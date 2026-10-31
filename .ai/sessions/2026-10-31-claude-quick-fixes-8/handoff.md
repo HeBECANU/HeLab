@@ -370,3 +370,13 @@ With one app per computer, the only other process sharing the app folder and sto
   now also mean a `helab convert` process:
   - `CacheTab.py:605`: "Another HeLab is running: quit it before clearing the older cache";
   - `CacheDialogs.py:106`: Clear old stores, "Another HeLab is running. Quit it first…".
+
+### Run 41202772809 (`110033d`: A43.3, A43.4; 3bafef1 already in c2663b9): success, all 12 job logs read
+
+- **No RERUN and no crashed worker in any job.**
+  - Tests passed: windows 1/2 4411, 2/2 4414; macos 4428, 4433; ubuntu 4424, 4433.
+  - Converter backends: 847 / 849 / 849.
+- **A39.1 passed on all three builds:** "built cleanly at 110033d26e…".
+- On Windows, `test_writing_held_data_out_counts_as_progress[alone]` and `[another thread starts a
+  process meanwhile]` both passed, as did the three Q43.1 cases.
+- This record is committed locally only (doc-only, no push).
