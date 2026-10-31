@@ -536,3 +536,103 @@ came after it. The switch stays off, so none of this is user-visible yet.
   the next check, and their tooltip ends 'A waiting file is checked again only when it changes', which is
   wrong for `cleared`: the next check converts them. Transient (one check interval). Fix: leave `cleared` out
   of `stuck()` (Assay's correction; not in `CONVERT_SETTLING`)."
+
+## Stage 2: open questions with proposed answers (no code; after checkpoint 3 landed, `c2d0ece`)
+
+Stage 2 waits for Tony's go. These are the readiness note's D7 and gap 10, plus what building stage 1 showed.
+Sources: the readiness note §1 and §3, the store-v4 design note §1–§6, the plan's "TXY layers and the policy",
+and the decided Q18.2, Q19.3, Q22.1–Q22.11 and Q42.x. Numbered provisionally after Q~1 and Q~2 above (`Q~3`…),
+to be merged by CoCo.
+
+**Q~3 (readiness D7): the default policy.**
+- *The conflict.* Q19.3 says every TXY source a plot uses is cached as its own layer. The design's `raw`
+  policy writes no HeLab layer, and the plan calls raw + tag "the default once the converter is robust".
+  Q22.11 (decided) settles most of it: "cache the raw layer and the selected TXY versions at the same
+  time; a global default caches raw files; a per-folder override picks the source priority".
+- *Proposed:* the default is **raw + used**. Raw rows where there are raw files, plus every TXY layer a
+  load composes: the `matlab` layer for MATLAB shots, and the HeLab layer of the tag the load used,
+  including a plot's other tag (Q19.3, "should be rare").
+  - **raw** (convert on load: no HeLab layer; the `matlab` layer still, since it can't be derived) and
+    **txy** (no raw rows: archives, or raw not wanted) are explicit choices, global or per folder.
+  - "raw + tag" stops being a separate policy: the selected tag is the tag the load uses (Q~4).
+  - As decided, a policy only decides what new saves write. Every layer is read, switching migrates
+    nothing and removes nothing.
+
+**Q~4 (gap 10b): one setting or two for "which TXY".**
+- *The question.* Q22.11's per-folder "source priority" overlaps two things: Q18.2's source mode plus
+  profile tag (global for tabs and Live; plots pick their own), and the design's `cache_policy.tag`.
+- *Proposed:* one choice. **What a load reads** is Q18.2's source mode and tag, with a per-folder override
+  (a row like `convert_prefs`: `source`, `tag`, `set_at`). **What is cached** is `cache_policy`
+  (`path`, `policy` ∈ raw+used / raw / txy, `set_at`), with no `tag` column. So "cache this folder's
+  p22v1" means "this folder loads p22v1", and Q~3's default caches what is loaded.
+  - The override is the user's own state, imported like `convert_prefs`.
+  - Clear all never removes it; Clear folder preferences does.
+
+**Q~5 (gap 10a): a HeLab layer read from beside TXY, keyed per shot or per layer.**
+- *The question.* Under `txy` (or with no raw file), a HeLab shot read from a beside `d_txy_helab_<tag>_<N>.txt`
+  has no raw fingerprint. The design puts `by_txy` "in `info`", but one `(path, layer)` row can mix shots
+  converted from raw with shots read from text.
+- *Proposed:* **per shot.** Each fingerprint entry gains its kind, `[shot, size, mtime_ns, "raw"|"txy"]`, and
+  `by_txy` goes. The loading order prefers raw: once the raw layer holds the shot, a TXY-keyed entry is
+  replaced by the raw-keyed one at the layer's next save, so it is converted once.
+  - Saved results made on a TXY-keyed shot then show as outdated once; that is the same rule as v3's
+    HeLab shots, §4.
+  - Make room counts a TXY-keyed shot whose text is gone as an only copy (not rebuildable).
+
+**Q~6: store-v4's `datasets` table once `txy_layers` exist.** Q42.3 carried `datasets` through stage 1. Only
+switch-on users (testers) have v4 rows.
+- *Proposed:* stage 2 never writes `datasets`. It reads them like Keep reads store-v3: a dataset whose
+  shots' fingerprints still match fills the `matlab` or `helab:<hash>` layer at the load's save. Make room
+  and Clear remove `datasets` rows as today.
+- No conversion code, and nothing removed without asking. A later layout (`_migrate`) may drop the empty
+  table.
+
+**Q~7: store-v3's MATLAB shots under Keep (the "v3 seed").**
+- *Proposed:* **copy on use.** A load that finds a v3 dataset shot with the current fingerprint adds it to
+  the `matlab` layer's save: it is read already, with no extra I/O, and v3 stays read only.
+- Saved results stay read-through (A42.1 decides their copy separately).
+
+**Q~8 (D8, stage 2's part): Make room's order with TXY layers.**
+- *Proposed order:*
+  1. HeLab layers whose raw layer is held (rebuildable locally);
+  2. other folders' `matlab` layers and TXY-keyed HeLab shots whose source file the last listing saw;
+  3. raw layers seen;
+  4. only copies of any kind (raw layers whose raw file is gone, `matlab` and TXY-keyed shots whose file
+     is gone), named.
+- `trim` (A42.2) follows the same order.
+- As in stage 1: exactly the named items, or nothing.
+
+**Q~9: Live's segments (F8) and the budget.**
+- *Proposed:* a save appends one segment of the new and changed shots, with one fit check for that
+  segment.
+- Compaction (over 8 segments, or over half superseded) runs in the same helper job only when the
+  rewritten copy fits beside the old one. Otherwise it waits for the next save, and it is never a reason
+  to ask Make room.
+- The old segments are retired, then swept as today, so there is no new removal rule.
+
+**Q~10: `pending_saves` with several units per folder (readiness gap 2).** Stage 1 never makes a pending raw
+unit (Q42.1: over the budget it is not saved and never asks), so `UNIQUE (path)` held.
+- *Proposed for stage 2:* keep one pending unit per folder. A TXY-layer save that doesn't fit merges its
+  parts into that folder's pending row (`parts`, as the design says), so one question names everything it
+  would save. Raw stays never-pending.
+
+**Q~11: RAM while converting from the raw layer.**
+- *Proposed:* no change to the RAM budget. A decoded raw layer lives only in the helper during a load's
+  conversion. Its peak is bounded by the worker count times a shot, since each shot decodes, converts and
+  is dropped. The GUI's RAM budget keeps counting the datasets it holds (`ram_buffers`) as today.
+
+**Q~12 (readiness gap 11): identity across computers.** A raw fingerprint is `(size, mtime_ns)`, and SMB
+clients on macOS and Windows may report different mtime resolution.
+- *Proposed:* stage 2 keeps `(size, mtime_ns)` as the key on each computer. The stored `sha256` decides a
+  match only for data made elsewhere (Q27.x's versioning, a later stage). There is no cross-computer
+  matching in stage 2.
+
+**Q~13: when the `store_v4` switch turns on (Q28.3).**
+- *Proposed:*
+  - not before stage 2 has landed and Tony has used it with the switch on, on his Mac and one lab PC
+    (M~2, M42.1's codec timing);
+  - then on by default in the release that ships stage 2, with store-v3 under Keep until the user answers;
+  - the switch row stays for one release, so a lab PC can go back to store-v3 while v4 settles.
+
+*Also for stage 2, no question:* `helab cache export` of TXY layers (A~5); `pack_dataset`'s 2.1 GB limit ends
+with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
