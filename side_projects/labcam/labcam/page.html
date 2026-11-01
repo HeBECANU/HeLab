@@ -50,7 +50,6 @@ tr.more{display:none}
 <main>
   <div id="locks" class="locks"></div>
   <details open data-key="view"><summary>Camera</summary>
-    <div class="bar"><label><input type="checkbox" id="overlay" checked> show the overlay (boxes, readings, marks)</label></div>
     <div id="view"><img id="stream" alt="Camera stream"><canvas id="draw"></canvas></div>
     <div class="bar">
       <span>Source: <b id="src">…</b></span>
@@ -97,6 +96,7 @@ tr.more{display:none}
       <label title="Off: each wavemeter field on its schedule (0.5 s, low power 5 s). On: at every check, on several cores (full power only)"><input type="checkbox" id="ocrfast"> read the wavemeter at every check<span id="ocrcores"></span></label>
     </div>
     <div class="bar">
+      <label><input type="checkbox" id="overlay" checked> show the overlay on the camera (boxes, readings, marks)</label>
       <label>Overlay text <input type="range" id="ovfont" min="0.25" max="1.2" step="0.05"> <b id="ovfontv"></b></label>
       <label>lines <select id="ovline"><option>1</option><option>2</option><option>3</option><option>4</option></select> px</label>
     </div>
@@ -296,6 +296,39 @@ function lockTraces(c, axis) {
   }));
 }
 
+// A label at each lock change: "He4 lost 16:03:12 / 11-01 · 2h 5m ago". Where labels would overlap, losses (lost or
+// unknown) win over locks (Tony, 2026-11-01), then the newer one; hovering any square still tells its time and state.
+function lockChangeLabels(c, axis, margin) {
+  const lasers = Object.keys(c).filter(k => !k.includes(".") && k !== "time" && !/_(sure|why)$/.test(k));
+  const times = c.time.map(t => new Date(t).getTime());
+  const span = Math.max(1, times[times.length - 1] - times[0]);
+  const width = Math.max(100, $("charts").clientWidth - margin.l - margin.r);
+  const labels = [];
+  for (const laser of lasers) {
+    const changes = [];
+    let previous = null;
+    c[laser].forEach((state, i) => {
+      if (state == null) return;
+      if (previous !== null && state !== previous) changes.push(i);
+      previous = state;
+    });
+    const kept = [];
+    const order = [...changes.filter(i => c[laser][i] !== "locked").reverse(), ...changes.filter(i => c[laser][i] === "locked").reverse()];
+    for (const i of order) {
+      const x = (times[i] - times[0]) / span * width;
+      if (kept.some(k => Math.abs(k - x) < 125)) continue;  // would overlap a label already kept
+      kept.push(x);
+      const state = c[laser][i], stamp = c.time[i];
+      labels.push({
+        x: stamp, y: laser, xref: "x2", yref: axis, showarrow: true, arrowhead: 0, arrowcolor: "#666", ax: 0, ay: -22,
+        text: `${laser} <b>${state}</b> ${stamp.slice(11, 19)}<br>${stamp.slice(5, 10)} · ${duration((Date.now() - times[i]) / 1000)} ago`,
+        font: {size: 9, color: STATE_COLOUR[state] || "#ccc"}, bgcolor: "rgba(17,17,17,0.85)", align: "left",
+      });
+    }
+  }
+  return labels;
+}
+
 const LINE_COLOURS = ["#4fc3f7", "#ba68c8", "#fff176", "#f06292"];
 function valueTraces(c, panel, axis) {
   return Object.keys(c).filter(panel.match).map((col, n) => {
@@ -369,6 +402,15 @@ async function refreshHistory() {
       }));
     });
     if (sure) layout.margin.r = 36;
+    const lockAt = shown.findIndex(p => p.kind === "state");
+    if (lockAt >= 0 && shown.length > 1) {
+      // The Locks panel gets its own time axis (the same times as the others'), and a label at each lock change.
+      const lockAxis = lockAt ? "y" + (lockAt + 1) : "y";
+      layout.xaxis2 = {type: "date", matches: "x", anchor: lockAxis, gridcolor: "#222", fixedrange: !zoom,
+                       tickfont: {size: 9, color: "#999"}};
+      traces.forEach(t => { if (t.yaxis === lockAxis) t.xaxis = "x2"; });
+      layout.annotations.push(...lockChangeLabels(c, lockAxis, layout.margin));
+    }
     layout.xaxis.fixedrange = !zoom;
     layout.dragmode = zoom ? "zoom" : false;
     layout.xaxis.anchor = shown.length > 1 ? "y" + shown.length : "y";

@@ -3,6 +3,7 @@ logs/
 data/
 reference.jpg
 anchors/
+models/
 config.local.json
 *.egg-info/
 tests/*.jpg

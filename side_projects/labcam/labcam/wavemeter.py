@@ -6,8 +6,9 @@ on 16 frames of 2026-11-01, Tesseract read the power's digits from none of them,
 Tesseract confuses 8, 6, 5, 3 and 2 and drops the decimal point. So:
 - each field is its own instrument (`field` "main" for the wavelength or frequency, "power" for the power),
   whose four corners follow the text; the engine cuts it out straightened and 3x oversampled;
-- each frame is read several ways (RapidOCR: the colours at 3x, 4x and 6x and the cleaned-up green at 4x;
-  Tesseract: two enlargements, three small turns around `tilt`), and only the digits are kept: the decimal point goes where the display's format puts it (`format`, e.g. "####.###");
+- each frame is read several ways (RapidOCR: the colours at 4x and 6x, the green channel at 4x plain and inverted;
+  Tesseract: two enlargements, three small turns around `tilt`), and only the digits are kept: the decimal
+  point goes where the display's format puts it (`format`, e.g. "####.###");
 - every digit position is voted on over those reads and the last `vote_s` seconds of frames (default 10). A
   position whose winner has less than `agree` of the votes shows as "?", and the reading is then `unknown`, not
   a guess. Reads without the format's digits don't vote, but count against how sure: confidence is the weakest
@@ -31,7 +32,7 @@ import cv2
 import numpy as np
 
 
-from .config import Instrument
+from .config import HOME, Instrument
 from .detectors import Detector, Image, Reading, duration
 
 log = logging.getLogger("labcam.wavemeter")
@@ -61,11 +62,18 @@ def _rapid() -> Any:
         return None
     logging.getLogger("RapidOCR").setLevel(logging.WARNING)
     # One core per read: reads run side by side (one model per OCR thread) instead of each spiking every core.
-    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+    extra = {"rec_model_path": str(SERVER_MODEL)} if SERVER_MODEL.exists() else {}
+    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, **extra)
 
 
+# PaddleOCR's larger recognition model, used when downloaded (`python -m labcam.get_model`): on 20 frames
+# (2026-11-01) it read the wavelength's 6th digit right (6) in 60 of 68 reads, the small built-in one in 35 (27
+# as 8); about 3x slower (60 ms a read on an M-series Mac).
+SERVER_MODEL = HOME / "models" / "ch_PP-OCRv4_rec_server_infer.onnx"
+SERVER_URL = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_server_infer.onnx"
 RAPID = _rapid()
-READER = "RapidOCR" if RAPID is not None else (f"Tesseract ({TESSERACT})" if TESSERACT else None)
+READER = (f"RapidOCR ({'server' if SERVER_MODEL.exists() else 'built-in'} model)" if RAPID is not None
+          else (f"Tesseract ({TESSERACT})" if TESSERACT else None))
 _models = threading.local()  # each OCR thread's own RapidOCR (one isn't safe to share between threads)
 
 
@@ -161,12 +169,17 @@ class Wavemeter(Detector):
             return Reading("unknown", "no OCR", note="install rapidocr-onnxruntime (or tesseract) to read the wavemeter")
         tilt = self.inst.option("tilt", 0.0)
         if RAPID is not None:
-            # roi is 3x the camera's pixels: as it is, 4x and 6x in colour, and the green cleaned up at 4x.
+            # roi is 3x the camera's pixels (and the mean of the last few frames): in colour at 4x and 6x, and its
+            # green channel at 4x, plain and inverted. Tried on 20 frames (2026-11-01): the green channel read
+            # most often; sharpening and CLAHE made it worse (power readable 7/20 and 3/20 against 17/20).
             def bordered(image: Image) -> Image:
                 return cv2.copyMakeBorder(image, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
-            variants = [bordered(roi), bordered(cv2.resize(roi, None, fx=4 / 3, fy=4 / 3, interpolation=cv2.INTER_CUBIC)),
-                        bordered(cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)),
-                        cv2.cvtColor(prepare(roi, 4 / 3, tilt), cv2.COLOR_GRAY2BGR)]
+            x4 = cv2.resize(roi, None, fx=4 / 3, fy=4 / 3, interpolation=cv2.INTER_CUBIC)
+            green = x4[:, :, 1]
+            variants = [bordered(x4), bordered(cv2.cvtColor(green, cv2.COLOR_GRAY2BGR))]
+            if not SERVER_MODEL.exists():  # the small model gains from more looks; the server one costs 3x a read
+                variants += [bordered(cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)),
+                             bordered(cv2.cvtColor(255 - green, cv2.COLOR_GRAY2BGR))]
             texts = [rapid_read(v) for v in variants]
         else:
             allowed = "0123456789.uWmn" if self.power else "0123456789.nmGHz"
