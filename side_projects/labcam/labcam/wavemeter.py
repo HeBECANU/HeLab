@@ -62,8 +62,19 @@ def _rapid() -> Any:
         return None
     logging.getLogger("RapidOCR").setLevel(logging.WARNING)
     # One core per read: reads run side by side (one model per OCR thread) instead of each spiking every core.
-    extra = {"rec_model_path": str(SERVER_MODEL)} if SERVER_MODEL.exists() else {}
-    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, **extra)
+    global SERVER_TOO_SLOW
+    if SERVER_MODEL.exists() and not SERVER_TOO_SLOW:
+        model = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, rec_model_path=str(SERVER_MODEL))
+        # It needs a recent CPU: 60 ms a read on an M-series Mac, 17 s on Lab Side's (2026-11-01). Timed once.
+        sample = np.full((96, 312, 3), 128, np.uint8)
+        started = time.monotonic()
+        model(sample, use_det=False, use_cls=False, use_rec=True)
+        took = time.monotonic() - started
+        if took <= SERVER_MAX_S:
+            return model
+        SERVER_TOO_SLOW = True
+        log.warning("the server OCR model took %.1f s a read here (limit %.1f s): using the built-in one", took, SERVER_MAX_S)
+    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
 
 
 # PaddleOCR's larger recognition model, used when downloaded (`python -m labcam.get_model`): on 20 frames
@@ -71,8 +82,11 @@ def _rapid() -> Any:
 # as 8); about 3x slower (60 ms a read on an M-series Mac).
 SERVER_MODEL = HOME / "models" / "ch_PP-OCRv4_rec_server_infer.onnx"
 SERVER_URL = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_server_infer.onnx"
+SERVER_MAX_S = 0.3  # a read slower than this (timed at start) means the built-in model instead
+SERVER_TOO_SLOW = False
 RAPID = _rapid()
-READER = (f"RapidOCR ({'server' if SERVER_MODEL.exists() else 'built-in'} model)" if RAPID is not None
+SERVER = SERVER_MODEL.exists() and not SERVER_TOO_SLOW
+READER = (f"RapidOCR ({'server' if SERVER else 'built-in'} model)" if RAPID is not None
           else (f"Tesseract ({TESSERACT})" if TESSERACT else None))
 _models = threading.local()  # each OCR thread's own RapidOCR (one isn't safe to share between threads)
 
@@ -177,7 +191,7 @@ class Wavemeter(Detector):
             x4 = cv2.resize(roi, None, fx=4 / 3, fy=4 / 3, interpolation=cv2.INTER_CUBIC)
             green = x4[:, :, 1]
             variants = [bordered(x4), bordered(cv2.cvtColor(green, cv2.COLOR_GRAY2BGR))]
-            if not SERVER_MODEL.exists():  # the small model gains from more looks; the server one costs 3x a read
+            if not SERVER:  # the small model gains from more looks; the server one costs 3x a read
                 variants += [bordered(cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)),
                              bordered(cv2.cvtColor(255 - green, cv2.COLOR_GRAY2BGR))]
             texts = [rapid_read(v) for v in variants]

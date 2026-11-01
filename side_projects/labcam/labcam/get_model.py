@@ -1,7 +1,8 @@
 """`python -m labcam.get_model`: downloads PaddleOCR's server recognition model (91 MB) for the wavemeter.
 
 Saved as `models/ch_PP-OCRv4_rec_server_infer.onnx` beside the README (ignored by Git); labcam uses it from its next
-start (see wavemeter.py). Delete the file to go back to RapidOCR's built-in model.
+start (see wavemeter.py) if a read takes under 0.3 s there; on an older CPU it's far slower (17 s a read on Lab Side's,
+2026-11-01) and labcam keeps the built-in model. Delete the file to go back to the built-in model.
 """
 
 from __future__ import annotations
