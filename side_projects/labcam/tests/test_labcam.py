@@ -245,3 +245,46 @@ def test_old_days_deleted_and_compressed(tmp_path: Path, monkeypatch: pytest.Mon
     history.compress_old()
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
         [f"history-{day(0)}.csv", f"history-{day(2)}.csv.gz"])
+
+
+def test_compress_twice_at_once_keeps_every_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two compress runs at midnight (one per writer) once deleted each other's .gz (2026-11-01).
+    import gzip
+    import threading
+
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    day = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    body = "time,He3\n" + "".join(f"{day}T00:00:{i:02d},locked\n" for i in range(60)) * 200
+    for kind in ("history", "locks"):
+        (tmp_path / f"{kind}-{day}.csv").write_text(body)
+    runs = [threading.Thread(target=history.compress_old) for _ in range(4)]
+    for t in runs:
+        t.start()
+    for t in runs:
+        t.join()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+    assert gzip.decompress((tmp_path / f"history-{day}.csv.gz").read_bytes()).decode() == body
+    # A CSV whose .gz already exists with the same content (a run stopped before deleting it) just goes.
+    (tmp_path / f"locks-{day}.csv").write_text(body)
+    history.compress_old()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+
+
+def test_series_breaks_lines_across_gaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    now = time.time()
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
+    rows = [now - 3000, now - 2995, now - 100, now - 95]  # labcam off for about 48 min between
+    (tmp_path / f"history-{time.strftime('%Y-%m-%d')}.csv").write_text(
+        "time,He3\n" + "".join(f"{stamp(t)},locked\n" for t in rows))
+    if time.strftime("%Y-%m-%d", time.localtime(now - 3000)) != time.strftime("%Y-%m-%d"):
+        pytest.skip("just after midnight")
+    c = history.series(1)["columns"]
+    assert c["He3"] == ["locked", "locked", None, "locked", "locked"]
+
+
+def test_duration() -> None:
+    from labcam.detectors import duration
+
+    assert [duration(s) for s in (0, 45, 192, 3600, 7500, 97200, 86400 * 3 + 59)] == [
+        "0s", "45s", "3m 12s", "1h", "2h 5m", "1d 3h", "3d"]

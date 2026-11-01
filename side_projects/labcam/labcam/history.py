@@ -72,8 +72,6 @@ class _Daily:
         if day != self.day or header != self.header:
             if self.file is not None:
                 self.file.close()
-                if day != self.day:
-                    threading.Thread(target=compress_old, name="labcam-gzip", daemon=True).start()
             DATA.mkdir(exist_ok=True)
             n = 1
             while True:
@@ -97,31 +95,57 @@ def _header(path: Path) -> list[str]:
         return next(csv.reader(f), [])
 
 
+_compressing = threading.Lock()  # one compress at a time: two at once lost whole days (2026-11-01)
+
+
 def compress_old() -> None:
-    """Deletes days older than KEEP_DAYS, and gzips every other day's CSV but today's (being written)."""
-    today = time.strftime("%Y-%m-%d")
-    oldest = time.strftime("%Y-%m-%d", time.localtime(time.time() - KEEP_DAYS * 86400))
-    for path in sorted([*DATA.glob("*.csv"), *DATA.glob("*.csv.gz")]):
-        match = re.search(r"\d{4}-\d{2}-\d{2}", path.name)
-        if match and match.group(0) < oldest:
+    """Deletes days older than KEEP_DAYS, and gzips every other day's CSV but today's (being written).
+
+    Each gzip goes to a temporary name and is renamed over `<name>.csv.gz` only when complete; the CSV is then
+    deleted. A failure removes only its own temporary file, never a `.gz`, so a CSV is never lost: one that can't
+    be gzipped now (still open, say) stays and is tried again next time.
+    """
+    with _compressing:
+        today = time.strftime("%Y-%m-%d")
+        oldest = time.strftime("%Y-%m-%d", time.localtime(time.time() - KEEP_DAYS * 86400))
+        for path in sorted([*DATA.glob("*.csv"), *DATA.glob("*.csv.gz"), *DATA.glob("*.partial")]):
+            match = re.search(r"\d{4}-\d{2}-\d{2}", path.name)
+            if match and match.group(0) < oldest:
+                try:
+                    path.unlink()
+                    log.info("deleted %s (older than %d days)", path.name, KEEP_DAYS)
+                except OSError as exc:
+                    log.warning("couldn't delete %s: %s", path.name, exc)
+        for path in sorted(DATA.glob("*.csv")):
+            if today in path.name:
+                continue
+            target = path.with_suffix(".csv.gz")
+            partial = path.with_suffix(".csv.gz.partial")
+            try:
+                if target.exists():
+                    with gzip.open(target, "rb") as f:
+                        same = f.read() == path.read_bytes()
+                    if same:  # a run stopped between the rename and the delete: the .gz already has it
+                        path.unlink()
+                        continue
+                    # Otherwise gzip the CSV under the next free name: nothing already compressed is replaced.
+                    n = 2
+                    while (target := path.with_name(f"{path.stem}-{n}.csv.gz")).exists():
+                        n += 1
+                size = path.stat().st_size
+                with path.open("rb") as src, gzip.open(partial, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                partial.replace(target)
+            except (OSError, EOFError) as exc:
+                log.warning("couldn't compress %s: %s", path.name, exc)
+                partial.unlink(missing_ok=True)
+                continue
             try:
                 path.unlink()
-                log.info("deleted %s (older than %d days)", path.name, KEEP_DAYS)
-            except OSError as exc:
-                log.warning("couldn't delete %s: %s", path.name, exc)
-    for path in sorted(DATA.glob("*.csv")):
-        if today in path.name:
-            continue
-        target = path.with_suffix(".csv.gz")
-        size = path.stat().st_size
-        try:
-            with path.open("rb") as src, gzip.open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-            path.unlink()
-            log.info("compressed %s (%.1f MB → %.2f MB)", path.name, size / 1e6, target.stat().st_size / 1e6)
-        except OSError as exc:
-            log.warning("couldn't compress %s: %s", path.name, exc)
-            target.unlink(missing_ok=True)
+                log.info("compressed %s (%.1f MB → %.2f MB)", path.name, size / 1e6, target.stat().st_size / 1e6)
+            except OSError as exc:  # still open (Windows): keep the CSV, not both; it's gzipped next time
+                log.warning("couldn't delete %s after gzipping it, kept: %s", path.name, exc)
+                target.unlink(missing_ok=True)
 
 
 class Recorder:
@@ -130,6 +154,7 @@ class Recorder:
         self.history = _Daily("history")
         self.last = 0.0
         self.last_states: dict[str, str] = {}
+        self.day = time.strftime("%Y-%m-%d")
         if DATA.exists():
             threading.Thread(target=compress_old, name="labcam-gzip", daemon=True).start()
 
@@ -151,11 +176,19 @@ class Recorder:
             reading = readings.get(name)
             row += [reading.status if reading else ""] + [_value(inst, reading, f) for f in fields]
         self.history.write(now, header, row)
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if day != self.day:  # once both writers have moved to the new day, so neither holds yesterday open
+            self.day = day
+            threading.Thread(target=compress_old, name="labcam-gzip", daemon=True).start()
 
 
 def files(kind: str) -> list[Path]:
     """The kind's files, oldest first: earlier days gzipped, today's plain."""
     return sorted([*DATA.glob(f"{kind}-*.csv"), *DATA.glob(f"{kind}-*.csv.gz")], key=lambda p: p.name.split(".")[0])
+
+
+def _seconds(stamp: str) -> float:
+    return time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
 
 
 def series(hours: float, max_points: int = 1500) -> dict[str, Any]:
@@ -180,6 +213,16 @@ def series(hours: float, max_points: int = 1500) -> dict[str, Any]:
     # Keep every row where a lock state changes, so thinning never hides a short loss.
     kept = [r for i, r in enumerate(rows) if i % step == 0 or i == 0
             or any(k in lasers and r.get(k) != rows[i - 1].get(k) for k in r)]
+    # Where labcam wasn't running (or a day's file is missing), an empty row: the plots break their lines there
+    # rather than drawing one across the gap.
+    gap = max(60.0, 3 * step * EVERY)
+    spaced: list[dict[str, str]] = []
+    for r in kept:
+        if spaced and _seconds(r["time"]) - _seconds(spaced[-1]["time"]) > gap:
+            middle = (_seconds(r["time"]) + _seconds(spaced[-1]["time"])) / 2
+            spaced.append({"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(middle))})
+        spaced.append(r)
+    kept = spaced
     columns = sorted({k for r in kept for k in r})
 
     def convert(text: str | None) -> Any:

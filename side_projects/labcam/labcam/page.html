@@ -73,6 +73,13 @@ th{color:var(--dim);font-weight:normal}
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// A time span in its two largest units, as detectors.duration: "45s", "3m 12s", "2h 5m", "1d 3h".
+function duration(sec) {
+  const s = Math.max(0, Math.round(sec));
+  const parts = [[Math.floor(s / 86400), "d"], [Math.floor(s / 3600) % 24, "h"], [Math.floor(s / 60) % 60, "m"], [s % 60, "s"]];
+  let first = parts.findIndex(([n]) => n); if (first < 0) first = 3;
+  return parts.slice(first, first + 2).filter(([n], i) => n || i === 0).map(([n, u]) => n + u).join(" ");
+}
 let editing = null;
 const img = $("stream"), canvas = $("draw"), ctx = canvas.getContext("2d");
 img.onerror = () => setTimeout(() => { if (viewSection.open) img.src = streamUrl(); }, 2000);
@@ -141,7 +148,7 @@ async function refresh() {
       const age = r.at ? Math.round(s.now - r.at) : null;
       const values = Object.entries(r.values || {}).map(([k, v]) => `${k}=${v}`).join("  ");
       return `<tr><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
-        <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${age} s ago)</span>` : ""}</td>
+        <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
         <td>${Math.round((r.confidence || 0) * 100)}%<br><span class="values">${sure10(i.sure_10s).trim()}</span></td>
         <td class="values">${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}</td>
         <td><button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `<br><button onclick="post('api/snap', {name: '${name}'})" title="Fit the region to the screen's edges on the current frame (shadows and bezels stay outside)">Snap</button>` : ""}</td></tr>`;
@@ -193,7 +200,7 @@ let historyDrawn = false;
 function lockTraces(c, axis) {
   const lasers = Object.keys(c).filter(k => !k.includes(".") && k !== "time" && !/_(sure|why)$/.test(k));
   return lasers.map(laser => ({
-    type: "scatter", mode: "markers", name: laser, x: c.time, y: c.time.map(() => laser), yaxis: axis,
+    type: "scatter", mode: "markers", name: laser, x: c.time, y: c[laser].map(s => s == null ? null : laser), yaxis: axis,  // null: a gap
     marker: {symbol: "square", size: 9, color: c[laser].map(s => STATE_COLOUR[s] || "#333"),
              opacity: c[laser + "_sure"] ? c[laser + "_sure"].map(v => 0.35 + 0.65 * (v ?? 0)) : 1},
     customdata: c[laser].map((s, i) => [s, Math.round(100 * ((c[laser + "_sure"] || [])[i] ?? 0)), (c[laser + "_why"] || [])[i] ?? ""]),
