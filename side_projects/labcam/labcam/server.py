@@ -2,7 +2,8 @@
 un-mirrored camera frame, `/state.json` every reading and lock, `/log` the recent log, `/history.csv` and `/locks.csv` today's
 data, `/history.json?hours=N` the last N hours for the plots;
 POST `/api/region` {name, corners} and `/api/reference` change the boxes and the reference frame;
-`/api/settings` {ocr_every_check} reads the wavemeter at every check (on several cores) or every 2 s."""
+`/api/settings` {ocr_every_check, power_mode, overlay_font, overlay_line} (saved in config.local.json);
+`/api/presence` {focused, active}, a page's heartbeat for the auto power mode; `/api/lowpower` low power now."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import collections
 import gzip
 import json
 import logging
+import time
 import threading
 import urllib.parse
 from http import HTTPStatus
@@ -80,6 +82,11 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
                 after = int(query.split("after=")[1]) if "after=" in query else 0
                 self._json(ring.since(after))
             elif path == "/frame.jpg":
+                # The overlay is drawn only while wanted: ask for it, and wait for a fresh one.
+                engine.overlay_wanted_until = time.time() + 10
+                deadline = time.time() + 2
+                while time.time() - engine.overlay_at > 1.5 and time.time() < deadline:
+                    time.sleep(0.05)
                 if engine.overlay_jpeg is None:
                     self._send(b"no frame yet", "text/plain", HTTPStatus.SERVICE_UNAVAILABLE)
                 else:
@@ -126,6 +133,8 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
             seen = -1
             if plain:
                 engine.plain_viewers += 1
+            else:
+                engine.overlay_viewers += 1
             try:
                 while True:
                     with engine.changed:
@@ -145,6 +154,8 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
             finally:
                 if plain:
                     engine.plain_viewers -= 1
+                else:
+                    engine.overlay_viewers -= 1
             self.close_connection = True
 
         def do_POST(self) -> None:
@@ -177,11 +188,33 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
                 engine.set_corners(name, points)
                 self._json({"message": f"{name} region saved"})
             elif self.path == "/api/settings":
+                said = []
                 if "ocr_every_check" in body:
                     engine.ocr_every_check = bool(body["ocr_every_check"])
-                    log.info("wavemeter read %s", "at every check" if engine.ocr_every_check else "every 2 s")
-                self._json({"message": "wavemeter: " + ("read at every check" if engine.ocr_every_check
-                                                        else "read every 2 s")})
+                    engine.config.save_setting("ocr_every_check", engine.ocr_every_check)
+                    said.append("wavemeter read " + ("at every check" if engine.ocr_every_check else "on its schedule"))
+                if body.get("power_mode") in ("auto", "full", "low"):
+                    engine.power_mode = body["power_mode"]
+                    engine.config.save_setting("power_mode", engine.power_mode)
+                    said.append(f"power: {engine.power_mode}")
+                if "overlay_font" in body:
+                    engine.style.font = min(1.5, max(0.25, float(body["overlay_font"])))
+                    engine.config.save_setting("overlay_font", engine.style.font)
+                    said.append(f"overlay text {engine.style.font:g}")
+                if "overlay_line" in body:
+                    engine.style.line = min(6, max(1, int(body["overlay_line"])))
+                    engine.config.save_setting("overlay_line", engine.style.line)
+                    said.append(f"overlay lines {engine.style.line} px")
+                for line in said:
+                    log.info("setting: %s", line)
+                self._json({"message": "; ".join(said) or "nothing changed"})
+            elif self.path == "/api/presence":
+                engine.presence(bool(body.get("focused")), bool(body.get("active")))
+                self._json({"low": engine.power()[0]})
+            elif self.path == "/api/lowpower":
+                engine.low_power_now()
+                self._json({"message": "low power until the next input on a page" if engine.power_mode == "auto"
+                            else f"power is set to {engine.power_mode}; choose auto to use this"})
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 

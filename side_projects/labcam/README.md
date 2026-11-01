@@ -20,9 +20,23 @@ checks the instruments 5 times a second (`analysis_hz`), each time on the averag
 covers, which reads as not flat). Each instrument's result is then voted over its last second of checks
 (`smooth`): the most common status and shape win, with the medians of their numbers, so a stray
 misdetection is outvoted. A new status shows once it has lasted 1 s (`settle`); a laser shows lost after
-1.5 s and locked after 10 s. The wavemeter reads each field every 2 s, or at every check on up to 4 cores with
-"read the wavemeter at every check" ticked (Instruments; back to every 2 s on restart), and votes over the last
+1.5 s and locked after 10 s. The wavemeter reads each field every 0.5 s (low power 5 s), or at every check on up to 4 cores with
+"read the wavemeter at every check" ticked (Debug), and votes over the last
 10 s by itself; reads without the right number of digits don't vote but lower how sure.
+
+## Power and the Debug section
+
+The page's **Debug** section (closed by default) holds the power mode, the wavemeter's "read at every check"
+and the overlay's text size and line width; they're saved in `config.local.json` → `settings`.
+
+- **Full:** each wavemeter field read every 0.5 s, 5 checks a second, 10 frames decoded a second.
+- **Low power:** every 5 s, 2 checks and 5 frames a second. Locks still show lost after 1.5 s and locked after
+  10 s, and history still gets a row every 5 s.
+- **auto** (default) goes low after 10 min with no page in focus, or 1 h with no input on a page, and back at
+  the next focus or input; **Low power now** goes low until the next input. "keep full speed" and "keep low
+  power" stay as set.
+- The overlay is drawn and encoded only while someone watches the stream (or `/frame.jpg` was asked for in
+  the last 10 s); each OCR read uses one core.
 
 ## Laser locks
 

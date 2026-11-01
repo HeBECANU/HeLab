@@ -60,17 +60,20 @@ def _rapid() -> Any:
     except ImportError:
         return None
     logging.getLogger("RapidOCR").setLevel(logging.WARNING)
-    return RapidOCR()
+    # One core per read: reads run side by side (one model per OCR thread) instead of each spiking every core.
+    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
 
 
 RAPID = _rapid()
 READER = "RapidOCR" if RAPID is not None else (f"Tesseract ({TESSERACT})" if TESSERACT else None)
-_rapid_lock = threading.Lock()  # one recognition at a time per model (ONNX Runtime uses several cores itself)
+_models = threading.local()  # each OCR thread's own RapidOCR (one isn't safe to share between threads)
 
 
 def rapid_read(image: Image) -> str:
-    with _rapid_lock:
-        result, _ = RAPID(image, use_det=False, use_cls=False, use_rec=True)
+    model = getattr(_models, "rapid", None)
+    if model is None:
+        model = _models.rapid = RAPID if threading.current_thread() is threading.main_thread() else _rapid()
+    result, _ = model(image, use_det=False, use_cls=False, use_rec=True)
     return str(result[0][0]) if result else ""
 
 # Formats by unit: # is a digit. The unit decides between them where the OCR caught it (G, H or z → GHz).

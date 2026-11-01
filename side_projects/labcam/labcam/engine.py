@@ -25,7 +25,7 @@ from . import relocate
 from .config import HOME, Config, Corners
 from .detectors import Detector, Dot, Image, Motion, Needle, Reading, TraceLevel
 from .segments import SevenSegment
-from .overlay import Item, draw
+from .overlay import Item, Style, draw
 from .source import FrameSource
 from .wavemeter import Wavemeter
 
@@ -40,6 +40,13 @@ KINDS: dict[str, type[Detector]] = {
     "segments": SevenSegment,
 }
 ALIGN_EVERY = 5.0  # s
+# Power (Tony, 2026-11-01). Low power: OCR every 5 s instead of 0.5 s, 2 checks a second instead of 5, 5 frames
+# decoded a second instead of 10. "auto" goes low after 10 min with no page in focus or 1 h with no input on a
+# page, and back to full at the next focus or input; "full" and "low" stay so. "Low power now" goes low in auto
+# until the next input.
+OCR_EVERY = (0.5, 5.0)  # s between reads of each wavemeter field: full, low
+LOW_ANALYSIS_HZ, LOW_STREAM_FPS = 2.0, 5.0
+UNFOCUSED_LOW, IDLE_LOW = 600.0, 3600.0  # s
 OCR_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 1))  # cores for the wavemeter when reading every check
 LOCK_SETTLE = 1.5  # s a loss (or unknown) must last before it shows
 LOCK_AFTER = 10.0  # s
@@ -99,7 +106,17 @@ class Engine:
         self._last_slow: dict[str, float] = {}
         # OCR (Tesseract, a process per read) on a pool of its own: one read at a time, each field every `every`
         # s; or, with `ocr_every_check` on, a read of each field at every check on up to OCR_WORKERS cores.
-        self.ocr_every_check = False
+        self.ocr_every_check = bool(config.settings.get("ocr_every_check", False))
+        self.power_mode = str(config.settings.get("power_mode", "auto"))  # auto, full, low
+        self.style = Style(float(config.settings.get("overlay_font", 0.45)), int(config.settings.get("overlay_line", 1)))
+        started = time.time()
+        self._last_focused = started  # a page in focus said so
+        self._last_input = started  # a page saw a key, click, scroll or move
+        self._low_until_input = False  # "Low power now" in auto
+        self.overlay_viewers = 0  # overlay streams open
+        self.overlay_wanted_until = 0.0  # /frame.jpg asked: draw until then
+        self.overlay_at = 0.0
+        self._was_low = False
         self._ocr_pool = ThreadPoolExecutor(OCR_WORKERS, thread_name_prefix="labcam-ocr")
         self._ocr_busy: dict[str, int] = {}
         self._ocr_guard = threading.Lock()
@@ -184,7 +201,8 @@ class Engine:
                     self._frame(jpeg)
                 except Exception:
                     log.exception("frame %d failed", seq)
-            wait = 1.0 / max(0.2, self.config.stream_fps) - (time.monotonic() - started)
+            fps = min(LOW_STREAM_FPS, self.config.stream_fps) if self.power()[0] else self.config.stream_fps
+            wait = 1.0 / max(0.2, fps) - (time.monotonic() - started)
             self._stop.wait(max(0.01, wait))
 
     def _frame(self, jpeg: bytes) -> None:
@@ -202,9 +220,17 @@ class Engine:
             self.set_reference()
             self._reference_wanted = False
         now = time.time()
-        if now - self._last_analysis >= 1.0 / max(0.05, self.config.analysis_hz):
+        low, why = self.power()
+        if low != self._was_low:
+            log.info("%s power: %s", "low" if low else "full", why)
+            self._was_low = low
+        hz = min(LOW_ANALYSIS_HZ, self.config.analysis_hz) if low else self.config.analysis_hz
+        if now - self._last_analysis >= 1.0 / max(0.05, hz):
             self._last_analysis = now
             self._analyse(self._averaged(), now)
+        overlay = self.overlay_viewers > 0 or now < self.overlay_wanted_until
+        if not overlay and self.plain_viewers == 0:
+            return  # nobody watching: no drawing or encoding
         t1 = time.monotonic()
         items = [
             Item(self.config.instruments[n].label, self.config.instruments[n].kind, self.regions[n].corners, r,
@@ -214,19 +240,52 @@ class Engine:
         ]
         alignment = self.aligner.current
         header = "ALIGNMENT LOST" if not alignment.ok else ("" if not alignment.note else "camera moved")
-        image = draw(frame, items, header)
-        ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality])
-        self.timings["draw_ms"] = (time.monotonic() - t1) * 1000
+        encoded = None
+        if overlay:
+            image = draw(frame, items, header, self.style)
+            ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality])
+            encoded = encoded if ok else None
+            self.timings["draw_ms"] = (time.monotonic() - t1) * 1000
         plain = None
         if self.plain_viewers > 0:  # someone watches without the overlay: the frame as it is, un-mirrored
             done, plain_encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.config.jpeg_quality])
             plain = plain_encoded.tobytes() if done else None
-        if ok:
-            with self.changed:
+        with self.changed:
+            if encoded is not None:
                 self.overlay_jpeg = encoded.tobytes()
-                self.plain_jpeg = plain
-                self.frame_seq += 1
-                self.changed.notify_all()
+                self.overlay_at = now
+            self.plain_jpeg = plain
+            self.frame_seq += 1
+            self.changed.notify_all()
+
+    # Power --------------------------------------------------------------------------------------------
+
+    def presence(self, focused: bool, active: bool) -> None:
+        """A page's heartbeat: whether it's in focus, and whether it saw input since its last one."""
+        now = time.time()
+        if focused:
+            self._last_focused = now
+        if active:
+            self._last_input = now
+            self._low_until_input = False
+
+    def low_power_now(self) -> None:
+        self._low_until_input = True
+
+    def power(self) -> tuple[bool, str]:
+        """(low power?, why)."""
+        if self.power_mode == "full":
+            return False, "kept at full speed"
+        if self.power_mode == "low":
+            return True, "kept at low power"
+        now = time.time()
+        if self._low_until_input:
+            return True, "low power now: until input on the page"
+        if now - self._last_focused > UNFOCUSED_LOW:
+            return True, f"no page in focus for {now - self._last_focused:.0f} s"
+        if now - self._last_input > IDLE_LOW:
+            return True, f"no input on a page for {now - self._last_input:.0f} s"
+        return False, "a page is in use"
 
     def _averaged(self) -> Image:
         """The mean of the last `average_frames` decoded frames: camera noise and a single odd frame fade, while a
@@ -271,8 +330,10 @@ class Engine:
                     self.covered[name] = why
             if isinstance(detector, Wavemeter):
                 # OCR is slow: it runs on its own thread, one field at a time, so the overlay keeps moving.
-                fast = self.ocr_every_check
-                due = fast or now - self._last_slow.get(name, 0.0) >= self.config.instruments[name].option("every", 2.0)
+                low, _ = self.power()
+                fast = self.ocr_every_check and not low
+                every = self.config.instruments[name].option("every_low" if low else "every", OCR_EVERY[low])
+                due = fast or now - self._last_slow.get(name, 0.0) >= every
                 with self._ocr_guard:
                     busy = sum(self._ocr_busy.values())
                     free = busy < OCR_WORKERS and self._ocr_busy.get(name, 0) < max(1, OCR_WORKERS // 2) if fast \
@@ -528,6 +589,8 @@ class Engine:
             },
             "timings_ms": {k: round(v, 1) for k, v in self.timings.items()},
             "ocr": {"every_check": self.ocr_every_check, "workers": OCR_WORKERS},
+            "power": {"mode": self.power_mode, "low": self.power()[0], "why": self.power()[1]},
+            "overlay": {"font": self.style.font, "line": self.style.line},
             "instruments": {
                 name: {
                     "label": inst.label,

@@ -344,3 +344,29 @@ def test_seven_segment_display() -> None:
     unsure_last = segments.tally(within, "013", ["012", "013"], contrast)  # 0.1? is within ±0.3 either way
     assert unsure_last.status == "ok" and unsure_last.text.startswith("0.1?")
     assert segments.tally(within, "048", ["048"], contrast).status == "off"  # 0.48 is beyond ±0.3
+
+
+def test_power_modes() -> None:
+    from labcam import engine
+
+    eng = engine.Engine.__new__(engine.Engine)  # only the power state, no camera
+    now = time.time()
+    eng.power_mode, eng._low_until_input = "auto", False
+    eng._last_focused = eng._last_input = now
+    assert eng.power() == (False, "a page is in use")
+    eng._last_focused = now - engine.UNFOCUSED_LOW - 1  # 10 min with no page in focus
+    assert eng.power()[0]
+    eng.presence(focused=True, active=False)
+    assert not eng.power()[0]
+    eng._last_input = now - engine.IDLE_LOW - 1  # in focus but 1 h without input
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)
+    eng.low_power_now()
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)  # the next input ends "low power now"
+    assert not eng.power()[0]
+    eng.power_mode = "low"
+    assert eng.power() == (True, "kept at low power")
+    eng.power_mode = "full"
+    eng._last_focused = 0.0
+    assert not eng.power()[0]

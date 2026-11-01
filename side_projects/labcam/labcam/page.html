@@ -14,6 +14,7 @@ summary:hover{color:var(--fg)}
 main{max-width:1280px;margin:0 auto;padding:6px 10px}
 .bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;color:var(--dim);margin:4px 0}
 .bar b{color:var(--fg)}
+.bar b.ok{color:var(--ok)}.bar b.off{color:var(--off)}
 button{background:#222;color:var(--fg);border:1px solid #444;border-radius:4px;padding:2px 8px;font:inherit;cursor:pointer}
 button:hover{border-color:#777}
 table{border-collapse:collapse;width:100%}
@@ -61,7 +62,6 @@ tr.more{display:none}
     <table><thead><tr><th>Instrument</th><th>Status</th><th>Reading</th><th title="now, and over the last 10 s: median ± std">Sure</th><th class="wide">Details</th><th class="wide"></th></tr></thead>
       <tbody id="rows"></tbody></table>
     <div class="bar">
-      <label title="Off: each wavemeter field is read every 2 s. On: at every check (5 a second), on several cores at once"><input type="checkbox" id="ocrfast"> read the wavemeter at every check<span id="ocrcores"></span></label>
       <button id="ref" title="Use the current frame as the one boxes are drawn on; later frames are matched to it">Set reference frame</button>
       <a href="raw.jpg" target="_blank"><button>Camera frame</button></a>
       <a href="locks.csv" target="_blank"><button>Today's locks (CSV)</button></a>
@@ -82,6 +82,24 @@ tr.more{display:none}
       "how sure" adds the computer vision's confidence (0–100 %, right axis) to each panel.</div>
     <div id="about" class="explain"></div>
     <div id="charts"></div>
+  </details>
+  <details data-key="debug"><summary>Debug</summary>
+    <div class="bar">
+      <label title="auto: low power after 10 min with no page in focus or 1 h with no input on a page; back at the next focus or input">Power
+        <select id="powermode"><option value="auto">auto</option><option value="full">keep full speed</option><option value="low">keep low power</option></select></label>
+      <button id="lowpower" title="Low power until the next input on a page (in auto)">Low power now</button>
+      <span>now: <b id="powernow">…</b></span>
+    </div>
+    <div class="explain">Full: wavemeter read every 0.5 s, 5 checks a second, 10 frames a second. Low power: every 5 s, 2 checks
+      and 5 frames a second (locks still lost after 1.5 s, locked after 10 s; history still every 5 s). The overlay is
+      drawn only while someone watches it.</div>
+    <div class="bar">
+      <label title="Off: each wavemeter field on its schedule (0.5 s, low power 5 s). On: at every check, on several cores (full power only)"><input type="checkbox" id="ocrfast"> read the wavemeter at every check<span id="ocrcores"></span></label>
+    </div>
+    <div class="bar">
+      <label>Overlay text <input type="range" id="ovfont" min="0.25" max="1.2" step="0.05"> <b id="ovfontv"></b></label>
+      <label>lines <select id="ovline"><option>1</option><option>2</option><option>3</option><option>4</option></select> px</label>
+    </div>
   </details>
   <details open data-key="log"><summary>Log</summary>
     <div class="bar">
@@ -113,6 +131,28 @@ async function post(path, body) {
 }
 $("ref").onclick = () => post("api/reference");
 $("ocrfast").onchange = () => post("api/settings", {ocr_every_check: $("ocrfast").checked});
+$("powermode").onchange = () => post("api/settings", {power_mode: $("powermode").value});
+$("lowpower").onclick = () => { idleSince = Date.now(); active = false; post("api/lowpower"); };
+$("ovfont").oninput = () => { $("ovfontv").textContent = $("ovfont").value; };
+$("ovfont").onchange = () => post("api/settings", {overlay_font: +$("ovfont").value});
+$("ovline").onchange = () => post("api/settings", {overlay_line: +$("ovline").value});
+// Heartbeat for the auto power mode: whether this page is in focus, and whether it saw input since the last one.
+let active = true, idleSince = 0;
+function beat() {
+  const focused = document.visibilityState === "visible" && document.hasFocus();
+  fetch("api/presence", {method: "POST", headers: {"Content-Type": "application/json"},
+                         body: JSON.stringify({focused, active})}).catch(() => {});
+  active = false;
+}
+for (const ev of ["keydown", "pointerdown", "pointermove", "wheel", "touchstart", "scroll"]) {
+  addEventListener(ev, () => {
+    if (Date.now() - idleSince < 1500) return;  // the click on "Low power now" itself
+    const first = !active; active = true;
+    if (first && $("powernow").className === "off") beat();  // back from low power at once
+  }, {passive: true, capture: true});
+}
+addEventListener("focus", beat); document.addEventListener("visibilitychange", beat);
+setInterval(beat, 15000); beat();
 
 function frameXY(ev) {
   const r = canvas.getBoundingClientRect();
@@ -164,6 +204,14 @@ async function refresh() {
     $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}` : a.note;
     $("align").className = a.ok ? (a.note.startsWith("camera moved") ? "off" : "ok") : "off";
     if (s.ocr && document.activeElement !== $("ocrfast")) { $("ocrfast").checked = s.ocr.every_check; $("ocrcores").textContent = ` (${s.ocr.workers} cores)`; }
+    if (s.power) {
+      if (document.activeElement !== $("powermode")) $("powermode").value = s.power.mode;
+      $("powernow").textContent = `${s.power.low ? "low power" : "full"} (${s.power.why})`;
+      $("powernow").className = s.power.low ? "off" : "ok";
+    }
+    if (s.overlay && document.activeElement !== $("ovfont") && document.activeElement !== $("ovline")) {
+      $("ovfont").value = s.overlay.font; $("ovfontv").textContent = s.overlay.font; $("ovline").value = s.overlay.line;
+    }
     const t = s.timings_ms;
     $("timing").textContent = `analysis ${t.analysis_ms ?? "–"} ms, decode ${t.decode_ms ?? "–"} ms, draw ${t.draw_ms ?? "–"} ms`;
     $("rows").innerHTML = Object.entries(s.instruments).map(([name, i]) => {
