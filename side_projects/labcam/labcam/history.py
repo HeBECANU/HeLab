@@ -38,6 +38,7 @@ FIELDS: dict[str, list[str]] = {
     "trace": ["shape", "level", "thickness", "waviness"],
     "wavemeter": ["value"],
     "needle": ["offset"],
+    "segments": ["value"],
     "dot": ["spread_px", "x", "y"],
     "motion": ["present", "moved"],
 }
@@ -48,7 +49,7 @@ def _value(inst: Instrument, reading: Reading | None, field: str) -> Any:
         return ""
     values = reading.values
     if field == "value":
-        for key in ("wavelength", "frequency", "power"):
+        for key in ("wavelength", "frequency", "power", "value"):
             if key in values:
                 return values[key]
         return ""

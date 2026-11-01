@@ -7,6 +7,7 @@ Watches the lab rack camera (an MJPEG stream, e.g. the Raspberry Pi's ustreamer 
 | Left top / left middle scope | `trace` | the signal's shape (flat thin line, wavy, block, empty screen) and height (0 top, 1 bottom); `ok` = a flat line within `tolerance` of the middle |
 | Wavemeter, Power | `wavemeter` | the wavelength (nm) or frequency (GHz), and the power, by OCR; unsure digits show as `?` |
 | Lock-in needle | `needle` | the needle's offset from the centre (-1 … 1); `ok` within `tolerance` |
+| Lock-in reading | `segments` | the 7-segment number beside the needle, read segment by segment (no sign); `ok` within ±`tolerance` (0.3) |
 | Scope dot | `dot` | whether the spot moved more than `still` (a fraction of the screen's width, 0.1) in the last `window` s, or disappeared (`ok` = still, `want`) |
 | People | `motion` | movement outside the instruments' regions (`off` = someone moving) |
 
@@ -19,7 +20,9 @@ checks the instruments 5 times a second (`analysis_hz`), each time on the averag
 covers, which reads as not flat). Each instrument's result is then voted over its last second of checks
 (`smooth`): the most common status and shape win, with the medians of their numbers, so a stray
 misdetection is outvoted. A new status shows once it has lasted 1 s (`settle`); a laser shows lost after
-1.5 s and locked after 10 s. The wavemeter reads every 2 s and votes by itself.
+1.5 s and locked after 10 s. The wavemeter reads each field every 2 s, or at every check on up to 4 cores with
+"read the wavemeter at every check" ticked (Instruments; back to every 2 s on restart), and votes over the last
+10 s by itself; reads without the right number of digits don't vote but lower how sure.
 
 ## Laser locks
 
@@ -27,8 +30,9 @@ misdetection is outvoted. A new status shows once it has lasted 1 s (`settle`); 
 
 - **He3**: the left middle scope shows a flat thin line in the middle (`left_middle:ok`). A block, a wavy or
   spiky trace, or an empty screen means it isn't locked.
-- **He4**: the left top scope shows a flat line in the middle, the scope dot is still and the lock-in needle
-  is in the middle (`left_top:ok`, `scope_dot:still`, `lockin:middle`).
+- **He4**: the left top scope shows a flat line in the middle, the scope dot is still, the lock-in needle
+  is in the middle and the lock-in's number is within ±0.3 (`left_top:ok`, `scope_dot:still`, `lockin:middle`,
+  `lockin_value:middle`). An unsure last digit doesn't matter when it can't change that (0.0? is within).
 
 A laser is `locked` only once every sign has held for 10 s, `lost` as soon as one fails for 3 analyses (about
 1.5 s), `unknown` when a sign can't be told. Each comes with how sure it is (its surest failing sign, or its
@@ -63,12 +67,12 @@ and power, trace thickness and level, the needle, the dot's movement and people.
 
 ## Set up (once)
 
-Needs [uv](https://docs.astral.sh/uv/) and, for the wavemeter, Tesseract (everything else works without it).
+Needs [uv](https://docs.astral.sh/uv/). The wavemeter is read with RapidOCR, installed with labcam;
+Tesseract is optional, used only where RapidOCR can't be installed.
 
 macOS:
 
 ```bash
-brew install tesseract
 cd side_projects/labcam
 uv venv --python 3.13 .venv && uv pip install -p .venv -e '.[test]'
 ```
@@ -76,13 +80,12 @@ uv venv --python 3.13 .venv && uv pip install -p .venv -e '.[test]'
 Windows (PowerShell or cmd):
 
 ```bat
-winget install UB-Mannheim.TesseractOCR
 cd side_projects\labcam
 uv venv --python 3.13 .venv
 uv pip install -p .venv -e .[test]
 ```
 
-Labcam finds Tesseract on the PATH, in `Program Files\Tesseract-OCR` or `%LOCALAPPDATA%\Programs\Tesseract-OCR`,
+Without RapidOCR, labcam finds Tesseract on the PATH, in `Program Files\Tesseract-OCR` or `%LOCALAPPDATA%\Programs\Tesseract-OCR`,
 or wherever `LABCAM_TESSERACT` names. Its startup line says which it uses ("tesseract not found" turns the
 wavemeter off).
 
@@ -138,10 +141,10 @@ beside this README and ignored by Git.
 
 ## Limits (2026-10-30)
 
-- **Wavemeter OCR is not reliable at 720p.** The digits are about 13 px tall, with glare. Tesseract confuses
-  8, 6, 5, 3 and 2 and drops the decimal point, sometimes the same way in every read of a frame. Each frame
-  is read six ways and every digit is voted on over five frames; a digit without 60 % agreement shows as `?`
-  and the reading is `unknown`. A digit can still be wrong *and* agreed on. The wavemeter's own data port,
+- **Wavemeter OCR is at its limit at 720p.** The digits are about 13 px tall, bold, slanted and blurred
+  together. RapidOCR (2026-11-01) reads them where Tesseract can't (the power: about half the frames against
+  none), in about 5 ms a read, but still mixes 8 and 6. Each frame is read four ways and every digit is voted
+  on over the last 10 s; a digit without 60 % agreement shows as `?` and the reading is `unknown`. A digit can still be wrong *and* agreed on. The wavemeter's own data port,
   or a camera closer to it, is the real fix; a reader taught this display's digits from labelled frames is
   the next software step.
 - **Lock-in needle:** the needle is faint at this resolution; check the region covers the meter you mean.

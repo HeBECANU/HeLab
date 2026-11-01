@@ -19,7 +19,7 @@ Corners = list[Point]  # top-left, top-right, bottom-right, bottom-left, in the 
 @dataclass
 class Instrument:
     name: str
-    kind: str  # trace, wavemeter, needle, dot, motion
+    kind: str  # trace, wavemeter, needle, dot, motion, segments
     label: str
     corners: Corners
     options: dict[str, Any] = field(default_factory=dict)

@@ -61,6 +61,7 @@ tr.more{display:none}
     <table><thead><tr><th>Instrument</th><th>Status</th><th>Reading</th><th title="now, and over the last 10 s: median ± std">Sure</th><th class="wide">Details</th><th class="wide"></th></tr></thead>
       <tbody id="rows"></tbody></table>
     <div class="bar">
+      <label title="Off: each wavemeter field is read every 2 s. On: at every check (5 a second), on several cores at once"><input type="checkbox" id="ocrfast"> read the wavemeter at every check<span id="ocrcores"></span></label>
       <button id="ref" title="Use the current frame as the one boxes are drawn on; later frames are matched to it">Set reference frame</button>
       <a href="raw.jpg" target="_blank"><button>Camera frame</button></a>
       <a href="locks.csv" target="_blank"><button>Today's locks (CSV)</button></a>
@@ -111,6 +112,7 @@ async function post(path, body) {
   const j = await r.json(); say(j.message || j.error);
 }
 $("ref").onclick = () => post("api/reference");
+$("ocrfast").onchange = () => post("api/settings", {ocr_every_check: $("ocrfast").checked});
 
 function frameXY(ev) {
   const r = canvas.getBoundingClientRect();
@@ -161,6 +163,7 @@ async function refresh() {
     const a = s.alignment;
     $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}` : a.note;
     $("align").className = a.ok ? (a.note.startsWith("camera moved") ? "off" : "ok") : "off";
+    if (s.ocr && document.activeElement !== $("ocrfast")) { $("ocrfast").checked = s.ocr.every_check; $("ocrcores").textContent = ` (${s.ocr.workers} cores)`; }
     const t = s.timings_ms;
     $("timing").textContent = `analysis ${t.analysis_ms ?? "–"} ms, decode ${t.decode_ms ?? "–"} ms, draw ${t.draw_ms ?? "–"} ms`;
     $("rows").innerHTML = Object.entries(s.instruments).map(([name, i]) => {
@@ -222,6 +225,9 @@ const PANELS = [
     about: "Where each scope's trace sits on its screen: 0 the top, 0.5 the middle, 1 the bottom."},
   {title: "Needle offset", match: k => k.endsWith(".offset"), range: [-1, 1],
     about: "The lock-in needle's place: 0 the middle, −1 and +1 the ends of its scale."},
+  {title: "Lock-in reading", match: k => k === "lockin_value.value", range: [-0.05, 1],
+    about: "The number on the lock-in's display beside the needle, read segment by segment (its sign isn't read).<br>" +
+      "He4 counts as locked while it's within ±0.3. Gaps: digits it couldn't read for sure."},
   {title: "Dot movement (px)", match: k => k.endsWith(".spread_px"),
     about: "How far the scope dot moved over the last few seconds, in pixels of the camera frame.<br>" +
       "It counts as moving past a tenth of the screen's width."},

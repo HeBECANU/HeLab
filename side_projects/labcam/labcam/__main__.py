@@ -13,7 +13,7 @@ from .config import HOME
 from .engine import Engine
 from .server import RingHandler, serve
 from .source import FrameSource
-from .wavemeter import TESSERACT
+from .wavemeter import READER
 
 
 def main() -> None:
@@ -49,8 +49,8 @@ def main() -> None:
     log = logging.getLogger("labcam")
     if "CAMERA-HOST" in cfg.source:
         parser.error("set the camera's stream with --source, or \"source\" in config.local.json (see the README)")
-    log.info("labcam starting: source %s, %d instruments, tesseract %s", cfg.source, len(cfg.instruments),
-             TESSERACT or "not found (wavemeter off)")
+    log.info("labcam starting: source %s, %d instruments, wavemeter OCR %s", cfg.source, len(cfg.instruments),
+             READER or "not found (wavemeter off)")
     source = FrameSource(cfg.source)
     engine = Engine(cfg, source)
     source.start()

@@ -321,3 +321,26 @@ def test_relocate_finds_a_moved_instrument(tmp_path: Path) -> None:
     again = relocate.load(tmp_path / "a.npz")
     assert again is not None and again.origin == anchor.origin
     assert relocate.find(again, with_scope(14, -17, 30), corners).shift == (14.0, -17.0)  # type: ignore[union-attr]
+
+
+def test_seven_segment_display() -> None:
+    from labcam import segments
+
+    # Dark segments on a light LCD: "0", "1" and "8" side by side, 40 x 80 px cells, upright.
+    image = np.full((80, 120), 190, np.float32)
+    bars = {"a": (8, 2, 32, 8), "b": (30, 4, 36, 40), "c": (30, 40, 36, 76), "d": (8, 72, 32, 78),
+            "e": (4, 40, 10, 76), "f": (4, 4, 10, 40), "g": (8, 37, 32, 43)}
+    for k, on in enumerate(("abcdef", "bc", "abcdefg")):
+        for seg in on:
+            x0, y0, x1, y1 = bars[seg]
+            image[y0:y1, 40 * k + x0:40 * k + x1] = 110
+    read, contrast = segments.read_cells(image, [(0, 1 / 3), (1 / 3, 2 / 3), (2 / 3, 1)], 0.0)
+    assert read == "018" and contrast > 50
+    within = inst("segments", point=1, tolerance=0.3)
+    # Unreadable checks don't vote but lower how sure; an unsure digit shows as "?".
+    reading = segments.tally(within, "018", ["018", "018", "???", "018"], contrast)
+    assert reading.status == "ok" and reading.values["value"] == 0.18 and reading.confidence == 0.75
+    assert segments.tally(within, "048", ["018", "048"], contrast).status == "unknown"  # 0.18 or 0.48?
+    unsure_last = segments.tally(within, "013", ["012", "013"], contrast)  # 0.1? is within ±0.3 either way
+    assert unsure_last.status == "ok" and unsure_last.text.startswith("0.1?")
+    assert segments.tally(within, "048", ["048"], contrast).status == "off"  # 0.48 is beyond ±0.3

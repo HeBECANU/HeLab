@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import collections
+import os
+from concurrent.futures import ThreadPoolExecutor
 import dataclasses
 import logging
 import threading
@@ -22,6 +24,7 @@ from . import region as regions
 from . import relocate
 from .config import HOME, Config, Corners
 from .detectors import Detector, Dot, Image, Motion, Needle, Reading, TraceLevel
+from .segments import SevenSegment
 from .overlay import Item, draw
 from .source import FrameSource
 from .wavemeter import Wavemeter
@@ -34,8 +37,10 @@ KINDS: dict[str, type[Detector]] = {
     "dot": Dot,
     "motion": Motion,
     "wavemeter": Wavemeter,
+    "segments": SevenSegment,
 }
 ALIGN_EVERY = 5.0  # s
+OCR_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 1))  # cores for the wavemeter when reading every check
 LOCK_SETTLE = 1.5  # s a loss (or unknown) must last before it shows
 LOCK_AFTER = 10.0  # s
 SURE_WINDOW = 10.0  # s of "how sure" summarised as median ± std
@@ -92,7 +97,12 @@ class Engine:
         self._last_analysis = 0.0
         self._last_align = 0.0
         self._last_slow: dict[str, float] = {}
-        self._slow_busy = threading.Event()
+        # OCR (Tesseract, a process per read) on a pool of its own: one read at a time, each field every `every`
+        # s; or, with `ocr_every_check` on, a read of each field at every check on up to OCR_WORKERS cores.
+        self.ocr_every_check = False
+        self._ocr_pool = ThreadPoolExecutor(OCR_WORKERS, thread_name_prefix="labcam-ocr")
+        self._ocr_busy: dict[str, int] = {}
+        self._ocr_guard = threading.Lock()
         self._streaks: dict[str, tuple[str, float]] = {}
         self._history: dict[str, collections.deque[tuple[float, Reading]]] = {}
         self._sure: dict[str, collections.deque[tuple[float, float]]] = {}  # instrument or laser → (time, sure)
@@ -261,12 +271,16 @@ class Engine:
                     self.covered[name] = why
             if isinstance(detector, Wavemeter):
                 # OCR is slow: it runs on its own thread, one field at a time, so the overlay keeps moving.
-                due = now - self._last_slow.get(name, 0.0) >= self.config.instruments[name].option("every", 2.0)
-                if due and not self._slow_busy.is_set():
-                    self._last_slow[name] = now
-                    self._slow_busy.set()
-                    threading.Thread(target=self._run_slow, args=(name, detector, frame, self.regions[name]),
-                                     name="labcam-ocr", daemon=True).start()
+                fast = self.ocr_every_check
+                due = fast or now - self._last_slow.get(name, 0.0) >= self.config.instruments[name].option("every", 2.0)
+                with self._ocr_guard:
+                    busy = sum(self._ocr_busy.values())
+                    free = busy < OCR_WORKERS and self._ocr_busy.get(name, 0) < max(1, OCR_WORKERS // 2) if fast \
+                        else busy == 0
+                    if due and free:
+                        self._last_slow[name] = now
+                        self._ocr_busy[name] = self._ocr_busy.get(name, 0) + 1
+                        self._ocr_pool.submit(self._run_slow, name, detector, frame, self.regions[name])
                 continue
             self._run_detector(name, detector, frame, self.regions[name])
         self.analysis_count += 1
@@ -368,7 +382,8 @@ class Engine:
         try:
             self._run_detector(name, detector, frame, region)
         finally:
-            self._slow_busy.clear()
+            with self._ocr_guard:
+                self._ocr_busy[name] -= 1
 
     def _run_detector(self, name: str, detector: Detector, frame: Image, region: regions.Region) -> None:
         t = time.monotonic()
@@ -512,6 +527,7 @@ class Engine:
                 for laser, lock in self.locks.items()
             },
             "timings_ms": {k: round(v, 1) for k, v in self.timings.items()},
+            "ocr": {"every_check": self.ocr_every_check, "workers": OCR_WORKERS},
             "instruments": {
                 name: {
                     "label": inst.label,

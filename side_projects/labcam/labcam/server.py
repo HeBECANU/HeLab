@@ -1,7 +1,8 @@
 """HTTP: `/` the page, `/stream` the overlay as MJPEG (`?overlay=0` without it), `/frame.jpg` one overlay frame, `/raw.jpg` the
 un-mirrored camera frame, `/state.json` every reading and lock, `/log` the recent log, `/history.csv` and `/locks.csv` today's
 data, `/history.json?hours=N` the last N hours for the plots;
-POST `/api/region` {name, corners} and `/api/reference` change the boxes and the reference frame."""
+POST `/api/region` {name, corners} and `/api/reference` change the boxes and the reference frame;
+`/api/settings` {ocr_every_check} reads the wavemeter at every check (on several cores) or every 2 s."""
 
 from __future__ import annotations
 
@@ -175,6 +176,12 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
                     return
                 engine.set_corners(name, points)
                 self._json({"message": f"{name} region saved"})
+            elif self.path == "/api/settings":
+                if "ocr_every_check" in body:
+                    engine.ocr_every_check = bool(body["ocr_every_check"])
+                    log.info("wavemeter read %s", "at every check" if engine.ocr_every_check else "every 2 s")
+                self._json({"message": "wavemeter: " + ("read at every check" if engine.ocr_every_check
+                                                        else "read every 2 s")})
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
