@@ -72,7 +72,7 @@ tr.more{display:none}
     <div class="bar">
       <select id="hours"><option value="0.25">15 min</option><option value="1" selected>1 h</option>
         <option value="6">6 h</option><option value="24">24 h</option><option value="168">7 days</option></select>
-      <label title="Plot each instrument's (and lock's) confidence, 0–100 %, as a dotted line over its panel"><input type="checkbox" id="showsure"> how sure</label>
+      <label title="Plot each instrument's (and lock's) confidence, 0–100 %, as a dotted line over its panel"><input type="checkbox" id="showsure" checked> how sure</label>
       <label title="Off: tap or hover only, so a touch never moves the plots"><input type="checkbox" id="zoom"> zoom and pan</label>
       <span id="histinfo"></span>
     </div>
@@ -330,7 +330,7 @@ async function refreshHistory() {
 }
 $("hours").onchange = refreshHistory;
 for (const id of ["showsure", "zoom"]) {
-  try { $(id).checked = localStorage.getItem("labcam-" + id) === "1"; } catch (e) {}
+  try { const v = localStorage.getItem("labcam-" + id); if (v !== null) $(id).checked = v === "1"; } catch (e) {}
   $(id).onchange = () => { try { localStorage.setItem("labcam-" + id, $(id).checked ? "1" : "0"); } catch (e) {} refreshHistory(); };
 }
 

@@ -191,6 +191,7 @@ def test_hand_in_front_holds_the_lock(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(history, "DATA", tmp_path)
     cfg = config.load(HOME / "config.json")
     cfg.analysis_hz = 100
+    monkeypatch.setattr(engine, "ANCHORS", tmp_path / "anchors")  # not the real ones
     eng = engine.Engine(cfg, FrameSource(str(SAMPLE)))
     frame = cv2.imread(str(SAMPLE))
     hand = cv2.flip(frame, 1)
@@ -288,3 +289,35 @@ def test_duration() -> None:
 
     assert [duration(s) for s in (0, 45, 192, 3600, 7500, 97200, 86400 * 3 + 59)] == [
         "0s", "45s", "3m 12s", "1h", "2h 5m", "1d 3h", "3d"]
+
+
+def test_relocate_finds_a_moved_instrument(tmp_path: Path) -> None:
+    from labcam import relocate
+
+    rng = np.random.default_rng(1)
+    scene = cv2.GaussianBlur(rng.integers(0, 255, (300, 400, 3), np.uint8), (0, 0), 3)
+    scene = cv2.normalize(scene, None, 0, 255, cv2.NORM_MINMAX)
+
+    def with_scope(dx: int, dy: int, screen: int) -> np.ndarray:
+        frame = scene.copy()
+        x, y = 150 + dx, 110 + dy
+        frame[y - 25:y + 85, x - 30:x + 120] = 200  # the bezel
+        cv2.putText(frame, "SCOPE", (x - 20, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (40, 40, 40), 1)
+        for k in range(4):  # buttons
+            cv2.circle(frame, (x + 105, y + 10 + 15 * k), 4, (60, 60, 60), -1)
+        frame[y:y + 60, x:x + 90] = screen  # the screen; what it shows changes
+        return frame
+
+    corners = [(150.0, 110.0), (240.0, 110.0), (240.0, 170.0), (150.0, 170.0)]
+    anchor = relocate.anchor(with_scope(0, 0, 90), corners)
+    assert anchor is not None
+    still = relocate.find(anchor, with_scope(0, 0, 30), corners)  # only the screen changed
+    assert still is not None and not still.moved
+    found = relocate.find(anchor, with_scope(14, -17, 30), corners)
+    assert found is not None and found.moved and found.shift == (14.0, -17.0)
+    gone = relocate.find(anchor, scene, corners)  # nothing like it nearby: the box stays
+    assert gone is not None and not gone.moved
+    relocate.save(anchor, tmp_path / "a.npz")
+    again = relocate.load(tmp_path / "a.npz")
+    assert again is not None and again.origin == anchor.origin
+    assert relocate.find(again, with_scope(14, -17, 30), corners).shift == (14.0, -17.0)  # type: ignore[union-attr]

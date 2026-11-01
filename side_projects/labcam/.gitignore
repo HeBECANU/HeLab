@@ -2,6 +2,7 @@
 logs/
 data/
 reference.jpg
+anchors/
 config.local.json
 *.egg-info/
 tests/*.jpg

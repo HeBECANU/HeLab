@@ -19,6 +19,7 @@ from . import snap as snap_module
 from . import locks as locks_module
 from .align import Aligner
 from . import region as regions
+from . import relocate
 from .config import HOME, Config, Corners
 from .detectors import Detector, Dot, Image, Motion, Needle, Reading, TraceLevel
 from .overlay import Item, draw
@@ -40,6 +41,9 @@ LOCK_AFTER = 10.0  # s
 SURE_WINDOW = 10.0  # s of "how sure" summarised as median ± std
 COVER_ACCEPT = 600.0  # s: surroundings changed this long become the usual ones
 COVER_PAD = 10.0  # px around a moving area that still counts as in front of an instrument
+RELOCATE_AFTER = 30.0  # s of changed surroundings, nobody moving, before looking for the instrument nearby
+ANCHOR_EVERY = 60.0  # s between fresh anchors (relocate.py) while an instrument reads normally
+ANCHORS = HOME / "anchors"  # the last anchor per instrument, for the check at start
 
 
 def _ring(frame: Image, corners: Corners, size: tuple[int, int] = (64, 48)) -> Any:
@@ -72,6 +76,8 @@ class Engine:
         self.surround_change: dict[str, float] = {}
         self._usual_rings: dict[str, Any] = {}
         self._covered_since: dict[str, float] = {}
+        self._anchors: dict[str, tuple[float, relocate.Anchor]] = {}  # instrument → (taken at, anchor)
+        self._relocate_tried: dict[str, float] = {}
         self.regions: dict[str, regions.Region] = {}
         self.marks: dict[str, list[tuple[Any, ...]]] = {}
         self.overlay_jpeg: bytes | None = None
@@ -90,6 +96,7 @@ class Engine:
         self._streaks: dict[str, tuple[str, float]] = {}
         self._history: dict[str, collections.deque[tuple[float, Reading]]] = {}
         self._sure: dict[str, collections.deque[tuple[float, float]]] = {}  # instrument or laser → (time, sure)
+        self._startup_checked = False
         self._reference_wanted = not self._load_reference()
         self._stop = threading.Event()
         self.locks: dict[str, locks_module.Lock] = {}
@@ -139,6 +146,13 @@ class Engine:
         stored = self.aligner.current.back(corners)
         self.config.set_corners(name, stored)
         self.detectors[name].reset()
+        # Its surroundings and anchor were the old box's.
+        self._usual_rings.pop(name, None)
+        self._covered_since.pop(name, None)
+        self._anchors.pop(name, None)
+        frame = self.raw_frame
+        if frame is not None:  # set on the current frame: that's where the instrument is now
+            self._take_anchor(name, frame, corners, time.time())
         log.info("region of %s set to %s (reference frame)", name, [(round(x), round(y)) for x, y in stored])
 
     # Loop ----------------------------------------------------------------------------------------------
@@ -226,6 +240,17 @@ class Engine:
             if isinstance(detector, Motion):
                 own = self.regions[name]
                 detector.ignore = [own.unmap(r.corners) for n, r in self.regions.items() if n != name]
+        if not self._startup_checked and alignment.ok:
+            # Moved while labcam was off: each instrument looked for once, from its last saved anchor. (Not from the
+            # reference frame: it's stale for any box moved since it was taken, and would move that box again.)
+            self._startup_checked = True
+            for name, inst in instruments.items():
+                path = ANCHORS / f"{name}.npz"
+                saved = relocate.load(path) if inst.kind != "motion" and path.exists() else None
+                if saved is not None:
+                    self._relocate(frame, name, now, saved, startup=True)
+            self.regions = {name: regions.make(alignment.move(inst.corners))
+                            for name, inst in self.config.instruments.items()}
         # Movement first: the other instruments use it to tell when someone is in front of them.
         order = sorted(self.detectors.items(), key=lambda item: not isinstance(item[1], Motion))
         self.covered = {}
@@ -286,10 +311,58 @@ class Engine:
                 self._usual_rings[name] = ring
                 self._covered_since.pop(name, None)
                 return ""
+            if now - since > RELOCATE_AFTER and self._relocate(frame, name, now):
+                return "moved: its box followed it"
             return f"its surroundings changed ({change:.0f}): something in front?"
         self._covered_since.pop(name, None)
         self._usual_rings[name] = 0.95 * usual + 0.05 * ring
+        taken = self._anchors.get(name)
+        reading = self.readings.get(name)
+        if (taken is None or now - taken[0] > ANCHOR_EVERY) and reading is not None and reading.status != "unknown":
+            self._take_anchor(name, frame, region.corners, now)
         return ""
+
+    def _take_anchor(self, name: str, frame: Image, corners: Corners, now: float) -> None:
+        fresh = relocate.anchor(frame, corners)
+        if fresh is None:
+            return
+        self._anchors[name] = (now, fresh)
+        try:
+            relocate.save(fresh, ANCHORS / f"{name}.npz")
+        except OSError as exc:
+            log.debug("couldn't save %s's anchor: %s", name, exc)
+
+    def _relocate(self, frame: Image, name: str, now: float, anchor: relocate.Anchor | None = None,
+                  startup: bool = False) -> bool:
+        """Looks for an instrument moved on its own (see relocate.py), at most every RELOCATE_AFTER while its
+        surroundings stay changed and nobody is moving in the room, and once at start from its saved anchor
+        (`anchor`); moves its box there when found clearly."""
+        inst = self.config.instruments[name]
+        if anchor is None:
+            taken = self._anchors.get(name)
+            if taken is not None:
+                anchor = taken[1]
+            elif (ANCHORS / f"{name}.npz").exists():  # none taken since start: the last one saved
+                anchor = relocate.load(ANCHORS / f"{name}.npz")
+        people = self.readings.get("people")
+        if (anchor is None or not inst.option("relocate", True)
+                or (not startup and now - self._relocate_tried.get(name, 0.0) < RELOCATE_AFTER)
+                or (not startup and people is not None and people.values.get("present") != "no")):
+            return False
+        self._relocate_tried[name] = now
+        corners = self.regions[name].corners
+        found = relocate.find(anchor, frame, corners, int(inst.option("relocate_px", 60)))
+        if found is None or not found.moved:
+            if found is not None:
+                log.debug("%s: not found elsewhere (best %.2f at %s, here %.2f, elsewhere %.2f)", name, found.score,
+                          found.shift, found.here, found.other)
+            return False
+        dx, dy = found.shift
+        # Shifted as it is, not snapped: a box drawn to leave out part of the screen (a menu column) stays so.
+        log.warning("%s moved %+.0f, %+.0f px by itself (match %.2f, %.2f where it was): box moved with it", name,
+                    dx, dy, found.score, found.here)
+        self.set_corners(name, [(x + dx, y + dy) for x, y in corners])
+        return True
 
     def _run_slow(self, name: str, detector: Detector, frame: Image, region: regions.Region) -> None:
         try:
