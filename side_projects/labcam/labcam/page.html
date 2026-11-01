@@ -76,9 +76,10 @@ tr.more{display:none}
       <label title="Off: tap or hover only, so a touch never moves the plots"><input type="checkbox" id="zoom"> zoom and pan</label>
       <span id="histinfo"></span>
     </div>
-    <div class="explain">What labcam has seen over the chosen time, read from its saved history (a row every 5 s and at every lock change):
-      the lasers' lock states (faded when unsure), then each instrument's numbers, coloured by its status (green ok, orange off).
-      Breaks are times labcam wasn't running. "How sure" adds the computer vision's confidence (0–100 %, right axis).</div>
+    <div class="explain">What labcam has seen, from its saved history (a row every 5 s and at every lock change). Points are coloured
+      by status (green ok, orange off); breaks are times labcam wasn't running. Hover or tap a panel's title (ⓘ) for what it shows;
+      "how sure" adds the computer vision's confidence (0–100 %, right axis) to each panel.</div>
+    <div id="about" class="explain"></div>
     <div id="charts"></div>
   </details>
   <details open data-key="log"><summary>Log</summary>
@@ -207,24 +208,34 @@ function showLocks(locks) {
 // History plots (Plotly, served by labcam) --------------------------------------------------------------
 // One figure, panels stacked on a shared time axis; hovering shows each point's time, value and status.
 const STATE_COLOUR = {locked: "#50c850", lost: "#ffa028", unknown: "#777", ok: "#50c850", off: "#ffa028"};
+// `about`: shown on hovering (or tapping) the panel's title.
 const PANELS = [
-  {title: "Locks", kind: "state"},
-  {title: "Wavemeter", match: k => k === "wavemeter.value"},
-  {title: "Power (µW)", match: k => k === "wavemeter_power.value"},
-  {title: "Trace thickness", match: k => k.endsWith(".thickness")},
-  {title: "Trace level (0 top, 1 bottom)", match: k => k.endsWith(".level"), range: [1, 0]},
-  {title: "Needle offset", match: k => k.endsWith(".offset"), range: [-1, 1]},
-  {title: "Dot movement (px)", match: k => k.endsWith(".spread_px")},
-  {title: "People", match: k => k.endsWith(".present"), kind: "bars", range: [0, 1.05]},
+  {title: "Locks", kind: "state", about: "Each laser's lock state: green locked, orange lost, grey can't tell.<br>" +
+    "The fainter a square, the less sure labcam was. He3: the left middle scope shows a flat thin line.<br>" +
+    "He4: the left top scope is flat, the scope dot still and the lock-in needle in the middle."},
+  {title: "Wavemeter", match: k => k === "wavemeter.value", about: "The wavemeter's reading (nm or GHz), read from its display.<br>" +
+    "Grey points had digits it couldn't read for sure."},
+  {title: "Power (µW)", match: k => k === "wavemeter_power.value", about: "The power under the wavemeter's reading, read from its display."},
+  {title: "Trace thickness", match: k => k.endsWith(".thickness"), about: "How thick each scope's trace is, as a fraction of the screen's height.<br>" +
+    "A thin locked line is about 0.05–0.1; a block or an oscillation is much more."},
+  {title: "Trace level (0 top, 1 bottom)", match: k => k.endsWith(".level"), range: [1, 0],
+    about: "Where each scope's trace sits on its screen: 0 the top, 0.5 the middle, 1 the bottom."},
+  {title: "Needle offset", match: k => k.endsWith(".offset"), range: [-1, 1],
+    about: "The lock-in needle's place: 0 the middle, −1 and +1 the ends of its scale."},
+  {title: "Dot movement (px)", match: k => k.endsWith(".spread_px"),
+    about: "How far the scope dot moved over the last few seconds, in pixels of the camera frame.<br>" +
+      "It counts as moving past a tenth of the screen's width."},
+  {title: "People", match: k => k.endsWith(".present"), kind: "bars", range: [0, 1.05],
+    about: "1 when labcam saw someone moving in the room. Readings behind a person are held, not counted as lost."},
 ];
-let historyDrawn = false;
+let historyDrawn = false, PANEL_ABOUT = {};
 
 function lockTraces(c, axis) {
   const lasers = Object.keys(c).filter(k => !k.includes(".") && k !== "time" && !/_(sure|why)$/.test(k));
   return lasers.map(laser => ({
     type: "scatter", mode: "markers", name: laser, x: c.time, y: c[laser].map(s => s == null ? null : laser), yaxis: axis,  // null: a gap
     marker: {symbol: "square", size: 9, color: c[laser].map(s => STATE_COLOUR[s] || "#333"),
-             opacity: c[laser + "_sure"] ? c[laser + "_sure"].map(v => 0.35 + 0.65 * (v ?? 0)) : 1},
+             opacity: c[laser + "_sure"] ? c[laser + "_sure"].map(v => 0.15 + 0.85 * (v ?? 0)) : 1},  // fainter = less sure
     customdata: c[laser].map((s, i) => [s, Math.round(100 * ((c[laser + "_sure"] || [])[i] ?? 0)), (c[laser + "_why"] || [])[i] ?? ""]),
     hovertemplate: `<b>${laser}</b> %{customdata[0]} (sure %{customdata[1]}%)<br>%{customdata[2]}<br>%{x}<extra></extra>`,
     showlegend: false,
@@ -234,14 +245,15 @@ function lockTraces(c, axis) {
 const LINE_COLOURS = ["#4fc3f7", "#ba68c8", "#fff176", "#f06292"];
 function valueTraces(c, panel, axis) {
   return Object.keys(c).filter(panel.match).map((col, n) => {
-    const name = col.split(".")[0], status = c[name + ".status"] || [], shape = c[name + ".shape"] || [];
+    const name = col.split(".")[0], status = c[name + ".status"] || [], sure = c[name + ".sure"] || [], shape = c[name + ".shape"] || [];
     const bars = panel.kind === "bars";
     return {
       type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y: c[col], yaxis: axis,
       marker: bars ? {color: "#ffa028"} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
       line: {width: 1, color: LINE_COLOURS[n % LINE_COLOURS.length]}, connectgaps: false, showlegend: false,
-      customdata: c.time.map((_, i) => [status[i] ?? "", shape[i] ? ", " + shape[i] : ""]),
-      hovertemplate: `<b>${name}</b> %{y}<br>status %{customdata[0]}%{customdata[1]}<br>%{x}<extra></extra>`,
+      customdata: c.time.map((_, i) => [status[i] ?? "", shape[i] ? ", " + shape[i] : "",
+                                        sure[i] == null ? "" : ` (sure ${Math.round(100 * sure[i])}%)`]),
+      hovertemplate: `<b>${name}</b> %{y}<br>status %{customdata[0]}%{customdata[1]}%{customdata[2]}<br>%{x}<extra></extra>`,
     };
   });
 }
@@ -283,16 +295,16 @@ async function refreshHistory() {
       // The panel's title above it, with a key to its lines when it has more than one (no shared legend).
       const key_ = p.kind === "state" || p.traces.length < 2 ? "" : "   " + p.traces.map(t =>
         `<span style="color:${t.line.color}">━ ${t.name.split(".")[0]}</span>`).join("  ");
-      layout.annotations.push({text: `<b>${p.title}</b>${key_}`, xref: "paper", yref: "paper", x: 0, y: top,
-                               xanchor: "left", yanchor: "bottom", showarrow: false, font: {size: 11, color: "#bbb"}});
+      layout.annotations.push({text: `<b>${p.title}</b> ⓘ${key_}`, xref: "paper", yref: "paper", x: 0, y: top,
+                               xanchor: "left", yanchor: "bottom", showarrow: false, font: {size: 11, color: "#bbb"},
+                               hovertext: p.about, captureevents: true, name: p.title});
       layout[key] = {domain: [top - h, top], gridcolor: "#222", zeroline: false,
                      ...(p.kind === "state" ? {type: "category"} : {range: p.range || robustRange(p.traces)})};
       layout[key].fixedrange = !zoom;
       p.traces.forEach(t => traces.push({...t, yaxis: axis}));
-      if (!sure) return;
+      if (!sure || p.kind === "state") return;  // the Locks panel shows how sure by its squares' opacity
       // How sure, on a 0–100 % axis of its own over the panel: per laser for the locks, per instrument otherwise.
-      const cols = p.kind === "state" ? p.traces.map(t => t.name + "_sure")
-        : [...new Set(p.traces.map(t => t.name.split(".")[0] + ".sure"))];
+      const cols = [...new Set(p.traces.map(t => t.name.split(".")[0] + ".sure"))];
       const sureAxis = "y" + (shown.length + n), sureKey = "yaxis" + (shown.length + n);
       layout[sureKey] = {overlaying: axis, side: "right", range: [0, 105], autorange: false, showgrid: false, zeroline: false,
                          fixedrange: true, ticksuffix: "%", tickmode: "array", tickvals: [0, 50, 100], ticktext: ["0%", "50%", "100%"], tickfont: {size: 9, color: "#888"}};
@@ -306,8 +318,13 @@ async function refreshHistory() {
     layout.xaxis.fixedrange = !zoom;
     layout.dragmode = zoom ? "zoom" : false;
     layout.xaxis.anchor = shown.length > 1 ? "y" + shown.length : "y";
+    PANEL_ABOUT = Object.fromEntries(shown.map(p => [p.title, p.about]));
     Plotly.react("charts", traces, layout, {displaylogo: false, responsive: true, scrollZoom: false,
                                             displayModeBar: zoom ? "hover" : false});
+    if (!historyDrawn) $("charts").on("plotly_clickannotation", ev => {  // a tap on a title (phones have no hover)
+      const about = PANEL_ABOUT[ev.annotation.name];
+      $("about").innerHTML = about ? `<b>${esc(ev.annotation.name)}:</b> ${about}` : "";
+    });
     historyDrawn = true;
   } catch (e) { $("histinfo").textContent = "history unavailable: " + e; }
 }
