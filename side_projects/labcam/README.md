@@ -52,7 +52,7 @@ take it again from a locked frame.
 Under `data/`, a row every 5 s and at every lock change (so no loss falls between rows; about 2.5 MB a day,
 earlier days gzipped to about a tenth at start and at midnight; days older than 7 are deleted):
 - `locks-<date>.csv`: each laser's state, how sure, and why;
-- `history-<date>.csv`: the locks, then each instrument's status and numbers (trace shape, level, thickness and
+- `history-<date>.csv`: the locks, then each instrument's status, how sure (0–1) and numbers (trace shape, level, thickness and
   waviness; wavemeter value; power; needle offset; dot spread and position; movement 0/1).
 
 The page plots them with Plotly (served by labcam from the plotly package, no internet needed; 15 min to 7

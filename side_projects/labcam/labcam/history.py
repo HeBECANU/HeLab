@@ -2,7 +2,7 @@
 lock state changes (so a loss is never missed between rows).
 
 - `locks-<date>.csv`: time, then per laser its state (locked, lost, unknown), how sure (0–1) and why;
-- `history-<date>.csv`: time, the locks again, then each instrument's status and its numbers (a trace's shape,
+- `history-<date>.csv`: time, the locks again, then each instrument's status, how sure (0–1) and its numbers (a trace's shape,
   level and thickness, the wavemeter's value, the needle's offset, the dot's spread, movement 0/1).
 
 A file's header is written when it is created; a day whose header no longer matches the instruments (the
@@ -172,9 +172,10 @@ class Recorder:
         row: list[Any] = [stamp] + [v for lock in locks.values() for v in (lock.state, lock.confidence, lock.summary)]
         for name, inst in instruments.items():
             fields = FIELDS.get(inst.kind, [])
-            header += [f"{name}.status"] + [f"{name}.{f}" for f in fields]
+            header += [f"{name}.status", f"{name}.sure"] + [f"{name}.{f}" for f in fields]
             reading = readings.get(name)
-            row += [reading.status if reading else ""] + [_value(inst, reading, f) for f in fields]
+            row += [reading.status if reading else "", round(reading.confidence, 2) if reading else ""]
+            row += [_value(inst, reading, f) for f in fields]
         self.history.write(now, header, row)
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         if day != self.day:  # once both writers have moved to the new day, so neither holds yesterday open

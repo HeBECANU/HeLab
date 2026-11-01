@@ -29,6 +29,20 @@ th{color:var(--dim);font-weight:normal}
 .lock{padding:6px 12px;border-radius:6px;border:1px solid var(--line);width:360px;max-width:calc(100% - 26px);box-sizing:border-box}
 .lock .values{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lock b{font-size:16px}
+tr.more{display:none}
+.explain{color:var(--dim);margin:2px 0 6px}
+/* Narrow screens: an instrument's details go on their own line under it. */
+@media (max-width: 760px){
+  main{padding:6px 6px}
+  td,th{padding:3px 4px}
+  .wide{display:none}
+  tr.more{display:table-row}
+  tr.main td{border-bottom:none}
+  tr.more td{padding-top:0}
+  .values{word-break:normal;overflow-wrap:anywhere}
+  td{overflow-wrap:break-word}
+  button{padding:2px 5px}
+}
 .lock.locked{border-color:var(--ok)}.lock.lost{border-color:var(--off);background:#2a1a05}
 
 </style></head><body>
@@ -44,7 +58,7 @@ th{color:var(--dim);font-weight:normal}
     </div>
   </details>
   <details open data-key="instruments"><summary>Instruments</summary>
-    <table><thead><tr><th>Instrument</th><th>Status</th><th>Reading</th><th title="now, and over the last 10 s: median ± std">Sure</th><th>Details</th><th></th></tr></thead>
+    <table><thead><tr><th>Instrument</th><th>Status</th><th>Reading</th><th title="now, and over the last 10 s: median ± std">Sure</th><th class="wide">Details</th><th class="wide"></th></tr></thead>
       <tbody id="rows"></tbody></table>
     <div class="bar">
       <button id="ref" title="Use the current frame as the one boxes are drawn on; later frames are matched to it">Set reference frame</button>
@@ -58,8 +72,13 @@ th{color:var(--dim);font-weight:normal}
     <div class="bar">
       <select id="hours"><option value="0.25">15 min</option><option value="1" selected>1 h</option>
         <option value="6">6 h</option><option value="24">24 h</option><option value="168">7 days</option></select>
+      <label title="Plot each instrument's (and lock's) confidence, 0–100 %, as a dotted line over its panel"><input type="checkbox" id="showsure"> how sure</label>
+      <label title="Off: tap or hover only, so a touch never moves the plots"><input type="checkbox" id="zoom"> zoom and pan</label>
       <span id="histinfo"></span>
     </div>
+    <div class="explain">What labcam has seen over the chosen time, read from its saved history (a row every 5 s and at every lock change):
+      the lasers' lock states (faded when unsure), then each instrument's numbers, coloured by its status (green ok, orange off).
+      Breaks are times labcam wasn't running. "How sure" adds the computer vision's confidence (0–100 %, right axis).</div>
     <div id="charts"></div>
   </details>
   <details open data-key="log"><summary>Log</summary>
@@ -147,11 +166,14 @@ async function refresh() {
       const r = i.reading || {status: "unknown", text: "waiting…", values: {}, confidence: 0, note: ""};
       const age = r.at ? Math.round(s.now - r.at) : null;
       const values = Object.entries(r.values || {}).map(([k, v]) => `${k}=${v}`).join("  ");
-      return `<tr><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
+      const details = `${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}`;
+      const buttons = sep => `<button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `${sep}<button onclick="post('api/snap', {name: '${name}'})" title="Fit the region to the screen's edges on the current frame (shadows and bezels stay outside)">Snap</button>` : ""}`;
+      return `<tr class="main"><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
         <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
         <td>${Math.round((r.confidence || 0) * 100)}%<br><span class="values">${sure10(i.sure_10s).trim()}</span></td>
-        <td class="values">${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}</td>
-        <td><button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `<br><button onclick="post('api/snap', {name: '${name}'})" title="Fit the region to the screen's edges on the current frame (shadows and bezels stay outside)">Snap</button>` : ""}</td></tr>`;
+        <td class="values wide">${details}</td>
+        <td class="wide">${buttons("<br>")}</td></tr>
+        <tr class="more"><td colspan="4"><span class="values">${details}</span><br>${buttons(" ")}</td></tr>`;
     }).join("");
   } catch (e) { $("src").textContent = "labcam server not answering"; $("src").className = "off"; }
 }
@@ -241,7 +263,7 @@ async function refreshHistory() {
     const data = await (await fetch("history.json?hours=" + hours)).json();
     const c = data.columns;
     if (!c.time || !c.time.length) { $("histinfo").textContent = "no history yet"; return; }
-    $("histinfo").textContent = `${data.rows} rows (${c.time.length} shown) · hover for time and status, drag to zoom, double-click to reset`;
+    $("histinfo").textContent = `${data.rows} rows (${c.time.length} shown) · ${$("zoom").checked ? "drag to zoom, double-click to reset" : "tap or hover for time and status"}`;
     const panels = PANELS.map(p => ({...p, traces: []}));
     panels.forEach((p, i) => { const axis = i ? "y" + (i + 1) : "y"; p.traces = p.kind === "state" ? lockTraces(c, axis) : valueTraces(c, p, axis); });
     const shown = panels.filter(p => p.traces.length);
@@ -250,11 +272,11 @@ async function refreshHistory() {
       // Dark whatever the browser's or Plotly's theme says.
       template: {}, paper_bgcolor: "#111", plot_bgcolor: "#000", font: {color: "#ccc", size: 11},
       hoverlabel: {bgcolor: "#222", bordercolor: "#555", font: {color: "#eee"}},
-      margin: {l: 50, r: 10, t: 22, b: 30}, height: 150 * shown.length, showlegend: false,
-      hovermode: "closest", uirevision: "keep", annotations: [],
+      margin: {l: 60, r: 10, t: 22, b: 30}, height: 150 * shown.length, showlegend: false,
+      hovermode: "closest", uirevision: $("zoom").checked ? "zoom" : "fixed", annotations: [],
       xaxis: {type: "date", gridcolor: "#222", anchor: "y" + (shown.length > 1 ? shown.length : "")},
     };
-    const traces = [];
+    const traces = [], sure = $("showsure").checked, zoom = $("zoom").checked;
     shown.forEach((p, i) => {
       const n = i + 1, axis = n === 1 ? "y" : "y" + n, key = n === 1 ? "yaxis" : "yaxis" + n;
       const top = 1 - i * (h + gap);
@@ -265,14 +287,35 @@ async function refreshHistory() {
                                xanchor: "left", yanchor: "bottom", showarrow: false, font: {size: 11, color: "#bbb"}});
       layout[key] = {domain: [top - h, top], gridcolor: "#222", zeroline: false,
                      ...(p.kind === "state" ? {type: "category"} : {range: p.range || robustRange(p.traces)})};
+      layout[key].fixedrange = !zoom;
       p.traces.forEach(t => traces.push({...t, yaxis: axis}));
+      if (!sure) return;
+      // How sure, on a 0–100 % axis of its own over the panel: per laser for the locks, per instrument otherwise.
+      const cols = p.kind === "state" ? p.traces.map(t => t.name + "_sure")
+        : [...new Set(p.traces.map(t => t.name.split(".")[0] + ".sure"))];
+      const sureAxis = "y" + (shown.length + n), sureKey = "yaxis" + (shown.length + n);
+      layout[sureKey] = {overlaying: axis, side: "right", range: [0, 105], autorange: false, showgrid: false, zeroline: false,
+                         fixedrange: true, ticksuffix: "%", tickmode: "array", tickvals: [0, 50, 100], ticktext: ["0%", "50%", "100%"], tickfont: {size: 9, color: "#888"}};
+      cols.filter(col => c[col]).forEach(col => traces.push({
+        type: "scatter", mode: "lines", name: col, x: c.time, y: c[col].map(v => v == null ? null : 100 * v), yaxis: sureAxis,
+        line: {width: 1, dash: "dot", color: "#aaa"}, connectgaps: false, showlegend: false,
+        hovertemplate: `<b>${col.replace(/[._]sure$/, "")}</b> sure %{y:.0f}%<br>%{x}<extra></extra>`,
+      }));
     });
+    if (sure) layout.margin.r = 36;
+    layout.xaxis.fixedrange = !zoom;
+    layout.dragmode = zoom ? "zoom" : false;
     layout.xaxis.anchor = shown.length > 1 ? "y" + shown.length : "y";
-    Plotly.react("charts", traces, layout, {displaylogo: false, responsive: true});
+    Plotly.react("charts", traces, layout, {displaylogo: false, responsive: true, scrollZoom: false,
+                                            displayModeBar: zoom ? "hover" : false});
     historyDrawn = true;
   } catch (e) { $("histinfo").textContent = "history unavailable: " + e; }
 }
 $("hours").onchange = refreshHistory;
+for (const id of ["showsure", "zoom"]) {
+  try { $(id).checked = localStorage.getItem("labcam-" + id) === "1"; } catch (e) {}
+  $(id).onchange = () => { try { localStorage.setItem("labcam-" + id, $(id).checked ? "1" : "0"); } catch (e) {} refreshHistory(); };
+}
 
 // Sections remember being open or closed (per browser). A closed camera section stops its stream.
 for (const d of document.querySelectorAll("details[data-key]")) {
