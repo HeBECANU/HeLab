@@ -70,16 +70,6 @@ def stored(qtbot: QtBot) -> None:
                     and not store._probe_owner, timeout=30_000)
 
 
-@pytest.fixture(autouse=True)
-def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An arrangement preset's warning would be a modal no test closes (the worker hung until killed, CI
-    41484277419): the test fails with its text instead. A test that expects one sets ``presets.warn``."""
-    def fail(parent: Optional[QWidget], title: str, text: str) -> None:
-        raise AssertionError(f"a modal warning would wait here: {title}: {text}")
-
-    monkeypatch.setattr("helab.views.plots.presets.warning_box", fail)
-
-
 def restart_presets(qtbot: QtBot) -> FolderCache:
     """HeLab quits once the presets are saved, and starts again: a new app FolderCache, which
     knows only what it reads from the store."""
@@ -1043,7 +1033,8 @@ def presets_for(window: Window, explorer: Explorer, cache: FolderCache) -> Arran
 
 def test_an_unexpected_preset_warning_fails_the_test_instead_of_waiting(qtbot: QtBot, cache: FolderCache,
                                                                         windows: Windows) -> None:
-    """The seam: ``warning_box`` (patched by ``no_modal_warnings``) raises with the warning's text."""
+    """The seam: ``warning_box`` (made to fail by conftest's ``no_modal_warnings``) raises with the warning's
+    text."""
     window = new_window(qtbot, cache, windows)
     presets = presets_for(window, Explorer(folder("anywhere")), cache)
     with pytest.raises(AssertionError, match="a modal warning would wait here: Preset can't be read: .*isn't saved"):

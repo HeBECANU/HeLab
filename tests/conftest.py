@@ -515,3 +515,17 @@ def no_selection_settle(monkeypatch: pytest.MonkeyPatch) -> None:
     selection to settle (Finish, Cancel) has its own tests, which set ``SETTLE_MAX`` again."""
     from helab.views.FolderExplorer import FolderExplorer
     monkeypatch.setattr(FolderExplorer, "SETTLE_MAX", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An arrangement preset's warning (``helab.views.plots.presets.warning_box``) is a modal no test closes:
+    a worker hung on one until killed (CI 41484277419). Here it fails the test with its text instead. A test
+    that expects a warning sets the presets' ``warn`` (as ``test_presets_plots.py`` does), or patches
+    ``warning_box`` itself."""
+    from helab.views.plots import presets
+
+    def fail(parent: Any, title: str, text: str) -> None:
+        raise AssertionError(f"a modal warning would wait here: {title}: {text}")
+
+    monkeypatch.setattr(presets, "warning_box", fail)

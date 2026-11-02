@@ -67,5 +67,23 @@ on retry:
 
 - **A~1:** other tests that make a real "restart" (shut the helpers down) should wait for owed writes the same way.
   A shared helper in `tests/` would do it (`testing.md`).
-- **A~2:** a suite-wide guard against a modal that no test closes (in `tests/conftest.py`, not this floor's): make
-  `QMessageBox.exec` and the static helpers fail in tests unless a test allows them.
+- **A~2:** a guard against other modals no test closes. The presets have three more defaults that open
+  real dialogs unless a test stubs them: `presets.ask_name` (`QInputDialog`), `presets.replace_or_add` (a
+  Replace / Add / Cancel `QMessageBox`, `exec`) and `presets.confirm` (`QMessageBox`, `exec`). `PresetBar`
+  and `ArrangementPresets` take them as instance attributes (`self.ask_name`, `self.confirm`,
+  `self.replace_or_add`). Today the tests stub them per instance (`presets_for`). A test that forgets one
+  hangs as this one did. Proposed: make them fail in `conftest.py` the way `warning_box` now does, after
+  checking that every test that reaches them stubs them. A broader option is a conftest guard on
+  `QMessageBox.exec` / `QDialog.exec` that fails unless a test allows it.
+
+## Review fix (Prismo, `498c584`: L1)
+
+`no_modal_warnings` moved from `test_presets_plots.py` into `tests/conftest.py`, autouse for every test, so
+an unexpected `warning_box` fails fast in every file. Before, `test_presets_window.py` and
+`test_preset_folder_live.py` apply arrangement presets without it. A test that expects a warning sets the
+presets' `warn`, or patches `warning_box` itself.
+
+- **New test:** `test_presets_window.py::test_applying_a_missing_preset_in_the_window_fails_fast_instead_of_waiting`
+  applies a preset never saved in a real `HelabMainWindow`, and fails with the warning's text.
+- **Checked against the old conftest:** without the fixture, the test hung on the modal until I killed it.
+- **Checks:** full suite 9160 passed, 673 skipped, **no RERUN**; the five type checks clean. CI: CI2_PLACEHOLDER

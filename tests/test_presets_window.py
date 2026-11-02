@@ -83,6 +83,20 @@ def test_the_presets_menu_lists_saved_arrangements(qtbot: QtBot) -> None:
     quit_window(qtbot, window)
 
 
+def test_applying_a_missing_preset_in_the_window_fails_fast_instead_of_waiting(qtbot: QtBot) -> None:
+    """Prismo's L1: the window's presets warn with a modal (``warning_box``); conftest's ``no_modal_warnings``
+    makes an unexpected one fail the test with its text, in every test file, rather than hang the worker."""
+    import pytest
+    from helab.views.HelabMainWindow import HelabMainWindow
+    window = HelabMainWindow()
+    qtbot.addWidget(window)
+    store = preset_store()
+    qtbot.waitUntil(lambda: store.presets_read and not store._preset_jobs, timeout=30_000)
+    with pytest.raises(AssertionError, match="a modal warning would wait here: Preset can't be read: .*isn't saved"):
+        window.arrangement_presets.apply("never saved")
+    quit_window(qtbot, window)
+
+
 def test_applying_a_live_preset_in_a_real_tab_starts_live_once_listed(
         qtbot: QtBot, tmp_path: Path) -> None:
     """A folder with no shots yet (this temp folder): the tab opens it as typing its path would,
