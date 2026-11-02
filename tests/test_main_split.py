@@ -9,10 +9,9 @@ from typing import Iterator
 import pytest
 from PyQt6 import QtWebEngineWidgets  # noqa: F401  (before any QApplication: the main window)
 from PyQt6.QtCore import QSettings
-from PyQt6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
-from helab.resources.icons import IconsInitUtil
+from helab.resources.icons import ToolIcons
 from helab.utils.settings_defaults import MAIN_SPLIT_SETTING, read_setting
 from helab.utils.settings_store import app_settings
 from helab.views.FolderExplorer import FolderExplorer
@@ -22,15 +21,13 @@ from test_debug_runner_menu import load, plot, run_folder
 pytestmark = pytest.mark.no_auto_data_root
 
 
-@pytest.fixture(autouse=True)
-def icons(qapp: QApplication) -> None:
-    """The toolbars' icons, as ``main.py`` sets them up before the window opens. Without them each side
-    toolbar's buttons show their text, and how wide the toolbars are, so how much of the window the splitter
-    gets, depended on whether an earlier test in the worker had set them up: a 1300 px window gave a 976 px
-    splitter on Windows CI in one run and 676 px in the next (41161254527; 315 px of toolbars without icons
-    here, 72 px with them). After the QApplication (``qapp``): an icon made before it aborts the process, as
-    in a worker whose first Qt test was a pure one here (41164525298)."""
-    IconsInitUtil.initialise_icons()
+def test_a_qt_test_has_the_apps_toolbar_icons(qtbot: QtBot) -> None:
+    """A43.1: conftest's ``toolbar_icons`` sets the icons up for every Qt test, as ``main.py`` does before the
+    window. Without them each side toolbar's buttons show their text, and how wide the toolbars are, so how much
+    of the window the splitter gets, depended on whether an earlier test in the worker had set them up: a
+    1300 px window gave a 976 px splitter on Windows CI in one run and 676 px in the next (41161254527; 315 px of
+    toolbars without icons here, 72 px with them). (This module set them up itself until then, 04a667a.)"""
+    assert not ToolIcons.ICON_LEFT_COLLAPSE.isNull() and not ToolIcons.ICON_RIGHT_COLLAPSE.isNull()
 
 
 def wide_parts(window: HelabMainWindow) -> str:

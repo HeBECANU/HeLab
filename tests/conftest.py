@@ -278,6 +278,24 @@ def store_free(*services: "IOService") -> bool:
     return not any(service.cache_busy() for service in (*services, app) if service is not None)
 
 
+_ICONS_READY: list[bool] = []
+
+
+@pytest.fixture(autouse=True)
+def toolbar_icons(request: pytest.FixtureRequest) -> None:
+    """A Qt test's windows have the app's icons, as ``main.py`` sets them up before its window (A43.1): without
+    them the toolbars' buttons show their text, so a window's widths depended on whether an earlier test in the
+    worker had set them up (``test_main_split`` on Windows CI). Once per worker (class attributes that stay),
+    and only for tests using pytest-qt: it takes ``qapp`` first, since an icon made before the QApplication
+    aborts the process (``1f86ca2``), and a test without Qt gets no QApplication from here."""
+    if _ICONS_READY or not {"qtbot", "qapp"} & set(request.fixturenames):
+        return
+    request.getfixturevalue("qapp")
+    from helab.resources.icons import IconsInitUtil
+    IconsInitUtil.initialise_icons()
+    _ICONS_READY.append(True)
+
+
 @pytest.fixture(autouse=True)
 def private_settings(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test's app settings are an ini file of its own (``settings_store.app_settings``), never
