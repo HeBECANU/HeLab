@@ -131,7 +131,7 @@ def main() -> None:
         elif operation == "cached":
             read_cached(request["path"], request["output"], cache_options=request.get("cache"),
                         limits=request.get("limits"), allow_large=bool(request.get("allow_large")),
-                        verified_volumes=request.get("verified_volumes"))
+                        verified_volumes=request.get("verified_volumes"), txy=request.get("txy"))
         elif operation == "result_find":
             result_find(request["path"], request["output"], request.get("cache"), str(request["lookup"]),
                         str(request.get("family") or ""), verified_volumes=request.get("verified_volumes"))

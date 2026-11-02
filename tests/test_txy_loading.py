@@ -160,3 +160,37 @@ def test_lives_save_writes_only_what_its_layers_lack(tmp_path: Path) -> None:
     held = [*loaded["fingerprint"], [3, info.st_size, info.st_mtime_ns]]
     save_held(str(source), sent.append, options, held, [], str(held_dir))  # type: ignore[arg-type]
     assert first(sent, "cache_saved") and segments(options, source) == [(1, 2), (2, 1)]
+
+
+def test_a_cached_read_follows_its_source_and_without_one_the_last_used_view(tmp_path: Path) -> None:
+    """The ``cached`` request carries the tab's TXY source (FolderCache, stage 2): its view is read. An older
+    request without one reads the folder's view used last."""
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    run_load(source, tmp_path, options)  # (The priority modes' view, "".)
+    run_load(source, tmp_path, options, txy={"source": "matlab-only"})
+    with opened(options, source) as store:
+        assert sorted(view[0] for view in store.folder_views(str(source))) == ["", "matlab-only"]
+        key = store._path_key(str(source))
+        with store.transaction():  # (The priority view used last.)
+            store._conn.execute("UPDATE txy_views SET last_used = 10 WHERE path = ? AND source = 'matlab-only'", (key,))
+
+    def read(txy: dict[str, Any] | None) -> dict[str, Any]:
+        output = tmp_path / f"cached-{time.monotonic_ns()}"
+        output.mkdir()
+        events: list[dict[str, Any]] = []
+        read_cached(str(source), str(output), events.append, options, txy=txy)  # type: ignore[arg-type]
+        return first(events, "loaded")
+    assert read({"source": "matlab-only"})["txy"]["source"] == "matlab-only"
+    assert read(None)["txy"]["source"] != "matlab-only"
+
+
+def test_folder_cache_sends_the_tabs_source_with_a_cached_read(monkeypatch: Any, tmp_path: Path) -> None:
+    from test_raw_fill import frozen
+    service, cache = frozen(monkeypatch)
+    try:
+        assert cache.submit("tab", 0, str(tmp_path), "cached", {"cache": {}})
+        request = next(item for item in service.pending if item.operation == "cached")
+        assert request.payload["txy"]["source"] == cache.tab_source()
+    finally:
+        service.shutdown()

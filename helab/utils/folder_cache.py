@@ -2271,7 +2271,8 @@ class FolderCache(QObject):
         payload = payload or {}
         if self.quitting and not (operation == "load" and payload.get("save")):
             return False
-        if operation == "load":
+        if operation in ("load", "cached"):
+            # (A cached read too: in store-v4 it reads the view of the tab's TXY source, stage 2.)
             payload = self.with_txy(path, payload)
             if payload.get("live") and "helab_since" not in payload:
                 # HeLab's folders as the last Live check found them: unchanged, nothing was converted since.
