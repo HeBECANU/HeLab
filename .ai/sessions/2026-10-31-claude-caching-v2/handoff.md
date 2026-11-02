@@ -725,3 +725,32 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
 - The step 3 work in progress was kept out of `6b0f998`: set aside as a patch, then reapplied after it.
 - Assay's notes for later: `start_txy_job`'s guard also holds `gen_datasets` and the folder's epoch when step
   3d seeds layers from v4 `datasets` rows; Settings › Cache's Clear all sends `txy` (step 5).
+
+## Step 3: loading (store-v4; the switch stays off, store-v3 unchanged)
+
+| Commit | What |
+|---|---|
+| `7d185eb` | 3a: `helab/io_ops/txy_cache.py` `Access`: `_load` and `save_held` make the same calls (`row`, `full` with a loader, `touch`, `confirm`, `write`). In store-v3 these are the dataset methods; in store-v4 views and layers. Loads and Live's saves write append-only units, never a dataset. A40.3: a signature-only change only rewrites the view's info. A held shot already kept isn't read again for a save. `mark_txy_seen` at every v4 listing. Each job takes a TXY guard |
+| `d8b6bae` | 3a: a cached read carries the tab's TXY source (FolderCache's `with_txy` for `cached`, and the `io_helper.py` line CoCo approved); an older request reads the folder's last used view |
+| `3366640` | 3b (Q19.3): a plot's own TXY choice (a `no_cache` request) is cached under its own view in store-v4, quietly (no cache events, never waiting); Don't cache still keeps it RAM only |
+| `d96c65f` | S2-3 (Assay re-check): a new layer is first seen at its job's listing time (`save_txy(seen_at=…)`, kept on waiting parts). Assay's note: the TXY guard also holds `gen_datasets` and the folder's epoch |
+| `2f6c1f3` | 3c (Q45.2): the folder's own source and tag. A v4 load sends `folder_choices` and follows it for the tab. FolderCache remembers it and `with_txy` applies it to the tab's loads, Live and cached reads. `txy_sources.with_choices`; tags are resolved to the conversion profile or a built-in |
+| `08895bc` | 3d: no view yet, so store-v4's own `datasets` row (Q45.4), else store-v3's under Keep (Q45.5, `LegacyStore.dataset_row`, `CacheStore.legacy_dataset`, never one store-v4 removed), seeds the layers on use. A42.1: a store-v3 result is copied into store-v4 as `result_find` returns it (`save_result(only_new=True)`) |
+| `6f57918` | 3e: a HeLab shot from the raw layer (the loading order's second step), equal to its text, for built-in profiles |
+
+- **Departures:**
+  - `save_dataset` isn't made to raise in store-v4 (stage 1's tests and Q45.4's rows use it). Loads never call
+    it there, and a test checks it.
+  - Live checks don't open the store, so the folder's source reaches them through FolderCache, which learns it
+    from a load's or the admin's `folder_choices`. A Live started with no load of that folder this session
+    follows the global source until one runs.
+  - 3e converts only for built-in profiles (the helper has no user profile library); others read the text.
+- **Observed, not a failure or a RERUN:** one full local run printed `ERROR:root:GUI stalled for 62.74s; capturing
+  thread stacks`. It comes from `gui_watchdog.py`, the main window's watchdog thread. Likely cause: a test leaves
+  a main window's watchdog running after its event loop is gone. This floor's code touches neither. I saw it
+  once, and it isn't in known-issues. **known-issues proposal:** "a main-window test may leave its `GUIWatchdog`
+  running (a 'GUI stalled' log in a later test's worker)".
+- Tests: `tests/test_txy_loading.py` (17), and additions to `test_txy_layers_store.py` (23), `test_store_v4.py`,
+  `test_helper_dispatch.py`, `test_caching_v2_session.py`.
+- Local full suite at `6f57918`: 8909 passed, 672 skipped, no RERUN. mypy --strict (helab, tests, win32) and
+  pyright (also Windows) are clean.
