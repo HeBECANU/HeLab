@@ -333,6 +333,10 @@ def test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing
     checkout = tmp_path / "checkout"
     subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(ROOT), str(checkout)], check=True)
     subprocess.run(["git", "-C", str(checkout), "checkout", "--quiet", "--detach", "HEAD"], check=True)
+    # git's first status on a checkout just written refreshes its whole index (and on Windows meets the virus
+    # scanner over every new file): past build_info's 2 s per git call on a slow runner, which then stamped
+    # "unknown" (Windows CI 41481668334). Done once here, untimed, so what follows tests the stamp, not that.
+    subprocess.run(["git", "-C", str(checkout), "status", "--porcelain"], check=True, capture_output=True)
     commit = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
     assert checkout_build_info(checkout).branch == "detached"
     monkeypatch.delenv("HELAB_BUILD_BRANCH", raising=False)
