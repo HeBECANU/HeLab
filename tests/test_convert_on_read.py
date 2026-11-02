@@ -346,3 +346,25 @@ def test_helab_priority_keeps_matlabs_txy_of_a_raw_file_that_cant_be_converted_n
     monkeypatch.setattr(txy_sources, "CONVERT_OVER_MATLAB", True)
     later = first(run_load(source, tmp_path, options, txy=asked(txy_sources.HELAB_PRIORITY)), "loaded")
     assert later["load_counts"]["helab_on_read"] == 3  # (The flag: over MATLAB's too.)
+
+
+@pytest.mark.parametrize("over_matlab", [False, True])
+def test_a_shot_live_converted_on_read_stays_helabs_when_matlabs_txy_of_it_appears(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, over_matlab: bool) -> None:
+    """SQ-1: under HeLab priority a shot Live holds from its raw file, converted on read, isn't read again from
+    MATLAB's TXY when that appears (the lab's autoconverter writes it seconds later): it stays HeLab's, as
+    ``could_take`` keeps held shots; with Q50.1's flag on, as before."""
+    monkeypatch.setattr(txy_sources, "CONVERT_OVER_MATLAB", over_matlab)
+    source = raw_folder(tmp_path, (1,))
+    raw = (source / "d1.txt").stat()
+    origin = txy_sources.helab_origin(MATLAB_2019.content_hash())
+    matlab = source / "d_txy_forc1.txt"
+    matlab.write_text("1.5,2,3\n")  # (MATLAB's TXY of it, written after Live converted it.)
+    old = time.time() - 120
+    os.utime(matlab, (old, old))
+    txy = {**asked(txy_sources.HELAB_PRIORITY), "on_read": True}
+    memory = [[1, raw.st_size, raw.st_mtime_ns]]
+    sent = live(source, tmp_path, txy, memory, origins={"1": origin})
+    sent += live(source, tmp_path, txy, memory, seen=last_state(sent)["live_seen"], origins={"1": origin})
+    assert not shots_of(sent) and all(event["kind"] != "file_started" for event in sent)
+    assert not any(event.get("live_reread") for event in sent)

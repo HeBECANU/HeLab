@@ -196,7 +196,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
         could = helab_txy.could_take(txy_source, raw_entries, matlab, held_origins)
         helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
         if on_read_profile is not None:
-            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy, matlab)
+            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy, matlab, held_origins)
     # Each shot's TXY as the source asks; a held shot keeps its kind while that TXY is there (one held from
     # MATLAB's too: "" its origin, so a HeLab TXY converted since doesn't replace it).
     chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found},
