@@ -698,3 +698,14 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
   No other RERUN. Windows Tests 1/2 took 19.1 min (2/2: 13.7). The new store tests take under a second.
   **known-issues proposal:** add "Again: `agent/caching-v2` CI 41375836115 (Windows Tests 2/2, job
   125055805809)" to both entries, and "`[1]` too" to the first.
+- **Windows Tests 1/2 timing** (CoCo asked; 17.4 min of pytest, 19.1 min job, against 11.1 and 13.4 in CI
+  41188263711). Measured from the log's per-worker PASSED timestamps (CI prints no durations):
+  - the stage 2 tests cost little: `test_txy_layers_store.py` 7–8 s of worker time, `test_cache_cli.py`
+    3–4 s, `test_cache_folder_record.py` 0.9 s, `test_caching_v2_session.py` 5 s;
+  - the growth (36.6 → 63.7 worker-min) is in files this floor didn't change: `test_convert_fastio.py`
+    131 → 484 s, `test_convert_raw.py` 217 → 567 s, `test_store_identity.py` 227 → 380 s,
+    `test_cache_move.py` 13 → 84 s;
+  - group 1 ran about the same number of tests (4419 against 4409), and fastio's CPU-bound parsing was
+    3.7× slower, so a slower runner this time, not new tests.
+
+  Under the ~25 min stop line; watched at every run from here on.
