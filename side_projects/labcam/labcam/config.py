@@ -19,7 +19,7 @@ Corners = list[Point]  # top-left, top-right, bottom-right, bottom-left, in the 
 @dataclass
 class Instrument:
     name: str
-    kind: str  # trace, wavemeter, needle, dot, motion
+    kind: str  # trace, wavemeter, needle, dot, motion, segments
     label: str
     corners: Corners
     options: dict[str, Any] = field(default_factory=dict)
@@ -38,7 +38,16 @@ class Config:
     average_frames: int
     instruments: dict[str, Instrument]
     locks: dict[str, list[str]] = field(default_factory=dict)  # laser → its signs (see locks.py)
+    settings: dict[str, Any] = field(default_factory=dict)  # the page's Debug settings (save_setting)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def save_setting(self, key: str, value: Any) -> None:
+        """A page setting (power mode, overlay style…), kept in `config.local.json` → "settings"."""
+        with self.lock:
+            self.settings[key] = value
+            local = _read(LOCAL)
+            local.setdefault("settings", {})[key] = value
+            LOCAL.write_text(json.dumps(local, indent=2) + "\n", encoding="utf-8")
 
     def set_corners(self, name: str, corners: Corners) -> None:
         """Changes one instrument's region and saves it to `config.local.json`."""
@@ -101,4 +110,5 @@ def load(path: Path | None = None) -> Config:
         average_frames=int(data.get("average_frames", 3)),
         instruments=instruments,
         locks={str(k): [str(v) for v in signs] for k, signs in {**data.get("locks", {}), **local.get("locks", {})}.items()},
+        settings=dict(local.get("settings", {})),
     )

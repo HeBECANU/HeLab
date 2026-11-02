@@ -1,13 +1,18 @@
-"""The wavemeter's display: wavelength (nm) or frequency (GHz), and power, read with Tesseract OCR.
+"""The wavemeter's display: wavelength (nm) or frequency (GHz), and power, read by OCR.
 
-The display is small in the frame (digits about 13 px tall) and Tesseract confuses its 8, 6, 5, 3 and 2 and
-sometimes drops the decimal point. So:
+The reader is RapidOCR (PaddleOCR's recognition model on ONNX Runtime, about 5 ms a read) when installed, else
+Tesseract. The display is small in the frame (digits about 13 px tall, bold, slanted, blurred into each other):
+on 16 frames of 2026-11-01, Tesseract read the power's digits from none of them, RapidOCR from about half, and
+Tesseract confuses 8, 6, 5, 3 and 2 and drops the decimal point. So:
 - each field is its own instrument (`field` "main" for the wavelength or frequency, "power" for the power),
   whose four corners follow the text; the engine cuts it out straightened and 3x oversampled;
-- each frame is read several ways (two enlargements, three small turns around `tilt`), and only the digits
-  are kept: the decimal point goes where the display's format puts it (`format`, e.g. "####.###");
-- every digit position is voted on over those reads and the last `vote` frames. A position whose winner has
-  less than `agree` of the votes shows as "?", and the reading is then `unknown`, not a guess.
+- each frame is read several ways (RapidOCR: the colours at 4x and 6x, the green channel at 4x plain and inverted;
+  Tesseract: two enlargements, three small turns around `tilt`), and only the digits are kept: the decimal
+  point goes where the display's format puts it (`format`, e.g. "####.###");
+- every digit position is voted on over those reads and the last `vote_s` seconds of frames (default 10). A
+  position whose winner has less than `agree` of the votes shows as "?", and the reading is then `unknown`, not
+  a guess. Reads without the format's digits don't vote, but count against how sure: confidence is the weakest
+  position's share times the fraction of reads that were readable.
 """
 
 from __future__ import annotations
@@ -18,14 +23,17 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 
 
-from .config import Instrument
-from .detectors import Detector, Image, Reading
+from .config import HOME, Instrument
+from .detectors import Detector, Image, Reading, duration
 
 log = logging.getLogger("labcam.wavemeter")
 
@@ -45,6 +53,50 @@ def _find_tesseract() -> str | None:
 
 
 TESSERACT = _find_tesseract()
+
+
+def _rapid() -> Any:
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # type: ignore[import-untyped,import-not-found,unused-ignore]
+    except ImportError:
+        return None
+    logging.getLogger("RapidOCR").setLevel(logging.WARNING)
+    # One core per read: reads run side by side (one model per OCR thread) instead of each spiking every core.
+    global SERVER_TOO_SLOW
+    if SERVER_MODEL.exists() and not SERVER_TOO_SLOW:
+        model = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, rec_model_path=str(SERVER_MODEL))
+        # It needs a recent CPU: 60 ms a read on an M-series Mac, 17 s on Lab Side's (2026-11-01). Timed once.
+        sample = np.full((96, 312, 3), 128, np.uint8)
+        started = time.monotonic()
+        model(sample, use_det=False, use_cls=False, use_rec=True)
+        took = time.monotonic() - started
+        if took <= SERVER_MAX_S:
+            return model
+        SERVER_TOO_SLOW = True
+        log.warning("the server OCR model took %.1f s a read here (limit %.1f s): using the built-in one", took, SERVER_MAX_S)
+    return RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+
+
+# PaddleOCR's larger recognition model, used when downloaded (`python -m labcam.get_model`): on 20 frames
+# (2026-11-01) it read the wavelength's 6th digit right (6) in 60 of 68 reads, the small built-in one in 35 (27
+# as 8); about 3x slower (60 ms a read on an M-series Mac).
+SERVER_MODEL = HOME / "models" / "ch_PP-OCRv4_rec_server_infer.onnx"
+SERVER_URL = "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_server_infer.onnx"
+SERVER_MAX_S = 0.3  # a read slower than this (timed at start) means the built-in model instead
+SERVER_TOO_SLOW = False
+RAPID = _rapid()
+SERVER = SERVER_MODEL.exists() and not SERVER_TOO_SLOW
+READER = (f"RapidOCR ({'server' if SERVER else 'built-in'} model)" if RAPID is not None
+          else (f"Tesseract ({TESSERACT})" if TESSERACT else None))
+_models = threading.local()  # each OCR thread's own RapidOCR (one isn't safe to share between threads)
+
+
+def rapid_read(image: Image) -> str:
+    model = getattr(_models, "rapid", None)
+    if model is None:
+        model = _models.rapid = RAPID if threading.current_thread() is threading.main_thread() else _rapid()
+    result, _ = model(image, use_det=False, use_cls=False, use_rec=True)
+    return str(result[0][0]) if result else ""
 
 # Formats by unit: # is a digit. The unit decides between them where the OCR caught it (G, H or z → GHz).
 FORMATS = {"nm": "####.###", "GHz": "######.##", "power": "###.##"}
@@ -90,6 +142,7 @@ def ocr(image: Image, allowed: str) -> str:
         [TESSERACT, "stdin", "stdout", "--psm", "7", "-c", f"tessedit_char_whitelist={allowed}"],
         input=png.tobytes(),
         capture_output=True,
+        env={**os.environ, "OMP_THREAD_LIMIT": "1"},  # one core per read: reads run side by side instead
         timeout=10,
     )
     return " ".join(result.stdout.decode("utf-8", "replace").split())
@@ -111,10 +164,14 @@ class Wavemeter(Detector):
     def __init__(self, inst: Instrument) -> None:
         super().__init__(inst)
         self.power = inst.options.get("field", "main") == "power"
-        self.frames: collections.deque[tuple[str, list[str]]] = collections.deque(maxlen=int(inst.option("vote", 5)))
+        # (time, unit, readable reads, all reads) per frame read, over the last `vote_s` seconds.
+        self.frames: collections.deque[tuple[float, str, list[str], int]] = collections.deque()
+        self._lock = threading.Lock()  # frames are read in parallel when reading every check
+        self.last: tuple[float, str] | None = None  # (time, text) of the last vote with readable reads
 
     def reset(self) -> None:
-        self.frames.clear()
+        with self._lock:
+            self.frames.clear()
 
     def _unit(self, texts: list[str]) -> str:
         if self.power:
@@ -122,24 +179,48 @@ class Wavemeter(Detector):
         return "GHz" if re.search(r"[GHz]", "".join(texts)) else "nm"
 
     def update(self, roi: Image) -> Reading:
-        if TESSERACT is None:
-            return Reading("unknown", "no tesseract", note="install tesseract to read the wavemeter")
+        if READER is None:
+            return Reading("unknown", "no OCR", note="install rapidocr-onnxruntime (or tesseract) to read the wavemeter")
         tilt = self.inst.option("tilt", 0.0)
-        allowed = "0123456789.uWmn" if self.power else "0123456789.nmGHz"
-        # roi is already 3x; 4/3 and 8/3 make 4x and 8x of the camera's pixels.
-        texts = [ocr(prepare(roi, s, tilt + a), allowed) for s in (4 / 3, 8 / 3) for a in (-1.5, 0.0, 1.5)]
+        if RAPID is not None:
+            # roi is 3x the camera's pixels (and the mean of the last few frames): in colour at 4x and 6x, and its
+            # green channel at 4x, plain and inverted. Tried on 20 frames (2026-11-01): the green channel read
+            # most often; sharpening and CLAHE made it worse (power readable 7/20 and 3/20 against 17/20).
+            def bordered(image: Image) -> Image:
+                return cv2.copyMakeBorder(image, 16, 16, 16, 16, cv2.BORDER_REPLICATE)
+            x4 = cv2.resize(roi, None, fx=4 / 3, fy=4 / 3, interpolation=cv2.INTER_CUBIC)
+            green = x4[:, :, 1]
+            variants = [bordered(x4), bordered(cv2.cvtColor(green, cv2.COLOR_GRAY2BGR))]
+            if not SERVER:  # the small model gains from more looks; the server one costs 3x a read
+                variants += [bordered(cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)),
+                             bordered(cv2.cvtColor(255 - green, cv2.COLOR_GRAY2BGR))]
+            texts = [rapid_read(v) for v in variants]
+        else:
+            allowed = "0123456789.uWmn" if self.power else "0123456789.nmGHz"
+            # roi is already 3x; 4/3 and 8/3 make 4x and 8x of the camera's pixels.
+            texts = [ocr(prepare(roi, s, tilt + a), allowed) for s in (4 / 3, 8 / 3) for a in (-1.5, 0.0, 1.5)]
         unit = self._unit(texts)
         fmt = str(self.inst.options.get("format", FORMATS["power" if self.power else unit]))
         reads = [d for d in (digits_for(t, fmt) for t in texts) if d is not None]
         log.debug("%s OCR %s -> %s", self.inst.name, texts, reads)
         raw = " | ".join(texts)
-        if reads:
-            self.frames.append((unit, reads))
-        # Votes from the recent frames read in the same unit as the newest.
-        current = self.frames[-1][0] if self.frames else unit
+        now = time.time()
+        with self._lock:
+            self.frames.append((now, unit, reads, len(texts)))
+            while self.frames and now - self.frames[0][0] > self.inst.option("vote_s", 10.0):
+                self.frames.popleft()
+            frames = list(self.frames)
+        # Votes from the recent frames read in the same unit as the newest readable one.
+        current = next((u for _, u, rs, _ in reversed(frames) if rs), unit)
         fmt = str(self.inst.options.get("format", FORMATS["power" if self.power else current]))
-        pool = [r for u, rs in self.frames if u == current for r in rs if len(r) == fmt.count("#")]
+        pool = [r for _, u, rs, _ in frames if u == current for r in rs if len(r) == fmt.count("#")]
+        tried = sum(n for _, _, _, n in frames)
+        readable = len(pool) / tried if tried else 0.0
         if not pool:
+            if self.last is not None:  # the last value read, marked as old: not a reading now, not saved
+                at, text = self.last
+                return Reading("unknown", f"{text} (read {duration(now - at)} ago)", {"raw": raw, "readable": f"0% of {tried}"},
+                               0.0, f"no read in the last {self.inst.option('vote_s', 10.0):g} s had the {fmt} format")
             return Reading("unknown", "unreadable", {"raw": raw}, 0.0, f"no read had the {fmt} format")
         winner, shares = vote(pool)
         agree = self.inst.option("agree", 0.6)
@@ -148,15 +229,17 @@ class Wavemeter(Detector):
             "shown": shown,
             "per_digit": " ".join(f"{s:.0%}" for s in shares),
             "reads": len(pool),
+            "readable": f"{readable:.0%} of {tried}",
             "raw": raw,
         }
         if "?" not in shown:
             key = "power" if self.power else ("frequency" if current == "GHz" else "wavelength")
             values[key] = float(shown)
         status = "ok" if "?" not in shown and reads else "unknown"
+        self.last = (now, f"{shown} {current}")
         note = ""
         if "?" in shown:
             note = "some digits unsure: the reads disagree"
         elif not reads:
             note = "this frame unreadable; showing the recent vote"
-        return Reading(status, f"{shown} {current}", values, min(shares), note)
+        return Reading(status, f"{shown} {current}", values, round(min(shares) * readable, 2), note)

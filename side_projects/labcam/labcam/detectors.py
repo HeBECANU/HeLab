@@ -31,6 +31,14 @@ else:
 Point = tuple[float, float]
 
 
+def duration(seconds: float) -> str:
+    """A time span in its two largest units: "45s", "3m 12s", "2h 5m", "1d 3h"."""
+    s = max(0, int(round(seconds)))
+    parts = [(s // 86400, "d"), (s // 3600 % 24, "h"), (s // 60 % 60, "m"), (s % 60, "s")]
+    first = next((i for i, (n, _) in enumerate(parts) if n), 3)
+    return " ".join(f"{n}{unit}" for n, unit in parts[first:first + 2] if n or unit == parts[first][1])
+
+
 @dataclass
 class Reading:
     status: str  # ok, off, unknown
@@ -298,7 +306,7 @@ class Motion(Detector):
             self.last_motion = now
         present = self.last_motion > 0 and now - self.last_motion <= self.inst.option("hold", 5.0)
         marks = [("loop", _rect(x / s, y / s, w / s, h / s)) for x, y, w, h in regions]
-        ago = "" if self.last_motion == 0 else f", last {now - self.last_motion:.0f} s ago"
+        ago = "" if self.last_motion == 0 else f", last {duration(now - self.last_motion)} ago"
         return Reading(
             "off" if present else "ok",
             ("movement" if present else "quiet") + ago,
