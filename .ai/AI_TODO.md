@@ -344,8 +344,10 @@ From the IO Fixes floor's [handoff](sessions/2026-10-31-claude-io-fixes/handoff.
 - **A40.2 An unreadable new HeLab TXY in `live_check`**: a switched or HeLab-held shot whose new HeLab TXY
   turns out unreadable drops the held data and keeps the shot known-unreadable (as for a HeLab-held shot
   converted again). Unlikely (temporary name and rename); keeping the held data until a readable TXY is
-  read would be safer (Probe agrees: a fresh load would take the same file).
-- **A40.3 A signature-only change rewrites the whole dataset** (io-5; the cache area, best with caching
+  read would be safer (Probe agrees: a fresh load would take the same file). It joined caching v2's stage 2
+  (design addendum §7) but wasn't built there: `io_ops/live.py` is unchanged at `1cd586c`. Still open; it
+  joins caching v2's stage 3 on the Caching v2 floor (Tony's go, 2026-11-02).
+- [x] **A40.3 A signature-only change rewrites the whole dataset** (done in store-v4, caching v2 stage 2: `confirm_view`, `b691d26`, used by loads from `7d185eb`; it writes only the view's signature and TXY record, `txy.folders` included; store-v3 unchanged) (io-5; the cache area, best with caching
   v2's store work): every cached shot is unpacked and packed again, though no TXY is read.
   `CacheStore.confirm_dataset(..., signature=None)` merging a given signature into `info` (JSON, no schema
   change), and a confirm branch in `loading.load` for a cache whole but for the signature, would need
@@ -370,10 +372,10 @@ From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/hand
 checkpoint 2 landed `ad86bd3`). The floor's own remaining steps (5–7, and what step 5 owes) are in its
 handoff and the [plan](../roadmaps/caching-v2.md#stages-each-needs-tonys-go).
 
-- **A42.1 store-v3's saved results under Keep**: copy a v3 result into v4 when it is used (the addendum
+- [x] **A42.1 store-v3's saved results under Keep** (done in `08895bc`, stage 2: copied into store-v4 as `result_find` returns them, within the budget, never over a newer one): copy a v3 result into v4 when it is used (the addendum
   said "by the next save of that folder's results"), or decide read-through is enough while v3 is kept
   (built: read-through only).
-- **A42.2 `trim` in Make room's order**: a lowered budget in store-v4 removes datasets only; give it Make
+- [x] **A42.2 `trim` in Make room's order** (done in `b691d26`, with S2-1's fix `6b0f998` and the question from its plan `102c027`, stage 2: one planner, only copies only when named): a lowered budget in store-v4 removes datasets only; give it Make
   room's order (datasets, raw layers seen, only copies named).
 
 ## Quick Fixes 8 (block 43)
@@ -408,13 +410,43 @@ From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.
 ## Caching v2 checkpoint 3 (block 44)
 
 From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) (Vault; checkpoint 3
-landed `c2d0ece`, stage 1 complete, the switch off). A42.1 and A42.2 stay open.
+landed `c2d0ece`, stage 1 complete, the switch off). A42.1 and A42.2 were done in stage 2 (`1cd586c`).
 
-- **A44.1 `helab cache export` of stage 2's TXY layers** (`kind` `txy`): the same CLI, the layer's columns.
+- [x] **A44.1 `helab cache export` of stage 2's TXY layers** (done in `a70d261`: `--kind txy [--layer]`) (`kind` `txy`): the same CLI, the layer's columns.
   With stage 2.
-- **A44.2 A Qt-free `helab cache`**: `helab cache export --folder` without `--cache` imports
+- [x] **A44.2 A Qt-free `helab cache`** (done in `a70d261`: `cache-folder.json` in the app folder, written by the GUI only, CoCo's option (b)): `helab cache export --folder` without `--cache` imports
   `helab.utils.constants` (QtCore) for `cache_dir()`; a Qt-free reader of the cache-folder setting would
   make all of `helab cache` Qt-free. Minor: no widgets and no GUI start either way.
+
+## Caching v2 stage 2 (block 47)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Step 7", Vault;
+stage 2 landed `1cd586c`, the switch off). The typing and accessible-names timeouts it proposed (A~10) were
+done by Quick Fixes 9 (`e8a28a1`, `5f52068`).
+
+- **A47.1 Conversion from the raw layer for user profiles** (A~7): a load converts a HeLab shot from the raw
+  layer (the loading order's second step, `6f57918`) only for built-in profiles, since the helper has no user
+  profile library; other profiles read their text. Send the profile (or the library) with the request.
+- **A47.2 `FolderCache` learns a folder's choices with its listing** (A~8; Q47.2): `folder_choices` beside
+  `folder_prefs` in `io_ops/metadata.py`, so Live and the first load follow a folder's own TXY source at once,
+  not the global one until a load tells it. Before the switch goes on (Q47.2, Tony 2026-11-02): stage 3, the
+  Caching v2 floor.
+- **A47.3 The GUI watchdog left running by quit tests** (A~9; known-issues): `HelabMainWindow.closeEvent`
+  returns early, without stopping its `GUIWatchdog`, when a close waits for saves (`QuitSaveDialog`) or a quit
+  dialog is open. Finish or cancel the dialog in `tests/test_quit_confirms.py` and
+  `tests/test_txy_last_used_quit.py`, or stop the watchdog when the window is destroyed.
+- **A47.4 Purge by age per kind, plus everything** (Q47.1, Tony 2026-11-02; the Caching v2 floor, Vault):
+  Settings › Cache's store-v4 purge by age split per kind (datasets, TXY layers and their views, raw layers),
+  each with its estimate and question, plus one "purge everything by age" button; only copies never go unless
+  the question names them. Until then the purge takes all three and keeps only copies (S3-1).
+- **A47.5 Save a plot's TXY source and profile** (Q14.2 = Q23.4, Tony 2026-11-02; the Live Scripts floor):
+  with presets, arrangements and reopened plots (a format change in `analysis/presets.py`; today a reopened
+  plot starts "As the folder's tab"), plus a plot-settings toggle that turns the saving off, for tweaking and
+  exploring.
+- **A47.6 Convert from the raw layer with the app's backend** (block 47's docs pass; the Caching v2 floor,
+  Vault): `txy_cache.py:215` calls `reconstruct(raw_layer.decode(layer), profile)` without a backend, so it
+  runs `reconstruct.DEFAULT_BACKEND`, `reference` (readable, not fast), not `pipeline.APP_BACKEND` (numpy) or
+  Settings' `convert_backend`. Pass the app's choice; the output is byte-identical by contract.
 
 ## Not AI work (stays in MANUAL_TODO)
 

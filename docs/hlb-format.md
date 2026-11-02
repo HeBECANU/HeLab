@@ -2,17 +2,18 @@
 
 HeLab's caching v2 (store-v4) keeps its binary data in `.hlb` files. This page describes the format and how to
 read one with or without HeLab, from the command line, and from MATLAB. Store-v4 is built behind a switch that
-stays off until caching v2's stage 2 ([plan](../roadmaps/caching-v2.md)), so today's HeLab writes no `.hlb`
-files unless that switch is on. HeLab's code: `helab.utils.hlb.read`, `helab.convert.raw_layer.columns`, and
-`helab cache dump|export` (`helab/cache_cli.py`). The "without HeLab" sample below runs as a test
-(`tests/test_cache_cli.py`), checked against a file HeLab wrote. Written 2026-10-31 (caching v2 stage 1; Q42.5, Q44.2).
+stays off until HeLab 0.0.8 turns it on ([plan](../roadmaps/caching-v2.md)), so today's HeLab writes no `.hlb`
+files unless that switch is on. HeLab's code: `helab.utils.hlb.read`,
+`helab.convert.raw_layer.columns`, `helab.convert.txy_layer.unpack_segment`, and `helab cache dump|export`
+(`helab/cache_cli.py`). The "without HeLab" sample below runs as a test
+(`tests/test_cache_cli.py`), checked against a file HeLab wrote. Written 2026-10-31 (caching v2 stage 1; Q42.5, Q44.2); TXY layers added 2026-11-02 (stage 2).
 
 ## What a `.hlb` file is
 
 HeLab's caching v2 (store-v4) keeps binary data in `.hlb` files: named NumPy arrays, compressed, with a JSON header
-that says what they are and who made them. No Python pickle anywhere, so any language can read one. Today the only
-kind is a **raw layer**: one raw TDC file `d<N>.txt` parsed into its pulses (`store-v4/raw/<uuid>.hlb`). Stage 2 adds
-TXY layers (`kind` `txy`) in the same container.
+that says what they are and who made them. No Python pickle anywhere, so any language can read one. There are two
+kinds: a **raw layer**, one raw TDC file `d<N>.txt` parsed into its pulses (`store-v4/raw/<uuid>.hlb`), and a **TXY
+segment**, some shots of one folder's TXY layer (`store-v4/txy/<uuid>.hlb`, stage 2).
 
 ## Byte layout (format 1)
 
@@ -45,7 +46,7 @@ The chunks tile the rest of the file exactly: no gap, no overlap, nothing after 
 ```
 
 - `format`: this layout's version. A reader refuses a higher one; it never rewrites a file.
-- `kind`: `raw` (a raw layer), later `txy`.
+- `kind`: `raw` (a raw layer) or `txy` (a TXY segment).
 - `maker`: which HeLab session made the file (Q28.4): its id, and its record with HeLab's version and commit, the
   machine's random id, **its hostname**, and Python, NumPy, SciPy and blosc versions. A file shared off the machine
   carries the hostname.
@@ -74,6 +75,31 @@ Times are TDC bins. HeLab's profiles use **25 ps** (`bin_time` 25e-12 s), so sec
 `meta.facts` holds what HeLab's done-writing checks read from the text: `rows`, `t_zero` (as text; `"nan"` for an
 empty file), `first_channel`, `blank`, `final_newline`, `line_endings` (`crlf`, `lf`, `cr`, `mixed`, `none`) and
 `reader` (`strict` or `general`). `meta.parser` is HeLab's parser version (1).
+
+## TXY layers (`kind` `txy`)
+
+A folder's TXY data is kept per **layer**: `matlab` (MATLAB's TXY) or `helab:<profile hash>` (one per HeLab
+profile's content hash; its tags, such as `m19v1` and `p22v1`, are names for it). Each layer is a set of
+append-only **segments**, each one `.hlb` holding some of the layer's shots; when a shot is in several, the newest
+segment wins (the store's rows say which segment holds each shot, so a lone segment may hold superseded shots).
+
+Arrays:
+
+- `shots` (`<i8` [k]): the shot numbers, ascending;
+- `offsets` (`<i8` [k+1]): shot `i`'s hits are rows `offsets[i]` to `offsets[i+1]` of `hits`;
+- `hits` (`<f8` [N, 3]): T in s, X in m, Y in m, one hit per row;
+- `problematic` (`|u1` [k]): 1 where the shot's TXY had empty fields or couldn't be read whole.
+
+`meta`: `layer`, `profile_hash` (`""` for `matlab`), `tags`, and `precision`: `g8` holds the values the
+8-significant-figure text parses to (MATLAB's TXY and `m19v1`, so a shot equals its text TXY), `f64` full float64
+(newer profiles, Q19.6). Codec: Blosc zstd 9 with **no shuffle** (`shuffle` `none`).
+
+```python
+from helab.convert import txy_layer
+shots, problematic, header = txy_layer.unpack_segment(open("seg.hlb", "rb").read())  # {shot: (n, 3) float64}
+```
+
+Without HeLab, `read_hlb` below gives the same arrays: `hits[offsets[i]:offsets[i + 1]]` is shot `shots[i]`.
 
 ## The format rule
 
@@ -139,10 +165,14 @@ as `raw_layer.decode`.
 helab cache dump d1.hlb                                   # the header as JSON (arrays without their chunk lists)
 helab cache export d1.hlb --to npz|mat|csv [--out PATH]   # channel, time_bins, time_s, header
 helab cache export --folder /data/2026-10-31/run --to mat # every raw layer store-v4 holds for that folder
+helab cache export --folder /data/2026-10-31/run --kind txy [--layer matlab|m19v1|helab:<hash>] --to csv
+helab cache export seg.hlb --to npz                      # a TXY segment: t_s, x_m, y_m and a shot column
 ```
 
-A file's export goes to the current folder (`d1.npz`), a folder's to `./helab-export-<name>/d<N>.<ext>`; nothing is
-replaced without `--force`, and nothing is ever written into a store. `--bin-time` changes the seconds per bin.
+A file's export goes to the current folder (`d1.npz`), a folder's to `./helab-export-<name>/d<N>.<ext>` (with `--kind
+txy`, `d_txy<N>.<ext>`, one per shot, columns `t_s`, `x_m`, `y_m`, of the layer `--layer` names, by layer or tag, or
+the only one there is); nothing is replaced without `--force`, and nothing is ever written into a store.
+`--bin-time` changes the seconds per bin (raw layers).
 
 ### MATLAB
 
