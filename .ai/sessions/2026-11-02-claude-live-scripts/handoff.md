@@ -37,6 +37,21 @@ How "fails before" was checked: the new test files were copied into a worktree o
 the three new names `script_tree` exports): 12 failed, 34 passed. M2 and L1 were checked by putting Prismo's
 mutations back: each test then fails.
 
+## Re-check fix (Prismo, `f66a946`: R1)
+
+Commit `c79f210`. **R1** a loading marker could stick (HeLab stopped while Load Scripts… loaded a new folder,
+not yet remembered, or the marker unreadable): every later start skipped all remembered folders. Now a start
+drops a marker naming no remembered folder (and loads them), skips one start for an unreadable marker and
+drops it, and a deliberate Reload (button or a folder's menu) or Load Scripts… ends a marker it didn't make;
+auto-reload doesn't (`reload_scripts(…, deliberate=False)`). **R2** (mine, found writing R1's test): the
+Reload button was connected straight to `reload_scripts(folders)`, so `clicked`'s `checked=False` came in as
+the folders and raised `TypeError`; the button never reloaded (the tests had called `reload_scripts()`
+directly). It has its own slot now (`_reload_clicked`); the tests click it and trigger the menu's Reload.
+Tests: `test_a_marker_naming_no_remembered_folder_is_dropped_at_start`,
+`test_an_unreadable_marker_skips_one_start_only`, `test_a_deliberate_load_clears_a_marker_it_didnt_make`
+[reload, menu, load another]: all five fail on `f66a946`. Full suite 8980 passed, 672 skipped, **no RERUN**;
+the five type checks clean. CI: CI3_PLACEHOLDER
+
 ## What was built
 
 **Reload core** (`helab/scripts/scripts_manager.py`, Qt-free):
