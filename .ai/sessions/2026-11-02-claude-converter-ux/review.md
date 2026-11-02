@@ -192,3 +192,42 @@ need the event's path. Leave it as it is unless it shows up.
   RERUN**.
 - Type checks: `mypy helab/ --strict`, `mypy tests --strict`, `mypy helab/ --strict --platform win32`,
   `pyright helab tests` and `pyright --pythonplatform Windows helab tests`: all clean.
+
+## The share question's test race (`dc5219f`, `tests/test_explorer_convert.py`, 2026-11-03)
+
+**No open findings. It is a test race, not an app bug, and the fix closes it.**
+
+**Why the app is right.**
+- Live's tick reaches `_convert_tick` only from its timer (`_live_tick`) and from the answers to its questions.
+  `test_live.deliver` emits events synchronously and runs no event loop.
+- So on a slow runner, a tick can fire while `cycle()` is still waiting for its check. That is more than a
+  check interval after `cycle()`'s conversion ended, and before the test sets the flag. The tick then queues
+  a conversion with `beside` False, which is correct: the flag isn't known yet.
+- In the app, the helper runs that conversion, it ends, and the next tick asks the share question, or converts
+  beside on a local folder. In the test harness nothing runs it, so `convert.request` stays True and every
+  later tick returns early.
+- `dc5219f` changes no app file. `git diff dc5219f^ dc5219f` touches only the test and the handoff.
+
+**Why the fix holds.**
+- `beside_flag_in_live` sets the flag, then checks the jobs straight away, with no event loop in between, so no
+  tick can slip in. A conversion queued before the flag must have `beside` False, and that is asserted, so a
+  conversion queued after the flag would fail the test.
+- It then runs that conversion, answers a pending Live check, and sets `ended_at` back. While it runs, any
+  tick waits on the timer. Afterwards the next tick sees the flag: it asks on a share, or converts beside on a
+  local folder.
+- In the refusal test the open box blocks ticks until the click, and the click's `_convert_tick` queues the
+  job the test reads. No window is left. All six tests that set the flag after `cycle()` use the helper.
+
+**Reproduced.** I ran exports of `dc5219f^` and `dc5219f` in my scratchpad, with the floor's venv and the
+default switches (store-v4 off). Each run had 14 busy-loop processes on the 16 cores, `-n 16` and no reruns,
+with the test file copied 16 times and `-k` on the six tests plus the Retry parametrisations: 160 runs per round.
+- **Old tests: failed in 5 of 7 rounds.** The failures were in
+  `…asks_once_and_cache_instead_writes_nothing_there`, `…choice_after_a_refusal_holds_for_the_folder…`,
+  `…refused_beside_write_in_live…[retry-None]` (Retry's stale payload) and
+  `…lives_question_goes_with_auto_convert…`.
+- **New tests: 11 of 11 rounds passed**, 1,760 of 1,760 runs.
+
+**Rerun on the floor at `489de54`:**
+- `tests/test_explorer_convert.py` (`-n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-strata`):
+  20 passed, no RERUN.
+- `mypy tests --strict` (200 files) and `pyright tests/test_explorer_convert.py`: clean.
