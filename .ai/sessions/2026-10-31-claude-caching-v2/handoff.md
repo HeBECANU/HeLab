@@ -1354,3 +1354,62 @@ appears 7 times.
   - `test_offline_browsing.py`'s `offline_restart` now runs with store-v3 and store-v4.
   - The new tests and the store-v4 offline ones fail without the fix.
 - **Checked:** suite 9148 passed, 673 skipped, no RERUN.
+
+### CI 41471378031 (`76e0f91`, SR-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs. Windows Tests 1/2 took pytest 17.2 min, the slowest
+tonight but under the stop line.
+- **One RERUN:** Ubuntu Tests 2/2 (job 125365677960),
+  `test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot[PyQtGraph]`. The worker gw2
+  died ("Fatal Python error: Segmentation fault", "node down: Not properly terminated").
+  - The crashing thread is the main thread, in `qtbot.waitUntil` (test line 1636), inside Qt's event loop; there
+    is no HeLab frame below the test's wait. The other threads were idle: the analysis runner's `_run_jobs`,
+    IOService's `_run`, and werkzeug's server.
+  - SR-1 changes only store creation.
+  - **Cause:** not pinned. It belongs to the "QtWebEngine crashes xdist workers" family, which lists main-thread
+    SIGSEGVs.
+  - **known-issues proposal:** add it to that entry as a sighting: "a main-thread SIGSEGV in
+    `test_transfer_fractions_highlight_follows_lives_newest_shot[PyQtGraph]` (Ubuntu CI 41471378031, job
+    125365677960), in `qtbot.waitUntil`; passed on retry."
+- The known "GUI stalled" log appears 8 times.
+
+### CI 41472779247 (`1cffaba`, the views fix)
+
+Green on all three OSes. I read all 9 Tests and Converter logs.
+- **One RERUN:** macOS Tests 2/2 (job 125370535914),
+  `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so`. The assertion at line
+  575 saw "Live stopped: Cancelled" in place of "auto-convert stopped: not while working offline". It passed on
+  retry.
+  - **Likely cause:** a timing race in the test. If a Live check is in flight when it sets `service.offline`, the
+    offline gate cancels that check, and Live's halt message ("Cancelled") takes the status line before
+    auto-convert's error.
+  - Neither the views fix nor this test file changed.
+  - **known-issues proposal:** "`test_a_conversion_refused_offline_stops_auto_convert_and_says_so`: 'Live
+    stopped: Cancelled' at line 575 (macOS CI 41472779247, job 125370535914); a Live check in flight when the test
+    goes offline is cancelled and halts Live first; passed on retry. Fix: the test waits for no Live check before
+    going offline."
+- The known "GUI stalled" log appears 5 times.
+
+### Q50.1 (a): HeLab priority converts on read only what MATLAB's TXY lacks (`ced04aa`)
+
+CoCo's call (2026-11-03), behind the switch.
+- **Why:** under HeLab priority, a raw file that couldn't be converted now (still settling, or invalid) cost the
+  shot its MATLAB TXY.
+- **The rule:** `txy_sources.converts_over_matlab`.
+  - HeLab only: always converts over MATLAB's TXY.
+  - HeLab priority: only with `CONVERT_OVER_MATLAB` (False).
+  - MATLAB's sources: never.
+- **Where it applies:** `helab_txy.on_read` (loads and Live) and `FolderCache.on_read_shots` (the count and
+  "converted when loaded") follow it.
+- **Tests:** in `test_convert_on_read.py`, failing without the change.
+- **Checked:** suite 9149 passed, no RERUN.
+- **For Tony, Q50.1 (= Q~16):**
+  - Built now: HeLab priority converts only what MATLAB's TXY lacks.
+  - (b), later if wanted: HeLab's conversion over MATLAB's, with a fallback to MATLAB's TXY when the conversion
+    can't be done now. Turning on `CONVERT_OVER_MATLAB` gives that without the fallback.
+
+### SV-1 (`48e3656`)
+
+- **The fix:** each folder's view is parsed in its own try. A damaged view is an error for that folder only.
+- **Test:** `test_v4_listings.py`, damaging a view three ways. It fails without the fix.
+- **Checked:** suite 9150 passed, no RERUN.
