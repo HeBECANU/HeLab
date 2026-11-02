@@ -19,7 +19,8 @@ from helab.views import explorer_convert
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderExplorer import FolderExplorer
 from test_convert_helab import raw_bytes
-from test_live import age_folder, job_of, producer, replay, service  # noqa: F401
+from helab.io_ops.loading import load
+from test_live import age_folder, deliver, job_of, producer, replay, service  # noqa: F401
 from test_live_convert import check, cycle, line, run_convert, watching_raw_folder, write_raw
 
 SHARE = "//labserver/data"
@@ -217,6 +218,26 @@ def raw_folder(qtbot: QtBot, tmp_path: Path, shots: int = 2) -> tuple[FolderExpl
     return explorer, path, panel
 
 
+def load_as_the_helper_does(cache: Any, path: str, tmp_path: Path) -> list[dict[str, Any]]:
+    """The queued load run with the fields ``io_helper`` passes that ``test_live.replay`` leaves out (HeLab's
+    TXY: ``txy``), its events delivered."""
+    request = producer(cache, path)
+    payload = request.payload
+    output = tmp_path / f"artifacts-{time.monotonic_ns()}"
+    output.mkdir()
+    sent: list[Any] = []
+    try:
+        load(path, str(output), sent.append, payload.get("cache"), payload.get("memory"),
+             payload.get("base_signature", ""), payload.get("signature", ""), limits=payload.get("limits"),
+             no_cache=bool(payload.get("no_cache")), check_level=str(payload.get("check_level") or "medium"),
+             txy=payload.get("txy"), memory_origins=payload.get("memory_origins"))
+        sent.append({"kind": "done"})
+    except Exception as exc:
+        sent.append({"kind": "error", "message": str(exc)})
+    cache.service.pending.remove(request)
+    return deliver(cache, request, sent)
+
+
 def test_a_local_raw_only_folder_has_no_offer(qtbot: QtBot, service: IOService, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cache_location, "share_of", lambda path, mounts=None, *, resolve=False: "")
@@ -255,6 +276,14 @@ def test_a_share_folder_without_txy_offers_hellabs_folders_and_converts_there(
     panel.show_explorer(explorer, None)
     assert panel.text("offer") == f"2 converted to {explorer_convert.WHERE[choice]}"
     qtbot.waitUntil(lambda: ("list", path) in cache.jobs)  # Listed and loaded again: HeLab's TXY show.
+    replay(cache, path, tmp_path, "list")
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None)
+    load_as_the_helper_does(cache, path, tmp_path)
+    qtbot.waitUntil(lambda: explorer.displayed_dataset is not None and explorer.displayed_dataset.path == path)
+    shown = explorer.displayed_dataset
+    assert shown is not None and sorted(shown.data) == [1, 2]
+    panel.show_explorer(explorer, None)
+    assert panel.text("offer") == f"2 converted to {explorer_convert.WHERE[choice]}"  # (Its result, not the offer.)
     explorer.close_cleanup()
 
 
