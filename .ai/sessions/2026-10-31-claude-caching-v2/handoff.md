@@ -709,3 +709,19 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
     3.7× slower, so a slower runner this time, not new tests.
 
   Under the ~25 min stop line; watched at every run from here on.
+
+### Checkpoint 1 review fixes (Assay, `review-s2-checkpoint1.md`, `7d5c567`)
+
+| Finding | Commit | Fix | Test (fails before the fix) |
+|---|---|---|---|
+| S2-1 Medium | `6b0f998` | `trim` stops before only copies (`_free_space(only_copies=False)`) unless given the named plan (`expected`), which it removes exactly or not at all; `trim_plan(budget)` and the admin's `trim` with `plan_only`/`plan` give step 5's question what goes; `trim_estimate` is store-v3's | `test_trim_keeps_only_copies_unless_its_plan_names_them` |
+| S2-2 Low | `6b0f998` | A layer keeps `seen_at` (`STAGE2_SCHEMA`, and a `migrate` addition for a store migrated before it); `mark_txy_seen` follows C2-10's rule | `test_an_older_listing_landing_late_undoes_no_mark`; the migration test, extended to a store without `seen_at` |
+
+- **CI 41379212072** (`6b0f998`): green on all three OSes. I read every Tests and Converter job's log (9).
+  Windows Tests 2/2 (job 125066159186) had **1 RERUN**, of
+  `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: the known pathlib
+  `lstat` collection error, which passed on retry. **known-issues proposal:** add this run to that entry. No other
+  RERUN. Windows Tests 1/2 took 9.1 min, 2/2 took 11.6.
+- The step 3 work in progress was kept out of `6b0f998`: set aside as a patch, then reapplied after it.
+- Assay's notes for later: `start_txy_job`'s guard also holds `gen_datasets` and the folder's epoch when step
+  3d seeds layers from v4 `datasets` rows; Settings › Cache's Clear all sends `txy` (step 5).
