@@ -88,6 +88,7 @@ def rows(store: CacheStore, sql: str, args: tuple[Any, ...] = ()) -> list[tuple[
 
 # The switch (Q28.3)
 
+@pytest.mark.store_v3  # (The switch off: store-v3 itself.)
 def test_with_the_switch_off_store_v3_is_live_and_no_store_v4_is_ever_made(private_store: str) -> None:
     from helab.utils.folder_cache import store_options
     cache_store._reset_live_layout()
@@ -104,6 +105,56 @@ def test_with_the_switch_off_store_v3_is_live_and_no_store_v4_is_ever_made(priva
         assert store_v4.MAKER_ENV not in os.environ or json.loads(os.environ[store_v4.MAKER_ENV])  # (Not made here.)
     finally:
         cache_store._reset_live_layout()
+
+
+def test_store_v4_is_the_shipped_default_and_the_hidden_row_turns_store_v3_back_on(private_store: str) -> None:
+    """V~2 (Q47.4): v0.0.8 ships store-v4: a fresh settings file (no ``store_v4`` row) gives store-v4; the row
+    set off by hand, the hidden fallback kept one release, gives store-v3. Settings shows no control for it."""
+    from helab.utils.folder_cache import store_options
+    from helab.utils.settings_defaults import STORE_V4_SETTING, read_setting, setting
+    from helab.utils.settings_store import app_settings
+    settings = app_settings()
+    assert setting(STORE_V4_SETTING).default is True and read_setting(settings, STORE_V4_SETTING, typed=True) is True
+    cache_store._reset_live_layout()
+    try:
+        assert cache_store.live_layout() == store_v4.LAYOUT
+        assert store_options()["directory"] == os.path.join(private_store, "store-v4")
+        settings.setValue(STORE_V4_SETTING, False)
+        settings.sync()
+        cache_store._reset_live_layout()
+        assert cache_store.live_layout() == cache_store.LAYOUT_VERSION
+        assert store_options()["directory"] == os.path.join(private_store, "store-v3")
+    finally:
+        settings.remove(STORE_V4_SETTING)
+        cache_store._reset_live_layout()
+
+
+@pytest.mark.parametrize(("version", "reads"), [("0.0.7a1", True), ("0.0.8a1", True), ("0.0.8", True),
+                                                ("0.0.9a1", False), ("0.0.9", False), ("0.1.0", False),
+                                                ("1.0.0", False), ("not a version", False)])
+def test_keep_reads_store_v3_through_v0_0_8_only(version: str, reads: bool) -> None:
+    """V~3 (Tony, 2026-11-03): Keep's read-through ends when v0.0.9 starts."""
+    assert cache_store.legacy_read_through(version) is reads
+
+
+def test_from_v0_0_9_store_v3_is_neither_read_nor_counted_nor_asked_about(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """V~3: from v0.0.9 store-v4 never opens store-v3 (Keep or not answered), counts none of it in the budget,
+    and the store-v3 question isn't asked; Settings' Clear old stores… still removes it."""
+    from types import SimpleNamespace
+    from helab.views.CacheDialogs import CacheDialogs
+    caches = tmp_path / "caches"
+    v3_with_state(caches)
+    with CacheStore(str(caches / "store-v4")) as store:
+        store.measure_legacy()
+        assert store._kept_legacy() is not None and store._legacy_counted() > 0  # (v0.0.8: read and counted.)
+    monkeypatch.setattr(cache_store, "legacy_read_through", lambda version=None: False)
+    with CacheStore(str(caches / "store-v4")) as store:
+        assert store._kept_legacy() is None and store._legacy_counted() == 0
+    dialogs = SimpleNamespace(cache=SimpleNamespace(legacy={"present": True, "choice": None}), _legacy_asked=False)
+    assert not CacheDialogs._legacy_due(dialogs)  # type: ignore[arg-type]
+    monkeypatch.setattr(cache_store, "legacy_read_through", lambda version=None: True)
+    assert CacheDialogs._legacy_due(dialogs)  # type: ignore[arg-type]
 
 
 def test_the_switch_on_makes_store_v4_the_live_store(switch_on: None, private_store: str) -> None:

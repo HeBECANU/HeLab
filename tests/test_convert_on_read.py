@@ -216,6 +216,7 @@ def test_lives_session_sends_its_failed_held_shots_back_with_known() -> None:
     assert session.held_failed == [[1, 2, 3]]  # (A check that didn't list keeps it.)
 
 
+@pytest.mark.store_v3  # (Its store-v3 half needs the switch off; it then points the store at store-v4.)
 def test_folder_cache_asks_live_to_convert_on_read_only_with_store_v4(monkeypatch: pytest.MonkeyPatch,
                                                                      tmp_path: Path) -> None:
     from helab.utils import folder_cache
@@ -231,6 +232,7 @@ def test_folder_cache_asks_live_to_convert_on_read_only_with_store_v4(monkeypatc
 
 # 3c: what users see (S3~5, S3~6)
 
+@pytest.mark.store_v3  # (Its store-v3 half needs the switch off; it then points the store at store-v4.)
 def test_folder_cache_says_which_folders_convert_on_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from helab.utils import folder_cache
     from test_cache_tab import frozen_cache

@@ -462,7 +462,9 @@ def test_the_cache_tab_lists_and_clears_folder_preferences_apart_from_clear_all(
         service.pending.remove(request)
         assert tab.prefs_label.text() == "2 folders not cached · 1 folder not auto-loaded"
         tab.clear(list(KINDS))
-        assert admin(service, "clear").payload["params"]["kinds"] == list(KINDS)  # Not the flags.
+        from helab.utils import cache_store
+        v4 = ["raw", "txy"] if cache_store.live_layout() >= 4 else []  # (store-v4: raw pulses and TXY data too.)
+        assert admin(service, "clear").payload["params"]["kinds"] == [*KINDS, *v4]  # Not the flags.
         service.pending.clear()
         tab._job = ""
         tab.clear_prefs()

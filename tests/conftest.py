@@ -71,6 +71,8 @@ if TYPE_CHECKING:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "no_auto_data_root: test the RAM-only or explicit marker path")
+    config.addinivalue_line("markers", "store_v3: a test about store-v3 itself, run with the store_v4 switch off "
+                                       "(v0.0.8 ships store-v4, the suite's default)")
     group_option(config.getoption("test_group"))  # (a bad --test-group stops the run before collecting)
     # The folders HeLab resolved must be this process's private ones, never the real app's.
     from helab.utils import constants
@@ -318,6 +320,23 @@ def private_settings(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
     the machine's native store. In a folder apart from ``tmp_path``, which tests list."""
     folder = tmp_path_factory.mktemp("settings")
     monkeypatch.setenv("HELAB_TEST_SETTINGS_FILE", str(folder / "helab-settings.ini"))
+
+
+@pytest.fixture(autouse=True)
+def store_layout(request: pytest.FixtureRequest, private_settings: None) -> Iterator[None]:
+    """A ``store_v3`` test runs with the ``store_v4`` row off in its own settings (read again by the next
+    ``store_root``); every other test runs on the shipped default, store-v4. The layout is read again after."""
+    if request.node.get_closest_marker("store_v3") is None:
+        yield
+        return
+    from helab.utils import cache_store
+    from helab.utils.settings_store import app_settings
+    settings = app_settings()
+    settings.setValue("store_v4", False)
+    settings.sync()
+    cache_store._reset_live_layout()
+    yield
+    cache_store._reset_live_layout()
 
 
 @pytest.fixture(autouse=True)

@@ -210,8 +210,8 @@ def scan(cache: FolderCache, path: str, children: list[str] | None = None, txy_b
     cache.service.resultReady.emit(request, {"kind": "entries", "entries": [
         {"path": p, "modified": None} for p in (children or [])]})
     files = {"txy": {"count": 1, **({} if txy_bytes is None else {"bytes": txy_bytes})}}
-    cache.service.resultReady.emit(request, {"kind": "status", "status": "ok", "count": 1, "raw": [1], "details": True,
-                                             "txy": [1] if data else [], "files": files if data else {},
+    cache.service.resultReady.emit(request, {"kind": "status", "status": "ok", "count": 1, "raw": [1] if data else [],
+                                             "details": True, "txy": [1] if data else [], "files": files if data else {},
                                              "modified": 0, "signature": "v1", "scanned_at": time.time()})
     cache.service.resultReady.emit(request, {"kind": "done"})
     cache.service.pending.remove(request)

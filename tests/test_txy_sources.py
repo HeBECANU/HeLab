@@ -223,7 +223,7 @@ def test_the_cache_and_ram_never_reuse_a_shot_of_the_other_kind(tmp_path: Path, 
     source = make_run(tmp_path, private_store)
     first = loaded(run_load(source, tmp_path, private_store, options(tmp_path, private_store)))
     with stores._cache_store(store_root(private_store), [str(source)]) as store:
-        row = store.read_dataset_row(str(source)).value
+        row = store.read_dataset_infos([str(source)])[str(source)].value  # (store-v4: its view's.)
     assert row is not None and row["info"]["txy"]["origins"] == first["txy"]["origins"]
     assert row["info"]["signature"] == first["signature"]
     # MATLAB's TXY of shot 3 arrives: the cached HeLab one isn't reused for it.
@@ -368,7 +368,7 @@ def test_live_saves_keep_the_origins(tmp_path: Path, private_store: str) -> None
     result = loaded(saved)
     assert result["txy"]["origins"] == first["txy"]["origins"] and result["signature"] == first["signature"]
     with stores._cache_store(store_root(private_store), [str(source)]) as store:
-        row = store.read_dataset_row(str(source)).value
+        row = store.read_dataset_infos([str(source)])[str(source)].value  # (store-v4: its view's.)
     assert row is not None and row["info"]["txy"]["origins"] == first["txy"]["origins"]
     # Held without its record: HeLab's shots are taken for MATLAB's, which the folder lacks.
     lost: list[dict[str, Any]] = []
@@ -524,6 +524,9 @@ def kinds_of(events: list[dict[str, Any]]) -> list[str]:
     return [event["kind"] for event in events]
 
 
+# (store-v3: HeLab only without a current HeLab TXY leaves a shot out there; store-v4 converts it on read,
+# by design, which tests/test_convert_on_read.py covers.)
+@pytest.mark.store_v3
 def test_clearing_helabs_never_makes_a_mismatch(tmp_path: Path, private_store: str) -> None:
     source = make_run(tmp_path, private_store)
     first = loaded(run_load(source, tmp_path, None, options(tmp_path, private_store)))
@@ -794,7 +797,7 @@ def held_from_a_load(source: Path, tmp_path: Path, private_store: str) -> tuple[
 
 def saved_info(source: Path, private_store: str) -> dict[str, Any]:
     with stores._cache_store(store_root(private_store), [str(source)]) as store:
-        row = store.read_dataset_row(str(source)).value
+        row = store.read_dataset_infos([str(source)])[str(source)].value  # (store-v4: its view's.)
     assert row is not None
     return dict(row["info"])
 
@@ -954,6 +957,9 @@ def test_the_quick_check_never_reuses_ram_of_another_kind(tmp_path: Path, privat
     assert result["memory_shots"] == [1, 2] and result["source"] != "memory"
 
 
+# (store-v3: HeLab only without a current HeLab TXY leaves a shot out there; store-v4 converts it on read,
+# by design, which tests/test_convert_on_read.py covers.)
+@pytest.mark.store_v3
 def test_helab_only_leaves_out_matlabs_shots_without_a_mismatch(tmp_path: Path, private_store: str) -> None:
     """Codex 4425801688: shots cached (or held) from MATLAB's TXY that HeLab only leaves out aren't deleted: their
     MATLAB TXY are there. The load gives HeLab's shots, with no ``shots_missing``."""

@@ -81,14 +81,16 @@ def complete_scan(explorer: FolderExplorer, qtbot: QtBot, path: str,
     explorer._update_activity()
 
 
-@pytest.mark.parametrize("contents, expected", [
-    ("empty", "Folder is empty"),
-    ("unrelated", "No TXY files in this folder"),
-    ("subfolder", "No TXY files here · Select a subfolder to load data"),
-    ("raw", "1 raw shot found · No converted TXY files"),
+@pytest.mark.parametrize("contents, expected, cache_line", [
+    ("empty", "Folder is empty", "No data to cache"),
+    ("unrelated", "No TXY files in this folder", "No data to cache"),
+    ("subfolder", "No TXY files here · Select a subfolder to load data", "No data to cache"),
+    # (store-v4, the shipped default: a raw file without a TXY is converted when the folder is loaded, so it is
+    # data to cache, S3~5.)
+    ("raw", "1 raw found · converted when loaded · Not loaded", "No cached data"),
 ])
 def test_non_data_folder_summary(
-    browser: FolderExplorer, qtbot: QtBot, tmp_path: Path, contents: str, expected: str,
+    browser: FolderExplorer, qtbot: QtBot, tmp_path: Path, contents: str, expected: str, cache_line: str,
 ) -> None:
     if contents == "unrelated":
         (tmp_path / "notes.txt").write_text("experiment notes")
@@ -106,7 +108,7 @@ def test_non_data_folder_summary(
     assert "Live updates off" in browser.folder_freshness_label.text()
     assert browser.selected_folder_label.isHidden()
     assert browser.deselect_button.isHidden()
-    assert browser.folder_cache_label.text() == "No data to cache"
+    assert browser.folder_cache_label.text() == cache_line
 
 
 def test_folder_details_and_hint_describe_each_folder_state(

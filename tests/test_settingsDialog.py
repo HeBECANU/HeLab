@@ -52,7 +52,8 @@ def test_cache_tab_controls(qtbot: QtBot, settings_dialog: SettingsDialog) -> No
     # Without the app's folder cache (no helper to ask), it names the folder and
     # leaves every action disabled; tests/test_cache_tab.py covers the working tab.
     tab = settings_dialog.cache_tab
-    assert tab.location_label.text().endswith("store-v3")
+    from helab.utils import cache_store
+    assert tab.location_label.text().endswith("store-v4" if cache_store.live_layout() >= 4 else "store-v3")
     assert tab.inventory is None and not tab.enabled
     assert all(not button.isEnabled() for button in (*tab.kind_buttons.values(), tab.clear_all_button,
                                                      tab.purge_datasets_button, tab.purge_records_button))

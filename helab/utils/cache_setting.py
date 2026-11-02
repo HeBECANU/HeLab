@@ -21,7 +21,8 @@ def write_cache_setting(settings: QSettings, path: str) -> bool:
 
 
 def store_v4_enabled(settings: QSettings) -> bool:
-    """Caching v2's switch (Q28.3): the disk cache lives in store-v4. Off unless set by hand."""
+    """Caching v2's switch (Q28.3, Q47.4): the disk cache lives in store-v4, the default from v0.0.8; off (set
+    by hand, a hidden fallback for one release, V~2) it is store-v3."""
     return bool(read_setting(settings, STORE_V4_SETTING, typed=True))
 
 

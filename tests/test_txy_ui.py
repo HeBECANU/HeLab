@@ -169,6 +169,7 @@ def test_remove_everything_old_names_every_part_and_its_size(qtbot: QtBot, monke
         service.shutdown()
 
 
+@pytest.mark.store_v3  # (Its store-v3 half needs the switch off; it then points the store at store-v4.)
 def test_the_policy_is_saved_and_sent_with_store_v4_requests(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
                                                             tmp_path: Path) -> None:
     service, cache = frozen_cache(monkeypatch)

@@ -172,9 +172,10 @@ SETTINGS: tuple[Setting, ...] = (
             "The main window's folder panel and plot settings panel widths in logical pixels, \"<folders>,<settings>\", "
             "saved as HeLab quits; the plots take the rest of the window. Folders 80 to 4000, settings 250 to 4000; "
             "otherwise the default (Q33.2)."),
-    Setting(STORE_V4_SETTING, bool, False,
-            "Developers only until caching v2 stage 2 (Q28.3): keep the disk cache in store-v4 (caching v2) "
-            "instead of store-v3. Read once when HeLab starts; no Settings control."),
+    Setting(STORE_V4_SETTING, bool, True,
+            "The disk cache's store: store-v4 (caching v2), on from v0.0.8 (Q47.4). Off is a hidden fallback to "
+            "store-v3 kept for one release (V~2): set by hand only, never shown in Settings. Read once when "
+            "HeLab starts."),
     Setting(CACHE_POLICY_SETTING, str, "raw+used",
             "Caching v2 (store-v4 only): what new saves write unless a folder chooses otherwise (Q45.1): "
             "raw+used (raw pulses and every TXY a load uses, the default), raw (raw pulses; TXY converted on "
