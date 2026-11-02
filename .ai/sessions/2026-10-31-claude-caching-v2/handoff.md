@@ -636,3 +636,54 @@ clients on macOS and Windows may report different mtime resolution.
 
 *Also for stage 2, no question:* `helab cache export` of TXY layers (A~5); `pack_dataset`'s 2.1 GB limit ends
 with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
+
+# Stage 2 (Tony's go, 2026-11-02; brief-stage2.md)
+
+## Step 1: the design addendum (`1eddfaf`)
+
+[design-stage2.md](design-stage2.md). CoCo's answers:
+- **S~1:** the files outside the owned paths, yes.
+- **S~2:** raw-keyed wherever a raw file is listed, yes (CoCo tells Tony as an FYI).
+- **S~3:** (b), with three conditions:
+  - the file is written atomically, by the GUI only;
+  - `helab cache` falls back to QtCore when it is missing, or names a folder that isn't there;
+  - it is not part of housekeeping.
+- **S~4:** share one view, yes.
+- **S~5:** whole rows, yes.
+- **S~6:** goes to Tony; build with the proposed labels.
+- A40.2 and A44.2 joined stage 2 (CoCo).
+- A44.2's two call lines (`helab/main.py`, `helab/views/CacheMover.py`) approved, with a test that
+  `helab convert` doesn't write the file.
+
+## Step 2: the store side, inert (`b691d26`, `a70d261`)
+
+- **`b691d26`:**
+  - store-v4's stage 2 tables (migrated into stage 1's stores) and `helab/convert/txy_layer.py` (PURE);
+  - `CacheStore`'s TXY layers: save units, per-shot job order, views, `confirm_view` (A40.3), pending parts
+    merged per folder (Q45.8), compaction only when it fits (Q45.7), `mark_txy_seen`;
+  - one planner for Make room and `trim` (Q45.6, A42.2);
+  - Clear `txy` everywhere it joins; the sweep, `_live`, inventory and cache move over `txy/`;
+  - **S2-0:** `rekey_subtree` moves `raw_layers` and the TXY tables;
+  - admin `clear_txy` and `folder_choice`.
+
+  Tests: `tests/test_txy_layers_store.py` (19). Mutations of S2-0, the migration, the waiting parts' files
+  and the policy each fail a test.
+- **`a70d261`:**
+  - A44.1: `helab cache export --folder F --kind txy [--layer]`, and a segment file;
+  - A44.2: `cache-folder.json`, written by the GUI at startup and after a move, read by `helab cache` with
+    CoCo's fallbacks.
+
+  Tests: `test_cache_cli.py` (13), `test_cache_folder_record.py` (convert writes none; the GUI writes it).
+- **Departures from the addendum, to note:**
+  - **`save_dataset` is still allowed in store-v4.** The addendum's refusal moves to step 3, with the loads
+    that replace it. Refusing it now would stop switch-on loads from caching anything until step 3.
+  - **A merged waiting unit keeps the later job's view only.** One pending row per folder (Q45.8) can hold
+    one view. Parts of every layer are kept; another source mode's view is made again at its next load.
+  - **The GUI's Make room items** (`CacheDialogs.room_items` builds them from the room dict's keys) don't
+    yet know `txy_*`. Step 5 adds them, after merging `dev/v0.0.8` (Rivet's strings in that file). Until
+    then a switch-on Make room that names TXY layers finds its plan changed and removes nothing: safe.
+  - **`gone_at` on a layer** is set and cleared by the latest listing (`mark_txy_seen`). Unlike raw rows'
+    C2-10 ordering, a late older listing can flip it. Step 3's loads call it with the listing they took;
+    say so if it needs raw's ordering.
+- **Docs proposal:** `docs/hlb-format.md` gets a "TXY layers" section (§3's arrays and meta, the precision
+  rule) and `helab cache export --kind txy`. AGENTS.md's code map row for `cache_cli.py` adds "TXY layers".
