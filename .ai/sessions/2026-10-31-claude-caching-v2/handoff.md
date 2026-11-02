@@ -1322,3 +1322,35 @@ log appears 7 times.
   - 50 of 50 runs pass.
   - Without the fix, 5 of 10 runs fail.
 - **Checked:** suite 9135 passed, no RERUN.
+
+### CI 41469923406 (`915029b`, the race fix)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled" log
+appears 7 times.
+
+### store-v4's cached data in listings, scans and adopt (`4afa96a`)
+
+- **The gap:** found by the switch-on run. Listings took "disk cached" and `cache_info` from `read_dataset_infos`,
+  which read only `datasets`. With store-v4, every folder looked uncached after a restart: badges, cache-first and
+  offline browsing.
+- **Fix:** `read_dataset_infos` in store-v4 answers from the folder's view (`_view_infos`).
+  - Which view: the one `wanted` names, else the most recently used. Listings send none today, so it's the latest.
+  - What it gives: that view's info, the bytes of the layers it names, its RAM from those layers' rows by the share
+    of their shots it names, and its TXY bytes.
+  - A folder with only a stage 1 dataset (a seed) still answers from that dataset.
+- **The sweep of other readers of `datasets`:**
+  - **Fixed here:**
+    - a scan's `cache_mismatch` (`CacheStore.cached_matlab_shots`: the latest view's MATLAB shots);
+    - adopt's `cache_info` (now `read_dataset_infos`).
+  - **Left as they are, with the reason:**
+    - the inventory's "Cached data" row and the datasets purge: store-v4's own datasets are stage 1's seeds, and its
+      layers have their own rows and purges;
+    - Make room and trim: they have their layer groups;
+    - the file accounting (`_known_files`, `_live`, `_dataset_bytes`);
+    - `cache_move`'s verify: covers `txy_segments` since stage 2;
+    - `txy_cache.Access`: store-v3 only, or seeds.
+- **Tests:**
+  - `tests/test_v4_listings.py` (4 tests);
+  - `test_offline_browsing.py`'s `offline_restart` now runs with store-v3 and store-v4.
+  - The new tests and the store-v4 offline ones fail without the fix.
+- **Checked:** suite 9148 passed, 673 skipped, no RERUN.
