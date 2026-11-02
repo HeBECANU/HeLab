@@ -171,6 +171,9 @@ class _Log:
             LOG.info("%s -> %s: %d hit%s (%.2f s)%s", event["raw_name"], os.path.basename(event["txy"]),
                      event["hits"], "" if event["hits"] == 1 else "s", seconds,
                      f"; replaced: {event['replaced']}" if event["replaced"] else "")
+            if event["read_stop"] is not None:  # (A37.1: textscan stopped at a token it can't read.)
+                from helab.convert.raw import ReadStop
+                LOG.warning("%s: %s", event["raw_name"], ReadStop.of(event["read_stop"]).detail())
         elif event["kind"] == "shot_waiting":
             if self.waiting.get(event["raw_name"]) != event["reason"]:
                 self.waiting[event["raw_name"]] = event["reason"]

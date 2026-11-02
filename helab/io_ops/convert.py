@@ -752,6 +752,7 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                 _trace("write", target, "convert: TXY beside", bytes=len(result.txy))
             seconds["write"] = time.perf_counter() - write_started
             converted += 1
+            stop = result.read_stop  # (Where textscan's read stopped early: A37.1.)
             current.append(shot.entry)
             if raw_rows is not None:
                 raw_rows.add(shot.shot, shot.name, shot.size, shot.mtime_ns, data, read_at.get(shot.shot, time.time()))
@@ -759,7 +760,8 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                   "raw_size": shot.size, "raw_mtime_ns": shot.mtime_ns, "raw_sha256": record.raw_sha256,
                   "output": places["output"], "txy": target, "txy_size": len(result.txy), "provenance": index_path,
                   "hits": result.hits, "replaced": shot.replaced, "profile": profile_info, "backend": backend,
-                  "seconds": seconds})
+                  "seconds": seconds, "read_stop": None if stop is None else {
+                      "line": stop.line, "offset": stop.offset, "text": stop.text, "unread": stop.unread}})
         progress()
 
     read_at: dict[int, float] = {}

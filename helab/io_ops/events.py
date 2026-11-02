@@ -986,10 +986,21 @@ class ConvertPlanEvent(TypedDict):
     todo: int  # of those, to convert now
 
 
+class ReadStopField(TypedDict):
+    """Where a raw file's read stopped before its end (``helab.convert.raw.ReadStop``, A37.1): the
+    first token MATLAB's textscan can't read ends it, and the TXY holds the hits of the rows before it.
+    ``line`` from 1, as the read counts lines; ``offset`` the token's byte; ``text`` its start, escaped;
+    ``unread`` the bytes from there to the end."""
+    line: int
+    offset: int
+    text: str
+    unread: int
+
+
 class ShotConvertedEvent(TypedDict):
     """A shot converted: its TXY (``txy``, 0 bytes when ``hits`` is 0: "converted, empty", Q10.3) and
     provenance row written first in the base's index (``provenance``: that index's path). A low-count shot is the app's to judge
-    from ``hits``."""
+    from ``hits``. ``read_stop``: the raw file's read stopped early (A37.1), None when it read to the end."""
     kind: Literal["shot_converted"]
     path: str
     shot: int
@@ -1006,6 +1017,7 @@ class ShotConvertedEvent(TypedDict):
     profile: ConvertProfile
     backend: str
     seconds: ConvertSeconds
+    read_stop: ReadStopField | None
 
 
 class ShotWaitingEvent(TypedDict):

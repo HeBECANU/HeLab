@@ -828,6 +828,32 @@ def test_workers_give_the_same_bytes(source: Path, tmp_path: Path) -> None:
     assert converted == {shot: convert_raw(data, MATLAB_2019, "reference") for shot, data in datas.items()}
 
 
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_read_stopped_early_is_said_with_its_line(source: Path, tmp_path: Path, workers: int,
+                                                    caplog: pytest.LogCaptureFixture) -> None:
+    """A raw file with a line textscan can't read converts as MATLAB's reading does (the hits before it), and
+    its ``shot_converted`` says where the read stopped (A37.1), from a worker too; ``helab convert`` logs it."""
+    from helab import convert_cli
+    good = raw_bytes(10_000, 50_000)
+    garbage = good + b"2,145062644not,a,number\r\n" + raw_bytes(90_000)[len(b"5,1000\r\n"):]
+    write_raw(source, 1, good)
+    write_raw(source, 2, garbage)
+    events = run(source, request_for(source, tmp_path, workers=workers))
+    converted = {event["shot"]: event for event in of(events, "shot_converted")}
+    assert converted[1]["read_stop"] is None
+    stop = converted[2]["read_stop"]
+    assert stop == {"line": 10, "offset": len(good) + len(b"2,145062644"), "text": "not,a,number",
+                     "unread": len(garbage) - len(good) - len(b"2,145062644")}
+    assert Path(converted[2]["txy"]).read_bytes() == convert_raw(garbage, MATLAB_2019, "reference")
+    assert converted[2]["hits"] == 2  # (The hit after the line isn't read, as MATLAB.)
+    log = convert_cli._Log()
+    with caplog.at_level("INFO", logger="helab.convert"):
+        for event in events:
+            log(event)  # type: ignore[arg-type]
+    [warning] = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert warning.startswith('d2.txt: read stopped at line 10, at "not,a,number"') and warning.isascii()
+
+
 def test_one_large_shot_is_cut_into_pieces_and_stays_byte_identical(source: Path, tmp_path: Path,
                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     from helab.convert import split
