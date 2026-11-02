@@ -1229,3 +1229,33 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
   - cache-store.md: `folder_raw` and `remove_raw_following`.
   - app-runtime-and-ui.md: S4~1's two questions.
   - the plan: stage 4 ticked, and stage 5 (raw files drive status, after MATLAB is retired) unchanged.
+
+### CI 41459782803 (`fa7884f`: the stage 3 review fixes)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole. There were **3 RERUNs**, all passed
+on retry.
+- **Windows Tests 1/2 (job 125325725282):**
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`,
+  "waitUntil timed out in 3000 milliseconds" at line 292. This is known-issues' entry for this test; add the
+  sighting.
+- **Windows Tests 1/2 (same job):** `test_live_testdata.py::test_convert_watch_converts_a_run_as_it_arrives`.
+  - The worker died ("node down: Not properly terminated") after pytest-timeout's "Timeout (0:01:40)" dump, which
+    shows the test in `wait_for` (line 240) waiting for `helab convert --watch` to convert a shot.
+  - The test took 6–10 s in every other run read tonight (15 runs on three OSes).
+  - **Stage 3 can't reach it:** the watcher runs `convert_cli` and `io_ops/convert.py` in store-v3, and neither
+    imports any module stage 3 changed. Stage 3 didn't change them either.
+  - **Cause:** not pinned; the watcher's log isn't shown when the worker is killed.
+  - **known-issues proposal:** "`test_convert_watch_converts_a_run_as_it_arrives`: the watcher stopped converting
+    (pytest-timeout 100 s in `wait_for`, line 240; normally 6–10 s) on Windows CI 41459782803, job 125325725282;
+    passed on retry; cause not found (the log isn't kept when the worker is killed: fail `wait_for` with the log
+    before pytest-timeout)."
+- **Ubuntu Tests 2/2 (job 125325725389):** `test_left_widgets.py::test_a_teardown_that_raises_still_deletes_the_web_views`.
+  - Line 80 failed: `assert "3 passed, 2 errors"`. The inner run printed `.E.E.E`, three errors, so its third test
+    (`test_after_it`) also errored at teardown. The rerun reasons cut the rest of its output.
+  - **Stage 3 can't reach it:** the inner run is PyQt6 QtWebEngine views and the test conftest only, with no
+    HeLab I/O or caching.
+  - **known-issues proposal:** "`test_a_teardown_that_raises_still_deletes_the_web_views`: the inner run's third
+    test also errored at teardown (`.E.E.E` against "3 passed, 2 errors", line 80), on Ubuntu CI 41459782803, job
+    125325725389; passed on retry; its output is cut in the rerun reasons. Likely the QtWebEngine teardown
+    flakiness of the 'QtWebEngine crashes xdist workers' entry; not pinned."
+- The known "GUI stalled" log appears 5 times (A47.3, done on Ground).
