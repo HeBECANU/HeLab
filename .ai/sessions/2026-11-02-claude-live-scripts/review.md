@@ -136,3 +136,78 @@ landing:
   fixed).
 
 The settings rows' descriptions and `settings.md`'s paragraph are fine.
+
+## Re-check of the fixes (2026-11-03)
+
+I re-checked only the fix diff, `git diff 2825ddb..944fbd6 -- helab tests` (code commit `a18e4c9`).
+
+**Verdict: all 11 findings are closed. The fix adds one new finding, R1 (medium), which is open.**
+
+**Checks:**
+
+- The touched tests and their neighbours pass: `test_scripts_reload`, `test_live_scripts`, `test_plot_txy_saved`,
+  `test_scripts_folder`, `test_script_system`, `test_presets_plots`, `test_accessible_names`,
+  `test_destroyed_connections` and `test_headless_imports`. Run with `-n 4 --reruns 5 --reruns-delay 1
+  --basetemp=.ai/temp/pytest-prismo`: **167 passed, no RERUN**.
+- The five type checks are clean.
+- **Mutation check of the fixes.** I reverted each fix in turn on a copy of the tree. All of them made a new test
+  fail except one of L2's two guards: the stop in `_try_reload` can be removed with no test failing, but the
+  `remove_folder` guard is caught. That is enough. The two earlier survivors are caught now: M2 by
+  `test_a_plots_record_holds_the_choice_made_in_its_row`, and L1 by the waiting test's new assertions.
+
+| Finding | Status | How it was fixed |
+|---|---|---|
+| M1 | closed | `adopt_script` keeps waiting while `_own_waits` is set. |
+| M2 | closed | The record test chooses in the row, then checks `saved_plot()` and a reopen. |
+| M3 | closed for landing, see below | Remembered folders load after the window shows; network shares are skipped; the loading marker. |
+| L1 | closed | Asserts nothing is submitted while held, and the status line. |
+| L2 | closed | `_stop_waiting` runs when nothing is pending, in `_try_reload` and `remove_folder`. |
+| L3 | closed | The hook refuses `_PROTECTED` paths, with a test using a fake site-packages. |
+| L4 | closed | `_know_helpers` runs before unloading; the fold uses the known helpers. |
+| L5 | closed | `_folder_changed`: a helper newly found but not modified since the load is absorbed. |
+| N1 | closed | `identify_buttons` on the details window; object names on the actions. |
+| N2 | closed | The submenus are `deleteLater`'d. |
+| N3 | closed | The fixture restores `path_hooks`, `_SOURCE_ONLY` and `path_importer_cache`. |
+
+**M3: is it closed by what was built?** Yes, for landing.
+
+- **The share stall is gone at start.** A remembered folder on a share is never listed or loaded at start, and
+  never watched. `on_network` reads only the mount table: `GetDriveTypeW` and the UNC check on Windows, which
+  covers the lab's mapped drives; psutil's `getfsstat` elsewhere.
+- **A blocking or crashing script can now be recovered from inside the app.** Its first start still freezes, now
+  just after the window shows. The next start skips the remembered folders and shows an amber line with Reload,
+  so the settings file no longer has to be edited by hand.
+- **PlotReopen's deferral is sound.** `restore()` returns early while `folders_pending` is set and runs again on
+  `foldersRestored`. `record()` doesn't overwrite last session's record in the meantime.
+
+**What stays open:**
+
+- (a) Q~3, Tony's decision on importing off the GUI thread. Until then, a script that blocks at import still
+  freezes HeLab once, whether it comes from Load Scripts…, Reload or the first start.
+- (b) R1, below.
+
+### R1 (medium, new): a loading marker that names an unlisted folder makes every later start skip the folders
+
+`helab/views/plots/script_tree.py:326-334` (`_load_folder`), and `add_folder` (`:373-376`). `add_folder` appends
+the new folder to `_remembered` and loads it. It saves the list (`_save_folders()`) only after the load. So if
+HeLab hangs or crashes while Load Scripts… loads a **new** folder X, the marker names X but the saved list
+doesn't. At the next start every remembered folder is skipped, as designed. But nothing ever removes the marker:
+
+- Reload runs `_load_folder(F)` with `stuck == X`, which is neither `own` nor `== F`.
+- "Remove from the list" can't reach X, because X isn't in the list.
+
+So **every later start skips all the remembered folders**, with no way out in the UI except loading X again
+through Load Scripts…, which the user has no reason to guess. A marker that can't be read (`loading_marker() ==
+""`) gets stuck the same way. I confirmed it with a throwaway test: list `[good]`, marker `{"folder": hung}`. After
+`restore_folders()` and `reload_scripts()`, the marker still names `hung`, and a second `TreePanelWidget`'s
+`restore_folders()` loads nothing.
+
+**Fix:** any of these would do:
+
+- a deliberate Reload or Load Scripts… removes a marker it didn't make once its loads end (the user's word,
+  like Rerun);
+- `restore_folders` keeps a marker only when it names a remembered folder, and drops one naming no listed
+  folder or none;
+- `add_folder` saves the list before loading.
+
+Add a test for the unlisted-folder case.
