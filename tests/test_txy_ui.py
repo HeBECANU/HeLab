@@ -128,3 +128,53 @@ def test_make_room_names_txy_layers_and_its_items_are_the_stores() -> None:
     assert room_items(room) == list(cache_store.room_items(
         ["/data/x"], ["/data/w"], [], [("/data/r", "helab:h")], [("/data/y", "matlab")], [("/data/z", "matlab")]))
     assert room_items(room)[1] == cache_store.txy_item("txy:", "/data/r", "helab:h")
+
+
+# The folder's own choices (step 5c)
+
+def test_a_folders_own_choices_are_kept_and_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        assert cache.set_folder_choice("/data/run", source="helab-only", tag="m19v1")
+        request = admin_request(service, "folder_choice")
+        assert request.payload["params"]["source"] == "helab-only" and request.payload["params"]["tag"] == "m19v1"
+        assert cache.folder_choices["/data/run"]["source"] == "helab-only"  # (Kept now: the next load follows it.)
+        cache.set_folder_choice("/data/run", policy="txy")
+        assert cache.folder_choices["/data/run"]["policy"] == "txy" and cache.folder_choices["/data/run"]["tag"] == "m19v1"
+    finally:
+        service.shutdown()
+
+
+def test_the_explorers_dialogs_set_exactly_what_was_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from helab.utils import txy_sources
+    from helab.views.CacheTab import POLICY_LABELS
+    from helab.views.FolderExplorer import FOLDER_CHOICE_GLOBAL, FolderExplorer
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        answers: list[str] = []
+
+        def ask(parent: Any, title: str, label: str, items: list[str], index: int, editable: bool) -> tuple[str, bool]:
+            return answers.pop(0), True
+        explorer = SimpleNamespace(model=SimpleNamespace(cache=cache), ask_item=ask)
+        answers[:] = [txy_sources.LABELS["helab-only"], "m19v1"]
+        FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
+        assert admin_request(service, "folder_choice").payload["params"] | {"set_at": 0} == {
+            "path": "/data/run", "source": "helab-only", "tag": "m19v1", "set_at": 0}
+        answers[:] = [FOLDER_CHOICE_GLOBAL]
+        FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
+        assert admin_request(service, "folder_choice").payload["params"]["source"] == ""
+        answers[:] = [dict(POLICY_LABELS)["raw"]]
+        FolderExplorer.choose_folder_policy(explorer, "/data/run")  # type: ignore[arg-type]
+        assert admin_request(service, "folder_choice").payload["params"]["policy"] == "raw"
+    finally:
+        service.shutdown()
+
+
+def test_folder_details_names_a_folders_own_choices() -> None:
+    from helab.views.FolderDetailsPanel import FolderDetailsPanel
+    row = ("120 MATLAB", "MATLAB's TXY")
+    assert FolderDetailsPanel._with_choices(row, {}) == row
+    text, tip = FolderDetailsPanel._with_choices(row, {"source": "helab-only", "tag": "m19v1", "policy": "txy"})
+    assert "this folder: " in text and "(m19v1)" in text and "cache: TXY only (no raw)" in text
+    assert "right-click › TXY for this folder…" in tip

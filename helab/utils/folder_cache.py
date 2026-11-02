@@ -1019,6 +1019,26 @@ class FolderCache(QObject):
             self.folder_choices[path] = dict(choices)
             self.folderPrefsChanged.emit(path)
 
+    def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
+                          tag: str | None = None) -> str:
+        """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
+        one): kept now (the tab's next load and Live follow it), then saved; the store's answer
+        (``folder_choices``) wins. The job's owner, "" if it couldn't be queued."""
+        set_at = time.time()
+        choices: dict[str, Any] = dict(self.folder_choices.get(path) or {"policy": "", "source": "", "tag": ""})
+        if policy is not None:
+            choices.update(policy=policy, policy_set_at=set_at)
+        if source is not None:
+            choices.update(source=source, tag=(tag or "") if source else "", source_set_at=set_at)
+        self.folder_choices[path] = choices
+        self.folderPrefsChanged.emit(path)
+        params: dict[str, Any] = {"path": path, "set_at": set_at}
+        if policy is not None:
+            params["policy"] = policy
+        if source is not None:
+            params.update(source=source, tag=tag or "")
+        return self.cache_admin("folder_choice", **params)
+
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
         """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
         from helab.convert.profile import BUILTIN_PROFILES, file_tag
