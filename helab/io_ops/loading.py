@@ -810,8 +810,12 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     txy_record = helab_txy.record(txy_source, origins, {**on_read, **helab_found}, None, txy, helab_state, on_read)
     # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
     # cache state is its tab's, never a plot choice's).
+    # store-v4: the folder is disk cached when it has any view, this TXY choice's or another's (as listings say,
+    # read_dataset_infos), so its badge doesn't drop while this choice's first save is on its way.
+    other_view = (not had_dataset and had_dataset is not None and access is not None and access.layered
+                  and store is not None and bool(store.folder_views(path)))
     known_cached: DiskCachedField = {} if (had_dataset is None and not cached) or quiet else {
-        "disk_cached": cached or bool(had_dataset)}
+        "disk_cached": cached or bool(had_dataset) or other_view}
     send({"kind": "loaded", "rows": rows, "bytes": size, "files": loaded,
           "loaded_at": time.time(),
           "total_files": len(files) + len(young), "failed_files": len(files) - loaded - len(late),

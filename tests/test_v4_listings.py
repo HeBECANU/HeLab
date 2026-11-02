@@ -91,3 +91,16 @@ def test_a_damaged_view_is_an_error_for_its_folder_and_the_others_list_on(tmp_pa
             found = store.read_dataset_infos([str(source), str(other)])
         assert found[str(source)].failed and "unreadable" in found[str(source)].error, damage
         assert found[str(other)].value is not None, damage
+
+
+def test_a_load_of_another_txy_choice_says_the_folder_is_disk_cached(tmp_path: Path) -> None:
+    """A folder cached in store-v4 under one TXY choice is disk cached when a load of another choice (its view not
+    saved yet) says so: its badge doesn't drop until that save lands (the switch-on CI, 41482722171)."""
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    run_load(source, tmp_path, options)  # (No TXY choice: its own view.)
+    other = {"source": "helab-priority", "profile_hash": "f" * 64, "profile_tag": "zz1"}
+    with opened(options, source) as store:
+        assert store.read_view(str(source), "helab-priority", "f" * 64).missing
+    loaded = first(run_load(source, tmp_path, options, txy=other), "loaded")
+    assert loaded["disk_cached"] is True
