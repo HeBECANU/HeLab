@@ -2,7 +2,11 @@
 was deleted without its full close (A47.3: a quit left waiting for saves, as quit tests leave it)."""
 from __future__ import annotations
 
+import faulthandler
+import logging
+import os
 import threading
+import time
 from typing import Callable
 
 import pytest
@@ -65,3 +69,33 @@ def test_a_window_whose_quit_waits_for_saves_takes_its_watchdog_with_it(qtbot: Q
     delete_now(window)
     thread.join(timeout=3)
     assert not thread.is_alive()
+
+
+def test_a_stall_line_names_its_window_and_the_tests(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                    caplog: pytest.LogCaptureFixture) -> None:
+    """A~3 of Quick Fixes 9: Windows CI logs "GUI stalled" from a window an earlier test left alive, its stacks
+    lost (xdist keeps no worker stderr). The line names the watchdog's window, the test that made it and the
+    test running now, so the next sighting names the leak."""
+    from helab.utils import gui_watchdog
+    # (No stack dump here: only watchdogs call it, and a skipped dump harms none.)
+    monkeypatch.setattr(faulthandler, "dump_traceback", lambda **kwargs: None)
+    parent = QObject()
+    parent.setObjectName("plots_window")
+    watchdog, thread = started_by(lambda: GUIWatchdog(parent))
+    assert isinstance(watchdog, GUIWatchdog)
+    test = os.environ["PYTEST_CURRENT_TEST"]
+    try:
+        with caplog.at_level(logging.ERROR):
+            watchdog.last_beat -= 10  # Its heartbeat stopped (no event loop runs here: nothing beats).
+            deadline = time.monotonic() + 5
+            while "GUI stalled" not in caplog.text and time.monotonic() < deadline:
+                time.sleep(0.05)
+        [line] = [record.getMessage() for record in caplog.records if "GUI stalled" in record.getMessage()]
+        assert f"(QObject 'plots_window'; made in {test}; now in {test})" in line, line
+    finally:
+        watchdog.stop()
+        thread.join(timeout=3)
+        delete_now(parent)
+    unnamed = QObject()
+    assert gui_watchdog.describe(unnamed) == "QObject" and gui_watchdog.describe(None) == "no window"
+    delete_now(unnamed)
