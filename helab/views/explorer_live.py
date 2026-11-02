@@ -16,6 +16,7 @@ import weakref
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
+from helab.convert.raw import ReadStop
 from helab.utils import app_log, events
 from helab.utils import folder_cache
 from helab.utils import txy_sources
@@ -61,6 +62,9 @@ def no_hits_text(shots: list[int]) -> tuple[str, str]:
     return (plural(len(shots), "shot") + " with no hits",
             f"No hits ({len(shots):,}): shot{'' if len(shots) == 1 else 's'} {numbers}. HeLab converted "
             "each to an empty TXY (0 bytes): its raw file holds no matched pulses (check the detector).")
+# How the Live line names raw files whose read stopped early (A37.1): one by name, several counted. Folder
+# details colours its Auto-convert row amber on either.
+READ_STOPPED = ("read stopped at line", "reads stopped early")
 # What the Live line calls each place HeLab's TXY go (``convert_plan.output``).
 CONVERT_OUTPUTS = {"beside": "beside the raw files", "cache": "HeLab's disk cache folder",
                    "temp": "HeLab's temp folder"}
@@ -84,6 +88,8 @@ class AutoConvert:
     last_at: float | None = None  # Wall time.
     low: int = 0  # Low-count shots notified.
     no_hits: set[int] = field(default_factory=set)  # Shots converted with no hits (A17.1).
+    # Raw files converted whose read stopped early (A37.1: textscan stops at a token it can't read), by name.
+    stopped: dict[str, ReadStop] = field(default_factory=dict)
     # The last ``convert_done`` milestone's: ``no_hits`` counted, and the unconvertible, waiting and kept
     # counts (None: none yet). A run that changed nothing logs none (Live converts every interval).
     no_hits_logged: int = 0
@@ -873,7 +879,13 @@ class LiveController:
         convert.last_shot, convert.last_hits, convert.last_at = shot, hits, time.time()
         if hits == 0:
             convert.no_hits.add(shot)
-        convert.waiting.pop(str(event["raw_name"]), None)
+        raw_name = str(event["raw_name"])
+        convert.waiting.pop(raw_name, None)
+        if event.get("read_stop"):
+            convert.stopped[raw_name] = stop = ReadStop.of(event["read_stop"])
+            logging.warning("Live auto-convert: %s in %s: %s", raw_name, session.path, stop.detail())
+        else:
+            convert.stopped.pop(raw_name, None)  # (Converted again, read to its end.)
         threshold = low_hits_threshold()
         if threshold and hits < threshold:
             name = os.path.basename(session.path.rstrip(os.sep)) or session.path
@@ -899,7 +911,8 @@ class LiveController:
 
     def convert_line(self, session: LiveSession) -> tuple[str, list[str], bool]:
         """Auto-convert's part of the Live line, its tooltip lines, and whether it is amber: stopped on an
-        error, or shots converted with no hits (A17.1) ("" and no lines while off)."""
+        error, shots converted with no hits (A17.1), or a raw file's read stopped early (A37.1) ("" and no
+        lines while off)."""
         convert = session.convert
         if convert is None:
             return "", [], False
@@ -916,6 +929,11 @@ class LiveController:
                 parts.append(f"{len(stuck):,} waiting")
             if convert.damaged:
                 parts.append(f"{len(convert.damaged):,} damaged")
+            if len(convert.stopped) == 1:
+                name, stop = next(iter(convert.stopped.items()))
+                parts.append(f"{name} {stop.summary()}")
+            elif convert.stopped:
+                parts.append(f"{len(convert.stopped):,} {READ_STOPPED[1]}")
             if empty_text:
                 parts.append(empty_text)
             if others := len(convert.unconvertible) - len(convert.damaged):
@@ -939,6 +957,10 @@ class LiveController:
             + (f"; notified below {threshold:,} hits: {convert.low:,}" if threshold else "; low-count notifications off"))
         if empty_line:
             lines.append(empty_line)
+        if convert.stopped:
+            lines.append(f"Read stopped early ({len(convert.stopped):,}): " + "; ".join(
+                f"{name}: {stop.detail()}" for name, stop in sorted(convert.stopped.items())[:8])
+                + (" …" if len(convert.stopped) > 8 else ""))
         settling = len(convert.waiting) - len(convert.stuck())
         if settling:
             lines.append(f"Being written: {plural(settling, 'raw file')} (converted once written)")
@@ -960,7 +982,7 @@ class LiveController:
             lines.append("A waiting file is checked again only when it changes.")
         if convert.error:
             lines.append(f"Auto-convert stopped: {convert.error}. Retry converts again.")
-        return text, lines, bool(convert.error or empty_text)
+        return text, lines, bool(convert.error or empty_text or convert.stopped)
 
     def live_line(self, session: LiveSession) -> tuple[str, str, bool]:
         """The summary's third line for a folder Live watches or saves: text, tooltip, amber."""

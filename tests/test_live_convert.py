@@ -320,6 +320,41 @@ def test_shots_converted_with_no_hits_are_named_in_amber(qtbot: QtBot, service: 
     explorer.close_cleanup()
 
 
+def test_a_read_stopped_early_is_named_on_the_live_line_and_in_folder_details(
+        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+    """A37.1: a raw file whose read stopped at a line textscan can't read converts (the hits before it) and
+    is named on the Live line and in Folder details' Auto-convert row, amber, with the detail in the tooltip;
+    several are counted; one converted again to its end is no longer named."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    cycle(qtbot, explorer, path, tmp_path)
+    write_raw(Path(path), 3, raw_bytes(10_000, 20_000) + b"0,12abc\r\n" + raw_bytes(30_000)[len(b"5,1000\r\n"):])
+    cycle(qtbot, explorer, path, tmp_path)
+    _, sent = cycle(qtbot, explorer, path, tmp_path)
+    [converted] = of(sent, "shot_converted")
+    assert converted["shot"] == 3 and converted["hits"] == 2 and converted["read_stop"]["line"] == 10
+    text, tooltip = line(explorer)
+    assert "d3.txt read stopped at line 10" in text
+    assert 'Read stopped early (1): d3.txt: read stopped at line 10, at "abc"' in tooltip
+    assert "color" in explorer.folder_freshness_label.styleSheet()
+    panel = FolderDetailsPanel()
+    qtbot.addWidget(panel)
+    panel.show_explorer(explorer, None)
+    assert "d3.txt read stopped at line 10" in panel.text("convert")
+    assert "at line 10" in panel.values["convert"].toolTip() and "color" in panel.values["convert"].styleSheet()
+    session.convert.request = True
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "raw_sha256": "x"})
+    assert "2 reads stopped early" in line(explorer)[0]
+    explorer.live_control._convert_event(session, {**converted, "read_stop": None})
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "read_stop": None})
+    assert session.convert.stopped == {} and "stopped" not in line(explorer)[0]
+    panel.show_explorer(explorer, None)
+    assert "color" not in panel.values["convert"].styleSheet()
+    explorer.stop_live(save=False)
+    explorer.close_cleanup()
+
+
 def test_a_loaded_folders_empty_helab_shots_are_its_no_hit_shots() -> None:
     import numpy as np
     from helab.utils import txy_sources

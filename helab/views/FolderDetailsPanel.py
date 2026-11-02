@@ -23,7 +23,7 @@ from helab.views.FolderExplorer import (
     AMBER, AUTO_LOAD_OFF, AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, LARGE_TOOLTIP, REFUSED_TOOLTIP,
     LOAD_SPINNER, FolderExplorer, load_origin,
 )
-from helab.views.explorer_live import no_hits_text
+from helab.views.explorer_live import READ_STOPPED, no_hits_text
 from helab.views.explorer_text import large_text
 
 
@@ -230,8 +230,10 @@ class FolderDetailsPanel(QScrollArea):
         style = f"color: {AMBER};" if RAW_OVERWRITTEN_TEXT in rows["errors"][0] else ""
         if self.values["errors"].styleSheet() != style:
             self.values["errors"].setStyleSheet(style)
-        # Shots converted with no hits are amber (A17.1).
-        style = f"color: {AMBER};" if "with no hits" in rows.get("convert", ("", ""))[0] else ""
+        # Shots converted with no hits are amber (A17.1), as are raw files whose read stopped early (A37.1).
+        convert_text = rows.get("convert", ("", ""))[0]
+        style = (f"color: {AMBER};" if "with no hits" in convert_text
+                 or any(mark in convert_text for mark in READ_STOPPED) else "")
         if self.values["convert"].styleSheet() != style:
             self.values["convert"].setStyleSheet(style)
 

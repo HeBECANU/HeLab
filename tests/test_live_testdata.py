@@ -144,7 +144,8 @@ def test_damaged_files_during_live_are_said_once_and_the_run_goes_on(
     """The test data's damaged raw files arrive among good shots. One cut mid-line and one empty are
     damaged once they have stayed so (here at once), each said once, and the good shots convert. One with
     a garbage line converts as MATLAB's reading does: its textscan stops at the first token it can't read,
-    so the TXY holds only the hits before that line (the reference converter's output)."""
+    so the TXY holds only the hits before that line (the reference converter's output), and the Live line
+    says where the read stopped (A37.1)."""
     monkeypatch.setattr(convert, "DAMAGED_SECONDS", 0.0)
     damaged = raws(era("damaged"))
     good_source = era("eras/2024-11-low-occupancy")
@@ -167,11 +168,17 @@ def test_damaged_files_during_live_are_said_once_and_the_run_goes_on(
         stopped = convert_raw(damaged[3], MATLAB_2019, "reference")
         assert stopped is not None and Path(converted[3]["txy"]).read_bytes() == stopped
         assert converted[3]["hits"] < len(as_loaded(matlab_txy(good_source, 1111)))  # (Made from shot 1111.)
+        # Where its read stopped (A37.1): the garbage line, said in the event and kept for the Live line.
+        assert converted[3]["read_stop"] is not None and converted[3]["read_stop"]["line"] == 1010
+        assert converted[3]["read_stop"]["text"] == "not,a,number"
+        assert all(converted[shot]["read_stop"] is None for shot in renamed)
         assert sorted(event["raw_name"] for event in said) == ["d1.txt", "d2.txt"]
         assert {event["reason"] for event in said} == {"damaged"}
         session = explorer.live
         assert session is not None and session.convert is not None
         assert session.convert.damaged == {"d1.txt", "d2.txt"}
+        assert list(session.convert.stopped) == ["d3.txt"] and session.convert.stopped["d3.txt"].line == 1010
+        assert "d3.txt read stopped at line 1010" in explorer.live_control.convert_line(session)[0]
         assert explorer.live is not None  # Live goes on.
     finally:
         explorer.stop_live(save=False)
