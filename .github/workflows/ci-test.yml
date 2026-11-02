@@ -216,7 +216,25 @@ jobs:
           fi
           # One run gives the group's results and coverage (pytest-cov merges the xdist workers'
           # data); macOS uploads each group's coverage.xml below, and Codecov merges the uploads.
-          pytest -n 4 --test-group "${{ matrix.group }}" --verbose -rR --cache-clear --cov=helab --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy --reruns 5 --reruns-delay 5 --timeout=120 --timeout-method=thread
+          # --session-timeout (A~4 of Quick Fixes 9): pytest stops itself (between tests, so the one running
+          # finishes its tries) well before the job's limit, failing the job with its summary, rerun
+          # reasons and junit.xml; a job the runner cancels at its limit keeps none of them (Ubuntu CI
+          # 41468043383). 20 min of a 30-min job on Windows, 12 of 20 elsewhere: setup and the steps
+          # after take up to 2 min each, and a group's pytest takes about 10 min (Windows) or 6.
+          pytest -n 4 --test-group "${{ matrix.group }}" --verbose -rR --cache-clear --cov=helab --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy --reruns 5 --reruns-delay 5 --timeout=120 --timeout-method=thread --session-timeout=${{ inputs.os == 'windows' && 1200 || 720 }}
+
+      # A~5 of Quick Fixes 9: each test job's junit.xml (every test's outcome, time and failure text) kept for a
+      # week whatever the job's outcome, cancelled too: --session-timeout above has pytest write it before the
+      # job's limit, and a job cancelled even so keeps what exists. (Named by the job's index, since a group's
+      # "1/3" can't be in a name: index 0 is group 1.)
+      - name: Keep the test results (junit.xml)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-${{ inputs.os }}-py3${{ inputs.python-minor }}-group-index-${{ strategy.job-index }}
+          path: junit.xml
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}

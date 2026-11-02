@@ -124,3 +124,26 @@ def test_a_bad_group_stops_the_run(tmp_path: Path) -> None:
     done = nested_collect(tmp_path, "--test-group", "3/2")
     assert done.returncode == pytest.ExitCode.USAGE_ERROR, done.stdout + done.stderr
     assert "--test-group takes N/M" in done.stdout + done.stderr
+
+
+def test_ci_ends_pytest_itself_before_a_test_jobs_limit() -> None:
+    """A~4 of Quick Fixes 9: a test job the runner cancels at its limit keeps no summary, rerun reasons or junit.xml
+    (Ubuntu CI 41468043383), so pytest's --session-timeout ends it first: with room left in the job for the test
+    running then (its tries) and the steps after."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-test.yml").read_text(encoding="utf-8")
+    [(windows_job, other_job)] = re.findall(r"timeout-minutes: \$\{\{ inputs\.os == 'windows' && (\d+) \|\| (\d+) \}\}",
+                                            workflow.split("name: Tests", 1)[1])
+    [(windows_pytest, other_pytest)] = re.findall(r"--session-timeout=\$\{\{ inputs\.os == 'windows' && (\d+) \|\| (\d+) \}\}",
+                                                  workflow)
+    for job, pytest_seconds in ((windows_job, windows_pytest), (other_job, other_pytest)):
+        assert int(pytest_seconds) <= int(job) * 60 - 8 * 60, (job, pytest_seconds)  # (8 min for the rest.)
+
+
+def test_each_test_jobs_junit_xml_is_kept_whatever_its_outcome() -> None:
+    """A~5 of Quick Fixes 9: the junit.xml of every test job, cancelled ones too (``if: always()``), right after the
+    run, under a name each job has to itself (two can't upload one name)."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-test.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Keep the test results (junit.xml)", 1)[1].split("\n      - name:", 1)[0]
+    assert "if: always()" in step and "uses: actions/upload-artifact@" in step and "path: junit.xml" in step
+    assert "${{ inputs.os }}" in step and "${{ inputs.python-minor }}" in step and "${{ strategy.job-index }}" in step
+    assert workflow.index("- name: Run Tests") < workflow.index("- name: Keep the test results")
