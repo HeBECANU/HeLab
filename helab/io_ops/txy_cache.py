@@ -82,8 +82,10 @@ CONVERTED, LATE, DAMAGED, FAILED = "converted", "late", "damaged", "failed"
 
 def convert_raw_file(filename: str, shot: int, size: int, mtime_ns: int, profile: Any, backend: str,
                      send: Any) -> tuple[str, Any]:
-    """Caching v2 stage 3: a HeLab shot made from its raw file in memory, as the converter would make it, under
-    the converter's ticker for its size (S3-2); no text written (Q19.1). ``(CONVERTED, array)``, else
+    """Caching v2 stage 3: a HeLab shot made from its raw file in memory, as the converter would make it; no text
+    written (Q19.1). The file is read as the converter reads it, with a heartbeat per block only, so a read that
+    stalls (a share) still times out; only the checks and the conversion run under the converter's ticker for
+    its size (S3-2, S3R-1, as ``convert_folder`` does). ``(CONVERTED, array)``, else
     ``(LATE, None)`` (changed while read, or unfinished: try again later), ``(DAMAGED, None)`` (unfinished and
     unmodified for a minute, as ``helab convert --once`` judges) or ``(FAILED, None)`` (no rows, or a backend
     that can't). Raises OSError when it can't be read."""
@@ -91,11 +93,10 @@ def convert_raw_file(filename: str, shot: int, size: int, mtime_ns: int, profile
     from helab.convert.raw import not_done
     from helab.io_ops.convert import DAMAGED_SECONDS, ONCE_SETTLE_SECONDS, _read_raw, _Shot, _Ticker, compute_budget
     from helab.io_ops.infra import Heartbeat
-    with _Ticker(send, "converting", compute_budget(size)):
-        raw_data = _read_raw(_Shot(shot, os.path.basename(filename), filename, size, mtime_ns),
-                             Heartbeat(send, "converting"))
-        if isinstance(raw_data, str):
-            return LATE, None
+    raw_data = _read_raw(_Shot(shot, os.path.basename(filename), filename, size, mtime_ns), Heartbeat(send, "reading"))
+    if isinstance(raw_data, str):
+        return LATE, None
+    with _Ticker(send, "converting", compute_budget(len(raw_data))):
         if not_done(raw_data, profile.channel_trigger) is not None:
             old = time.time() - mtime_ns / 1e9 >= max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS)
             return (DAMAGED if old else LATE), None

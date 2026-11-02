@@ -235,8 +235,19 @@ def test_folder_cache_says_which_folders_convert_on_read(monkeypatch: pytest.Mon
     try:
         assert not cache.converts_on_read("/data/run") and cache.on_read_shots("/data/run", 5, 2) == 0  # (store-v3.)
         monkeypatch.setattr(folder_cache, "store_root", lambda folder: str(tmp_path / "caches" / "store-v4"))
-        assert cache.converts_on_read("/data/run") and cache.on_read_shots("/data/run", 5, 2) == 3
-        assert cache.on_read_shots("/data/run", 2, 2) == 0
+        # (S3R-2: as the load decides. HeLab priority, the default, converts over MATLAB's TXY too: every raw file.)
+        assert cache.tab_source() == txy_sources.HELAB_PRIORITY
+        assert cache.converts_on_read("/data/run") and cache.on_read_shots("/data/run", 5, 2) == 5
+        cache.remember_choices("/data/mp", {"policy": "", "source": txy_sources.MATLAB_PRIORITY, "tag": "",
+                                            "source_set_at": 1.0})
+        assert cache.on_read_shots("/data/mp", 5, 2) == 3 and cache.on_read_shots("/data/mp", 2, 2) == 0
+        cache.remember_choices("/data/ho", {"policy": "", "source": txy_sources.HELAB_ONLY, "tag": "",
+                                            "source_set_at": 1.0})
+        assert cache.on_read_shots("/data/ho", 2, 2) == 2
+        from types import SimpleNamespace
+        loaded = SimpleNamespace(metadata={"load_counts": {"txy_matlab": 2, "txy_helab": 1, "helab_on_read": 4}})
+        monkeypatch.setattr(cache, "latest_dataset", lambda path, choice=None: loaded)
+        assert cache.on_read_shots("/data/run", 5, 2) == 4  # (Its load counted them: a HeLab TXY was read for one.)
         cache.remember_choices("/data/mat", {"policy": "", "source": txy_sources.MATLAB_ONLY, "tag": "",
                                              "source_set_at": 1.0})
         assert not cache.converts_on_read("/data/mat")  # (Its own source reads MATLAB's only.)
@@ -279,3 +290,29 @@ def test_a_views_on_read_shots_follow_its_revisions() -> None:
     assert view.txy_text() == "TXY: HeLab's (profile h) (1 converted from raw)"
     later = view.with_shots({3: np.zeros((1, 3)), 1: np.zeros((1, 3))}, origins={3: origin, 1: origin}, on_read=[3])
     assert later.on_read == frozenset({3}) and later.txy_text().endswith("(1 converted from raw)")
+
+
+def test_a_raw_file_read_that_stalls_sends_no_heartbeats_of_the_conversion(tmp_path: Path,
+                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3R-1: the raw file is read with a heartbeat per block only, so a share read that hangs times out; the
+    converter's ticker covers only the checks and the conversion (as ``convert_folder``)."""
+    from helab.io_ops import convert as convert_ops
+    from helab.io_ops import txy_cache
+    from helab.io_ops.infra import Heartbeat
+    source = raw_folder(tmp_path, (1,))
+    raw = source / "d1.txt"
+    monkeypatch.setattr(Heartbeat, "INTERVAL", 0.02)
+    sent: list[dict[str, Any]] = []
+    during: list[int] = []
+    real = convert_ops._read_raw
+
+    def stalling(shot: Any, beat: Any) -> Any:
+        before = len(sent)
+        time.sleep(0.3)  # (A share that stops answering mid-file.)
+        during.append(len(sent) - before)
+        return real(shot, beat)
+    monkeypatch.setattr(convert_ops, "_read_raw", stalling)
+    outcome, array = txy_cache.convert_raw_file(str(raw), 1, raw.stat().st_size, raw.stat().st_mtime_ns, MATLAB_2019,
+                                                "", sent.append)
+    assert outcome == txy_cache.CONVERTED and np.array_equal(array, expected(1))
+    assert during == [0]  # (No heartbeat while the read hangs.)
