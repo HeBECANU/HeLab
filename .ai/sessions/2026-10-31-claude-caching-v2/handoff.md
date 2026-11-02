@@ -1206,3 +1206,285 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
 - **Tests:** a test that a stalled read sends no heartbeat, and one of the counts by source and after a load.
   Both fail without the fixes.
 - **Checked:** suite 8956 passed, no RERUN.
+
+## Stage 4: the policy UI (`1ad31a9`, integration check `beffbff`)
+
+- **S4~1, a folder:** `folder_choice` with policy `txy` reports `folder_raw` (`CacheStore.folder_raw`: shots,
+  bytes, only copies).
+  - FolderCache emits `rawRemovalOffered` to the tab that chose, the owner `set_folder_choice` recorded.
+  - That tab's explorer asks "Also remove HeLab's cached copy of this folder's raw pulses (N MB)? Your d files
+    aren't touched." and names any only copies.
+  - On a yes only, it sends `clear_raw` for that folder.
+- **S4~1, Settings:** saving TXY only from another policy, with raw pulses cached, asks about the folders that
+  follow the setting.
+  - The question says "up to N MB" (the inventory's total) and that folders with their own policy keep theirs.
+  - On a yes it sends `clear_raw` with `following`, through `CacheStore.remove_raw_following`.
+- **S4~2 and S4~3** hold as built in stage 2: Raw only drops HeLab layers from saves and keeps the existing ones,
+  and MATLAB's layers stay, since raw can't make them. A folder's choice applies to that folder only.
+- **S4~4:** the labels as built (Q47.3).
+- **Tests:** `tests/test_txy_only_offer.py` (4 tests, failing without the change), and the stage 4 session in
+  `test_caching_v2_session.py`.
+- **Checked:** suite 8961 passed, no RERUN.
+- **Doc proposals:**
+  - cache-store.md: `folder_raw` and `remove_raw_following`.
+  - app-runtime-and-ui.md: S4~1's two questions.
+  - the plan: stage 4 ticked, and stage 5 (raw files drive status, after MATLAB is retired) unchanged.
+
+### CI 41459782803 (`fa7884f`: the stage 3 review fixes)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole. There were **3 RERUNs**, all passed
+on retry.
+- **Windows Tests 1/2 (job 125325725282):**
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`,
+  "waitUntil timed out in 3000 milliseconds" at line 292. This is known-issues' entry for this test; add the
+  sighting.
+- **Windows Tests 1/2 (same job):** `test_live_testdata.py::test_convert_watch_converts_a_run_as_it_arrives`.
+  - The worker died ("node down: Not properly terminated") after pytest-timeout's "Timeout (0:01:40)" dump, which
+    shows the test in `wait_for` (line 240) waiting for `helab convert --watch` to convert a shot.
+  - The test took 6–10 s in every other run read tonight (15 runs on three OSes).
+  - **Stage 3 can't reach it:** the watcher runs `convert_cli` and `io_ops/convert.py` in store-v3, and neither
+    imports any module stage 3 changed. Stage 3 didn't change them either.
+  - **Cause:** not pinned; the watcher's log isn't shown when the worker is killed.
+  - **known-issues proposal:** "`test_convert_watch_converts_a_run_as_it_arrives`: the watcher stopped converting
+    (pytest-timeout 100 s in `wait_for`, line 240; normally 6–10 s) on Windows CI 41459782803, job 125325725282;
+    passed on retry; cause not found (the log isn't kept when the worker is killed: fail `wait_for` with the log
+    before pytest-timeout)."
+- **Ubuntu Tests 2/2 (job 125325725389):** `test_left_widgets.py::test_a_teardown_that_raises_still_deletes_the_web_views`.
+  - Line 80 failed: `assert "3 passed, 2 errors"`. The inner run printed `.E.E.E`, three errors, so its third test
+    (`test_after_it`) also errored at teardown. The rerun reasons cut the rest of its output.
+  - **Stage 3 can't reach it:** the inner run is PyQt6 QtWebEngine views and the test conftest only, with no
+    HeLab I/O or caching.
+  - **known-issues proposal:** "`test_a_teardown_that_raises_still_deletes_the_web_views`: the inner run's third
+    test also errored at teardown (`.E.E.E` against "3 passed, 2 errors", line 80), on Ubuntu CI 41459782803, job
+    125325725389; passed on retry; its output is cut in the rerun reasons. Likely the QtWebEngine teardown
+    flakiness of the 'QtWebEngine crashes xdist workers' entry; not pinned."
+- The known "GUI stalled" log appears 5 times (A47.3, done on Ground).
+
+### Stage 4's CI (41461329739, `ba11e8a`)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole: **no RERUN in any job**.
+- The known "GUI stalled" log appears 3 times (A47.3).
+- Times: Windows Tests 1/2 took pytest 11.5 min and 2/2 11.7 min; macOS 6.4 and 3.0; Ubuntu 5.9 and 3.3.
+
+### Stage 4 review fixes (Assay, `73f49cb`, `3085e53`; `dev/v0.0.8` merged first at `cbba723`)
+
+- **S4-1:** the inventory's raw summary gains `following`, counted with `remove_raw_following`'s own condition
+  (`_FOLLOWING`). Settings' question names those folders and their size, with no "up to", and only their only
+  copies.
+- **S4-2:** the folder's question opens after FolderCache's handler returns (`QTimer.singleShot(0)`), and a tab
+  closed meanwhile asks nothing.
+- **S4-3:** when Settings can't offer (busy, or the cache not checked yet), the tab's status line says "Cached raw
+  pulses kept: Clear raw pulses removes them".
+- **S4-4:** `remove_raw_text` moved below the constants.
+- **Tests:** all in `test_txy_only_offer.py`. The three changed tests fail without the fixes.
+- **Checked:** suite 9133 passed, 673 skipped, no RERUN. Types clean.
+
+### CI 41465454700 (`ee4df2b`: S4-1 to S4-4)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
+- **One RERUN:** Windows Tests 1/2 (job 125345114056), `test_accessible_names.py::test_every_script_and_each_library`,
+  "Basic plots v1 · Plot T, X, Y histograms: QTabBar < QMainWindow < … HelabMainWindow: no ID". It passed on retry.
+  - **Cause:** a plot dock area's tab bar gets its ID in `PlotWorkspace.fit` (`dock.py`, `identify_tabs`), which a
+    debounced timer (`_fit_soon`) runs. The test's walk ran before that timer fired: the log shows "GUI stalled for
+    2.30s" in that test in the same second.
+  - `dock.py` hasn't changed since 0.0.7a1, and stage 4 doesn't touch plots.
+  - known-issues already has this entry (Quick Fixes 7, CoCo): add this run as a sighting (CI 41465454700, job
+    125345114056).
+- The known "GUI stalled" log appears 7 times (A47.3).
+
+### A new store opened by two helpers at once (`c06f342`)
+
+- **Found by:** running the suite with store-v4 as the default, on the switch-on branch: "Disk cache could not be
+  opened: duplicate column name: maker".
+- **The race:** two helpers open a store that doesn't exist yet. Both see no layout before the write lock, and the
+  second then runs the schema again.
+  - store-v4's `ALTER TABLE … ADD COLUMN maker` can't run twice.
+  - store-v3's schema is all `IF NOT EXISTS`, so it never showed there.
+  - With store-v4 on, a first launch opens the new store from several helpers at once.
+- **Fix:** the layout is checked again under `BEGIN IMMEDIATE` (`CacheStore._create`).
+- **Test:** in `test_store_v4.py`, a deterministic race plus six threads opening a fresh store. It fails without
+  the fix with exactly that error.
+- **Checked:** suite 9135 passed, no RERUN.
+- CoCo: stage 4 lands including it; Assay reviews `eb38718..c06f342`.
+
+### CI 41467778422 (`eb38718`, S4R-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled"
+log appears 7 times.
+
+### SR-1: a new store's switch to WAL waits (`768ac40`)
+
+- **The review:** Assay's review of the race fix (`872b679`): `PRAGMA journal_mode = WAL` on a fresh store fails
+  at once with "database is locked", because SQLite doesn't wait `busy_timeout` for it.
+- **Fix:** `_wal` skips the switch when the store is in WAL already, and otherwise retries on BUSY or LOCKED until
+  `busy_timeout`.
+- **Test:** 8 rounds of six threads.
+  - 50 of 50 runs pass.
+  - Without the fix, 5 of 10 runs fail.
+- **Checked:** suite 9135 passed, no RERUN.
+
+### CI 41469923406 (`915029b`, the race fix)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled" log
+appears 7 times.
+
+### store-v4's cached data in listings, scans and adopt (`4afa96a`)
+
+- **The gap:** found by the switch-on run. Listings took "disk cached" and `cache_info` from `read_dataset_infos`,
+  which read only `datasets`. With store-v4, every folder looked uncached after a restart: badges, cache-first and
+  offline browsing.
+- **Fix:** `read_dataset_infos` in store-v4 answers from the folder's view (`_view_infos`).
+  - Which view: the one `wanted` names, else the most recently used. Listings send none today, so it's the latest.
+  - What it gives: that view's info, the bytes of the layers it names, its RAM from those layers' rows by the share
+    of their shots it names, and its TXY bytes.
+  - A folder with only a stage 1 dataset (a seed) still answers from that dataset.
+- **The sweep of other readers of `datasets`:**
+  - **Fixed here:**
+    - a scan's `cache_mismatch` (`CacheStore.cached_matlab_shots`: the latest view's MATLAB shots);
+    - adopt's `cache_info` (now `read_dataset_infos`).
+  - **Left as they are, with the reason:**
+    - the inventory's "Cached data" row and the datasets purge: store-v4's own datasets are stage 1's seeds, and its
+      layers have their own rows and purges;
+    - Make room and trim: they have their layer groups;
+    - the file accounting (`_known_files`, `_live`, `_dataset_bytes`);
+    - `cache_move`'s verify: covers `txy_segments` since stage 2;
+    - `txy_cache.Access`: store-v3 only, or seeds.
+- **Tests:**
+  - `tests/test_v4_listings.py` (4 tests);
+  - `test_offline_browsing.py`'s `offline_restart` now runs with store-v3 and store-v4.
+  - The new tests and the store-v4 offline ones fail without the fix.
+- **Checked:** suite 9148 passed, 673 skipped, no RERUN.
+
+### CI 41471378031 (`76e0f91`, SR-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs. Windows Tests 1/2 took pytest 17.2 min, the slowest
+tonight but under the stop line.
+- **One RERUN:** Ubuntu Tests 2/2 (job 125365677960),
+  `test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot[PyQtGraph]`. The worker gw2
+  died ("Fatal Python error: Segmentation fault", "node down: Not properly terminated").
+  - The crashing thread is the main thread, in `qtbot.waitUntil` (test line 1636), inside Qt's event loop; there
+    is no HeLab frame below the test's wait. The other threads were idle: the analysis runner's `_run_jobs`,
+    IOService's `_run`, and werkzeug's server.
+  - SR-1 changes only store creation.
+  - **Cause:** not pinned. It belongs to the "QtWebEngine crashes xdist workers" family, which lists main-thread
+    SIGSEGVs.
+  - **known-issues proposal:** add it to that entry as a sighting: "a main-thread SIGSEGV in
+    `test_transfer_fractions_highlight_follows_lives_newest_shot[PyQtGraph]` (Ubuntu CI 41471378031, job
+    125365677960), in `qtbot.waitUntil`; passed on retry."
+- The known "GUI stalled" log appears 8 times.
+
+### CI 41472779247 (`1cffaba`, the views fix)
+
+Green on all three OSes. I read all 9 Tests and Converter logs.
+- **One RERUN:** macOS Tests 2/2 (job 125370535914),
+  `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so`. The assertion at line
+  575 saw "Live stopped: Cancelled" in place of "auto-convert stopped: not while working offline". It passed on
+  retry.
+  - **Likely cause:** a timing race in the test. If a Live check is in flight when it sets `service.offline`, the
+    offline gate cancels that check, and Live's halt message ("Cancelled") takes the status line before
+    auto-convert's error.
+  - Neither the views fix nor this test file changed.
+  - **known-issues proposal:** "`test_a_conversion_refused_offline_stops_auto_convert_and_says_so`: 'Live
+    stopped: Cancelled' at line 575 (macOS CI 41472779247, job 125370535914); a Live check in flight when the test
+    goes offline is cancelled and halts Live first; passed on retry. Fix: the test waits for no Live check before
+    going offline."
+- The known "GUI stalled" log appears 5 times.
+
+### Q50.1 (a): HeLab priority converts on read only what MATLAB's TXY lacks (`ced04aa`)
+
+CoCo's call (2026-11-03), behind the switch.
+- **Why:** under HeLab priority, a raw file that couldn't be converted now (still settling, or invalid) cost the
+  shot its MATLAB TXY.
+- **The rule:** `txy_sources.converts_over_matlab`.
+  - HeLab only: always converts over MATLAB's TXY.
+  - HeLab priority: only with `CONVERT_OVER_MATLAB` (False).
+  - MATLAB's sources: never.
+- **Where it applies:** `helab_txy.on_read` (loads and Live) and `FolderCache.on_read_shots` (the count and
+  "converted when loaded") follow it.
+- **Tests:** in `test_convert_on_read.py`, failing without the change.
+- **Checked:** suite 9149 passed, no RERUN.
+- **For Tony, Q50.1 (= Q~16):**
+  - Built now: HeLab priority converts only what MATLAB's TXY lacks.
+  - (b), later if wanted: HeLab's conversion over MATLAB's, with a fallback to MATLAB's TXY when the conversion
+    can't be done now. Turning on `CONVERT_OVER_MATLAB` gives that without the fallback.
+
+### SV-1 (`48e3656`)
+
+- **The fix:** each folder's view is parsed in its own try. A damaged view is an error for that folder only.
+- **Test:** `test_v4_listings.py`, damaging a view three ways. It fails without the fix.
+- **Checked:** suite 9150 passed, no RERUN.
+
+### SQ-1: a shot Live converted on read stays HeLab's (`9be3e12`)
+
+- **The bug:** Assay's review of (a) (`5477538`). The filter left out shots Live held from on-read conversions, so
+  when MATLAB's TXY of a shot appeared, Live read it again and switched it to MATLAB's.
+- **Fix:** `on_read` takes `held` and spares shots held from HeLab, as `could_take` does. Live passes its held
+  origins.
+- **Test:** a Live test with the flag off and on. The flag-off case fails at `ced04aa`.
+- **Checked:** suite 9152 passed, 673 skipped.
+- **One local RERUN,** not this change:
+  `test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot[Matplotlib]`, "worker 'gw2'
+  crashed".
+  - **The mechanism, from macOS's crash report** (`~/Library/Logs/DiagnosticReports/python3.13-2026-11-03-030617.ips`):
+    SIGSEGV (KERN_INVALID_ADDRESS) on the main thread. A posted event in `qtbot.waitUntil`'s event loop reached a
+    `QLabel`, ran `QWidget::ensurePolished`, then `setPalette` and `QWidgetPrivate::updateIsOpaque`, on a
+    label whose widget tree was partly deleted.
+  - Same test as CI 41471378031's Ubuntu crash ([PyQtGraph] there).
+  - **Likely cause:** the test switches the plot's library, which replaces its drawing widget, and a widget of the
+    replaced one gets its polish event after the replacement.
+  - **known-issues proposal**, a new entry, or a mechanism for the QtWebEngine-crash family: "Live plots'
+    library switch: a main-thread SIGSEGV polishing a QLabel of a replaced plot widget
+    (`test_transfer_fractions_highlight_follows_lives_newest_shot`, CI 41471378031 Ubuntu, and locally
+    2026-11-03); plot code, not pinned."
+
+### CI 41476804254 (`6b00cb0`: Q50.1 (a), SV-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs.
+- **One RERUN:** Windows Tests 2/2 (job 125384496288),
+  `test_live_testdata.py::test_a_run_replayed_into_live_is_converted_once_per_shot_as_matlab_did`. pytest-timeout's
+  "Timeout (0:01:40)" fired, then "node down", and it passed on retry.
+  - **Where it was:** the dump shows the test's own `run_convert`, then `convert_folder`, then `finish`, then
+    `write_atomic`, then `pin`, then `provenance.record`, `_write`, `_patient`, `_transaction`, waiting at
+    `BEGIN IMMEDIATE` (provenance.py:346) on the converted-TXY index's lock.
+  - **What that means:** each `_patient` call waits at most `BUSY_SECONDS` (10 s), so the lock was held for most
+    of the 100 s by another connection to this test's own index.
+  - **Not reachable from this branch's changes:** the switch is off, and `helab/convert/provenance.py` and
+    `io_ops/convert.py` haven't changed on this branch since A19.2. Q50.1 (a) and SV-1 touch neither this path nor
+    the index.
+  - **Cause:** not pinned.
+  - **known-issues proposal:** "`test_a_run_replayed_into_live_is_converted_once_per_shot_as_matlab_did`: its
+    in-process conversion waited on the converted-TXY index's lock (provenance.py:346, BEGIN IMMEDIATE) until
+    pytest-timeout (Windows CI 41476804254, job 125384496288); another connection held that test's index for most
+    of 100 s; passed on retry; not pinned."
+- The known "GUI stalled" log appears 5 times.
+- Windows Tests 1/2 took pytest 14.4 min and 2/2 13.7 min.
+
+### CI 41478561880 (`cca4691`, SQ-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled" log
+appears 4 times. Windows Tests 1/2 took pytest 10.6 min and 2/2 11.0 min.
+
+## For Tony's morning summary (caching v2, 2026-11-03)
+
+- **Q50.1 (= Q~16), HeLab priority and MATLAB's TXY:**
+  - **Built now:** under HeLab priority, store-v4 converts on read only the shots MATLAB's TXY lacks (`ced04aa`,
+    `9be3e12`). CoCo chose this as the safe default after the switch-on run showed a problem: when HeLab's
+    conversion beat MATLAB's TXY, a raw file that couldn't be converted yet (still settling, or damaged) cost the
+    shot its MATLAB TXY.
+  - **(b), later if you want it:** HeLab's conversion over MATLAB's TXY, with a fallback to MATLAB's when the
+    conversion can't be done now. `txy_sources.CONVERT_OVER_MATLAB = True` gives the first half today, without the
+    fallback.
+  - HeLab only always converts.
+- **One more listing per load, with store-v4 on:** each load is followed by `raw_fill`, which lists the folder again
+  in the background to cache its raw pulses. That is stage 1's design, raw pulses kept wherever HeLab caches. On a
+  share, that's one more directory listing per folder load.
+- **The Auto-convert button** keeps its "Auto-convert" label (S3~4's "Also write TXY files" doesn't fit its fixed
+  width). In store-v4 its tooltip says Live converts on read and Auto-convert also writes the text.
+- **The switch-on** is on its own branch, `agent/v4-switch-on` (`ca9c869`), for the v0.0.8 PR after your check.
+  - store_v4 is on by default; the row is a hidden fallback for one release (V~2).
+  - Keep reads store-v3 through v0.0.8 only (V~3).
+  - Release-note lines: `release-notes-v0.0.8-caching.md` in this folder (V~5).
+- **Store-v4 bugs the switch-on run found, all fixed on `agent/caching-v2`:**
+  - a first-start race between helpers opening the new store (`c06f342`, `768ac40`);
+  - cached folders looking uncached after a restart, because listings, scans and adopt read only store-v3's table
+    (`4afa96a`, `48e3656`).

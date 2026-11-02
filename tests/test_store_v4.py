@@ -650,3 +650,49 @@ def test_a_store_v3_result_is_copied_into_store_v4_when_returned(tmp_path: Path)
                                  action="Plot", computed_at=0.5, only_new=True)
         assert refused.reason == "exists" and (v4.find_result(RUN, "old", "f1").value or pytest.fail()).data == b"newer"
     assert files(caches / "store-v3") == before
+
+
+@pytest.mark.parametrize("name", ["store-v4", "store-v3"])
+def test_a_new_store_opened_by_two_helpers_at_once_is_made_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                               name: str) -> None:
+    """Two helpers open a store that doesn't exist yet: both find no layout before either holds the write lock;
+    the second, once it has it, finds the store the first made and makes nothing (store-v4's schema adds
+    columns, which can't run twice: "duplicate column name: maker" otherwise)."""
+    import threading
+    root = str(tmp_path / "caches" / name)
+    with cache_store.CacheStore(root) as first:
+        store_id = first.store_id
+    real = cache_store._layout_version
+
+    locked: set[int] = set()
+
+    def late(conn: Any) -> int | None:
+        # (The second helper's looks before it first holds the write lock came before the first one's commit.)
+        if conn.in_transaction:
+            locked.add(id(conn))
+        return real(conn) if id(conn) in locked else None
+    monkeypatch.setattr(cache_store, "_layout_version", late)
+    with cache_store.CacheStore(root) as second:
+        assert second.store_id == store_id
+    monkeypatch.setattr(cache_store, "_layout_version", real)
+    # Several rounds of six helpers opening a fresh store at once (SR-1: the switch to WAL, which SQLite doesn't
+    # wait for, is tried again; the schema is made once).
+    for round_ in range(8):
+        fresh = str(tmp_path / f"fresh-{round_}" / name)
+        ids: list[str] = []
+        errors: list[BaseException] = []
+        start = threading.Barrier(6)
+
+        def open_it() -> None:
+            try:
+                start.wait()
+                with cache_store.CacheStore(fresh) as store:
+                    ids.append(store.store_id)
+            except BaseException as exc:  # (Reported below.)
+                errors.append(exc)
+        threads = [threading.Thread(target=open_it) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        assert errors == [] and len(ids) == 6 and len(set(ids)) == 1, round_

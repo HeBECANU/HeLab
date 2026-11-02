@@ -175,8 +175,9 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 result.update({"adopted": adopted.adopted, "path": adopted.path, "bytes": adopted.bytes,
                                "room": None if adopted.room is None else asdict(adopted.room)})
                 if adopted.adopted:
-                    row = store.read_dataset_row(adopted.path)
-                    result["cache_info"] = _cache_info(row.value["info"]) if row.value is not None else {}
+                    # (store-v4: the folder's view, read_dataset_infos's answer for it.)
+                    info = store.read_dataset_infos([adopted.path])[adopted.path].value
+                    result["cache_info"] = _cache_info(info["info"]) if info is not None else {}
         elif action == "discard":
             result["discarded"] = store.discard_pending(params["pending_id"])
         elif action == "prefs":

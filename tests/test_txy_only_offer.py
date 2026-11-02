@@ -10,6 +10,7 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from helab.io_ops.admin import cache_admin
+from helab.views.CacheTab import RAW_KEPT_MESSAGE
 
 from test_cache_tab import admin_request, finish, frozen_cache, inventory, make_tab
 from test_raw_fill import done, fill, write_raw
@@ -82,12 +83,21 @@ def test_the_tab_that_chose_txy_only_asks_and_removes_only_on_a_yes(qtbot: QtBot
             asked.append((path, size, only))
             return answers.pop(0)
         explorer = SimpleNamespace(model=SimpleNamespace(owner="tab-1", cache=cache), closed=False, ask_remove_raw=ask)
+        explorer._ask_raw_removal = lambda *args: FolderExplorer._ask_raw_removal(explorer, *args)  # type: ignore[arg-type]
         FolderExplorer._offer_raw_removal(explorer, "tab-2", "/data/run", 3_000_000, 1)  # type: ignore[arg-type]
+        qtbot.wait(20)
         assert not asked  # (Another tab's choice: not this one's to ask.)
         FolderExplorer._offer_raw_removal(explorer, "tab-1", "/data/run", 3_000_000, 1)  # type: ignore[arg-type]
+        assert not asked  # (S4-2: asked after FolderCache's handler returns, never inside it.)
+        qtbot.waitUntil(lambda: len(asked) == 1, timeout=2000)
         assert not [r for r in service.pending if r.payload.get("action") == "clear_raw"]  # (Kept.)
         FolderExplorer._offer_raw_removal(explorer, "tab-1", "/data/run", 3_000_000, 1)  # type: ignore[arg-type]
+        qtbot.waitUntil(lambda: len(asked) == 2, timeout=2000)
         assert admin_request(service, "clear_raw").payload["params"]["paths"] == ["/data/run"]
+        explorer.closed = True
+        FolderExplorer._offer_raw_removal(explorer, "tab-1", "/data/run", 3_000_000, 1)  # type: ignore[arg-type]
+        qtbot.wait(20)
+        assert len(asked) == 2  # (A closed tab asks nothing.)
         text = remove_raw_text("/data/run", 3_000_000, 1)
         assert "Also remove HeLab's cached copy of this folder's raw pulses (3.0 MB)? Your d files aren't touched." \
             in text and "1 of them are the only copy" in text
@@ -101,7 +111,8 @@ def test_settings_txy_only_asks_before_removing_the_raw_pulses(qtbot: QtBot, mon
     service, cache = frozen_cache(monkeypatch)
     try:
         tab, asked = make_tab(qtbot, cache, tmp_path)
-        raw = {"count": 40, "bytes": 30 * 10**6, "folders": 2, "only_copy": 0, "only_copy_bytes": 0, "last_used": None}
+        raw = {"count": 40, "bytes": 30 * 10**6, "folders": 2, "only_copy": 3, "only_copy_bytes": 0, "last_used": None,
+               "following": {"count": 25, "bytes": 20 * 10**6, "folders": 1, "only_copy": 1}}
         tab.inventory = inventory(raw=raw, txy={"layers": 0, "folders": 0, "shots": 0, "bytes": 0, "only_copy": 0,
                                                 "only_copy_folders": 0, "only_copy_bytes": 0, "tags": {},
                                                 "last_used": None}, legacy=None, older_stores=[])
@@ -111,7 +122,9 @@ def test_settings_txy_only_asks_before_removing_the_raw_pulses(qtbot: QtBot, mon
         tab.confirm = decline
         tab.policy_combo.setCurrentIndex(tab.policy_combo.findData("txy"))
         tab.save(tab.settings)
-        assert asked and "up to 30.0 MB" in asked[-1][1] and "Your d files aren't touched" in asked[-1][1]
+        text = asked[-1][1]
+        assert "their raw pulses (1 folder, 20.0 MB)? Your d files aren't touched." in text and "up to" not in text
+        assert "Raw pulses of 1 shot are the only copy" in text
         assert not [r for r in service.pending if r.payload.get("action") == "clear_raw"]  # (Declined.)
         folder_cache.set_cache_policy("raw+used")
         tab.confirm = lambda title, text, verb: True
@@ -121,6 +134,47 @@ def test_settings_txy_only_asks_before_removing_the_raw_pulses(qtbot: QtBot, mon
         tab._job = ""
         tab.save(tab.settings)  # (Already TXY only: nothing asked again.)
         assert len(asked) == count
+        # S4-3: busy, or not checked yet: not offered, and said so; S4R-1: in the main window's status bar too,
+        # since Settings closes as it saves (in the app, never a desktop notification).
+        from helab.utils import events
+
+        class Desktop:
+            def deliver(self, title: str, message: str) -> str:
+                raise AssertionError("a desktop notification")
+        for state in ("busy", "unchecked"):
+            hub = events.reset(Desktop())
+            notices: list[str] = []
+            hub.desktop.set_status_sink(notices.append)
+            folder_cache.set_cache_policy("raw+used")
+            tab.message = ""
+            if state == "busy":
+                tab._job = "job"
+            else:
+                tab._job, tab.inventory = "", None
+            tab.save(tab.settings)
+            assert len(asked) == count and tab.message == RAW_KEPT_MESSAGE, state
+            assert notices == [RAW_KEPT_MESSAGE] and hub.history[-1].kind == events.RAW_KEPT, state
+            assert hub.history[-1].shown and not hub.history[-1].desktop
     finally:
+        from helab.utils import events
+        events.reset()
         folder_cache.set_cache_policy("raw+used")
         service.shutdown()
+
+
+def test_settings_question_is_sized_as_the_removal_only_copies_included(tmp_path: Path) -> None:
+    """S4-1: the inventory's ``raw.following`` is what ``remove_raw_following`` removes (its own condition): a
+    folder with its own policy, and its only copies, are left out of both."""
+    options, a, b = raw_folders(tmp_path)
+    cache_admin(options, "folder_choice", lambda event: None, path=str(b), policy="raw+used", set_at=5.0)
+    with opened(options, a, b) as store:
+        with store.transaction():  # (One only copy in each folder: their raw files gone at the last look.)
+            for folder in (a, b):
+                store._conn.execute("UPDATE raw_layers SET gone_at = 1.0 WHERE path = ? AND shot = 1",
+                                    (store._path_key(str(folder)),))
+        raw = store.inventory()["raw"]
+        following = raw["following"]
+        assert raw["count"] == 4 and raw["only_copy"] == 2
+        assert (following["count"], following["folders"], following["only_copy"]) == (2, 1, 1)
+        removed = store.remove_raw_following()
+    assert (removed.rows, removed.bytes) == (following["count"], following["bytes"]) and following["bytes"] > 0

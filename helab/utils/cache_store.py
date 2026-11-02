@@ -952,26 +952,15 @@ class CacheStore:
         conn = self._connect(busy_timeout, read_only=False)
         try:
             if _layout_version(conn) is None:
-                conn.execute("PRAGMA journal_mode = WAL")
+                _wal(conn, busy_timeout)
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in SCHEMA.split(";"):
-                        if statement.strip():
-                            conn.execute(statement)
-                    for statement in ROOT_SCHEMA.split(";"):
-                        if statement.strip():
-                            conn.execute(statement)
-                    if self.layout >= store_v4.LAYOUT:
-                        for statement in (*store_v4.SCHEMA, *store_v4.STAGE2_SCHEMA):
-                            conn.execute(statement)
-                    defaults: dict[str, object] = {
-                        "layout_version": self._expected_layout, "store_id": uuid.uuid4().hex, "created_at": time.time(),
-                        **{f"gen_{kind}": 0 for kind in KINDS}, "gen_results": 0,
-                        **(store_v4.META_DEFAULTS if self.layout >= store_v4.LAYOUT else {})}
-                    # Another helper may have created it meanwhile: keep its values.
-                    conn.executemany("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
-                                     [(key, _dumps(value)) for key, value in defaults.items()])
-                    conn.execute("COMMIT")
+                    # Checked again under the write lock: another helper opening the same new store may have
+                    # made it meanwhile, and store-v4's schema adds columns (ALTER TABLE), which can't run twice.
+                    if _layout_version(conn) is not None:
+                        conn.execute("COMMIT")
+                    else:
+                        self._create(conn)
                 except BaseException:
                     conn.execute("ROLLBACK")
                     raise
@@ -987,6 +976,26 @@ class CacheStore:
             conn.close()
             raise
         return conn
+
+    def _create(self, conn: sqlite3.Connection) -> None:
+        """A new store's tables and meta (inside the caller's write transaction), then COMMIT."""
+        for statement in SCHEMA.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        for statement in ROOT_SCHEMA.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        if self.layout >= store_v4.LAYOUT:
+            for statement in (*store_v4.SCHEMA, *store_v4.STAGE2_SCHEMA):
+                conn.execute(statement)
+        defaults: dict[str, object] = {
+            "layout_version": self._expected_layout, "store_id": uuid.uuid4().hex, "created_at": time.time(),
+            **{f"gen_{kind}": 0 for kind in KINDS}, "gen_results": 0,
+            **(store_v4.META_DEFAULTS if self.layout >= store_v4.LAYOUT else {})}
+        # Another helper may have created it meanwhile: keep its values.
+        conn.executemany("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                         [(key, _dumps(value)) for key, value in defaults.items()])
+        conn.execute("COMMIT")
 
     def close(self) -> None:
         if self._legacy is not None:
@@ -2176,6 +2185,61 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return True
 
+    def _view_infos(self, keys: Sequence[str], wanted: tuple[str, str] | None,
+                    damaged: dict[str, str]) -> dict[str, tuple[int, int, str, float, int]]:
+        """store-v4 (inside a transaction): each folder's view as ``read_dataset_infos`` reads a dataset (bytes,
+        RAM bytes, info, last used, its TXY files' bytes): the ``wanted`` view, else the most recently used. A
+        folder whose view can't be read goes into ``damaged`` (key → why), never failing the others (SV-1)."""
+        marks = ",".join("?" * len(keys))
+        chosen: dict[str, tuple[str, str, str, float]] = {}
+        for path, source, tag, fingerprint, info, last_used in self._conn.execute(
+                f"SELECT path, source, tag, fingerprint, info, last_used FROM txy_views WHERE path IN ({marks}) "
+                "ORDER BY last_used", tuple(keys)):
+            key = str(path)
+            if key in chosen and wanted is not None and chosen[key][0] == "wanted":
+                continue
+            chosen[key] = ("wanted" if wanted is not None and (source, tag) == wanted else "", str(fingerprint),
+                           str(info), float(last_used))
+        layers: dict[tuple[str, str], tuple[int, int, int]] = {
+            (str(path), str(layer)): (int(size), int(count), int(rows_)) for path, layer, size, count, rows_ in
+            self._conn.execute(f"SELECT path, layer, bytes, shots, rows FROM txy_layers WHERE path IN ({marks})",
+                               tuple(keys))}
+        found: dict[str, tuple[int, int, str, float, int]] = {}
+        for key, (_, fingerprint, info, last_used) in chosen.items():
+            try:
+                entries = json.loads(fingerprint)
+                named: dict[str, int] = {}
+                for entry in entries:
+                    named[str(entry[4])] = named.get(str(entry[4]), 0) + 1
+                source_bytes = sum(int(entry[1]) for entry in entries)
+            except (ValueError, IndexError, TypeError, KeyError) as exc:
+                damaged[key] = f"{type(exc).__name__}: {exc}"
+                continue
+            size = sum(layers[(key, layer)][0] for layer in named if (key, layer) in layers)
+            # (A layer's rows by the share of its shots the view names: listings read no entries.)
+            rows = sum(layers[(key, layer)][2] * count // max(1, layers[(key, layer)][1])
+                       for layer, count in named.items() if (key, layer) in layers)
+            found[key] = (size, rows * TXY_ROW_BYTES, info, last_used, source_bytes)
+        return found
+
+    def cached_matlab_shots(self, path: str) -> Read[set[int]]:
+        """The shots cached from the folder's MATLAB TXY, for a scan's mismatch rule (TXY files are written once):
+        its dataset's (store-v3), or its most recently used view's MATLAB layer shots (store-v4); missing when
+        nothing is cached."""
+        if self.layout < store_v4.LAYOUT:
+            row = self.read_dataset_row(path)
+            if row.value is None:
+                return _error(row.error) if row.failed else _missing()
+            return _found({int(entry[0]) for entry in row.value["fingerprint"] if isinstance(entry, (list, tuple))
+                           and entry})
+        views = sorted(self.folder_views(path), key=lambda view: view[2])
+        if not views:
+            return _missing()
+        view = self.read_view(path, views[-1][0], views[-1][1])
+        if view.value is None:
+            return _error(view.error) if view.failed else _missing()
+        return _found({int(entry[0]) for entry in view.value.fingerprint if str(entry[4]) == _MATLAB_LAYER})
+
     def read_dataset_row(self, path: str) -> Read[DatasetRow]:
         """The dataset's record without its data, e.g. for the one-stat check."""
         key = self._path_key(path)
@@ -2198,11 +2262,16 @@ class CacheStore:
         except ValueError as exc:
             return _error(f"Saved dataset record is unreadable: {exc}")
 
-    def read_dataset_infos(self, paths: Sequence[str]) -> dict[str, Read[DatasetInfo]]:
-        """Each folder's dataset sizes and ``info``, without its fingerprint: for listings."""
+    def read_dataset_infos(self, paths: Sequence[str],
+                           wanted: tuple[str, str] | None = None) -> dict[str, Read[DatasetInfo]]:
+        """Each folder's dataset sizes and ``info``, without its fingerprint: for listings. In store-v4 a folder's
+        cached data is its views and TXY layers: found when it has a view (that of ``wanted``, a (source, tag)
+        view key, when it has one, else its most recently used), with that view's info and the bytes of the
+        layers it names; a folder with only stage 1's dataset (a seed) answers from that."""
         unique = list(dict.fromkeys(paths))
         keys = list(dict.fromkeys(self._path_key(path) for path in unique))
         rows: dict[str, tuple[int, int, str, float, int]] = {}
+        damaged: dict[str, str] = {}  # (store-v4: a folder whose view can't be read; the others list on, SV-1.)
         try:
             with self.transaction(write=False):
                 for start in range(0, len(keys), 500):
@@ -2212,12 +2281,17 @@ class CacheStore:
                             f"json_extract(f.value, '$[1]')), 0) FROM json_each(fingerprint) f) FROM datasets "
                             f"WHERE path IN ({','.join('?' * len(chunk))})", chunk):
                         rows[path] = (size, ram_bytes, info, last_used, source)
+                    if self.layout >= store_v4.LAYOUT:
+                        rows.update(self._view_infos(chunk, wanted, damaged))
         except (sqlite3.Error, StoreError) as exc:
             failure = _error(f"Disk cache could not be read: {exc}")
             return {path: failure for path in unique}
         result: dict[str, Read[DatasetInfo]] = {}
         for path in unique:
             key = self._path_key(path)
+            if key in damaged:
+                result[path] = _error(f"Saved view record is unreadable: {damaged[key]}")
+                continue
             if key not in rows:
                 result[path] = _missing()
                 continue
@@ -3088,6 +3162,9 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return RawRemoval(tuple(self._source_path(key) for key in keys), count, size)
 
+    # (``remove_raw_following``'s rows, and its question's estimate: one condition for both, S4-1.)
+    _FOLLOWING = " WHERE path NOT IN (SELECT path FROM cache_policy WHERE policy != '')"
+
     def remove_raw_following(self) -> RawRemoval:
         """S4~1 for the global policy (the user asked, after Settings › Cache's TXY only): the raw pulses of every
         folder that follows Settings' policy (none of its own), each folder's ``raw:`` epoch bumped as
@@ -3098,8 +3175,7 @@ class CacheStore:
         try:
             with self.transaction():
                 keys = [str(key) for (key,) in self._conn.execute(
-                    "SELECT DISTINCT path FROM raw_layers WHERE path NOT IN "
-                    "(SELECT path FROM cache_policy WHERE policy != '')")]
+                    f"SELECT DISTINCT path FROM raw_layers{self._FOLLOWING}")]
                 for key in keys:
                     self._conn.execute("INSERT INTO folder_epochs (path, epoch) VALUES (?, 1) ON CONFLICT (path) "
                                        "DO UPDATE SET epoch = epoch + 1", (_raw_epoch(key),))
@@ -3118,8 +3194,14 @@ class CacheStore:
             "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COUNT(DISTINCT path), MAX(last_used) FROM raw_layers").fetchone()
         only, only_bytes = self._conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM raw_layers WHERE gone_at IS NOT NULL").fetchone()
+        # What Settings' TXY only would remove (``remove_raw_following``, by its own condition: S4-1).
+        f_count, f_size, f_folders, f_only = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COUNT(DISTINCT path), COALESCE(SUM(gone_at IS NOT NULL), 0) "
+            f"FROM raw_layers{self._FOLLOWING}").fetchone()
         return {"count": int(count), "bytes": int(size), "folders": int(folders), "only_copy": int(only),
-                "only_copy_bytes": int(only_bytes), "last_used": None if last is None else float(last)}
+                "only_copy_bytes": int(only_bytes), "last_used": None if last is None else float(last),
+                "following": {"count": int(f_count), "bytes": int(f_size), "folders": int(f_folders),
+                              "only_copy": int(f_only)}}
 
     def _raw_live(self) -> int:
         if self.layout < store_v4.LAYOUT:
@@ -4551,6 +4633,25 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
+def _wal(conn: sqlite3.Connection, busy_timeout: float) -> None:
+    """A new store's switch to WAL. SQLite doesn't wait ``busy_timeout`` for it: another helper making the same
+    new store holds it, and the switch says "database is locked" at once (SR-1). Skipped when it is WAL already
+    (that helper made it); else tried again until ``busy_timeout``."""
+    deadline = time.monotonic() + busy_timeout
+    while True:
+        try:
+            if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            busy = (code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) if isinstance(code, int)
+                    else "locked" in str(exc) or "busy" in str(exc))
+            if not busy or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.005)
 
 
 def _transient_io_error(exc: sqlite3.Error) -> bool:

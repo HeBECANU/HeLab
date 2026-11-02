@@ -35,6 +35,8 @@ from test_result_cache_plots import Costly, close, folder_view, make_window, ope
 
 SOURCE = frozenset(OFFLINE_REFUSED | {"details"})
 
+from test_store_v4 import switch_on  # noqa: F401  (a fixture)
+
 
 @pytest.fixture(autouse=True)
 def back_online() -> Iterator[None]:
@@ -146,9 +148,13 @@ def browse_online(tmp_path: Path, data: Path) -> None:
     load(str(data / "day/run_1"), str(output), lambda event: None, options)
 
 
-@pytest.fixture
-def offline_restart(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[IOService, FolderCache, Path]]:
-    """A restart with the source deleted: a fresh service and cache, offline from the start."""
+@pytest.fixture(params=["store-v3", "store-v4"])
+def offline_restart(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+                    tmp_path: Path) -> Iterator[tuple[IOService, FolderCache, Path]]:
+    """A restart with the source deleted: a fresh service and cache, offline from the start; with store-v3, and
+    with store-v4 (the switch on: listings find its cached folders from their views)."""
+    if request.param == "store-v4":
+        request.getfixturevalue("switch_on")
     data = experiment(tmp_path)
     browse_online(tmp_path, data)
     shutil.rmtree(data)

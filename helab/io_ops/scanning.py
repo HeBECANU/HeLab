@@ -6,7 +6,7 @@ from typing import Any, TYPE_CHECKING
 
 from helab.io_ops import metadata, stores
 from helab.io_ops.events import DatasetFlags, ScanStatusEvent, SubtreeSavedEvent
-from helab.io_ops.fingerprints import _clock_ahead, _saved_fingerprint, _settled
+from helab.io_ops.fingerprints import _clock_ahead, _settled
 from helab.io_ops.infra import Emit, Heartbeat, _entry_stat, _is_dir, _scandir, emit
 from helab.io_ops.markers import _marker_temporary
 from helab.io_ops.metadata import _dataset_flags, _saved_folders, _send_guard
@@ -216,11 +216,12 @@ def _scan(path: str, send: Emit, store: CacheStore | None, guard: SaveGuard | No
 def _check_cached_shots(store: CacheStore, path: str, found: dict[str, set[int]], send: Emit) -> None:
     """Send ``cache_mismatch`` if shots cached for this folder are no longer in it (as a load's
     ``shots_missing``): TXY files are written once, so another folder may sit at this path.
-    Reads only the dataset's record (its fingerprint), never its data; unreadable is no answer."""
-    row = store.read_dataset_row(path).value
-    if row is None:
+    Reads only the dataset's record (its fingerprint; store-v4: its view's), never its data; unreadable is no
+    answer."""
+    cached = store.cached_matlab_shots(path).value
+    if cached is None:
         return
-    known = {int(entry[0]) for entry in _saved_fingerprint(row)}
+    known = cached
     listed = found.get(file_kinds.TXY.name, set())
     missing = sorted(known - listed)
     if missing:

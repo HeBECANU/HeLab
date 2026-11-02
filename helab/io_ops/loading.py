@@ -413,7 +413,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
         if (access is not None and access.layered and not no_cache
                 and access.profile_for(txy_sources.helab_origin(str(txy.get("profile_hash") or ""))) is not None):
-            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy)
+            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy, matlab)
     chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found})
     # (Those a conversion now serves: the rest of on_read lost to MATLAB's TXY by the source's rule.)
     on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}

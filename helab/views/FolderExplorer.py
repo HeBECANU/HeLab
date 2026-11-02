@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import datetime
+import functools
 import logging
 import math
 import os
@@ -63,15 +64,6 @@ REFUSED_TOOLTIP = "Folders larger than 30% of RAM are never loaded."
 # The user's choice for a folder (S10): selecting it loads nothing.
 AUTO_LOAD_OFF = "Auto-load off for this folder"
 # A folder's own TXY source or cache policy (caching v2 stage 2): following the global one.
-def remove_raw_text(path: str, size: int, only_copy: int) -> str:
-    """S4~1's question (Tony's wording, 2026-11-02): a folder now keeps no raw pulses; remove those it has?"""
-    name = os.path.basename(path.rstrip(os.sep)) or path
-    only = (f"\n\n{only_copy:,} of them are the only copy: their raw files are gone from the folder, so they can't "
-            "be read again." if only_copy else "")
-    return (f"{name} keeps no raw pulses from now on. Also remove HeLab's cached copy of this folder's raw pulses "
-            f"({byte_size(size, 'disk')})? Your d files aren't touched.{only}")
-
-
 FOLDER_CHOICE_GLOBAL = "As Settings (every folder)"
 AUTO_LOAD_OFF_TOOLTIP = ("Load this folder now. You chose not to load it automatically "
                          "(right-click › Don't auto-load this folder).")
@@ -89,6 +81,15 @@ OFFLINE_NOT_KEPT = "Data not kept (offline): work online to load it"
 CHECK_SPINNER = (CHECK_COLOR, "white")
 LOAD_SPINNER = (LOAD_COLOR, "#b4f0c2")
 IO_SPINNER = ("#8a8a8a", "white")
+
+
+def remove_raw_text(path: str, size: int, only_copy: int) -> str:
+    """S4~1's question (Tony's wording, 2026-11-02): a folder now keeps no raw pulses; remove those it has?"""
+    name = os.path.basename(path.rstrip(os.sep)) or path
+    only = (f"\n\n{only_copy:,} of them are the only copy: their raw files are gone from the folder, so they can't "
+            "be read again." if only_copy else "")
+    return (f"{name} keeps no raw pulses from now on. Also remove HeLab's cached copy of this folder's raw pulses "
+            f"({byte_size(size, 'disk')})? Your d files aren't touched.{only}")
 
 
 def paint_spinner(painter: QPainter, rect: QRect, angle: int, selected: bool = False,
@@ -2437,6 +2438,12 @@ class FolderExplorer(QWidget):
         """S4~1 (Tony, 2026-11-02): this tab set a folder to keep no raw pulses and the store holds some; ask, and
         remove only those, only on a yes. HeLab never removes d raw files."""
         if owner != self.model.owner or self.closed or not path:
+            return
+        # Asked after FolderCache's event handler returns (S4-2: no modal inside it).
+        QTimer.singleShot(0, functools.partial(self._ask_raw_removal, path, size, only_copy))
+
+    def _ask_raw_removal(self, path: str, size: int, only_copy: int) -> None:
+        if self.closed:
             return
         if (self.ask_remove_raw or self._ask_remove_raw)(path, size, only_copy):
             self.model.cache.cache_admin("clear_raw", paths=[path])

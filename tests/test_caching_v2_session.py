@@ -435,3 +435,41 @@ def test_a_stage_3_session_converts_on_read_and_leaves_store_v3_as_it_was(
     with opened(options, x) as store:
         assert store.inventory()["txy"]["layers"] == 0 and store.inventory()["raw"]["count"] == 0
     assert files(v3) == before and v3_opens == []
+
+
+def test_a_stage_4_session_txy_only_removes_raw_pulses_only_when_asked(
+        switch_on: None, private_store: str, tmp_path: Path) -> None:  # noqa: F811
+    """Stage 4's check (S4~1), the switch on, as the helpers run it: a folder set to TXY only reports its raw
+    pulses and keeps them; raw_fill then keeps none for it; removing them is a separate, asked-for clear_raw of
+    that folder; its next load still converts on read from the raw files (the d files untouched); Settings' TXY
+    only removes only the folders that follow it."""
+    options = store_options()
+    data = tmp_path / "data"
+    x, y = folder(data, "x", {1: CASE, 2: CASE}), folder(data, "y", {1: CASE})
+    for source in (x, y):
+        assert filled(source, options)["saved"] >= 1
+    sent: list[dict[str, Any]] = []
+    cache_admin(options, "folder_choice", sent.append, path=str(x), policy="txy", set_at=5.0)  # type: ignore[arg-type]
+    report = next(event for event in sent if event["kind"] == "admin_result")["folder_raw"]
+    assert report["shots"] == 2 and report["bytes"] > 0
+    with opened(options, x) as store:
+        assert len(store.raw_rows(str(x)).value or {}) == 2  # (Kept until the user says.)
+    (x / "d3.txt").write_bytes(CASE)
+    os.utime(x / "d3.txt", (OLD, OLD))
+    assert filled(x, options)["reason"] == "policy"  # (TXY only: no new raw pulses.)
+    cache_admin(options, "clear_raw", lambda event: None, paths=[str(x)])  # (The user's yes.)
+    with opened(options, x, y) as store:
+        assert store.raw_rows(str(x)).value == {} and store.raw_rows(str(y)).value
+    raw_before = {name: (x / name).read_bytes() for name in ("d1.txt", "d2.txt", "d3.txt")}
+    output = tmp_path / "out"
+    output.mkdir()
+    events: list[dict[str, Any]] = []
+    txy = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+           "profile_def": MATLAB_2019.to_dict()}
+    load(str(x), str(output), events.append, options, txy=txy)  # type: ignore[arg-type]
+    assert next(event for event in events if event["kind"] == "loaded")["load_counts"]["converted"] == 3
+    assert {name: (x / name).read_bytes() for name in raw_before} == raw_before
+    cache_admin(options, "folder_choice", lambda event: None, path=str(y), policy="raw+used", set_at=6.0)
+    cache_admin(options, "clear_raw", lambda event: None, following=True)
+    with opened(options, y) as store:
+        assert store.raw_rows(str(y)).value  # (Its own policy: kept.)
