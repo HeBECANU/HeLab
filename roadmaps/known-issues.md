@@ -140,7 +140,8 @@ How to use it:
   once locally on macOS; passed on retry. Again on Windows: Ground CI 40861772277 (`9f0b21f`) and
   `agent/txy-index` CI 40874212130; Ground CI 40988453930 (`c492242`, Windows Tests 1/2) and 41000437956 (`43cb202`);
   the `[1]` case on Windows, `agent/ui-polish` CI 41005221588 (same line); `[2]` on Ground CI 41164525298
-  (`82c9db3`, Windows Tests 1/2, job 124429158185). A candidate: 3 s under load.
+  (`82c9db3`, Windows Tests 1/2, job 124429158185); `[1]` on Ground CI 41374704252 (`0406a1d`, Windows
+  Tests 2/2, job 125052359778). A candidate: 3 s under load.
 - [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-CountsPerShot]`: an
   xdist worker crashed on Windows CI run 40803552596; passed on retry (no traceback; look for a
   faulthandler dump). Again: the Plotly case on `agent/byte-units` CI 40865344851 (job 123418722344,
@@ -163,12 +164,6 @@ How to use it:
   caught `IOService.release`'s `shutil.rmtree` on the "HeLab-artifact-cleanup" daemon thread
   (`io_service.py:963`), the same trap as the fixed `test_folder_summary` entry below. Fix: record
   only the test thread's calls (`threading.get_ident()`) or paths under `tmp_path`.
-- [ ] `test_folder_icons.py::test_native_icon_delivery_is_shared_and_rendering_stays_memory_only`:
-  "Painting an icon performed I/O or submitted work" raised on another thread (pytestqt "Failed to
-  process thread exception"), Ground CI 41164525298 (Windows Tests 1/2, job 124429158185, gw0,
-  `82c9db3`); passed on rerun. It patches `os.stat` and `os.scandir` for the whole process, so likely
-  another thread in the worker stat'ed meanwhile (the trap above). Fix: check only the GUI thread's calls
-  (Quick Fixes 8, 2026-10-31).
 - [ ] `test_folder_summary.py::test_cached_scan_age_and_failed_refresh_retain_counts` fails across
   midnight UTC: 3 RERUNs on Windows CI 40975825607 (job 123803535756, `agent/txy-index` `c6277f0`):
   `assert '2026-10-29' in 'Last successful status scan: 2026-10-30 00:00:19 …'` at line 286. It takes
@@ -268,6 +263,13 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
 
+- [x] `test_folder_icons.py::test_native_icon_delivery_is_shared_and_rendering_stays_memory_only`:
+  "Painting an icon performed I/O or submitted work" raised on another thread (pytestqt "Failed to
+  process thread exception"), Ground CI 41164525298 (Windows Tests 1/2, job 124429158185, gw0,
+  `82c9db3`); passed on rerun. It patches `os.stat` and `os.scandir` for the whole process, so likely
+  another thread in the worker stat'ed meanwhile (the trap above). Fix: check only the GUI thread's calls
+  (Quick Fixes 8, 2026-10-31).
+  **Fixed** (`eccb23c`, Quick Fixes 9): the I/O fakes raise only on the GUI thread; the repro case kept.
 - [x] `test_io_service_run.py::test_writing_held_data_out_counts_as_progress`: `assert (2 == 1)` at
   line 40 (two progress marks, 0.7 ms and 1.4 ms, where one is expected), Windows CI 40863356565
   (job 123411955603, `agent/txy-index`); passed on retry. Again: `agent/runner-tools` CI 40989399407

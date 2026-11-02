@@ -338,7 +338,7 @@ review of PR #10, six rounds).
 
 From the IO Fixes floor's [handoff](sessions/2026-10-31-claude-io-fixes/handoff.md) (Conduit; landed `471966b`).
 
-- **A40.1 A helper still starting when HeLab quits** (no `process` yet in `IOService._run`) is stopped
+- [x] **A40.1 A helper still starting when HeLab quits** (done in `b34683e`, Quick Fixes 9, as a guard test: quitting cancels every request first, and `_run` already kills a cancelled one after `Popen`; no code change) (no `process` yet in `IOService._run`) is stopped
   only by `_run`'s daemon thread, so it may run until its first stdout write fails. Low risk. Fix: `_run`
   checks `self.closed` right after `Popen` and kills.
 - **A40.2 An unreadable new HeLab TXY in `live_check`**: a switched or HeLab-held shot whose new HeLab TXY
@@ -350,7 +350,7 @@ From the IO Fixes floor's [handoff](sessions/2026-10-31-claude-io-fixes/handoff.
   `CacheStore.confirm_dataset(..., signature=None)` merging a given signature into `info` (JSON, no schema
   change), and a confirm branch in `loading.load` for a cache whole but for the signature, would need
   neither the dataset nor a rewrite.
-- **A40.4 Cancel all loads and scans' tip** (Q40.1): set `MissingShotsWindow.CANCEL_TIP` to "Cancel every
+- [x] **A40.4 Cancel all loads and scans' tip** (done in `0f54c5e`, Quick Fixes 9) (Q40.1): set `MissingShotsWindow.CANCEL_TIP` to "Cancel every
   load and scan, running, paused or queued. Browsing, cached data, saves and Live go on; loads already
   saving their cached data finish."
 
@@ -361,7 +361,8 @@ From the Plot Identity floor's [handoff](sessions/2026-10-31-claude-plot-identit
 
 - **A41.1 An outdated saved result has no view**: `AnalysisInstance._cached_found` shows it without one.
   If Release or the TXY row ever needs that result's own data, build a hollow view from the saved record
-  (coverage and origins). Not needed now.
+  (coverage and origins). Not needed now: open until Release or the TXY row needs it (Quick Fixes 9
+  found no defect, 2026-11-02).
 
 ## Caching v2 (block 42)
 
@@ -379,11 +380,11 @@ handoff and the [plan](../roadmaps/caching-v2.md#stages-each-needs-tonys-go).
 
 From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.md) (Rivet on Ground).
 
-- **A43.1 Toolbar icons in every test window**: without `IconsInitUtil.initialise_icons()` the side
+- [x] **A43.1 Toolbar icons in every test window** (done in `e784834`, Quick Fixes 9): without `IconsInitUtil.initialise_icons()` the side
   toolbars show their text, so a `HelabMainWindow`'s widths depend on which tests ran earlier on the xdist
   worker (the cause of `test_main_split`'s Windows failures). A conftest autouse fixture would remove it
   everywhere; it must take pytest-qt's `qapp` (icons before a `QApplication` abort the worker, `1f86ca2`).
-- **A43.2 "Another HeLab may have changed them"** before `read_presets()` (`PresetsInspector.py:207`,
+- [x] **A43.2 "Another HeLab may have changed them"** (done in `e3faeb3`, Quick Fixes 9) before `read_presets()` (`PresetsInspector.py:207`,
   `views/plots/presets.py:267`, `:613`): with one app per computer (Q39.1) and `helab convert` writing no
   presets, keep the cheap re-reads and drop that reason from the comments.
 - [x] **A43.3 Reset all settings while Work Offline is on** (done in `c9e64e6`) (Q43.1, Tony 2026-10-31; app-1; numbered at block
@@ -393,10 +394,16 @@ From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.
 - [x] **A43.4 The cache move's refusal while a converter runs** (done in `4940a81`) (Q43.4, Tony 2026-10-31): `cache_locks.lock_for_move`'s
   "Another HeLab is running (N windows)." becomes "A HeLab converter (helab convert) is running (N). Stop it
   before moving the cache." (only `helab convert` can hold it now, Q39.1). Rivet's, on Ground (Quick Fixes 8).
-- **A43.5 The two other "Another HeLab is running" texts** (Q43.5, Tony 2026-11-01): `CacheTab.py:605`
+- [x] **A43.5 The two other "Another HeLab is running" texts** (done in `42855ab`, Quick Fixes 9) (Q43.5, Tony 2026-11-01): `CacheTab.py:605`
   becomes "A HeLab converter (helab convert) is running. Stop it before clearing the older cache." and
   `CacheDialogs.py:106` "A HeLab converter (helab convert) is running. Stop it before clearing old stores."
   (Quick Fixes 9.)
+
+## Quick Fixes 9 (block 46)
+
+- **A46.1 Process-wide fakes in tests** (Quick Fixes 9's A~1): sweep the tests that patch `os.stat`,
+  `os.scandir` or `subprocess.Popen` for the whole process and make each fake act only on the test's own
+  thread, the pattern behind both Windows flakes fixed in `3bafef1` and `eccb23c`.
 
 ## Caching v2 checkpoint 3 (block 44)
 
