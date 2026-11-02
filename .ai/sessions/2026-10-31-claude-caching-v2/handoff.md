@@ -1512,3 +1512,33 @@ Green on all three OSes. I read all 9 Tests and Converter logs.
       share question didn't appear within 5 s (line 114) on macOS CI 41482722171 (`agent/v4-switch-on`); 15/15
       locally on both stores; not pinned."
 - The known "GUI stalled" log appears 6 times.
+
+### The switch-on branch's merged CI (41484277419, `e4967ec`, three test groups)
+
+**Failed:** one test, the store-v4 bug already fixed at `65ee050`, which this branch doesn't have yet. I read all 12
+Tests and Converter logs.
+- **Windows times:**
+  - Tests 1/3: 11m41s (pytest 10.0 min);
+  - Tests 2/3: 10m14s (8.2 min);
+  - Tests 3/3: 11m49s (9.9 min).
+  - Down from tonight's 15–16 min with two groups.
+- **Other times:** macOS 6.9, 6.5 and 7.1 min; Ubuntu 4.2, 6.7 and 5.5.
+- **The failure:** Windows Tests 1/3 (job 125410633289).
+  `test_folder_cache.py::test_disk_badge_after_restart_ram_load_eviction_and_clear` failed at line 1201 every time
+  (5 RERUNs, then failed). This is the "loaded says not disk cached" bug that `65ee050` fixes on
+  `agent/caching-v2`. The branch gets it with the next merge of `dev/v0.0.8`, after `65ee050` lands.
+- **One more RERUN:** Ubuntu Tests 2/3 (job 125410633098),
+  `test_presets_plots.py::test_an_arrangement_preset_round_trips_every_bundled_script`. The worker was killed after
+  pytest-timeout's 100 s; the test passed on retry.
+  - The dump shows `presets.apply` then `_warn`: a modal `QMessageBox.warning`, "Preset can't be read" (from
+    `read_arrangement`'s RecordError), opened just after the test's simulated restart re-read the presets. Nothing
+    closes it in a test.
+  - It passed 15 of 15 locally on store-v4. The test and the A47.5 presets code came with tonight's merge of
+    `dev/v0.0.8`.
+  - **Cause:** not pinned. Likely the presets' re-read from the store (now store-v4) racing the test's apply.
+  - **Proposals:**
+    - a test seam for `_warn` (a raised error, not a modal) so a failure fails rather than hangs;
+    - a known-issues line: "`test_an_arrangement_preset_round_trips_every_bundled_script`: 'Preset can't be read'
+      warning (a modal) after the restart's re-read, on store-v4 (Ubuntu CI 41484277419, job 125410633098); a
+      100 s hang; 15/15 locally; not pinned."
+- The known "GUI stalled" log appears 7 times.
