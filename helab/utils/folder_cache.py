@@ -337,6 +337,8 @@ class FolderCache(QObject):
         self.convert_reasons: OrderedDict[str, dict[str, str]] = OrderedDict()
         # Flag saves in flight: job owner → (path, the choice's set_at, who set it).
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
+        # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
+        self._choice_writes: dict[str, str] = {}
         # Constants (F0b): the lab's (Settings → Lab parameters, set by the main window), and each
         # folder's own, as the store or this session last said: {"values": {key: float}, "set_at"}.
         # Folders with no disk cache keep theirs for the session only (``constants_session_only``).
@@ -991,6 +993,11 @@ class FolderCache(QObject):
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
                         "profile": {"name": profile.name, "version": profile.version,
                                     "calibrated": profile.calibrated}})
+        if "backend" not in txy:
+            # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
+            from helab.utils import constants
+            from helab.utils.settings_store import app_settings
+            txy["backend"] = constants.read_convert_backend(app_settings())
         txy.update({"source": txy_sources.normal_source(txy.get("source")) or self.tab_source(),
                     "profile_hash": str(txy["profile_hash"]), "profile_tag": str(txy.get("profile_tag") or ""),
                     "cache_base": os.path.dirname(os.path.abspath(options["directory"])) if options else "",
@@ -1011,13 +1018,19 @@ class FolderCache(QObject):
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
     def remember_choices(self, path: str, choices: object) -> None:
-        """Keep a folder's stage 2 choices (``folder_choices``, store-v4); a later one (``source_set_at``) wins."""
+        """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the
+        admin's). Each part (the policy; the TXY source with its tag) keeps its later one by its own set time, so a
+        listing read before a change was saved never brings back the choice it replaced."""
         if not isinstance(choices, dict):
             return
         saved = self.folder_choices.get(path)
-        if saved is None or float(saved.get("source_set_at", 0)) <= float(choices.get("source_set_at", 0)):
-            self.folder_choices[path] = dict(choices)
-            self.folderPrefsChanged.emit(path)
+        merged: dict[str, Any] = dict(saved or {"policy": "", "source": "", "tag": ""})
+        for fields, stamp in ((("policy",), "policy_set_at"), (("source", "tag"), "source_set_at")):
+            if saved is None or float(choices.get(stamp, 0)) >= float(saved.get(stamp, 0)):
+                merged.update({field: choices[field] for field in (*fields, stamp) if field in choices})
+        if merged != saved:
+            self.folder_choices[path] = merged
+            self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
 
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
                           tag: str | None = None) -> str:
@@ -1037,7 +1050,10 @@ class FolderCache(QObject):
             params["policy"] = policy
         if source is not None:
             params.update(source=source, tag=tag or "")
-        return self.cache_admin("folder_choice", **params)
+        job = self.cache_admin("folder_choice", **params)
+        if job:
+            self._choice_writes[job] = path
+        return job
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
         """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
@@ -1640,9 +1656,10 @@ class FolderCache(QObject):
 
     def _root_prefs_gone(self, path: str) -> None:
         """Beside :meth:`_root_constants_gone` (cache-1): the old root's folder flags (Don't cache, Don't
-        auto-load) and converter flags (``write_beside``) no longer apply to the folders it held (not those
-        inside a nested root below), so the next listing's answer under the new identity stands; a flag
-        write still running (this session's choice) keeps its folder's."""
+        auto-load), converter flags (``write_beside``) and store-v4 folder choices (cache policy, TXY source:
+        A47-1) no longer apply to the folders it held (not those inside a nested root below), so the next
+        listing's answer under the new identity stands; a flag or choice write still running (this session's
+        choice) keeps its folder's."""
         writing = {write[0] for write in self._pref_writes.values()}
         changed: set[str] = set()
         for folder in [folder for folder in self.prefs if self._root_holds(path, folder) and folder not in writing]:
@@ -1655,6 +1672,11 @@ class FolderCache(QObject):
             if self.write_beside(folder):
                 changed.add(folder)
             del self.convert_prefs[folder]
+        choosing = set(self._choice_writes.values())
+        for folder in [folder for folder in self.folder_choices
+                       if self._root_holds(path, folder) and folder not in choosing]:
+            del self.folder_choices[folder]
+            changed.add(folder)
         for folder in sorted(changed):
             self.folderPrefsChanged.emit(folder)
 
@@ -3831,6 +3853,7 @@ class FolderCache(QObject):
         if kind in ("done", "error", "cancelled"):
             self._admin.pop(producer.owner, None)
             self._started.pop(producer.owner, None)
+            self._choice_writes.pop(producer.owner, None)
             write = self._pref_writes.pop(producer.owner, None)
             if write is not None and kind != "done":
                 self._prefs_not_saved(write[0], write[1], str(event.get("message") or "the save was cancelled"),
@@ -4187,6 +4210,8 @@ class FolderCache(QObject):
                         self.remember_subtree(entry["path"], entry["subtree"], notify=False)
                     if "prefs" in entry:
                         self.remember_prefs(entry["path"], entry["prefs"], known=False)
+                    if "choices" in entry:
+                        self.remember_choices(entry["path"], entry["choices"])  # (A47.2: with its listing.)
                     if "constants" in entry:
                         self.remember_constants(entry["path"], entry["constants"], known=False)
                     if "disk_cached" in entry and not self._cleared_since(job, entry["path"]):

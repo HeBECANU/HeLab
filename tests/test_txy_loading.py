@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 import numpy as np
+import pytest
 
 from helab.io_ops.loading import load, read_cached
 from helab.io_ops.save_held import save_held
@@ -328,10 +329,15 @@ def test_a_store_v3_dataset_store_v4_removed_is_never_read_through(tmp_path: Pat
 
 # The loading order's second step: from the raw layer (step 3e)
 
-def test_a_helab_shot_comes_from_the_raw_layer_equal_to_its_text(tmp_path: Path, monkeypatch: Any) -> None:
+@pytest.mark.parametrize(("backend", "runs"), [(None, "numpy"), ("numpy", "numpy"), ("reference", "reference"),
+                                              ("numba", "numpy"), ("no-such-backend", "numpy")])
+def test_a_helab_shot_comes_from_the_raw_layer_equal_to_its_text(tmp_path: Path, monkeypatch: Any,
+                                                                 backend: str | None, runs: str) -> None:
     """A conversion into the cache folder (store-v4) saved the raw layers; a load of HeLab's TXY then makes the
-    shots from them without reading the TXY text, and the data is the text's exactly."""
+    shots from them without reading the TXY text, on Settings' backend (A47.6: the app's, numpy, when it can't
+    run here or is numba), and the data is the text's exactly."""
     import pandas as pd
+    from helab.convert import reconstruct as reconstruct_module
     from helab.convert.profile import MATLAB_2019
     from helab.io_ops import infra
     from helab.io_ops.convert import convert_folder
@@ -358,9 +364,19 @@ def test_a_helab_shot_comes_from_the_raw_layer_equal_to_its_text(tmp_path: Path,
             raise AssertionError(f"read HeLab's TXY text {filename}")
         return read(filename, reason)
     monkeypatch.setattr(infra, "_read_txy_file", refuse_helab)
-    txy = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
-           "cache_base": str(caches), "temps": str(tmp_path / "temps")}
+    ran: list[str] = []
+    real = reconstruct_module.reconstruct
+
+    def spy(pulses: Any, profile: Any, backend: str = reconstruct_module.DEFAULT_BACKEND) -> Any:
+        ran.append(backend)
+        return real(pulses, profile, backend)
+    monkeypatch.setattr(reconstruct_module, "reconstruct", spy)
+    txy: dict[str, Any] = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+                           "cache_base": str(caches), "temps": str(tmp_path / "temps")}
+    if backend is not None:
+        txy["backend"] = backend
     events = run_load(source, tmp_path, options, txy=txy)
+    assert ran == [runs, runs]
     shots = {event["shot"]: np.load(event["artifact"]) for event in events if event["kind"] == "shot"}
     assert sorted(shots) == [1, 2] and first(events, "loaded")["problematic"] == []
     assert all(np.array_equal(shots[shot], expected[shot]) for shot in shots)

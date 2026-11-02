@@ -27,6 +27,9 @@ def frozen(monkeypatch: pytest.MonkeyPatch) -> tuple[IOService, FolderCache]:
 def flagged(cache: FolderCache, path: str) -> None:
     cache.remember_prefs(path, {"no_cache": True, "no_auto_load": True, "set_at": 10.0})
     cache._remember_convert_prefs(path, {"write_beside": True, "set_at": 11.0})
+    # (store-v4's own choices too, A47-1.)
+    cache.remember_choices(path, {"policy": "txy", "policy_set_at": 12.0, "source": "helab-only", "tag": "m19v1",
+                                  "source_set_at": 12.0})
 
 
 @pytest.mark.parametrize("change", ["new uuid", "marker removed", "another root found"])
@@ -52,7 +55,11 @@ def test_a_roots_change_of_identity_drops_the_old_roots_flags(monkeypatch: pytes
         service.resultReady.emit(IORequest("probe", 0, ROOT, "list", {}, 60), event)
         assert cache.folder_prefs(RUN) == {"no_cache": False, "no_auto_load": False}
         assert not cache.write_beside(RUN) and RUN in changed
+        assert RUN not in cache.folder_choices  # (A47-1: the old root's TXY source and policy no longer apply.)
+        from helab.utils.txy_sources import TXY_FIELD
+        assert cache.with_txy(RUN, {})[TXY_FIELD]["source"] == cache.tab_source() != "helab-only"
         assert cache.folder_prefs(INNER) == {"no_cache": True, "no_auto_load": True} and cache.write_beside(INNER)
+        assert cache.folder_choices[INNER]["source"] == "helab-only"
         # A listing under the new identity finding none now stands (it used to fill in only unknown folders).
         cache.remember_prefs(RUN, {}, known=False)
         assert cache.folder_prefs(RUN) == {"no_cache": False, "no_auto_load": False}
@@ -66,8 +73,11 @@ def test_a_flag_write_still_running_survives_the_roots_change(monkeypatch: pytes
         cache._root_seen(ROOT, A, "old")
         cache.remember_prefs(RUN, {"no_cache": False, "no_auto_load": True, "set_at": 50.0}, confirmed=False)
         cache._pref_writes["job"] = (RUN, 50.0, "tab")  # (This session's choice, being saved.)
+        assert cache.set_folder_choice(RUN, policy="raw")  # (A choice being saved, A47-1.)
+        cache.remember_choices(INNER, {"policy": "txy", "policy_set_at": 1.0, "source": "", "tag": ""})
         service.resultReady.emit(IORequest("probe", 0, ROOT, "list", {}, 60), {
             "kind": "root_changed", "path": ROOT, "location": "vol://test/data/root", "reason": "marker removed"})
         assert cache.folder_prefs(RUN) == {"no_cache": False, "no_auto_load": True}
+        assert cache.folder_choices[RUN]["policy"] == "raw" and INNER not in cache.folder_choices
     finally:
         service.shutdown()

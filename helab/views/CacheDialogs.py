@@ -57,19 +57,20 @@ def room_text(room: dict[str, Any] | None, verb: str = "Make room") -> str:
         parts.append(f"{lead()} removes the cached TXY data of {_folders(seen)} (read again from their TXY files "
                      "when needed).")
     if raw:
-        parts.append(f"{lead()} removes the cached raw pulses of "
+        parts.append(f"{lead()} removes HeLab's cached raw pulses of "
                      f"{len(raw)} folder{'' if len(raw) == 1 else 's'} (read again from their raw files when needed).")
     if txy_only:
         names = _names([pair[0] for pair in txy_only])
         parts.append(f"It also removes cached TXY data that is the only copy: its TXY files are gone from {names}.")
     if only:
         names = _names(only)
-        parts.append(f"It also removes cached raw pulses that are the only copy: their raw files are gone from "
+        parts.append(f"It also removes HeLab's cached raw pulses that are the only copy: their raw files are gone from "
                      f"{names}.")
     if rebuilt or seen or txy_only:
         parts[-1] += f" ({byte_size(int(room.get('txy_bytes', 0)), 'disk')} of TXY data in all.)"
     if raw or only:
-        parts[-1] += f" ({byte_size(int(room.get('raw_bytes', 0)), 'disk')} of raw pulses in all.)"
+        parts[-1] += (f" ({byte_size(int(room.get('raw_bytes', 0)), 'disk')} of raw pulses in all.) Your d files "
+                      "aren't touched.")
     return " ".join(parts)
 
 
