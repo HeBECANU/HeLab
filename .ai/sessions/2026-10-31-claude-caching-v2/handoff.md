@@ -1458,3 +1458,8 @@ Green on all three OSes. I read all 9 Tests and Converter logs.
     of 100 s; passed on retry; not pinned."
 - The known "GUI stalled" log appears 5 times.
 - Windows Tests 1/2 took pytest 14.4 min and 2/2 13.7 min.
+
+### CI 41478561880 (`cca4691`, SQ-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled" log
+appears 4 times. Windows Tests 1/2 took pytest 10.6 min and 2/2 11.0 min.
