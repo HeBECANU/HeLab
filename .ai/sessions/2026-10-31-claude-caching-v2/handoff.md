@@ -1278,3 +1278,17 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole: *
 - **S4-4:** `remove_raw_text` moved below the constants.
 - **Tests:** all in `test_txy_only_offer.py`. The three changed tests fail without the fixes.
 - **Checked:** suite 9133 passed, 673 skipped, no RERUN. Types clean.
+
+### CI 41465454700 (`ee4df2b`: S4-1 to S4-4)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
+- **One RERUN:** Windows Tests 1/2 (job 125345114056), `test_accessible_names.py::test_every_script_and_each_library`,
+  "Basic plots v1 · Plot T, X, Y histograms: QTabBar < QMainWindow < … HelabMainWindow: no ID". It passed on retry.
+  - **Cause:** a plot dock area's tab bar gets its ID in `PlotWorkspace.fit` (`dock.py`, `identify_tabs`), which a
+    debounced timer (`_fit_soon`) runs. The test's walk ran before that timer fired: the log shows "GUI stalled for
+    2.30s" in that test in the same second.
+  - `dock.py` hasn't changed since 0.0.7a1, and stage 4 doesn't touch plots.
+  - **known-issues proposal:** "`test_every_script_and_each_library`: a plot dock area's QTabBar walked before
+    `_fit_soon` named it ('no ID'), on a stalled Windows runner (CI 41465454700, job 125345114056); passed on
+    retry. Fix: the walk waits for the workspace's pending fit, or `fit()` runs before it."
+- The known "GUI stalled" log appears 7 times (A47.3).
