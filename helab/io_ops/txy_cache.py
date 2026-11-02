@@ -45,6 +45,67 @@ def view_key(txy_source: str, txy: Mapping[str, Any]) -> tuple[str, str]:
     return txy_sources.identity_source(txy_source), str(txy.get("profile_hash") or txy.get("profile_tag") or "")
 
 
+def profile_for(definition: Mapping[str, Any] | None, origin: str) -> Any | None:
+    """The profile of a HeLab origin (``helab:<hash>``): ``definition`` (the profile sent whole, A47.1) when it
+    is that one, else a built-in's; None for another (its text is read; no conversion on read)."""
+    from helab.convert.profile import BUILTIN_PROFILES, DetectorProfile
+    wanted = origin.split(":", 1)[1] if ":" in origin else ""
+    if not wanted:
+        return None
+    if definition is not None:
+        try:
+            given = DetectorProfile.from_dict(dict(definition))
+        except Exception:  # (A damaged definition: the built-ins only.)
+            given = None
+        if given is not None and given.content_hash() == wanted:
+            return given
+    return next((item for item in BUILTIN_PROFILES.values() if item.content_hash() == wanted), None)
+
+
+def backend_for(backend: str, profile: Any) -> str:
+    """The converter backend a conversion on read runs (A47.6): Settings' choice (``backend``) when it can run
+    here, else the app's (numpy); every backend's output is the reference's byte for byte. Numba (developers
+    only) needs the folder a conversion gives its compiled code, so a read runs the app's."""
+    from helab.convert.pipeline import APP_BACKEND
+    from helab.convert.reconstruct import get_backend
+    if not backend or backend in (APP_BACKEND, "numba"):
+        return APP_BACKEND
+    try:
+        return backend if get_backend(backend).unavailable(profile) is None else APP_BACKEND
+    except Exception:  # (Unknown, or one that can't load here.)
+        return APP_BACKEND
+
+
+# What ``convert_raw_file`` made of a raw file: its array, or why not.
+CONVERTED, LATE, DAMAGED, FAILED = "converted", "late", "damaged", "failed"
+
+
+def convert_raw_file(filename: str, shot: int, size: int, mtime_ns: int, profile: Any, backend: str,
+                     send: Any) -> tuple[str, Any]:
+    """Caching v2 stage 3: a HeLab shot made from its raw file in memory, as the converter would make it, under
+    the converter's ticker for its size (S3-2); no text written (Q19.1). ``(CONVERTED, array)``, else
+    ``(LATE, None)`` (changed while read, or unfinished: try again later), ``(DAMAGED, None)`` (unfinished and
+    unmodified for a minute, as ``helab convert --once`` judges) or ``(FAILED, None)`` (no rows, or a backend
+    that can't). Raises OSError when it can't be read."""
+    from helab.convert.pipeline import convert_shot
+    from helab.convert.raw import not_done
+    from helab.io_ops.convert import DAMAGED_SECONDS, ONCE_SETTLE_SECONDS, _read_raw, _Shot, _Ticker, compute_budget
+    from helab.io_ops.infra import Heartbeat
+    with _Ticker(send, "converting", compute_budget(size)):
+        raw_data = _read_raw(_Shot(shot, os.path.basename(filename), filename, size, mtime_ns),
+                             Heartbeat(send, "converting"))
+        if isinstance(raw_data, str):
+            return LATE, None
+        if not_done(raw_data, profile.channel_trigger) is not None:
+            old = time.time() - mtime_ns / 1e9 >= max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS)
+            return (DAMAGED if old else LATE), None
+        try:
+            text = convert_shot(raw_data, profile, backend_for(backend, profile)).txy
+        except Exception:
+            return FAILED, None
+    return CONVERTED, txy_array(text)
+
+
 def txy_array(text: bytes) -> Any:
     """HeLab's TXY text as a load's array, parsed as a TXY file is, so a shot converted in memory equals its
     text exactly."""
@@ -231,33 +292,12 @@ class Access:
         return txy_array(text)
 
     def profile_for(self, origin: str) -> Any | None:
-        """The profile of a HeLab origin (``helab:<hash>``): the one sent whole when it is that one (A47.1), else
-        a built-in's; None for another (its text is read; no conversion on read)."""
-        from helab.convert.profile import BUILTIN_PROFILES, DetectorProfile
-        wanted = origin.split(":", 1)[1] if ":" in origin else ""
-        if not wanted:
-            return None
-        if self.profile_def is not None:
-            try:
-                given = DetectorProfile.from_dict(dict(self.profile_def))
-            except Exception:  # (A damaged definition: the built-ins only.)
-                given = None
-            if given is not None and given.content_hash() == wanted:
-                return given
-        return next((item for item in BUILTIN_PROFILES.values() if item.content_hash() == wanted), None)
+        """The profile of a HeLab origin: :func:`profile_for` of the one sent whole."""
+        return profile_for(self.profile_def, origin)
 
     def backend_for(self, profile: Any) -> str:
-        """The backend ``from_raw`` runs (A47.6): Settings' choice when it can run here, else the app's (numpy);
-        every backend's output is the reference's byte for byte. Numba (developers only) needs the folder a
-        conversion gives its compiled code, so a load runs the app's."""
-        from helab.convert.pipeline import APP_BACKEND
-        from helab.convert.reconstruct import get_backend
-        if not self.backend or self.backend in (APP_BACKEND, "numba"):
-            return APP_BACKEND
-        try:
-            return self.backend if get_backend(self.backend).unavailable(profile) is None else APP_BACKEND
-        except Exception:  # (Unknown, or one that can't load here.)
-            return APP_BACKEND
+        """The backend ``from_raw`` runs (A47.6): :func:`backend_for` of Settings' choice."""
+        return backend_for(self.backend, profile)
 
     def touch(self, path: str) -> None:
         if not self.layered or self.seed:

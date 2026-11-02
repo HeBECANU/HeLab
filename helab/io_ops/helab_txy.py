@@ -305,10 +305,12 @@ def compose(source: str, matlab: Mapping[int, str], helab: Mapping[int, HelabSho
 
 
 def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabShot],
-           known: Mapping[str, Any] | None, options: Mapping[str, Any], state: list[list[Any]]) -> dict[str, Any]:
+           known: Mapping[str, Any] | None, options: Mapping[str, Any], state: list[list[Any]],
+           on_read: Any = ()) -> dict[str, Any]:
     """A dataset's ``txy`` metadata: its source, its shots' origins (HeLab's only), the profiles
     they were made with (``known``: those the caller had), the profile asked for and the folders'
-    state (for the next quick check)."""
+    state (for the next quick check); with stage 3, the HeLab shots made from their raw files when read
+    (``on_read``, only when some were: S3~6 names them)."""
     profiles = {str(key): dict(value) for key, value in (known or {}).items() if isinstance(value, Mapping)}
     for shot in helab.values():
         if shot.profile:
@@ -323,7 +325,8 @@ def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabSho
             "profile_hash": str(options.get("profile_hash") or ""),
             "profile_tag": str(options.get("profile_tag") or ""), "folders": state,
             # The root key HeLab's folders were found by (FolderCache sends it back when it knows no root).
-            "key": str(options.get("key") or "")}
+            "key": str(options.get("key") or ""),
+            **({"on_read": sorted(int(shot) for shot in on_read if int(shot) in origins)} if on_read else {})}
 
 
 def matlab_signature(fingerprint: Any, origins: Mapping[int, str]) -> str:

@@ -124,3 +124,103 @@ def test_folder_cache_sends_the_conversion_profile_whole(monkeypatch: pytest.Mon
         assert "profile_def" not in other[txy_sources.TXY_FIELD]
     finally:
         service.shutdown()
+
+
+# 3b: Live converts on read (S3~4), and A40.2
+
+def live(source: Path, tmp_path: Path, txy: dict[str, Any], memory: list[list[int]] | None = None,
+         seen: list[list[int]] | None = None, known: list[list[int]] | None = None,
+         origins: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    from helab.io_ops.live import live_check
+    output = tmp_path / f"live-{time.monotonic_ns()}"
+    output.mkdir()
+    sent: list[dict[str, Any]] = []
+    live_check(str(source), str(output), sent.append, memory=[] if memory is None else memory,  # type: ignore[arg-type]
+               known=known, seen=seen, txy=txy, memory_origins=origins)
+    return sent
+
+
+def last_state(sent: list[dict[str, Any]]) -> dict[str, Any]:
+    return [event for event in sent if event["kind"] in ("loaded", "live_unchanged")][-1]
+
+
+def test_live_converts_a_new_raw_shot_on_read_only_in_store_v4(tmp_path: Path) -> None:
+    source = raw_folder(tmp_path, (1,))
+    for on_read, expect in ((False, []), (True, [1])):
+        txy = {**asked(), **({"on_read": True} if on_read else {})}
+        first_check = live(source, tmp_path, txy)
+        assert not shots_of(first_check)  # (Seen once: read once unchanged a check apart.)
+        second = live(source, tmp_path, txy, seen=last_state(first_check)["live_seen"])
+        shots = shots_of(second)
+        assert sorted(shots) == expect
+    assert np.array_equal(shots[1], expected(1)) and not any(event["kind"] == "file_started" for event in second)
+    assert last_state(second)["txy"]["on_read"] == [1]
+    assert not list(tmp_path.rglob("d_txy_helab_*"))
+
+
+def test_a_shot_live_converted_on_read_isnt_read_again_when_its_text_appears(tmp_path: Path) -> None:
+    source = raw_folder(tmp_path, (1,))
+    raw = (source / "d1.txt").stat()
+    origin = txy_sources.helab_origin(MATLAB_2019.content_hash())
+    beside = source / "d_txy_helab_m19v1_1.txt"  # (Auto-convert wrote it since: the same data by contract.)
+    beside.write_bytes(convert_shot(HITS[1], MATLAB_2019).txy)
+    newer = time.time() - 120
+    os.utime(beside, (newer, newer))
+    txy = {**asked(txy_sources.HELAB_PRIORITY), "on_read": True}
+    memory = [[1, raw.st_size, raw.st_mtime_ns]]
+    sent = live(source, tmp_path, txy, memory, origins={"1": origin})
+    sent += live(source, tmp_path, txy, memory, seen=last_state(sent)["live_seen"], origins={"1": origin})
+    assert not shots_of(sent) and all(event["kind"] != "file_started" for event in sent)
+
+
+def test_a_held_helab_shot_whose_new_txy_is_unreadable_keeps_its_held_data(tmp_path: Path) -> None:
+    """A40.2: the held data stays until a readable TXY is read, and the unreadable file isn't read again while
+    unchanged (``live_failed``, sent back with ``known``)."""
+    source = raw_folder(tmp_path, (1,))
+    origin = txy_sources.helab_origin(MATLAB_2019.content_hash())
+    beside = source / "d_txy_helab_m19v1_1.txt"
+    beside.write_bytes(b"1,2,3\n")
+    then = time.time() - 300
+    os.utime(beside, (then, then))
+    memory = [[1, beside.stat().st_size, beside.stat().st_mtime_ns]]
+    beside.write_bytes(b"t,x,y\nnot,a,number\n")  # (Converted again: unreadable.)
+    now = time.time() - 120
+    os.utime(beside, (now, now))
+    txy = {**asked(txy_sources.HELAB_ONLY)}
+    sent = live(source, tmp_path, txy, memory, origins={"1": origin})
+    sent = live(source, tmp_path, txy, memory, seen=last_state(sent)["live_seen"], origins={"1": origin})
+    state = last_state(sent)
+    assert not shots_of(sent) and state["kind"] == "live_unchanged"
+    failed = state["live_failed"]
+    assert failed == [[1, beside.stat().st_size, beside.stat().st_mtime_ns]]
+    again = live(source, tmp_path, txy, memory, seen=state["live_seen"], known=failed, origins={"1": origin})
+    assert not any(event["kind"] == "file_started" for event in again) and last_state(again)["live_failed"] == failed
+    beside.write_bytes(b"1.5,2,3\n")  # (A readable one: read, replacing the held data.)
+    os.utime(beside, (now + 1, now + 1))
+    sent = live(source, tmp_path, txy, memory, known=failed, origins={"1": origin})
+    sent = live(source, tmp_path, txy, memory, seen=last_state(sent)["live_seen"], known=failed, origins={"1": origin})
+    assert np.array_equal(shots_of(sent)[1], [[1.5, 2, 3]]) and last_state(sent)["live_failed"] == []
+
+
+def test_lives_session_sends_its_failed_held_shots_back_with_known() -> None:
+    from types import SimpleNamespace
+    from helab.views.explorer_live import LiveController
+    session = SimpleNamespace(seen=[], seen_names=[], listed_mtime=None, identity="x", identity_root=None,
+                              held_failed=[])
+    LiveController._live_observed(session, {"live_failed": [[1, 2, 3]]})  # type: ignore[arg-type]
+    assert session.held_failed == [[1, 2, 3]]
+    LiveController._live_observed(session, {"live_seen": []})  # type: ignore[arg-type]
+    assert session.held_failed == [[1, 2, 3]]  # (A check that didn't list keeps it.)
+
+
+def test_folder_cache_asks_live_to_convert_on_read_only_with_store_v4(monkeypatch: pytest.MonkeyPatch,
+                                                                     tmp_path: Path) -> None:
+    from helab.utils import folder_cache
+    from test_cache_tab import frozen_cache
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        assert "on_read" not in cache.with_txy("/data/run", {})[txy_sources.TXY_FIELD]
+        monkeypatch.setattr(folder_cache, "store_root", lambda folder: str(tmp_path / "caches" / "store-v4"))
+        assert cache.with_txy("/data/run", {})[txy_sources.TXY_FIELD]["on_read"] is True
+    finally:
+        service.shutdown()

@@ -690,35 +690,22 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
 
     def convert_on_read(shot: int, index: int, filename: str) -> Any:
         """Stage 3 (store-v4): a HeLab shot made from its raw file (none current in the raw layer, no text), as
-        the converter would make it, before any file is announced and under the converter's ticker (S3-2); no
-        text is written (Q19.1) and no raw row (R~2: ``raw_fill``'s). None when it can't be: a file changed
-        while read, or unfinished, is late (the next load tries again; damaged once unmodified for a minute,
-        as ``helab convert --once`` judges it); a failed conversion is problematic."""
-        from helab.convert.pipeline import convert_shot
-        from helab.convert.raw import not_done
-        from helab.io_ops.convert import DAMAGED_SECONDS, ONCE_SETTLE_SECONDS, _read_raw, _Shot, _Ticker, compute_budget
+        the converter would make it, before any file is announced (``txy_cache.convert_raw_file``); no text is
+        written (Q19.1) and no raw row (R~2: ``raw_fill``'s). None when it can't be: late (the next load tries
+        again), or problematic (damaged, or a conversion that failed)."""
         assert access is not None
         profile = access.profile_for(origins[shot])
         size, mtime_ns = fingerprint[index][1:]
         if profile is None:
             problematic.append(shot)
             return None
-        with _Ticker(send, "converting", compute_budget(size)):
-            raw_data = _read_raw(_Shot(shot, os.path.basename(filename), filename, size, mtime_ns),
-                                 Heartbeat(send, "converting"))
-            problem = None if isinstance(raw_data, str) else not_done(raw_data, profile.channel_trigger)
-            if isinstance(raw_data, str) or problem is not None:
-                if problem is not None and time.time() - mtime_ns / 1e9 >= max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS):
-                    problematic.append(shot)  # (Damaged: unreadable until it changes.)
-                else:
-                    late.add(shot)
-                return None
-            try:
-                text = convert_shot(raw_data, profile, access.backend_for(profile)).txy
-            except Exception:  # (No rows, or a backend that can't: unreadable, as a failed read is.)
-                problematic.append(shot)
-                return None
-        array = txy_cache.txy_array(text)
+        outcome, array = txy_cache.convert_raw_file(filename, shot, size, mtime_ns, profile, access.backend, send)
+        if outcome == txy_cache.LATE:
+            late.add(shot)
+            return None
+        if outcome != txy_cache.CONVERTED:
+            problematic.append(shot)  # (Damaged or failed: unreadable until it changes.)
+            return None
         load_counts["converted"] += 1
         data[shot] = array
         return array
@@ -820,7 +807,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     # HeLab's not beside the raw files are named in full (a quick check's samples join them to the folder).
     names = [filename if shot in origins and os.path.dirname(filename) != os.path.dirname(matlab_dir(shot))
              else os.path.basename(filename) for shot, filename in files]
-    txy_record = helab_txy.record(txy_source, origins, helab_found, None, txy, helab_state)
+    txy_record = helab_txy.record(txy_source, origins, {**on_read, **helab_found}, None, txy, helab_state, on_read)
     # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
     # cache state is its tab's, never a plot choice's).
     known_cached: DiskCachedField = {} if (had_dataset is None and not cached) or quiet else {

@@ -148,6 +148,8 @@ class LiveSession:
     # once they show the same size and mtime again, a check later.
     seen: list[list[int]] = field(default_factory=list)
     seen_names: list[str] = field(default_factory=list)
+    # Held HeLab shots whose new TXY couldn't be read (A40.2): their held data stays; sent back with ``known``.
+    held_failed: list[list[int]] = field(default_factory=list)
     # The folder's mtime as of the last listing: while it stays, a check stats only the files in
     # ``seen`` instead of listing the folder.
     listed_mtime: int | None = None
@@ -385,6 +387,7 @@ class LiveController:
         dataset = session.dataset
         # Shots it couldn't read: read again only if they change.
         known = [list(entry) for entry in dataset.metadata.get("fingerprint", ()) if int(entry[0]) not in dataset.data]
+        known += [list(entry) for entry in session.held_failed]
         recent = time.monotonic() - session.listed_at < self.LIVE_LIST_SECONDS
         payload = {"live": True, "live_since": session.since if recent else None, "known": known,
                    "prefer_base": dataset.signature, "identity": session.identity,
@@ -634,6 +637,8 @@ class LiveController:
         if "live_seen" in event:
             session.seen = [list(entry) for entry in event["live_seen"]]
             session.seen_names = [str(name) for name in event.get("live_seen_names") or ()]
+        if "live_failed" in event:
+            session.held_failed = [list(entry) for entry in event["live_failed"]]
         if "live_listed_mtime" in event:
             session.listed_mtime = event["live_listed_mtime"]
         if not session.identity and event.get("live_identity"):

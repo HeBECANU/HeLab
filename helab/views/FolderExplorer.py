@@ -1958,10 +1958,19 @@ class FolderExplorer(QWidget):
         on = self.live_control.auto_converting(path)
         if button.isChecked() != on:
             button.setChecked(on)
-        tooltip = ("Auto-convert is on: each Live check also converts the folder's new raw files (d<N>.txt) "
-                   "to HeLab's TXY once written. Click to stop; the arrow has its choices." if on else
-                   "Auto-convert: also convert the folder's new raw files (d<N>.txt) to HeLab's TXY once "
-                   "written, while Live is on. The arrow has its choices.")
+        if "policy" in folder_cache.store_options():
+            # store-v4 (stage 3, S3~4): Live converts new shots when it reads them anyway; this adds the text.
+            tooltip = ("Auto-convert is on: Live converts each new shot when it reads it, and also writes HeLab's "
+                       "TXY files of the folder's new raw files (d<N>.txt) once written (Settings › TXY converter "
+                       "says where). Click to stop; the arrow has its choices." if on else
+                       "Live converts each new shot when it reads it. Auto-convert also writes HeLab's TXY files "
+                       "of the folder's new raw files (d<N>.txt) once written (Settings › TXY converter says "
+                       "where). The arrow has its choices.")
+        else:
+            tooltip = ("Auto-convert is on: each Live check also converts the folder's new raw files (d<N>.txt) "
+                       "to HeLab's TXY once written. Click to stop; the arrow has its choices." if on else
+                       "Auto-convert: also convert the folder's new raw files (d<N>.txt) to HeLab's TXY once "
+                       "written, while Live is on. The arrow has its choices.")
         if button.toolTip() != tooltip:
             button.setToolTip(tooltip)
 

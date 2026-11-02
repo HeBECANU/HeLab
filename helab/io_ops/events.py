@@ -78,6 +78,8 @@ class LiveState(TypedDict):
     live_seen_names: list[str]
     live_listed_mtime: int | None
     live_identity_root: str | None
+    # Held HeLab shots whose new TXY couldn't be read, as stat'ed (A40.2): sent back with ``known``.
+    live_failed: NotRequired[list[list[int]]]
 
 
 class MoveCheckFields(TypedDict):

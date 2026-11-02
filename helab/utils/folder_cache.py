@@ -997,6 +997,9 @@ class FolderCache(QObject):
             # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
             # built-ins the helper knows itself; another user profile's TXY is read from its text).
             txy["profile_def"] = profile.to_dict()
+        if "on_read" not in txy and "policy" in options:
+            # store-v4 (its options carry the policy): Live converts raw files on read too (stage 3, S3~4, R~1).
+            txy["on_read"] = True
         if "backend" not in txy:
             # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
             from helab.utils import constants
