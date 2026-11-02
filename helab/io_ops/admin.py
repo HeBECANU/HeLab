@@ -264,6 +264,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             if read.status == "error":
                 raise StoreError(read.error)
             result["choices"] = read.value or {"policy": "", "source": "", "tag": ""}
+            send({"kind": "folder_choices", "path": path, "choices": result["choices"]})
         elif action == "legacy_choice":
             # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
             result["legacy"] = store.set_legacy_choice(str(params["choice"]))

@@ -51,6 +51,16 @@ def layer_of(origin: str) -> str:
     return txy_layer.helab_layer(origin.split(":", 1)[1]) if origin else txy_layer.MATLAB
 
 
+def builtin_for_tag(tag: str) -> dict[str, Any] | None:
+    """A built-in profile's TXY options by its tag (``profile_hash``, ``profile_tag``, ``profile``), or None."""
+    from helab.convert.profile import BUILTIN_PROFILES, file_tag
+    for profile in BUILTIN_PROFILES.values():
+        if file_tag(profile) == tag:
+            return {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                    "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+    return None
+
+
 def entry_keys(fingerprint: Sequence[Sequence[int]], origins: Mapping[int, str],
                raw_entries: Mapping[int, os.DirEntry[str]]) -> dict[int, tuple[int, int, str]]:
     """Each shot's layer key: (size, mtime_ns, kind) of its raw file (HeLab's, where listed) or its TXY file."""

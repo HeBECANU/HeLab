@@ -303,6 +303,13 @@ def load(path: str, output: str, send: Emit = emit,
                 no_cache_reason = "Disk cache not used: the folder's settings couldn't be read"
             no_cache = chosen or prefs.failed
             quiet = quiet and not no_cache
+            if txy_cache.layered(store):
+                # The folder's own TXY source and policy (store-v4, Q45.1, Q45.2): told to the app, which applies
+                # the source to the tab's Live and later loads; and to this load if it is the tab's.
+                choices = store.read_folder_choices([path])[path]
+                if choices.value is not None:
+                    send({"kind": "folder_choices", "path": path, "choices": choices.value})
+                    txy = txy_sources.with_choices(txy or {}, choices.value, txy_cache.builtin_for_tag)
         _load(path, output, send, store, guard, bool(cache_options), memory, base_signature, expected,
               (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
               limits=limits, allow_large=allow_large, no_cache=no_cache, no_cache_reason=no_cache_reason,

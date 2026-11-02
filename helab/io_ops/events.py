@@ -292,6 +292,14 @@ class FolderPrefsEvent(TypedDict):
     prefs: dict[str, Any]
 
 
+class FolderChoicesEvent(TypedDict):
+    """A folder's stage 2 choices (store-v4, Q45.1, Q45.2): ``policy``, ``source`` and ``tag`` ("" each: the
+    global one), with when each was set; FolderCache applies the source to the tab's loads and Live."""
+    kind: Literal["folder_choices"]
+    path: str
+    choices: dict[str, Any]
+
+
 class FolderConstantsEvent(TypedDict):
     kind: Literal["folder_constants"]
     folders: dict[str, Any]
@@ -1093,7 +1101,8 @@ HelperEvent = Union[
     CacheWarningEvent, CacheSkippedEvent,
     EntriesEvent, ListedStatusEvent, OfflineListingEvent, ScanStatusEvent, MountsSeenEvent, SaveGuardEvent, ScanHistoryEvent,
     ScanHistorySavedEvent, ScanHistoryWarningEvent, ScanModeEvent, ScanCachedEvent, SubtreeCachedEvent,
-    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderConstantsEvent, PresetsEvent, CacheMismatchEvent,
+    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderChoicesEvent, FolderConstantsEvent, PresetsEvent,
+    CacheMismatchEvent,
     FolderIconEvent,
     LoadSourceEvent, ProgressEvent, FileStartedEvent, FileFinishedEvent, ShotEvent, ScanSummaryEvent,
     ShotsMissingEvent, TooLargeEvent, CachedLoadedEvent, UnchangedCachedLoadedEvent, UnchangedHeldLoadedEvent,
@@ -1115,7 +1124,7 @@ KINDS = frozenset({
     "done", "error", "paused", "resumed", "heartbeat", "drives", "resolved", "cache_warning", "cache_skipped",
     "entries", "status", "mounts_seen", "save_guard", "scan_history", "scan_history_saved",
     "scan_history_warning", "scan_mode", "scan_cached", "subtree_cached", "subtree_saved", "summary_save_failed",
-    "folder_prefs", "folder_constants", "presets", "cache_mismatch", "folder_icon",
+    "folder_prefs", "folder_choices", "folder_constants", "presets", "cache_mismatch", "folder_icon",
     "load_source", "progress", "file_started", "file_finished", "shot", "scan_summary", "shots_missing",
     "too_large", "loaded", "live_unchanged",
     "cache_saved", "disk_cached", "cache_save_failed", "cache_full", "cache_approval", "removed", "inventory",

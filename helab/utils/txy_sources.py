@@ -24,7 +24,7 @@ Standard library only: helpers import it.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 # The two kinds of TXY a shot comes from (``choose``).
 MATLAB = "matlab"
@@ -211,3 +211,19 @@ def _profile_text(profile_hash: str, profiles: Mapping[str, Mapping[str, Any]]) 
     if isinstance(names, list) and len(names) > 1:
         return " / ".join(str(name) for name in names)  # Profiles of one output: their TXY are alike.
     return f"{profile.get('name', '?')} v{profile.get('version', '?')}"
+
+
+def with_choices(txy: Mapping[str, Any], choices: Mapping[str, Any],
+                 profiles: Callable[[str], dict[str, Any] | None]) -> dict[str, Any]:
+    """The tab's TXY options with the folder's own choice (caching v2 stage 2, Q45.2): its ``source``, and its
+    ``tag``'s profile (``profiles``: tag → ``profile_hash``, ``profile_tag``, ``profile``; None for one it
+    doesn't know, which keeps the profile asked for); "" follows the global one. Only the tab's own loads
+    (``tab``) follow it: a plot's choice is its own."""
+    source = normal_source(choices.get("source"))
+    if not source or not txy.get("tab", True):
+        return dict(txy)
+    found = dict(txy, source=source)
+    tag = str(choices.get("tag") or "")
+    if tag and tag != str(txy.get("profile_tag") or "") and (profile := profiles(tag)) is not None:
+        found.update(profile)
+    return found

@@ -230,3 +230,49 @@ def test_a_plots_own_choice_stays_ram_only_in_store_v3(tmp_path: Path) -> None:
     run_load(source, tmp_path, options, no_cache=True, txy={"source": "matlab-only"})
     with opened(options, source) as store:
         assert store.read_dataset_row(str(source)).missing
+
+
+# The folder's own TXY source (Q45.2, step 3c)
+
+def test_a_tab_load_follows_the_folders_own_source_and_says_so(tmp_path: Path) -> None:
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    with opened(options, source) as store:
+        store.set_txy_source_pref(str(source), "matlab-only", "", time.time())
+    events = run_load(source, tmp_path, options)  # (The tab's: no choice of its own.)
+    assert first(events, "folder_choices")["choices"]["source"] == "matlab-only"
+    assert first(events, "loaded")["txy"]["source"] == "matlab-only"
+    with opened(options, source) as store:
+        assert store.read_view(str(source), "matlab-only", "").found and store.read_view(str(source), "", "").missing
+    plot = run_load(source, tmp_path, options, no_cache=True, txy={"source": "matlab-priority", "tab": False})
+    assert first(plot, "loaded")["txy"]["source"] == "matlab-priority"  # (A plot's choice is its own.)
+
+
+def test_setting_a_folders_choice_tells_the_app(tmp_path: Path) -> None:
+    from helab.io_ops.admin import cache_admin
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    with opened(options, source):
+        pass  # (The folder's data root, recorded as a load would.)
+    events: list[Any] = []
+    cache_admin(options, "folder_choice", events.append, path=str(source), source="helab-only", tag="m19v1",
+                set_at=time.time())
+    assert first(events, "folder_choices")["choices"]["tag"] == "m19v1"
+
+
+def test_folder_cache_applies_a_folders_own_source_to_the_tab_only(monkeypatch: Any, tmp_path: Path) -> None:
+    from helab.utils import txy_sources
+    from test_raw_fill import frozen
+    service, cache = frozen(monkeypatch)
+    try:
+        path = str(tmp_path)
+        cache.remember_choices(path, {"policy": "", "source": "helab-only", "tag": "m19v1", "source_set_at": 2.0})
+        tab = cache.with_txy(path, {})["txy"]
+        assert tab["source"] == "helab-only" and tab["profile_tag"] == "m19v1" and tab["profile_hash"]
+        plot = cache.with_txy(path, {"txy": {"source": "matlab-only"}})["txy"]
+        assert plot["source"] == "matlab-only"  # (A plot's choice stays its own.)
+        cache.remember_choices(path, {"source": "matlab-only", "source_set_at": 1.0})  # (Older: ignored.)
+        assert cache.with_txy(path, {})["txy"]["source"] == "helab-only"
+        assert txy_sources.with_choices({"tab": True}, {"source": "", "tag": "x"}, lambda tag: None) == {"tab": True}
+    finally:
+        service.shutdown()

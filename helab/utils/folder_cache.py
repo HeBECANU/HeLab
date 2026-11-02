@@ -302,6 +302,9 @@ class FolderCache(QObject):
         # Each folder's converter flags as the store last said ({"write_beside", "set_at"}; TXY
         # converter stage 4): only folders asked about (``read_convert_prefs``) or set this session.
         self.convert_prefs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # Each folder's stage 2 choices as the store last said (store-v4: ``folder_choices``, Q45.1, Q45.2):
+        # {"policy", "source", "tag", …}; the source and tag override the tab's for that folder.
+        self.folder_choices: dict[str, dict[str, Any]] = {}
         # Live auto-convert (TXY converter stage 4): the folders whose Live converts new raw shots
         # this session (Q9.6: reset each session, except the folders set to start at launch), and
         # each folder's last conversion's lists (``convert_summary``), sent back with the next one
@@ -959,6 +962,9 @@ class FolderCache(QObject):
         root = self.root_of(path)
         # Asked for no choice: the tab's (its dataset is the tab's, ``is_tab_dataset``).
         txy.setdefault("tab", not txy.get("source") and not txy.get("profile_hash"))
+        if txy["tab"] and (choices := self.folder_choices.get(path)):
+            # The folder's own TXY source and tag (store-v4, Q45.2) for the tab's loads, Live and cached reads.
+            txy = txy_sources.with_choices(txy, choices, self._profile_for_tag)
         if not txy.get("profile_hash"):
             profile = self.convert_profile()
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
@@ -982,6 +988,24 @@ class FolderCache(QObject):
             if isinstance(metadata, Mapping) and metadata.get("key"):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
+
+    def remember_choices(self, path: str, choices: object) -> None:
+        """Keep a folder's stage 2 choices (``folder_choices``, store-v4); a later one (``source_set_at``) wins."""
+        if not isinstance(choices, dict):
+            return
+        saved = self.folder_choices.get(path)
+        if saved is None or float(saved.get("source_set_at", 0)) <= float(choices.get("source_set_at", 0)):
+            self.folder_choices[path] = dict(choices)
+            self.folderPrefsChanged.emit(path)
+
+    def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
+        """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                        "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+        return None
 
     def payload_source(self, payload: Mapping[str, Any]) -> str:
         txy = payload.get(txy_sources.TXY_FIELD)
@@ -3622,6 +3646,9 @@ class FolderCache(QObject):
         if kind == "folder_prefs":
             self.remember_prefs(event["path"], event["prefs"])
             return
+        if kind == "folder_choices":
+            self.remember_choices(event["path"], event["choices"])
+            return
         if kind == "convert_prefs":
             self._remember_convert_prefs(event["path"], event["prefs"])
             return
@@ -4078,6 +4105,9 @@ class FolderCache(QObject):
                 return
             if kind == "folder_prefs":
                 self.remember_prefs(event["path"], event["prefs"], known=False)
+                return
+            if kind == "folder_choices":
+                self.remember_choices(event["path"], event["choices"])
                 return
             if kind == "folder_constants":
                 self._remember_constant_folders(event.get("folders"), known=False)
