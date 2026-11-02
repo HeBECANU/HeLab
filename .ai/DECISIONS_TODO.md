@@ -122,6 +122,29 @@ Tony in Chat, 2026-10-31 evening, on Quick Fixes 8 and Caching v2 checkpoint 3 (
 - **Landing Caching v2 checkpoint 3** (`ba898b8`) once its re-check has no open findings, and closing the
   Area Review floor (branch kept): "ok".
 
+Tony in Chat, 2026-11-02 ("I think we're ready for stage 2?"; via Side): **the go for caching v2's stage 2**,
+with Vault's open questions (its [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md), "Stage 2: open
+questions", `3ed34f2`) as proposed (block 45), the 8 GB default kept; A40.3, A42.1, A42.2 and A44.1 inside
+stage 2; Quick Fixes 9 for Rivet; A39.5 and A37.1 as small floors after stage 2's first checkpoint; at most
+three floors at once.
+
+- **Q45.1** (Q~3) the default policy is raw + used: raw rows plus every TXY layer a load composes; raw
+  (convert on load) and txy (no raw rows) are explicit choices, global or per folder; a policy decides only
+  what new saves write. The 8 GB budget stays (Tony: raw + used is about 2.8× today's disk per folder).
+- **Q45.2** (Q~4) one "which TXY" choice: Q18.2's mode and tag with a per-folder override (the user's
+  state); `cache_policy` has no tag column.
+- **Q45.3** (Q~5) fingerprints per shot carry their kind (`raw` or `txy`); `by_txy` goes.
+- **Q45.4** (Q~6) stage 2 never writes store-v4's `datasets`; it reads them like Keep reads store-v3.
+- **Q45.5** (Q~7) store-v3's MATLAB shots under Keep are copied into the `matlab` layer on use.
+- **Q45.6** (Q~8) Make room's order: HeLab layers with their raw held; seen `matlab` and TXY-keyed shots;
+  raw layers seen; only copies last, named; `trim` (A42.2) follows it.
+- **Q45.7** (Q~9) Live appends segments; compaction only when it fits, never a reason to ask.
+- **Q45.8** (Q~10) one pending unit per folder (parts merged); raw stays never-pending.
+- **Q45.9** (Q~11) no RAM-budget change for a decoded raw layer.
+- **Q45.10** (Q~12) no cross-computer matching in stage 2 (`(size, mtime_ns)` per computer; sha256 later).
+- **Q45.11** (Q~13) the switch turns on only after stage 2 has landed and Tony has used it (his Mac and a
+  lab PC, M44.1, M42.1); then on by default in the release shipping stage 2; the row stays one release.
+
 ## Quick Fixes 7 (block 38)
 
 From Quick Fixes 7's [handoff](sessions/2026-10-31-claude-quick-fixes-7/handoff.md) (Rivet on Ground,
