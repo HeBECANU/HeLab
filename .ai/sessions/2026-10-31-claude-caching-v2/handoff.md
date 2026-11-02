@@ -1009,3 +1009,35 @@ counts scan failures only when the box is ticked, and calls cached analysis the 
   - cache-store.md: `purge_cached` and `PURGE_KINDS`.
   - app-runtime-and-ui.md: Settings › Cache's purge rows and the raw pulses wording.
   - testing.md: the two tests above.
+
+### A47.2: FolderCache learns a folder's choices with its listing (`28d2112`)
+
+- **The listing:** `metadata._read_saved` reads `read_folder_choices` beside the prefs (store-v4; nothing in
+  store-v3).
+  - The folder's own choices go out as a `folder_choices` event, from `_send_saved`.
+  - Each child's go in its entry's `choices`, only when set.
+  - FolderCache keeps both, so Live and a first load follow a folder's own TXY source at once.
+- **`remember_choices`:** each part (the policy; the source with its tag) now keeps the later one by its own set
+  time.
+  - Before, it compared only `source_set_at`, so a listing read before a policy change was saved could bring the
+    old policy back.
+  - It now emits `folderPrefsChanged` only on a change.
+- **Tests** (`test_txy_ui.py`), both failing without the fix: the helper's listing feeding FolderCache, with
+  `with_txy` following the child's source; the per-part merge.
+- **Checked:** suite 8935 passed, no RERUN.
+- **Doc proposal:** io-and-browsing.md's listing records add "choices (store-v4)"; live.md's Q~15 note becomes
+  "Live follows a folder's own source from its listing (A47.2)".
+
+### A47.6: convert from the raw layer with Settings' backend (`9e8c576`)
+
+- **FolderCache:** `with_txy` adds `backend` (`read_convert_backend`) to a load's TXY options unless the caller
+  gives one.
+- **`Access.from_raw`:** runs `backend_for(profile)`, which is Settings' backend when it can run here and the app's
+  (numpy) otherwise. Numba also runs numpy, since it needs the compiled-code folder only a conversion sets.
+- **Tests,** failing without the fix:
+  - `test_txy_loading.py`'s raw-layer test, parametrized over the backends, records which one ran and still
+    compares with the text;
+  - a FolderCache test of the options.
+- **Checked:** suite 8940 passed, no RERUN.
+- **Doc proposal:** converter.md: "a load's conversion from the raw layer runs Settings' backend (numpy when it
+  can't run, or numba)".
