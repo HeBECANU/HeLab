@@ -345,3 +345,93 @@ def test_a_stage_2_session_with_layers_leaves_store_v3_as_it_was(switch_on: None
     assert cache_cli.main(["export", "--folder", str(x), "--kind", "txy", "--cache", str(target), "--out", str(out),
                            "--layer", "m19v1"]) == 0
     assert sorted(os.listdir(out)) == ["d_txy1.npz", "d_txy2.npz"]
+
+
+def test_a_stage_3_session_converts_on_read_and_leaves_store_v3_as_it_was(
+        switch_on: None, private_store: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    """Stage 3's integration check (design step 3d), the switch on, beside an older HeLab's store-v3:
+    1. the tab's load of a folder of raw files only converts them on read (no TXY text anywhere), keeps them in
+       the HeLab layer, and the next load is served from it;
+    2. after ``raw_fill``, a load of another (user) profile, sent whole, converts from the raw layer without
+       reading a raw file (A47.1);
+    3. Live converts a new shot on read; an unfinished one waits;
+    4. Clear all takes it all; store-v3's files are unchanged and only LegacyStore opens it."""
+    import dataclasses
+    from helab.io_ops import convert as convert_ops
+    from helab.io_ops.live import live_check
+    options = store_options()
+    caches = Path(private_store)
+    v3_with_state(caches)
+    v3 = caches / "store-v3"
+    before = files(v3)
+    v3_opens: list[str] = []
+    connect = sqlite3.connect
+
+    def watched(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if "store-v3" in str(database) and not any(frame.filename.endswith("legacy_store.py")
+                                                   for frame in traceback.extract_stack()):
+            v3_opens.append(str(database))
+        connection: sqlite3.Connection = connect(database, *args, **kwargs)
+        return connection
+    monkeypatch.setattr(sqlite3, "connect", watched)
+    data = tmp_path / "data"
+    tab_txy = {"source": "helab-priority", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+               "cache_base": private_store, "temps": str(tmp_path / "temps"), "profile_def": MATLAB_2019.to_dict()}
+
+    def run(source: Path, txy: dict[str, Any]) -> dict[str, Any]:
+        output = tmp_path / f"artifacts-{time.monotonic_ns()}"
+        output.mkdir()
+        sent: list[dict[str, Any]] = []
+        load(str(source), str(output), sent.append, options, txy=dict(txy))  # type: ignore[arg-type]
+        return next(event for event in sent if event["kind"] == "loaded")
+
+    # 1. Raw files only: converted on read, kept, and served from the layer next time.
+    x = folder(data, "x", {1: CASE, 2: CASE})
+    first_load = run(x, tab_txy)
+    assert first_load["load_counts"]["converted"] == 2 and first_load["txy"]["on_read"] == [1, 2]
+    assert not list(tmp_path.rglob("d_txy_helab_*")) and not list(caches.rglob("d_txy_helab_*"))
+    with opened(options, x) as store:
+        layer = (store.txy_layers(str(x)).value or {})["helab:" + MATLAB_2019.content_hash()]
+        assert {entry.kind for entry in layer.entries.values()} == {"raw"}
+    again = run(x, tab_txy)
+    assert again["cached"] and again["load_counts"].get("converted", 0) == 0
+
+    # 2. The raw layer, then a user profile's load from it: no raw file read.
+    assert filled(x, options)["saved"] == 2
+    mine = dataclasses.replace(MATLAB_2019, name="mine", v_perp_x=500_000.0)
+    with monkeypatch.context() as patch:
+        patch.setattr(convert_ops, "_read_raw", lambda *args: (_ for _ in ()).throw(AssertionError("read raw")))
+        theirs = run(x, {**tab_txy, "profile_hash": mine.content_hash(), "profile_tag": "mine1",
+                         "profile_def": mine.to_dict()})
+    assert theirs["problematic"] == [] and theirs["files"] == 2
+
+    # 3. Live: a new shot converted on read; an unfinished one waits.
+    folder(data, "incoming", {3: CASE})
+    os.replace(data / "incoming" / "d3.txt", x / "d3.txt")
+    (x / "d4.txt").write_bytes(CASE[:-3])  # (Still being written: ends mid-line.)
+    os.utime(x / "d4.txt", (time.time() - 10, time.time() - 10))
+    memory = [list(entry) for entry in again["fingerprint"]]
+    origins = {str(shot): origin for shot, origin in again["txy"]["origins"].items()}
+    live_txy = {**tab_txy, "on_read": True}
+
+    def check(seen: Any = None) -> list[dict[str, Any]]:
+        output = tmp_path / f"live-{time.monotonic_ns()}"
+        output.mkdir()
+        sent: list[dict[str, Any]] = []
+        live_check(str(x), str(output), sent.append, memory=memory, seen=seen,  # type: ignore[arg-type]
+                   txy=live_txy, memory_origins=origins)
+        return sent
+    first_check = check()
+    state = [event for event in first_check if event["kind"] in ("loaded", "live_unchanged")][-1]
+    second = check(state["live_seen"])
+    shots = [event["shot"] for event in second if event["kind"] == "shot"]
+    assert shots == [3] and not any(event["kind"] == "file_started" for event in second)
+    final = [event for event in second if event["kind"] in ("loaded", "live_unchanged")][-1]
+    assert final["unsettled_files"] >= 1 and 4 not in final.get("problematic", [])
+
+    # 4. Clear all, and store-v3 as it was, opened by nothing but LegacyStore.
+    cleared: list[Any] = []
+    cache_admin(options, "clear", cleared.append)
+    with opened(options, x) as store:
+        assert store.inventory()["txy"]["layers"] == 0 and store.inventory()["raw"]["count"] == 0
+    assert files(v3) == before and v3_opens == []
