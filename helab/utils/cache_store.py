@@ -955,23 +955,12 @@ class CacheStore:
                 conn.execute("PRAGMA journal_mode = WAL")
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in SCHEMA.split(";"):
-                        if statement.strip():
-                            conn.execute(statement)
-                    for statement in ROOT_SCHEMA.split(";"):
-                        if statement.strip():
-                            conn.execute(statement)
-                    if self.layout >= store_v4.LAYOUT:
-                        for statement in (*store_v4.SCHEMA, *store_v4.STAGE2_SCHEMA):
-                            conn.execute(statement)
-                    defaults: dict[str, object] = {
-                        "layout_version": self._expected_layout, "store_id": uuid.uuid4().hex, "created_at": time.time(),
-                        **{f"gen_{kind}": 0 for kind in KINDS}, "gen_results": 0,
-                        **(store_v4.META_DEFAULTS if self.layout >= store_v4.LAYOUT else {})}
-                    # Another helper may have created it meanwhile: keep its values.
-                    conn.executemany("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
-                                     [(key, _dumps(value)) for key, value in defaults.items()])
-                    conn.execute("COMMIT")
+                    # Checked again under the write lock: another helper opening the same new store may have
+                    # made it meanwhile, and store-v4's schema adds columns (ALTER TABLE), which can't run twice.
+                    if _layout_version(conn) is not None:
+                        conn.execute("COMMIT")
+                    else:
+                        self._create(conn)
                 except BaseException:
                     conn.execute("ROLLBACK")
                     raise
@@ -987,6 +976,26 @@ class CacheStore:
             conn.close()
             raise
         return conn
+
+    def _create(self, conn: sqlite3.Connection) -> None:
+        """A new store's tables and meta (inside the caller's write transaction), then COMMIT."""
+        for statement in SCHEMA.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        for statement in ROOT_SCHEMA.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        if self.layout >= store_v4.LAYOUT:
+            for statement in (*store_v4.SCHEMA, *store_v4.STAGE2_SCHEMA):
+                conn.execute(statement)
+        defaults: dict[str, object] = {
+            "layout_version": self._expected_layout, "store_id": uuid.uuid4().hex, "created_at": time.time(),
+            **{f"gen_{kind}": 0 for kind in KINDS}, "gen_results": 0,
+            **(store_v4.META_DEFAULTS if self.layout >= store_v4.LAYOUT else {})}
+        # Another helper may have created it meanwhile: keep its values.
+        conn.executemany("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                         [(key, _dumps(value)) for key, value in defaults.items()])
+        conn.execute("COMMIT")
 
     def close(self) -> None:
         if self._legacy is not None:
