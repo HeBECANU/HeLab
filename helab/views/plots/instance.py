@@ -28,7 +28,7 @@ from helab.analysis.live_feed import LiveFeed
 from helab.analysis.parameter_tree import build_tree, commit_pending_text, parameter_of, settings_widget, tree_values
 from helab.analysis import result_cache
 from helab.analysis.parameters import describe
-from helab.analysis.presets import PlotCheck, SavedPlot, ScriptPreset, ScriptRef, check_plot, is_waiting
+from helab.analysis.presets import PlotCheck, SavedPlot, ScriptPreset, ScriptRef, TxyChoice, check_plot, is_waiting
 from helab.analysis.results import DISK_CACHED, RAM_ONLY, AnalysisContext, AnalysisResult
 from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.convert.profile import DetectorProfile, file_tag
@@ -252,9 +252,14 @@ class AnalysisInstance(LinkedAnalysisInstance):
         # Its TXY choice (Q6.6, Q18.2, ``txy_source``): a source ("": as the folder's tab) and the profile
         # whose HeLab TXY it reads (None: the conversion profile's). The tab's choice is the tab's data;
         # another is a dataset the plot loads itself (``_source_owner``: that load in flight), again
-        # whenever Live finds new shots. A reopened plot starts as the tab (Q14.2).
+        # whenever Live finds new shots. A reopened plot starts with its saved choice (Q14.2 = Q23.4), unless
+        # "Keep this plot's TXY choice" (``txy_keep``) was off: then as the tab.
         self.txy_source = ""
         self.txy_profile: Optional[DetectorProfile] = None
+        self.txy_keep = True
+        # Reopened with its own choice before its folder was read this session (D4): it waits for a select of
+        # the folder (a tab's load) or Rerun to load that choice, never reading the folder by itself.
+        self._own_waits = False
         if view.txy_choice:
             self._choice_from(view.txy_choice)
         self.txy_row: Optional[TxySourceRow] = None
@@ -334,7 +339,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.input_label.setToolTip(self.path)
         layout.addWidget(self.input_label)
         self.txy_row = TxySourceRow(self.txy_source, self.set_txy_source,
-                                    self.txy_profile.name if self.txy_profile is not None else "")
+                                    self.txy_profile.name if self.txy_profile is not None else "",
+                                    keep=self.txy_keep, kept=self._keep_changed)
         layout.addWidget(self.txy_row)
         self._show_txy()
         layout.addWidget(identify_parameters(settings_widget(self.parameter_root, [*specs, *drawing, *live])), 1)
@@ -388,6 +394,9 @@ class AnalysisInstance(LinkedAnalysisInstance):
         if self.waiting():
             assert self._wait is not None
             self._wait.look(deliberate=True)
+            return
+        if self._own_waits:
+            self._load_own_choice()  # Deliberately: reading the folder is the user's word (D4).
             return
         if self.released is not None and not self.job_id:
             # Its data was released: drawn again from RAM or the disk cache, with these settings.
@@ -765,7 +774,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         root = self.parameter_root
         specs = self.script.parameters(self.action)
         backends = self.script.backends(self.action)
-        check = check_plot(saved, self.metadata.identity(), specs, backends, live_specs(self.policy))
+        profiles = {name: file_tag(profile) for name, profile in known_profiles().items()}
+        check = check_plot(saved, self.metadata.identity(), specs, backends, live_specs(self.policy), profiles)
         if root is None:
             return check
         for spec in specs:
@@ -777,6 +787,10 @@ class AnalysisInstance(LinkedAnalysisInstance):
         for spec in live_specs(self.policy):
             if spec.name in check.live:
                 parameter_of(root, spec).setValue(check.live[spec.name])
+        if isinstance(saved, SavedPlot):
+            self.set_txy_keep(saved.txy_keep)
+        if check.txy is not None:  # (None: none saved, or it doesn't fit. A preset without one leaves it: D2.)
+            self._apply_txy(check.txy)
         if isinstance(saved, ScriptPreset):
             self.note_saved(f"Preset “{saved.name}”", check, kept)
         else:  # Reopened (or reloaded): said only if a setting wasn't restored, or the script changed.
@@ -797,6 +811,36 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.status_label.setText(self._reopen_note)
         self.status_label.setToolTip(check.details() or self._reopen_note)
 
+    def txy_saved(self) -> Optional[TxyChoice]:
+        """Its TXY choice as its records save it (None while "Keep this plot's TXY choice" is off)."""
+        if not self.txy_keep:
+            return None
+        profile = self.txy_profile
+        return TxyChoice(self.txy_source, profile.name if profile is not None else "",
+                         file_tag(profile) if profile is not None else "")
+
+    def set_txy_keep(self, keep: bool) -> None:
+        """Keep this plot's TXY choice (its row's Keep box)."""
+        self.txy_keep = bool(keep)
+        box = self.txy_row.keep_box if self.txy_row is not None and not sip.isdeleted(self.txy_row) else None
+        if box is not None and box.isChecked() != self.txy_keep:
+            box.blockSignals(True)
+            box.setChecked(self.txy_keep)
+            box.blockSignals(False)
+
+    def _keep_changed(self, keep: bool) -> None:
+        self.txy_keep = bool(keep)
+
+    def _apply_txy(self, choice: TxyChoice) -> None:
+        """A saved TXY choice: an open plot switches to it (as choosing it in its row does); a plot still
+        waiting for its folder's data takes it as its choice (it loads it when its data is found)."""
+        if self.result is None and not self.job_id and is_waiting(self.follow.ran):
+            self.txy_source = choice.source
+            self.txy_profile = known_profiles().get(choice.profile) if choice.profile else None
+            self._show_txy()
+            return
+        self.set_txy_source(choice.source, choice.profile)
+
     def saved_plot(self) -> SavedPlot:
         """The plot as an arrangement records it (its place is added by ``arrangement.capture``)."""
         view = self.view
@@ -806,7 +850,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         commit_pending_text()
         return SavedPlot(self.script_ref(), view.identity.source_path, view.identity.root_key, self.values(),
                          self.backend(), self.live_values(), self.instance_id, f"{self.name} ({self.instance_id})",
-                         open_, width, preset=self.preset_from[0], preset_saved_at=self.preset_from[1])
+                         open_, width, preset=self.preset_from[0], preset_saved_at=self.preset_from[1],
+                         txy=self.txy_saved(), txy_keep=self.txy_keep)
 
     def waiting(self) -> bool:
         """Reopened and still waiting for its folder's data (no run yet)."""
@@ -819,8 +864,49 @@ class AnalysisInstance(LinkedAnalysisInstance):
         does: a result saved for exactly these settings and data shows instead (R2)."""
         if self.is_closed or not self.waiting():
             return
+        message = self._waiting_message
         self._end_wait()
-        self._submit(view, one_off=True)
+        if self.on_tab_choice():
+            self._submit(view, one_off=True)
+            return
+        # Its own TXY choice: a dataset of the folder it loads itself (RAM only, never in the disk cache).
+        if self._folder_read():
+            self._load_source()
+            return
+        self._own_waits = True  # D4: never the folder by itself.
+        text = f"Select {view.identity.name}, or Rerun, to load {self.txy_label()}"
+        if message is not None and not sip.isdeleted(message):
+            message.setText(text)
+        self.status_label.setText(text)
+        self._cache().datasetChanged.connect(self._own_folder_changed)
+        self._show_follow()
+
+    def _folder_read(self) -> bool:
+        """Whether HeLab has read the plot's folder this session (D4): listed it, or loaded or checked its
+        data against it (a cached read alone doesn't count)."""
+        cache = self._cache()
+        path = cache.key(self.path)
+        if path in cache.snapshots:
+            return True
+        dataset = cache.current_dataset(path) or cache.latest_dataset(path)
+        return dataset is not None and cache.verified(dataset) and math.isfinite(
+            float(dataset.metadata.get("checked_at", -math.inf)))
+
+    @pyqtSlot(str)
+    def _own_folder_changed(self, path: str) -> None:
+        """While its own choice waits: a tab's load of its folder (which read it) lets it load its choice."""
+        cache = self._cache()
+        if self._own_waits and not self.is_closed and path == cache.key(self.path) and self._folder_read():
+            self._load_own_choice()
+
+    def _load_own_choice(self) -> None:
+        if self._own_waits:
+            self._own_waits = False
+            try:
+                self._cache().datasetChanged.disconnect(self._own_folder_changed)
+            except TypeError:
+                pass
+        self._load_source()
 
     def _look_again(self) -> bool:
         """Still waiting as reopened: its folder's data is looked for again (``FolderWait``, under its
@@ -1060,6 +1146,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
             return
         self.txy_source, self.txy_profile = source, chosen
         cache = self._cache()
+        if self._own_waits:  # (Chosen again: as choosing it does, it loads now.)
+            self._own_waits = False
+            try:
+                cache.datasetChanged.disconnect(self._own_folder_changed)
+            except TypeError:
+                pass
         if self._source_owner:
             self._end_source_load(cache)
         if self.on_tab_choice():
@@ -1607,6 +1699,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
             self._end_disk_read(self._cache())
         if self._source_owner:
             self._end_source_load(self._cache())
+        if self._own_waits:
+            self._own_waits = False
+            try:
+                self._cache().datasetChanged.disconnect(self._own_folder_changed)
+            except TypeError:
+                pass
         if self._watching_folder:
             cache = self._cache()
             for signal in (cache.datasetChanged, cache.diskCacheChanged):
