@@ -906,3 +906,25 @@ no RERUN. mypy --strict (helab, tests, win32) and pyright (also Windows) are cle
   - the two folder menu items and Folder details' line.
 - **M~5** On the lab share, a large shot's load from the raw layer against reading its HeLab text (S3-2's cost
   note: the raw step is slower than local text, faster than a slow share).
+
+### Checkpoint 2's CI (41389534725, `93a938b`)
+
+Green on all three OSes. I read every Tests and Converter job's log (9). One job had RERUNs: **macOS Tests 1/2 (job
+125097691928), 7 RERUNs**, all worker deaths, every test passing on a rerun. The job took 14.9 min against its usual
+3–7: a slow runner.
+- **6 were pytest-timeout kills** at `--timeout=120 --timeout-method=thread` ("node down: Not properly terminated",
+  after faulthandler's stack dump):
+  - `test_typing.py::test_pyright_helab` 5 times. That test took 87 s and 70 s on macOS in this branch's two
+    previous runs, so it already sits near the limit. Locally `pyright helab` takes 10.3 s here against 10.1 s on
+    Ground's `dev/v0.0.8`, so stage 2's code adds about 2%; the runner is the cause.
+  - `test_accessible_names.py::test_every_script_and_each_library` once ("Timeout (0:01:40)!", killed at 120 s).
+- **1 was the known QtWebEngine abort:** `test_plot_backends.py::test_2d_plots_draw_with_every_library
+  [values2-Plotly-TxyHistograms]` ("Fatal Python error: Aborted"), known-issues' "QtWebEngine crashes xdist
+  workers".
+- **Proposals:**
+  - known-issues: "`test_pyright_helab` (and `test_accessible_names`) can pass pytest-timeout's 120 s on a slow
+    macOS runner (CI 41389534725: 5 and 1 worker kills, passed on retry); its normal 70–87 s is close to the limit."
+  - **A~10:** give the typing tests their own longer timeout (`@pytest.mark.timeout(300)` on `test_typing.py`'s
+    subprocess tests), or run them in a job of their own.
+  - The QtWebEngine entry gets this sighting.
+- Windows Tests took 12.6 and 16.2 min (pytest 10.7 and 14.6).
