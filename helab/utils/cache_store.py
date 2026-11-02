@@ -3149,6 +3149,17 @@ class CacheStore:
         if not self._txy_guard_holds({"generations": guard.generations, "epochs": guard.epochs}, key):
             raise SaveRejected("cleared", "Cached TXY data was cleared before saving completed")
 
+    def policy_of(self, path: str, default: str = store_v4.DEFAULT_POLICY) -> str:
+        """``path``'s cache policy (Q45.1): its own choice, else ``default`` (the app's global one); store-v3 has
+        none (``raw+used``: raw rows are store-v4's anyway)."""
+        if self.layout < store_v4.LAYOUT:
+            return store_v4.DEFAULT_POLICY
+        try:
+            with self.transaction(write=False):
+                return self._policy(self._path_key(path), default)
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be read: {exc}") from exc
+
     def _policy(self, key: str, default: str) -> str:
         """The folder's cache policy (Q45.1): its own row, else the global setting the app sent."""
         row = self._conn.execute("SELECT policy FROM cache_policy WHERE path = ?", (key,)).fetchone()

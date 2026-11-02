@@ -15,7 +15,7 @@ from typing import Any, Callable
 from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QValidator
 from PyQt6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
+    QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -30,12 +30,16 @@ from helab.utils.constants import (
 from helab.utils import folder_cache
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size, byte_unit
-from helab.utils.settings_defaults import RESULT_REUSE_SETTING, read_setting
+from helab.utils.settings_defaults import CACHE_POLICY_SETTING, RESULT_REUSE_SETTING, read_setting
 from helab.utils.time_format import relative_age
 
 DAY = 86400.0
 DEFAULT_PURGE_DAYS = 90
 # The rows of the disk cache, by record kind: label and button.
+# The cache policy's choices (caching v2, Q45.1), in the words S~6 proposed (Tony to confirm).
+POLICY_LABELS = (("raw+used", "Raw + what you load (default)"), ("raw", "Raw only, convert on load"),
+                 ("txy", "TXY only (no raw)"))
+
 KIND_ROWS = {"datasets": ("Cached data", "Clear…"), "summaries": ("Folder summaries", "Clear…"),
              "histories": ("Scan failures", "Forget…"), "subtrees": ("Subfolder status", "Clear…"),
              "listings": ("Folder listings", "Clear…")}
@@ -126,6 +130,10 @@ class CacheTab(QWidget):
         self._applying_budget = 0
         # The budget job found more cached than the lowered budget allows (its usage).
         self._too_full: int | None = None
+        # store-v4: lowering the budget asks from the helper's plan (``trim`` ``plan_only``, S2-1): the budget
+        # being planned for, and the plan when it came.
+        self._planning: int | None = None
+        self._trim_plan: dict[str, Any] | None = None
         self.message = ""
         self.confirm: Callable[[str, str, str], bool] = self._confirm
 
@@ -211,6 +219,29 @@ class CacheTab(QWidget):
         grid.addWidget(self.raw_name, row + 1, 0)
         grid.addWidget(self.raw_label, row + 1, 1)
         grid.addWidget(self.raw_button, row + 1, 2)
+        # Caching v2 stage 2: TXY data in layers (MATLAB's, and one per HeLab profile), and what new saves keep.
+        self.txy_name = QLabel("TXY data")
+        self.txy_label = QLabel("")
+        self.txy_label.setToolTip("Each folder's cached TXY: MATLAB's, and HeLab's of each converter profile used, each "
+                                  "shot kept once whichever TXY source a tab or plot shows. Only copies: their TXY "
+                                  "files are gone from their folders since.")
+        self.txy_button = QPushButton("Clear…")
+        self.txy_button.clicked.connect(self.clear_txy)
+        grid.addWidget(self.txy_name, row + 2, 0)
+        grid.addWidget(self.txy_label, row + 2, 1)
+        grid.addWidget(self.txy_button, row + 2, 2)
+        self.policy_name = QLabel("Cache policy")
+        self.policy_combo = QComboBox()
+        for data, text in POLICY_LABELS:
+            self.policy_combo.addItem(text, data)
+        self.policy_combo.setCurrentIndex(max(0, self.policy_combo.findData(
+            str(read_setting(settings, CACHE_POLICY_SETTING, typed=True)))))
+        self.policy_combo.setToolTip("What new saves keep, for every folder that hasn't its own choice. Raw + what you "
+                                     "load: raw pulses and each TXY a tab or plot uses. Raw only: TXY are made from "
+                                     "the raw pulses on each load. TXY only: no raw pulses (archives without raw "
+                                     "files). Changing it removes nothing.")
+        grid.addWidget(self.policy_name, row + 3, 0)
+        grid.addWidget(self.policy_combo, row + 3, 1, 1, 2)
         layout.addLayout(grid)
         legacy = QHBoxLayout()
         self.legacy_name = QLabel("Older cache (store-v3)")
@@ -381,6 +412,8 @@ class CacheTab(QWidget):
             identify(button, f"cache_clear_{kind}", f"{button.text().rstrip('…')} {KIND_ROWS[kind][0].lower()}…")
         identify(self.results_button, "cache_clear_results", f"Clear {RESULTS_LABEL.lower()}…")
         identify(self.raw_button, "cache_clear_raw", "Clear raw pulses…")
+        identify(self.txy_button, "cache_clear_txy", "Clear TXY data…")
+        identify(self.policy_combo, "cache_policy", "Cache policy")
         identify(self.legacy_choice_button, "cache_legacy_choice", "Keep using or ignore the older cache")
         identify(self.legacy_clear_button, "cache_clear_legacy", "Clear the older cache…")
         identify(self.result_reuse, "result_reuse")
@@ -460,6 +493,8 @@ class CacheTab(QWidget):
         self._update()
 
     def _on_result(self, action: str, event: dict[str, Any]) -> None:
+        if action == "trim" and self._planning is not None and event.get("kind") == "admin_result" and "items" in event:
+            self._trim_plan = event  # (What lowering the budget would remove, only copies named.)
         if (action == "budget" and self._budget_job and event.get("kind") == "admin_result"
                 and event.get("recorded") is False):
             self._too_full = int(event.get("usage") or 0)  # The data cached by now doesn't fit.
@@ -472,6 +507,20 @@ class CacheTab(QWidget):
             self._inventory_owner = ""
             if message:
                 self.message = f"Could not read the disk cache: {message}"
+        elif owner == self._budget_job and self._planning is not None:
+            # store-v4: the plan came; ask from it, and lower the budget removing exactly what it named (S2-1).
+            self._budget_job = ""
+            budget, plan, self._planning, self._trim_plan = self._planning, self._trim_plan, None, None
+            if not message and plan is not None and self._ask_trim(budget, None, None, plan.get("room")):
+                self._send_budget("trim", budget, plan=list(plan["items"]))
+                if self._budget_job:
+                    return
+            elif message:
+                self.message = f"Changing the disk budget failed: {message} — nothing saved"
+            else:
+                self.message = "Budget not lowered — nothing saved"
+            self.budgetApplied.emit(False)
+            self.refresh()
         elif owner == self._budget_job:
             self._budget_job = ""
             too_full, self._too_full = self._too_full, None
@@ -547,16 +596,20 @@ class CacheTab(QWidget):
             return
         if set(kinds) >= set(KINDS):
             raw = inventory.get("raw")
+            txy = inventory.get("txy")
             title = "Clear the disk cache?"
             text = (f"Removes everything in the disk cache: cached data for "
                     f"{plural(inventory['datasets']['count'], 'folder')} ({byte_size(inventory['datasets']['bytes'], 'disk')}),"
+                    + (f" TXY data for {plural(int(txy['folders']), 'folder')} ({byte_size(int(txy['bytes']), 'disk')}),"
+                       if txy else "")
                     + (f" raw pulses for {plural(int(raw['folders']), 'folder')} ({byte_size(int(raw['bytes']), 'disk')}),"
                        if raw else "")
                     + " folder summaries, scan failures, subfolder status and folder listings.\n\n"
                     "Loaded data stays open. Automatic checks will try failed folders again. Cached analysis "
                     "stays (its own Clear).")
             verb, label = "Clear all", "Clear all"
-            kinds = [*KINDS, *(["raw"] if raw is not None else [])]  # (store-v4: its raw pulses too.)
+            # (store-v4: its raw pulses and TXY data too.)
+            kinds = [*KINDS, *(["raw"] if raw is not None else []), *(["txy"] if txy is not None else [])]
         else:
             kind = kinds[0]
             name = KIND_ROWS[kind][0]
@@ -583,6 +636,20 @@ class CacheTab(QWidget):
                                           "from their folders, so these can't be read again." if only else ""))
         if self.confirm("Clear raw pulses?", text, "Clear"):
             self._run("Clear raw pulses", "clear_raw")
+
+    def clear_txy(self) -> None:
+        """Clear TXY data (store-v4): every folder's layers, only copies included, after asking."""
+        inventory = self.inventory
+        txy = (inventory or {}).get("txy")
+        if inventory is None or self.busy or not txy:
+            return
+        only = int(txy.get("only_copy") or 0)
+        text = (f"Removes the cached TXY data of {plural(int(txy['folders']), 'folder')} "
+                f"({byte_size(int(txy['bytes']), 'disk')}). It is cached again at the next load of each folder."
+                + (f"\n\n{plural(only, 'folder')}' TXY data is the only copy: its TXY files are gone from the folder, "
+                   "so it can't be read again." if only else ""))
+        if self.confirm("Clear TXY data?", text, "Clear"):
+            self._run("Clear TXY data", "clear_txy")
 
     def toggle_legacy(self) -> None:
         """Keep using the older store-v3, or ignore it (store-v4)."""
@@ -710,7 +777,8 @@ class CacheTab(QWidget):
                   "Changing the disk budget…" if self._budget_job else f"{self._job_label}…" if self.busy else "Checking…" if self._inventory_owner and inventory is None
                   else "")
         if inventory is None:
-            for widget in (self.raw_name, self.raw_label, self.raw_button, self.legacy_name, self.legacy_label,
+            for widget in (self.raw_name, self.raw_label, self.raw_button, self.txy_name, self.txy_label,
+                           self.txy_button, self.policy_name, self.policy_combo, self.legacy_name, self.legacy_label,
                            self.legacy_choice_button, self.legacy_clear_button):
                 widget.setVisible(False)
             for label in (*self.kind_labels.values(), self.prefs_label, self.results_label, self.converted_label):
@@ -777,7 +845,19 @@ class CacheTab(QWidget):
         self._show_estimates()
 
     def _show_v4_rows(self, inventory: dict[str, Any], writable: bool) -> None:
-        """Caching v2's rows, shown only with store-v4: raw pulses, and the older store-v3 when there is one."""
+        """Caching v2's rows, shown only with store-v4: raw pulses, TXY data and the policy, and the older store-v3
+        when there is one."""
+        txy = inventory.get("txy")
+        for widget in (self.txy_name, self.txy_label, self.txy_button, self.policy_name, self.policy_combo):
+            widget.setVisible(txy is not None)
+        if txy is not None:
+            tags = ", ".join(sorted(txy.get("tags") or ()))
+            text = f"{plural(int(txy['shots']), 'shot')} in {plural(int(txy['folders']), 'folder')} · " \
+                   f"{byte_size(int(txy['bytes']), 'disk')}" + (f" · {tags}" if tags else "")
+            if txy.get("only_copy"):
+                text += f" · {int(txy['only_copy']):,} only copies"
+            self.txy_label.setText(text)
+            self.txy_button.setEnabled(writable and bool(txy["layers"]))
         raw = inventory.get("raw")
         for widget in (self.raw_name, self.raw_label, self.raw_button):
             widget.setVisible(raw is not None)
@@ -844,14 +924,26 @@ class CacheTab(QWidget):
             return True
         inventory = self.inventory
         trim = budget < saved and (inventory is None or int(inventory["usage"]) > budget)
+        if trim and inventory is not None and "txy" in inventory:
+            # store-v4: what lowering it removes comes from the helper's plan (layers, raw pulses and only copies,
+            # named); the question is asked when it comes (``_on_done``).
+            self._planning = budget
+            self._send_budget("trim", budget, plan_only=True)
+            if not self._budget_job:
+                self._planning = None
+            return None if self._budget_job else False
         if trim and not self._ask_trim(budget, inventory, None):
             return False
         # Lowering it without a trim: the helper checks it still fits (more may be cached by now).
         self._send_budget("trim" if trim else "budget", budget, fit=budget < saved and not trim)
         return None if self._budget_job else False
 
-    def _ask_trim(self, budget: int, inventory: dict[str, Any] | None, usage: int | None) -> bool:
-        if inventory is not None:
+    def _ask_trim(self, budget: int, inventory: dict[str, Any] | None, usage: int | None,
+                  room: dict[str, Any] | None = None) -> bool:
+        if room is not None:
+            from helab.views.CacheDialogs import room_text
+            removes = room_text(room, "Lowering the budget")
+        elif inventory is not None:
             estimate = trim_estimate(inventory, budget)
             removes = (f"Removes cached data for up to {plural(estimate['datasets'], 'folder')} "
                        f"({byte_size(estimate['bytes'], 'disk')}), least recently used first.")
@@ -862,18 +954,27 @@ class CacheTab(QWidget):
                             f"The disk cache {uses} {byte_size(budget, 'disk')}. {removes}\n\n{CLEAR_TEXT['datasets']}",
                             "Lower budget")
 
-    def _send_budget(self, action: str, budget: int, *, fit: bool = False) -> None:
+    def _send_budget(self, action: str, budget: int, *, fit: bool = False, plan_only: bool = False,
+                     plan: list[str] | None = None) -> None:
         assert self.cache is not None
         self._applying_budget = budget
         params: dict[str, Any] = {"budget": budget, "budget_set_at": time.time()}
         if fit:
             params["fit"] = True
+        if plan_only:
+            params["plan_only"] = True
+        if plan is not None:
+            params["plan"] = plan
         self._budget_job = self.cache.cache_admin(action, **params)
         self.message = "" if self._budget_job else "Disk cache queue full — nothing saved. Save again to retry."
         self._update()
 
     def save(self, settings: QSettings) -> None:
-        """Save both budgets (after :meth:`apply_budget`), and how often Live saves."""
+        """Save both budgets (after :meth:`apply_budget`), how often Live saves, and the cache policy."""
+        policy = str(self.policy_combo.currentData() or "")
+        if policy:
+            settings.setValue(CACHE_POLICY_SETTING, policy)
+            folder_cache.set_cache_policy(policy)  # (Sent with the next store-v4 request.)
         # Never a value the store hasn't recorded (e.g. edited while it was recording another).
         settings.setValue(DISK_BUDGET_SETTING,
                           self._acknowledged if self._acknowledged is not None else read_disk_budget(settings))

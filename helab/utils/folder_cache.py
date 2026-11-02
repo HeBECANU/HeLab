@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 
 from helab.analysis.constant_layers import clean_layer, folder_layer
 from helab.utils.ram_buffers import Buffers, dataset_buffers
-from helab.utils import app_log, file_kinds, large_folder, txy_sources
+from helab.utils import app_log, file_kinds, large_folder, store_v4, txy_sources
 from helab.utils.cache_store import APPROVAL_SHARE, KINDS, store_root
 from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.constants import (
@@ -156,6 +156,25 @@ def set_disk_budget(budget: int) -> None:
     _disk_budget, _disk_budget_set_at = int(budget), time.time()
 
 
+# Caching v2's global cache policy (store-v4, Q45.1): read from its setting on first use, set by Settings ›
+# Cache; sent with every store-v4 request ("policy"), a folder's own choice winning in the store.
+_cache_policy: str | None = None
+
+
+def cache_policy() -> str:
+    global _cache_policy
+    if _cache_policy is None:
+        from helab.utils.settings_defaults import CACHE_POLICY_SETTING, read_setting
+        from helab.utils.settings_store import app_settings
+        _cache_policy = str(read_setting(app_settings(), CACHE_POLICY_SETTING, typed=True) or "")
+    return _cache_policy if _cache_policy in store_v4.POLICIES else store_v4.DEFAULT_POLICY
+
+
+def set_cache_policy(policy: str) -> None:
+    global _cache_policy
+    _cache_policy = policy
+
+
 # Work Offline (cache-only browsing, ``FolderCache.set_offline``): sent with every request's cache
 # options, so helpers key a folder on an unmounted share or volume through its mount hint.
 _offline = False
@@ -170,8 +189,10 @@ def store_options() -> dict[str, Any]:
     cache is off for this session. The GUI process never opens the store."""
     if not (DISK_CACHE_ENABLED and cache_dir_enabled()):
         return {}
-    return {"directory": store_root(cache_dir()), "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
-            **({"offline": True} if _offline else {})}
+    root = store_root(cache_dir())
+    return {"directory": root, "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
+            **({"offline": True} if _offline else {}),
+            **({"policy": cache_policy()} if os.path.basename(root) == STORE_V4_DIRNAME else {})}
 
 
 class FolderCache(QObject):
