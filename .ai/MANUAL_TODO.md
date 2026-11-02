@@ -191,7 +191,8 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   [notes](sessions/2026-10-31-claude-quick-fixes-7/notes.md) §1 (`python3 -I probe.py <scratch folder>`).
   It reports whether `os.link` works and whether `renamex_np(RENAME_EXCL)` refuses an existing name and
   renames onto a new one, then leaves files `a`, `b`, `c` to delete. If neither works, beside conversion
-  on the share from macOS fails with the reason (`c194f37`) and Q38.1's (b) or (c) is worth building.
+  on the share from macOS shows Q38.1's warning (decided 2026-11-02: Retry, or write to HeLab's local cache
+  or temp folder; the Converter UX floor) rather than failing with the reason (`c194f37`).
   Windows PCs are unaffected (`os.rename` refuses an existing name itself).
 
 ## I/O fixes, Plot identity, Caching v2, Quick Fixes 8 (added 2026-10-31, blocks 40–43)
@@ -226,6 +227,18 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
 - [ ] **M44.2 Cache export into MATLAB**: run `helab cache export d1.hlb --to mat` on a layer from the
   sample set's via-layer run (or a temp store) and the format page's MATLAB lines
   ([`docs/hlb-format.md`](../docs/hlb-format.md): `load`, `jsondecode(s.header)`).
+
+## Caching v2 stage 2 (added 2026-11-02, block 47)
+
+- [ ] **M47.1 Stage 2's controls on screen** (switch on, test settings and a temp cache folder only:
+  `floor-env.sh`): Settings › Cache's TXY data row (shots, folders, size, tags, only copies) and its Clear…,
+  the Cache policy combo, Clear all and the purge naming TXY data and raw pulses, and lowering the budget
+  below usage asking from its plan; Make room naming TXY layers by group; right-click "TXY for this folder…"
+  and "Cache policy for this folder…" (disabled without a data root), and Folder details' TXY line naming
+  them. Wording for Q47.3.
+- [ ] **M47.2 A load from the raw layer on the lab share** (S3-2's cost note): time a large shot's load from
+  the raw layer against reading its HeLab TXY text over the share. Locally the raw step costs more (0.48 s
+  against 0.004 s for a 3.25 MB shot on an M4); its gain should be on a slow share and offline.
 
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 

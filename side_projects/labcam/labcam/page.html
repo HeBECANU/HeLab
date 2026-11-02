@@ -51,6 +51,7 @@ tr.more{display:none}
   <div id="locks" class="locks"></div>
   <details open data-key="view"><summary>Camera</summary>
     <div id="view"><img id="stream" alt="Camera stream"><canvas id="draw"></canvas></div>
+    <div class="bar" id="editbar"></div>
     <div class="bar">
       <span>Source: <b id="src">…</b></span>
       <span>Alignment: <b id="align">…</b></span>
@@ -119,7 +120,7 @@ function duration(sec) {
   let first = parts.findIndex(([n]) => n); if (first < 0) first = 3;
   return parts.slice(first, first + 2).filter(([n], i) => n || i === 0).map(([n, u]) => n + u).join(" ");
 }
-let editing = null;
+let editing = null, lastState = null;
 const img = $("stream"), canvas = $("draw"), ctx = canvas.getContext("2d");
 img.onerror = () => setTimeout(() => { if (viewSection.open) img.src = streamUrl(); }, 2000);
 
@@ -160,6 +161,13 @@ function frameXY(ev) {
 }
 // Editing a region: click its four corners (top-left, top-right, bottom-right, bottom-left), or drag a rectangle.
 let clicks = [], down = null;
+function snapCurrent(name) {  // the Snap button: the current box, snapped and previewed like a drawn one
+  const inst = lastState && lastState.instruments[name];
+  if (!inst) return;
+  editing = name; canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; canvas.style.display = "block";
+  document.querySelector('details[data-key="view"]').open = true;
+  finish(inst.corners);
+}
 function edit(name) {
   editing = name; clicks = []; down = null; canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
   canvas.style.display = "block";
@@ -170,10 +178,34 @@ function sketch(points, closed) {
   ctx.beginPath(); points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); if (closed) ctx.closePath(); ctx.stroke();
   points.forEach(([x, y]) => ctx.fillRect(x - 2, y - 2, 4, 4));
 }
-function finish(corners) {
-  canvas.style.display = "none"; ctx.clearRect(0, 0, canvas.width, canvas.height);
-  post("api/region", {name: editing, corners: corners.map(p => p.map(v => Math.round(v * 10) / 10))});
-  editing = null; clicks = []; down = null;
+// Drawn: the sides snap to the screen's edges near them (Tony, 2026-11-02); the snapped box (green, a side
+// without a clear edge orange) shows over the drawn one (magenta) until "Use snapped" or "Keep as drawn".
+const round1 = corners => corners.map(p => p.map(v => Math.round(v * 10) / 10));
+async function finish(corners) {
+  const name = editing; editing = null; clicks = []; down = null;
+  let snapped = null;
+  try {
+    const r = await (await fetch("api/snap_preview", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                      body: JSON.stringify({name, corners: round1(corners)})})).json();
+    if (r.corners) snapped = r;
+  } catch (e) {}
+  if (!snapped) { canvas.style.display = "none"; post("api/region", {name, corners: round1(corners)}); return; }
+  sketch(corners, true);
+  ctx.lineWidth = 2;
+  snapped.corners.forEach((p, i) => {
+    const q = snapped.corners[(i + 1) % 4];
+    ctx.strokeStyle = snapped.sides[i] ? "#3f3" : "#fa0";
+    ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+  });
+  const lost = ["top", "right", "bottom", "left"].filter((_, i) => !snapped.sides[i]);
+  $("editbar").innerHTML = `${name}: snapped (moved up to ${Math.round(snapped.moved)} px${lost.length ? "; no clear edge at the " + lost.join(", ") + ", kept as drawn" : ""}) `;
+  const choose = (label, chosen) => {
+    const b = document.createElement("button"); b.textContent = label;
+    b.onclick = () => { canvas.style.display = "none"; ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        $("editbar").textContent = ""; post("api/region", {name, corners: round1(chosen)}); };
+    $("editbar").appendChild(b);
+  };
+  choose("Use snapped", snapped.corners); choose("Keep as drawn", corners);
 }
 canvas.onmousedown = ev => { down = frameXY(ev); };
 canvas.onmousemove = ev => {
@@ -191,11 +223,12 @@ canvas.onmouseup = ev => {
   clicks.push(p); sketch(clicks, clicks.length === 4);
   if (clicks.length === 4) finish(clicks);
 };
-document.onkeydown = ev => { if (ev.key === "Escape") { canvas.style.display = "none"; editing = null; clicks = []; down = null; } };
+document.onkeydown = ev => { if (ev.key === "Escape") { canvas.style.display = "none"; editing = null; clicks = []; down = null; $("editbar").textContent = ""; } };
 
 async function refresh() {
   try {
     const s = await (await fetch("state.json")).json();
+    lastState = s;
     showLocks(s.locks);
     const src = s.source;
     $("src").textContent = src.connected ? `connected, frame ${src.last_frame_age ?? "–"} s old` : `not connected: ${src.error}`;
@@ -219,7 +252,7 @@ async function refresh() {
       const age = r.at ? Math.round(s.now - r.at) : null;
       const values = Object.entries(r.values || {}).map(([k, v]) => `${k}=${v}`).join("  ");
       const details = `${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}`;
-      const buttons = sep => `<button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `${sep}<button onclick="post('api/snap', {name: '${name}'})" title="Fit the region to the screen's edges on the current frame (shadows and bezels stay outside)">Snap</button>` : ""}`;
+      const buttons = sep => `<button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `${sep}<button onclick="snapCurrent('${name}')" title="Snap the box's sides to the screen's edges near them, and preview it before using it">Snap</button>` : ""}`;
       return `<tr class="main"><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
         <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
         <td>${Math.round((r.confidence || 0) * 100)}%<br><span class="values">${sure10(i.sure_10s).trim()}</span></td>

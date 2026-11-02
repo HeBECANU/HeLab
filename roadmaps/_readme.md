@@ -22,7 +22,9 @@ v0.0.7a1 went to `main` by PR on 2026-10-31 (TonyXTYan/HeLab#10, squash `e03c32a
 pre-release with v0.0.8 development straight after (Q27.3). Its open checks are below, not waited
 for (Tony, 2026-10-31). Work for v0.0.8 branches from `dev/v0.0.8` (agents: `agent/<task>`,
 [workflow](agent-workflow.md)) and lands back there; `dev/v0.0.8` goes to `main` by PR, with the
-version bump on that branch.
+version bump on that branch. **v0.0.8 ships as the 0.0.8a1 alpha pre-release** (Q47.5, Tony 2026-11-02): the
+PR to `main` opens when everything below has landed and CI is green, and the merge is Tony's. Store-v4 is
+switched on in that PR, after Tony's check (Q47.4).
 
 **Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
 
@@ -35,12 +37,27 @@ version bump on that branch.
   the raw layer, store-v4's core and raw layers' store side) landed `ad86bd3`. **Stage 1 done, the switch
   off** (checkpoint 3 landed `c2d0ece`: `raw_fill`, the store-v3 question and Settings › Cache's rows, the
   integration check, cache export and the [`.hlb` format page](../docs/hlb-format.md), Q42.5, Q44.1, Q44.2);
-  the switch stays off until stage 2 and Tony's go (Q28.3). Next: stage 2 (TXY layers), after Tony's go.
+  the switch stays off until stage 2 and Tony's go (Q28.3). **Stage 2 done, the switch off** (Tony's go
+  2026-11-02 with Q45.1–Q45.11; landed `1cd586c`: TXY layers per profile hash, the loading order, every
+  source mode disk cached, Live's segments and compaction, the policy and per-folder choices, A40.3, A42.1,
+  A42.2, A44.1, A44.2). **Go for stages 3 and 4** (Tony, 2026-11-02; on the Caching v2 floor tonight):
+  convert on read with A40.2 and A47.2, then the policy UI and Make room's order with A47.4 (Q47.1's purge
+  per kind) and A47.6; HeLab's TXY text stays in temp or cache until Tony switches the default to beside
+  (Q19.1). The switch stays off during the build; after Tony's check (M47.1, M47.2, M44.1, M42.1) it is
+  switched on in the v0.0.8 PR (Q47.4). Open: Q47.3.
 - [ ] Say when a raw file's reading stops early (A37.1, Q37.1; Tony, 2026-10-31): the parser stops at
-  the first unreadable token as MATLAB's `textscan` does, silently today.
+  the first unreadable token as MATLAB's `textscan` does, silently today. On the Converter UX floor
+  (`agent/converter-ux`) tonight, with A39.5 and Q38.1.
 - [ ] TXY and shares (Q39.2, Tony 2026-10-31; A39.5): writing TXY to a share warns that conversion
   belongs on the machine that owns the data; a share folder without TXY offers to convert into HeLab's
-  cache (recommended) or temp, and still allows beside after the warning.
+  cache (recommended) or temp, and still allows beside after the warning. On the Converter UX floor
+  (`agent/converter-ux`) tonight, with A37.1 and Q38.1.
+- [ ] Live scripts (Tony, 2026-11-02: "yes I need live scripts build in v0.0.8"): a Reload button and
+  optional auto-reload on save; open plots rerun on the new code keeping their settings; remembered script
+  folders; load errors shown in the Scripts panel; helper modules re-imported (`helab/scripts/scripts_manager.py`,
+  `helab/views/plots/script_tree.py`, the workspace). With A47.5 (Q14.2 = Q23.4: a plot's TXY source and
+  profile saved with presets, arrangements and reopened plots, with a toggle to turn that off). One floor,
+  Live Scripts, tonight.
 - [x] One running HeLab per computer, from source or a build (Q39.1, A39.3; `0335768`, Quick Fixes 8).
 - [ ] The v0.0.7a1 area review's findings (`.ai/sessions/2026-10-31-claude-area-review/`): io by IO Fixes
   (landed `471966b`, with A39.2), plots by Plot Identity (`e3f94d9`), cache by Caching v2's stage 0
@@ -50,7 +67,8 @@ version bump on that branch.
 - [ ] Quick Fixes 7's open items (block 38): Q38.1–Q38.3 (beside conversion without a no-replace
   rename, Live switching a held shot to HeLab's TXY, Folder details' wording), A38.1, A38.2 and M38.1
   (whether the lab share can add a file without replacing one). Q38.2 is built (A39.2, `471966b`);
-  Q38.3 is A39.4.
+  Q38.3 is A39.4. Q38.1 is decided (Tony, 2026-11-02): a warning offering Retry or HeLab's local cache or
+  temp folder, built on the Converter UX floor.
 - [ ] v0.0.7's open checks ([MANUAL_TODO](../.ai/MANUAL_TODO.md)): on a Mac, M1.4-2 to M1.4-4,
   M1.5, M1.6-3, M1.8, M1.9 and M36.1–M36.4, and by hand the splitter drags and floated plots
   opening a step apart; the review of M1.4-1 and M1.7's physics; the lab PC pass (M1.1–M1.10 on
@@ -61,7 +79,8 @@ version bump on that branch.
 - [ ] The TXY converter, stage 3 (calibration) and stage 5 (replacing MATLAB), after v0.0.7 (Q9.9);
   stages 1, 2 and 4 are done (Done, v0.0.7a1). The post-2025 plate findings feed stage 3 (a 180°
   orientation from July 2026, Q25.1; an opt-in burst veto, Q25.5). Open: Q6.7, Q6.9–Q6.11, Q12.6,
-  Q14.2, Q14.4, Q15.3, Q23.x, Q25.2, Q25.4 ([plan](txy-converter.md#open-decisions)) (2026-10-29).
+  Q14.4, Q15.3, Q23.x, Q25.2, Q25.4 ([plan](txy-converter.md#open-decisions)) (2026-10-29); Q14.2 = Q23.4
+  decided 2026-11-02 (A47.5, Live Scripts).
 - [ ] Distributed results compute: one machine computes analysis results and other HeLabs use
   them without repeating the work. It builds on the [headless runner](headless-analysis.md)
   and the [network extension](network-runners-and-web.md#cross-machine-result-sharing).

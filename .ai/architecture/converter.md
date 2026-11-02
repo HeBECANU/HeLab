@@ -35,6 +35,7 @@ no Qt, plotting library or `helab.utils.constants`: every module below but `back
 | `pipeline` | `convert_raw(bytes, profile, backend) -> bytes | None` (None: no file, as the 2019 wrapper for no hits); `convert_shot`: HeLab's own (timed; 0-byte TXY for no hits; pieces with an executor); `APP_BACKEND` = `numpy`. |
 | `provenance` | The converted-TXY index (`converted-txy/index.sqlite`: `TxyIndex`, `read_shots`, set-aside, `IndexUnavailable`); `Provenance`, one row per shot (raw fingerprint, profile name/version/hash/tag, backend, TXY size, mtime and SHA-256), `stale`, the file names. |
 | `raw_layer` | Caching v2's raw layer (stage 1, `agent/caching-v2`, landed `ad86bd3`): `RawPulses` ↔ the layer's arrays and `facts` (trigger time, first channel, rows, final newline, so `not_done` from facts equals `not_done(bytes)`); the compact `i8-i64d-1` encoding (int8 channels, int64 time deltas; row 0 first, then stable time order) when the strict path read the file, channels ≤ 127 and times < 2^62, else `f64-1` in file order; zstd 9 + byte shuffle (Q22.7, Q42.2) in the `.hlb` container (`helab.utils.hlb`); `RAW_PARSER_VERSION` (1), bumped only when `parse_raw`'s output changes; `columns(layer, bin_time=BIN_TIME)` (`BIN_TIME` 25e-12 s, the profiles' TDC bin) gives the export columns `channel`, `time_bins` (absolute) and `time_s` in stored order, for `helab cache export` (checkpoint 3, landed `c2d0ece`; format page [`docs/hlb-format.md`](../../docs/hlb-format.md)). |
+| `txy_layer` | Caching v2's TXY segments (stage 2, landed `1cd586c`): `pack_segment`/`unpack_segment`, one `.hlb` of `kind` `txy` per segment of a folder's layer (`matlab` or `helab:<profile hash>`, `helab_layer`, `profile_hash_of`): arrays `shots`, `offsets`, `hits` (float64 T s, X m, Y m) and `problematic`; meta `layer`, `profile_hash`, `tags`, `precision` (`g8`: the values the `%.8g` text parses to, MATLAB's TXY and `m19v1`; `f64`: full float64, newer tags, Q19.6); zstd 9, no shuffle; checked on read like `unpack_dataset` (`HlbError`). Qt-free, `PURE`. |
 | `samples` | The sample manifest (`~/HeLab-samples/txy-v1/manifest.json`, SHA-256 checked on read); held-in/held-out positions. |
 | `check` | `check_txy(ours, reference)`: identical, or the first differing line (`ENDED`, `NO_FINAL_NEWLINE`) and both hit counts; `ReferenceFault` and `prove_fault`; `convert_via_layer` (raw bytes → layer → TXY, in memory). |
 | `timing` | `time_shot`/`time_shots` with `Parallelism` (serial, processes, threads, within-shot through `split`); `summarise` (SI MB/s per stage, latency). |
@@ -253,6 +254,20 @@ hold back isn't converted, so no unfinished row is saved. Each shot's encode run
 fails the conversion: a store that can't take the rows (busy, a Clear since, the budget, Don't cache) sends
 one `cache_warning` or nothing, and the rest of that run's rows go unsaved
 ([cache-store](cache-store.md#store-v4-caching-v2-behind-the-switch)).
+Under the cache policy `txy` (Q45.1; the folder's own, else Settings › Cache's) a conversion keeps no raw
+rows: `_RawRows` doesn't start (stage 2, `102c027`).
+
+**Converting from the raw layer** (caching v2 stage 2, `6f57918`, landed `1cd586c`; switch off): with
+store-v4 live, a load that finds a HeLab shot's raw layer (the raw file's current fingerprint and parser)
+and no current TXY layer entry decodes it and converts it with the layer's profile (`txy_cache`: `reconstruct` with its default backend, `reference`, not
+`APP_BACKEND` or Settings' backend; A47.6) instead of reading the HeLab text: the loading order's second step
+([io-and-browsing](io-and-browsing.md#loads-with-txy-layers)). `m19v1`'s shot is stored as
+`parse(format_txy(hits))`, which the byte-identical converter makes equal to its text (`g8`). Only for
+built-in profiles: the helper has no user profile library, so other profiles read their text (A47.1). It
+runs before the shot's `file_started`, under `_Ticker` with `compute_budget` of the raw size (S3-2). Stage 2
+converts only shots that have a current HeLab TXY on the share; convert on read without one is stage 3.
+Locally the raw step costs more CPU than parsing text (0.48 s against 0.004 s for a 3.25 MB shot on an M4);
+its gain is on slow shares and offline (M47.2).
 
 #### Events (`helab/io_ops/events.py`)
 

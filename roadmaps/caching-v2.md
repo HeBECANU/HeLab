@@ -3,7 +3,10 @@
 Horizon: v0.0.8 (Q28.2, Tony 2026-10-29), after v0.0.7's converter. Added: 2026-10-29, planned with Tony in Chat. **Tony's
 go came on 2026-10-31 (Q28.1): stages 0 and 1 in v0.0.8, stage 2 later**, on one area floor (Caching v2,
 `agent/caching-v2`); stage 0 and stage 1's checkpoint 2 landed `ad86bd3` with store-v4 behind its switch,
-off (Q28.3; [stages](#stages-each-needs-tonys-go)). Readiness for an unattended build: block 28; stage 1's
+off (Q28.3; [stages](#stages-each-needs-tonys-go)). Stage 1 landed `c2d0ece`; **stage 2 (Tony's go
+2026-11-02, Q45.1–Q45.11) landed `1cd586c`, the switch still off**. **Go for stages 3 and 4** (Tony,
+2026-11-02), on the same floor. The switch stays off while they are built; after Tony's check it is switched
+on in the v0.0.8 PR, so v0.0.8 (0.0.8a1) ships with store-v4 on (Q47.4, refining Q45.11). Readiness for an unattended build: block 28; stage 1's
 design: the [addendum](../.ai/sessions/2026-10-31-claude-caching-v2/design-stage1.md). Evidence and options:
 [caching audit](../.ai/sessions/2026-10-29-claude-caching-audit/audit.md); the design:
 [store-v4 design note](../.ai/sessions/2026-10-29-claude-caching-audit/store-v4-design.md);
@@ -154,7 +157,8 @@ design:
    **Done** (landed `ad86bd3`): A19.2's fence (A19.1 earlier, with the converted-TXY index), cache-4,
    cache-5, cache-6.
 1. The raw layer: parser output as stored pulses; the checker proves layer = file. **Done behind the
-   switch** (checkpoint 3 landed `c2d0ece`): the switch stays off until stage 2 and Tony's go (Q28.3).
+   switch** (checkpoint 3 landed `c2d0ece`): the switch stays off until stage 2 and Tony's go (Q28.3; since
+   stage 2, until Tony has used it, Q45.11).
    Steps (the brief's):
    - [x] the design addendum (T~1–T~3 decided as Q42.1–Q42.3);
    - [x] the `.hlb` container and the raw layer's codec, layer = file proved (`b3945f1`);
@@ -174,15 +178,44 @@ design:
      FOLDER --to npz|mat|csv`; read only, no new dependency (`8627566`); the format page is
      [`docs/hlb-format.md`](../docs/hlb-format.md) (Q44.2).
    - Review: checkpoint 3's C3-1–C3-6 fixed ([review](../.ai/sessions/2026-10-31-claude-caching-v2/review-checkpoint3.md)).
-     Follow-ups: A42.1, A42.2, A44.1 (export of stage 2's TXY layers), A44.2 (a Qt-free `helab cache`);
+     Follow-ups: A42.1, A42.2, A44.1 (export of stage 2's TXY layers), A44.2 (a Qt-free `helab cache`), all
+     done in stage 2;
      on screen and in MATLAB: M44.1, M44.2.
 2. TXY layers per profile hash and the loading order above; identity by raw fingerprint +
-   profile hash; every source mode disk cached.
-3. Convert on read: loads and Live convert from the raw layer; HeLab writes TXY text only beside
-   the raw files or on export by default; `converted-txy/` and the cache and temp outputs stay as
-   options (Q19.1: "default no", keep options open; Q19.7: temp kept for scratch and new
+   profile hash; every source mode disk cached. **Done behind the switch** (Tony's go 2026-11-02 with
+   Q45.1–Q45.11; landed `1cd586c`; design: the [stage 2 addendum](../.ai/sessions/2026-10-31-claude-caching-v2/design-stage2.md),
+   CoCo's answers S~1–S~5; mechanics: [cache-store](../.ai/architecture/cache-store.md#txy-layers-stage-2)).
+   The switch stays off through stages 3 and 4, then turns on in the v0.0.8 PR after Tony's check (Q47.4);
+   the row is kept one release. Steps:
+   - [x] the design addendum (`1eddfaf`);
+   - [x] the store side, inert: `txy_layers`, `txy_segments`, `txy_views`, `cache_policy`, `txy_source_prefs`,
+     pending parts (Q45.8), compaction when it fits (Q45.7), one planner for Make room and `trim` (Q45.6,
+     A42.2), Clear `txy`, S2-0's rekey; A44.1 (`helab cache export --kind txy`) and A44.2 (`cache-folder.json`)
+     (`b691d26`, `a70d261`; checkpoint 1's S2-1, S2-2 fixed in `6b0f998`);
+   - [x] loading: `txy_cache.Access`, the loading order (layer, raw layer for built-in profiles, seeds, share),
+     a plot's own choice cached quietly (Q19.3), the folder's own source (Q45.2), A40.3, the v4 `datasets`
+     and v3 seeds (Q45.4, Q45.5), A42.1 (`7d185eb`–`6f57918`; S2-3 `d96c65f`; S3-1, S3-2 `df17761`);
+   - [x] Live's segments and compaction (`8be1be6`);
+   - [x] the UI: Settings › Cache's TXY data row and global policy, the plan-based budget question, Make room
+     naming layers, the folder menu's two items, Folder details' TXY line (`102c027`, `d849372`; C2S2-1–3
+     `28d5844`);
+   - [x] the integration check with the switch on (`a39a94d`).
+   - Review: Assay's S2-1–S2-3, S3-1, S3-2, C2S2-1–C2S2-3 fixed, no open findings
+     ([checkpoint 1](../.ai/sessions/2026-10-31-claude-caching-v2/review-s2-checkpoint1.md),
+     [step 3](../.ai/sessions/2026-10-31-claude-caching-v2/review-s2-step3.md),
+     [checkpoint 2](../.ai/sessions/2026-10-31-claude-caching-v2/review-s2-checkpoint2.md)).
+     Follow-ups: Q47.1 (decided: purge by age per kind plus everything, A47.4), Q47.2 (decided: A47.2 before
+     the switch goes on), Q47.3 (open), A40.2 (joined the brief, not built: stage 3), A47.1–A47.3, A47.6 (the
+     app's backend for raw-layer conversion); on screen and in the lab: M47.1, M47.2.
+3. Convert on read: loads and Live convert from the raw layer, with A40.2 and A47.2 (before the switch
+   goes on). **Go given** (Tony, 2026-11-02; the Caching v2 floor). HeLab's TXY text output is unchanged:
+   it keeps writing to the temp or cache folder as now, beside only per folder or on the command line,
+   until Tony explicitly switches the default to **beside the raw d files**; his future default is beside,
+   not "no text" (Q19.1, decided 2026-11-02, replacing "default no"; Q19.7: temp kept for scratch and new
    features).
-4. The policy UI (per folder and global) and Make room's order.
+4. The policy UI (per folder and global) and Make room's order. Stage 2 built a first version (Settings ›
+   Cache's policy combo, the folder menu's two items, Make room's five groups); Q47.3's wording is open;
+   the purge per kind (Q47.1, A47.4). **Go given** (Tony, 2026-11-02; the Caching v2 floor, after stage 3).
 5. After MATLAB is retired (converter stage 5): raw files drive status, counts and signatures
    (Q14.4).
 
@@ -190,19 +223,24 @@ design:
 
 In [DECISIONS_TODO](../.ai/DECISIONS_TODO.md):
 
-- Q19.1 (keep HeLab's own TXY files once loads convert on read: Tony "default no", keeping
-  beside writing and the options open; to confirm as written).
+- Q47.3 (the policy and per-folder labels as built), open.
 - Block 28 is decided (Tony, 2026-10-31): stages 0 and 1 (Q28.1), store-v4 behind a switch until stage
   2 (Q28.3), the `makers` table (Q28.4), Make room's "Clear old stores…" (Q28.5), the overwrite
   warning (Q28.6).
 - Block 42 (the floor, 2026-10-31): Q42.1 a raw batch over the budget isn't saved and never asks; Q42.2
   zstd 9 stays unless M42.1 finds it too slow; Q42.3 `datasets` through stage 1; Q42.4 Don't cache's
   removal takes seen raw layers, keeps only copies; Q42.5 cache export; Q42.6 AGENTS.md's wording (all
-  decided). Follow-ups: A42.1, A42.2, A40.3.
+  decided). Follow-ups: A42.1, A42.2, A40.3 (all done in stage 2).
 - Block 44 (checkpoint 3, 2026-10-31): Q44.1 the store-v3 question's and Settings › Cache's wording as
-  built; Q44.2 the format page at `docs/hlb-format.md` (both decided). Follow-ups: A44.1, A44.2; M44.1,
-  M44.2.
+  built; Q44.2 the format page at `docs/hlb-format.md` (both decided). Follow-ups: A44.1, A44.2 (done in
+  stage 2); M44.1, M44.2.
+- Block 45 (Tony's go for stage 2, 2026-11-02): Q45.1–Q45.11, all decided as proposed.
+- Block 47 (stage 2, 2026-11-02): Q47.1 the purge by age (decided by Tony: per kind plus one for everything,
+  A47.4); Q47.2 a Live started before any load follows the global TXY source (decided: A47.2 before the
+  switch goes on); Q47.3 the policy and per-folder labels as built (open); Q47.4 the switch on in the v0.0.8
+  PR after Tony's check; Q47.5 v0.0.8 as 0.0.8a1. Q19.1 decided the same day (TXY text stays in temp or
+  cache until Tony switches the default to beside).
 
-Decided: Q19.2 (under Q12.3), Q19.3–Q19.10, Q22.1–Q22.11 (Q22.7: keep 8 GB and zstd 9 + byte
+Decided: Q19.1 (2026-11-02), Q19.2 (under Q12.3), Q19.3–Q19.10, Q22.1–Q22.11 (Q22.7: keep 8 GB and zstd 9 + byte
 shuffle), Q26.1 (byte units by OS), Q26.2 (one `converted-txy/index.sqlite` instead of a JSON
 per TXY, before v0.0.7's release) (above, and Recently decided).

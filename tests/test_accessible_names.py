@@ -320,6 +320,12 @@ def close_web_views(scripts: TreePanelWidget) -> int:
     return len(closing)
 
 
+# Every script and library in one walk: 66-99 s on macOS and Windows CI, 109-123 s on a slow macOS runner
+# (caching-v2 CI 41389534725, timed out at CI's --timeout=120): its own 300 s (A~2 of Quick Fixes 9).
+WALK_SECONDS = 300
+
+
+@pytest.mark.timeout(WALK_SECONDS)
 @pytest.mark.no_auto_data_root  # RAM only: no save left for the quit to wait for (handoff A~5).
 @covers("PlotlyPane", "MatplotlibPane", "UnitSpinBox", "CommitTextEdit", "SettingsTree", "PositionPlot", "DensityPlot",
         "ReleasePlot", "SpectrumPlot", "CountsPlot", "FractionsPlot", "HistogramsWidget", "HotSpotsPlot",
@@ -381,6 +387,12 @@ def test_every_script_and_each_library(qtbot: QtBot, tmp_path: Path) -> None:
     finally:
         quit_window(qtbot, window)
     walk.check(covered_by("test_every_script_and_each_library"))
+
+
+def test_the_walk_keeps_more_time_than_cis_per_test_timeout() -> None:
+    """``test_every_script_and_each_library`` keeps its own timeout over CI's ``--timeout=120``."""
+    [mark] = [mark for mark in getattr(test_every_script_and_each_library, "pytestmark", []) if mark.name == "timeout"]
+    assert mark.args == (WALK_SECONDS,) and WALK_SECONDS >= 300
 
 
 def settled(qtbot: QtBot, service: IOService) -> None:

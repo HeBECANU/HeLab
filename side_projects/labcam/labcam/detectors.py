@@ -78,7 +78,8 @@ class TraceLevel(Detector):
     - filled: how far the columns' median colour is from the empty screen's (`background`, [B, G, R]); a block
       covering most of the screen makes the median the block's colour, so it reads as filled even when the
       leftover screen is what differs per column;
-    - waviness: how far the columns' median signal rows spread (10–90 %), as a fraction of the height;
+    - waviness: how far the columns' median signal rows spread (10–90 %) around their straight-line fit, as a
+      fraction of the height (a straight line at a slant is flat);
     - shape: `block` (thicker than `thin` or filled beyond `fill`), `line` (flatter than `flat`), `wavy`, or
       `none` (an empty screen). For a laser lock's error signal a flat thin line means locked;
     - level: the median of the columns' median signal rows.
@@ -126,7 +127,24 @@ class TraceLevel(Detector):
         counts = signal.sum(axis=0)[columns]
         medians = [float(np.median(np.nonzero(signal[:, c])[0])) for c in columns]
         thickness = float(np.median(counts)) / scale
-        waviness = float(np.percentile(medians, 90) - np.percentile(medians, 10)) / scale
+        # Around the trace's straight-line fit: a flat line seen at a slant (the box drawn a little steeper or
+        # shallower than the screen) stays flat; a wave or an oscillation still spreads (left top, 2026-11-02).
+        xs = np.asarray(columns, np.float64)
+        ys = np.asarray(medians, np.float64)
+        residual = ys - ys.mean()
+        if len(xs) > 2:
+            slope, offset = np.polyfit(xs, ys, 1)
+            # Only a small slant (the box's misfit, under `slant` of the height across the width): a steep line
+            # is a ramp or sweep on the scope, not a flat trace, and keeps its spread.
+            if abs(slope) * w <= self.inst.option("slant", 0.3) * scale:
+                residual = ys - (slope * xs + offset)
+            # Columns far off the trace are marks beside it (the screen's menu text, a label), not the trace:
+            # when they're few (under a quarter of the columns), the spread is the rest's.
+            spread = max(2.0, 3 * float(np.median(np.abs(residual - np.median(residual)))))
+            near = np.abs(residual - np.median(residual)) <= spread
+            if near.mean() >= 0.75:
+                residual = residual[near]
+        waviness = float(np.percentile(residual, 90) - np.percentile(residual, 10)) / scale
         level = (float(np.median(medians)) + top) / scale
         blocked = thickness > thin or filled > fill_limit
         shape = "block" if blocked else ("line" if waviness <= flat else "wavy")

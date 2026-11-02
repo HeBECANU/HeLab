@@ -28,17 +28,21 @@ How to use it:
   differ (Side's `ffe346c`). A fault in MATLAB's archive, not HeLab.
 - [ ] Beside conversion fails on a file system with neither hard links nor a no-replace rename:
   `txy.write_atomic` refuses rather than risk replacing a file, and the run stops with the reason (Quick
-  Fixes 7, `c194f37`; Q38.1; M38.1 for the lab share).
+  Fixes 7, `c194f37`; Q38.1; M38.1 for the lab share). Q38.1 decided (Tony, 2026-11-02): a warning that
+  offers Retry or writing to HeLab's local cache or temp folder instead; on the Converter UX floor.
 
 - [ ] **A cached dataset over ~2.1 GB can't be saved.** `pack_dataset` (`helab/utils/cache_store.py:459`)
   compresses a whole folder in one Blosc call, and python-blosc 1.11.4 caps a call at 2,147,483,631
   bytes (store-v4 design note, 2026-10-29). Store-v4's chunked `.hlb` files fix it in caching v2's stage
   2; store-v4's `datasets` keep the limit through stage 1 (Q42.3; Caching v2's A~2). Until then a folder
-  that large stays RAM only (check what the save reports).
+  that large stays RAM only (check what the save reports). Stage 2 (landed `1cd586c`) ends it in store-v4:
+  loads and Live save append-only TXY segments, never a dataset; store-v3, the default while the switch is
+  off (Q45.11), keeps the limit.
 - [ ] **Dataset files are pickles** (`DATASET_FORMAT = "blosc-pickle-1"`, `pickle.loads` in
   `unpack_dataset`, `cache_store.py:466-473`), unlike saved results (NumPy + JSON). A cache folder
   someone else can write to could run code in HeLab's helpers. Store-v4's pickle-free `.hlb`
-  containers fix it (design note, 2026-10-29).
+  containers fix it (design note, 2026-10-29): since stage 2 (`1cd586c`) store-v4 writes no dataset, though
+  it still reads stage 1's `datasets` rows and store-v3's under Keep to seed layers (Q45.4, Q45.5).
 
 - [ ] The tab's startup default-folder resolve (`QTimer.singleShot(0)` in `FolderExplorer.__init__`)
   can run after an early `open_to_path` (a preset applied, or a path typed, before the event loop
@@ -129,6 +133,10 @@ How to use it:
   They do: `test_accessible_names.py` crashed its worker on Ground CI 41100591971 (Windows Tests 1/2, job
   124217404251, gw0, `371751d`), PR CI 41095142656 attempt 1 (macOS Tests 1/2, `8ccc0be`) and PR CI
   41104589243 (macOS Tests 1/2, job 124231159424, `92c532b`); each passed on rerun (2026-10-31).
+  `test_plot_backends.py::test_2d_plots_draw_with_every_library[values2-Plotly-TxyHistograms]` aborted its
+  worker ("Fatal Python error: Aborted") on `agent/caching-v2` CI 41389534725 (macOS Tests 1/2, job
+  125097691928, `93a938b`); passed on rerun. (That job's `test_accessible_names` worker death was the 120 s
+  timeout, Fixed below.)
 - [ ] `test_accessible_names.py::test_every_script_and_each_library`: "Controls without an accessible
   name: Basic plots v1 › Plot T, X, Y histograms: QTabBar < QMainWindow < QSplitter < HelabMainWindow: no
   ID", Windows CI 41086378298 (Tests 1/2, job 124168617741, gw0, `dev/v0.0.7` `9de3e19`, 2026-10-31);
@@ -141,7 +149,8 @@ How to use it:
   `agent/txy-index` CI 40874212130; Ground CI 40988453930 (`c492242`, Windows Tests 1/2) and 41000437956 (`43cb202`);
   the `[1]` case on Windows, `agent/ui-polish` CI 41005221588 (same line); `[2]` on Ground CI 41164525298
   (`82c9db3`, Windows Tests 1/2, job 124429158185); `[1]` on Ground CI 41374704252 (`0406a1d`, Windows
-  Tests 2/2, job 125052359778). A candidate: 3 s under load.
+  Tests 2/2, job 125052359778); `[1]` on `agent/caching-v2` CI 41375836115 (`84ccaeb`, Windows Tests 2/2,
+  job 125055805809). A candidate: 3 s under load.
 - [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-CountsPerShot]`: an
   xdist worker crashed on Windows CI run 40803552596; passed on retry (no traceback; look for a
   faulthandler dump). Again: the Plotly case on `agent/byte-units` CI 40865344851 (job 123418722344,
@@ -178,13 +187,15 @@ How to use it:
 - [ ] `test_root_gui.py::test_the_gui_never_writes_the_saved_file_itself`: xdist worker gw0 crashed
   once on macOS CI (run 40790093719, `agent/quick-fixes-5` `ed0635c`, job 123172940859, 2026-10-29);
   passed on its rerun. Again: gw2 on Ground CI 41161254527 (Windows Tests 2/2, job 124419124616,
-  `f128623`; "node down: Not properly terminated", a stack at line 449), passed on gw4. A crash, not an
-  assertion (a native fault in a GUI test?); cause unknown.
+  `f128623`; "node down: Not properly terminated", a stack at line 449), passed on gw4. Again: gw3 on
+  `agent/caching-v2` CI 41386150963 (`df17761`, Ubuntu Tests 2/2, job 125087377900), passed on retry. A
+  crash, not an assertion (a native fault in a GUI test?); cause unknown.
 - [ ] `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: a
   collection error in pathlib `lstat` on Windows CI (run 40754482305, `agent/txy-packaging` `7d2bff9`),
   passed on retry. Again on Windows Tests (2/2): `agent/byte-units` CI 40989130996 (job
   123847075029) and `agent/smoke-ready` CI 40990082872 (job 123850152612), both passed on retry; Ground
-  CI 41072414259 (job 124119750861, `2960680`).
+  CI 41072414259 (job 124119750861, `2960680`); `agent/caching-v2` CI 41375836115 (`84ccaeb`, job
+  125055805809) and CI 41379212072 (`6b0f998`, job 125066159186).
 - [ ] `test_gui_responsiveness.py::test_stalled_process_keeps_heartbeat_and_shutdown_responsive`:
   `assert 0.2199… < 0.2` (line 228) on macOS CI (run 40764414177), passed on retry.
 - [ ] Tests that `chdir` while helpers can start: a helper inherits the working folder, which its
@@ -234,6 +245,22 @@ How to use it:
   their own job, after which macOS tests took 4–11 min again. The other three: cause not found.
   For `test_another_library…`, also in the 2026-10-28 run below, a slow runner building
   matplotlib's font cache is likely.
+- [ ] **A quit test leaves its `GUIWatchdog` running** (a log line, never a failure): `HelabMainWindow.closeEvent`
+  stops the watchdog only on its full path; it returns early when a close waits for saves (`_wait_for_saves`
+  opens `QuitSaveDialog`) or a quit dialog is open, and `qtbot.addWidget`'s close at teardown doesn't stop it
+  either. The worker, idle at the end of its run, then logs `ERROR:root:GUI stalled for 62.74s; capturing
+  thread stacks` (`gui_watchdog.py:40`). Seen in a local full run on `agent/caching-v2` (2026-11-02; the
+  faulthandler dump showed the main thread idle in execnet beside a live `GUIWatchdog` thread) and 4 times on
+  `agent/caching-v2` CI 41393351958 (`28d5844`: Windows Tests 1/2 twice, Windows 2/2 and Ubuntu 2/2 once).
+  Likely `tests/test_quit_confirms.py` or `tests/test_txy_last_used_quit.py` (not pinned: neither reproduces
+  alone). Fix: A47.3 (finish or cancel the dialog in those tests, or stop the watchdog when the window is
+  destroyed). Vault's handoff, step 3.
+- [ ] `test_live_io.py::test_a_live_check_pauses_background_work_only_while_it_reads`: `waitUntil` timed out
+  (10 s) at line 136, once in a local full run under a load average of ~37 (Ground, Quick Fixes 9, 2026-11-02,
+  before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into.
+- [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
+  `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
+  retry and 5 of 5 alone. Cause not looked into.
 - [ ] `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
   ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
@@ -263,6 +290,13 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
 
+- [x] `test_typing.py::test_pyright_helab` and `test_accessible_names.py::test_every_script_and_each_library`
+  passed pytest-timeout's 120 s on a slow macOS runner: `agent/caching-v2` CI 41389534725 (`93a938b`, macOS
+  Tests 1/2, job 125097691928) killed the pyright test's worker 5 times ("node down: Not properly
+  terminated") and the walk's once ("Timeout (0:01:40)!"); each passed on rerun. Their normal times sit near
+  the limit (pyright 40–97 s, the walk 27–99 s across OSes; 115–142 s and 123 s on that runner).
+  **Fixed** (Quick Fixes 9): their own `pytest.mark.timeout(300)`, each with a guard test: `test_typing.py`
+  (`e8a28a1`), the walk (`5f52068`); CI 41392473183 and 41394539355 green with no RERUN.
 - [x] `test_folder_icons.py::test_native_icon_delivery_is_shared_and_rendering_stays_memory_only`:
   "Painting an icon performed I/O or submitted work" raised on another thread (pytestqt "Failed to
   process thread exception"), Ground CI 41164525298 (Windows Tests 1/2, job 124429158185, gw0,

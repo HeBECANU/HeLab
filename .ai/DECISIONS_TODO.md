@@ -149,19 +149,63 @@ three floors at once.
 - **Q45.11** (Q~13) the switch turns on only after stage 2 has landed and Tony has used it (his Mac and a
   lab PC, M44.1, M42.1); then on by default in the release shipping stage 2; the row stays one release.
 
+Tony in Chat, 2026-11-02 (via Side), on caching v2's stage 2 (block 47; landed `1cd586c` with the switch
+off, Q28.3 and Q45.11 still hold):
+
+- **Q47.1** (Q~14) **The purge by age in store-v4.** As built (S3-1, `df17761`; Assay's call per Q22.6 and
+  C2-9), Settings › Cache's purge takes datasets, TXY layers and views and seen raw layers not used since the
+  cutoff, and keeps only copies. Tony: "split options to purge by each type of cache too? also just a button
+  that purges anything by age". Decided: a purge by age **per kind** (datasets, TXY layers and their views,
+  raw layers; only copies never, unless the question names them) **plus one "purge everything by age"
+  button**. Built by the Caching v2 floor (A47.4); until then the purge stays as built.
+
+Tony in Chat, 2026-11-02 later (via Side), on what comes next (block 47):
+
+- **Q47.2** (Q~15) **A Live started on a folder before any load of it** follows the global TXY source until a
+  load tells `FolderCache` the folder's own (store-v4 only). Tony: "ok" to building A47.2 (the folder's
+  choices learnt with its listing) **before the switch goes on**, not accepting it for now.
+- **Q47.4 The switch-on, refined** (Q45.11): the `store_v4` row stays **off** while stages 3 and 4 are built;
+  Tony checks store-v4, then it is switched **on in the v0.0.8 PR**, so v0.0.8 ships with store-v4 on, after
+  his check.
+- **Q47.5 Release:** v0.0.8 ships as the **0.0.8a1** alpha pre-release; the PR to `main` opens when
+  everything has landed and CI is green; the merge is Tony's.
+- **Go for caching v2's stages 3 and 4** (convert on read; the policy UI and Make room's order), on the
+  Caching v2 floor (`agent/caching-v2`), with A40.2 and A47.2 in stage 3.
+- **Q19.1 Keep HeLab's own TXY files once loads convert on read?** HeLab keeps writing its TXY text to the
+  temp or cache folder as now until Tony explicitly says to switch the default to **beside the raw d files**;
+  his future default is beside, not "no text" (replacing his 2026-10-29 "default no"). Stage 3 keeps the
+  output setting as it is.
+- **Q14.2 = Q23.4 yes:** a plot's TXY source and profile are saved with presets, arrangements and reopened
+  plots, plus a plot-settings toggle to turn that off (for tweaking and exploring). Built on the Live Scripts
+  floor (A47.5).
+- **Q38.1** Beside conversion on a file system with neither hard links nor a no-replace rename (today
+  `txy.write_atomic` refuses and the run stops with the reason, `c194f37`): show a **warning that lets the
+  user choose Retry or write to HeLab's local cache or temp folder instead**, neither a silent refusal nor a
+  silent fallback. Built on the Converter UX floor (`agent/converter-ux`, with A39.5 and A37.1).
+- **Live scripts in v0.0.8** (Tony: "yes I need live scripts build in v0.0.8"): a Reload button and optional
+  auto-reload on save, open plots rerun on the new code keeping their settings, remembered script folders,
+  load errors in the Scripts panel, helper modules re-imported; one floor, Live Scripts
+  ([overview](../roadmaps/_readme.md)).
+
+## Caching v2 stage 2 (block 47)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Step 7", Vault;
+stage 2 landed `1cd586c`, the switch off).
+
+- **Q47.3** (the design addendum's S~6) **The cache policy's and the per-folder choices' wording**, built as
+  proposed (store-v4 only): Settings › Cache's "Cache policy" combo (`CacheTab.POLICY_LABELS`): "Raw + what
+  you load (default)" / "Raw only, convert on load" / "TXY only (no raw)"; right-click "TXY for this
+  folder…" ("This folder's tab and Live load:"; then "HeLab's TXY of the profile tagged:") and "Cache policy
+  for this folder…" ("This folder's saves keep:"), each with "As Settings (every folder)"
+  (`FolderExplorer.FOLDER_CHOICE_GLOBAL`) first; Folder details' TXY line adds "this folder: <source>
+  (<tag>)" and "cache: <policy>". **Proposed:** keep as built.
+
 ## Quick Fixes 7 (block 38)
 
 From Quick Fixes 7's [handoff](sessions/2026-10-31-claude-quick-fixes-7/handoff.md) (Rivet on Ground,
 Codex's review of PR #10, six rounds; detail in its `notes.md`).
 
-- **Q38.1** Beside conversion on a file system with neither hard links nor a no-replace rename
-  (`txy.write_atomic` refuses rather than risk replacing a file: `c194f37`). (a) Refuse as built: the
-  run fails with the reason, auto-convert stops (amber line, Retry), Live goes on, nothing is written.
-  (b) Per shot: `shot_unconvertible` with the reason, not tried again while the raw file is unchanged, as
-  for a path too long. (c) Fall back to HeLab's cache or temp folder for that run, saying so in the plan
-  (as `convert_plan`'s `fallback` does when the folder's flag is off). Proposed: (a); (b) or (c) only if
-  M38.1 shows the lab share needs it (macOS FAT and Linux's local file systems work; Windows refuses an
-  existing name itself).
+Q38.1 is decided (Recently decided, 2026-11-02).
 
 ## UI polish (block 36)
 
@@ -182,10 +226,6 @@ settled as Q18.4–Q18.6.
 
 From the `agent/txy-ui` and `agent/txy-live` handoffs (`sessions/2026-10-29-claude-txy-{ui,live}/handoff.md`).
 
-- **Q14.2 Save a plot's TXY source and profile with presets, arrangements and reopened plots?**
-  Not built (a format change in `analysis/presets.py`); a reopened plot starts "As the folder's
-  tab" (Q23.4 is the same question). Proposed: save them once `analysis/presets.py` changes format
-  for something else.
 - **Q14.4 Count HeLab's TXY in a folder's status?** Today status and counts come from MATLAB's TXY
   alone; proposed: count current HeLab TXY of the tab's tag once scans can see HeLab's folders
   cheaply (A23.1 waits for this). Caching v2's stage 5 would make raw files drive status.
@@ -201,14 +241,7 @@ Tony asked (Q14.5) to rethink caching now that HeLab converts raw files; the pla
 decided). **Tony, 2026-10-29: keep planning; no cache code until he gives an explicit go** (A19.1
 and A19.2 included). The go came on 2026-10-31 (Q28.1); A19.2 landed with caching v2's stage 0.
 
-- **Q19.1 Keep HeLab's own TXY files once loads convert on read?** (a) no: only beside and export;
-  (b) yes, as a cache in the budget; (c) yes, as now. Proposed: (a), at stage 2.
-  **Tony, 2026-10-29: "default no, but … we need to keep options open"**: for a bridging time
-  HeLab writes TXY beside the raw files (the per-folder option stays), and raw files may be local
-  or on remote servers, "so we might still want txy caching?" Reply sent in Chat: the store's TXY
-  layers are that cache (binary, local, in the budget, made once per profile), so remote raw
-  files load from the layer without the share; the text output to HeLab's folders stays as a
-  non-default option until he drops it. To confirm.
+Q19.1 is decided (Recently decided, 2026-11-02).
 
 ## Converter follow-ups as built (block 23)
 
@@ -221,8 +254,6 @@ Q12.7 confirmed as Q18.6 (the patterns now tagged).
   Folder details visible. Proposed: as built.
 - **Q23.3 No rows waits 20 s** before it is damaged (was: unconvertible once settled, Q10.2).
   Proposed: keep (one rule for all three checks).
-- **Q23.4 A plot's profile choice isn't saved** with presets, arrangements or reopened plots: a
-  reopened plot starts "As the folder's tab". The same question as Q14.2: answer it there.
 - **Q23.5 The Live line turns amber for no-hit shots** (the whole line, which otherwise means
   "stopped"). Alternative: amber only in Folder details. Proposed: as built.
 
@@ -330,8 +361,8 @@ are here.
   and convert them as they read, with no TXY stored. On X, TXY is 27–41 % of the raw size (2022
   and 2024 folders), so the TXY archive is ~22–29 % of a folder; reading raw files moves 2.4–3.6×
   the bytes on a first, uncached load. Caching v2 answers it in effect (Q19.9: cache the raw
-  files; Q19.1, to decide: HeLab writes TXY only beside the raw files or on export). Proposed:
-  close Q6.9 as answered by caching v2, with Q19.1 still to decide.
+  files; Q19.1, decided 2026-11-02: HeLab's TXY text stays in temp or cache until Tony switches the
+  default to beside). Proposed: close Q6.9 as answered by caching v2 and Q19.1.
 - **Q6.10 (still open) The ~2022 plate swap date.** On X the last old-plate run is 2022-08-22 and
   the first named for the new plates is `20221103_bragg_beam_tests_new_plates`, so 2022-11-03
   provisionally until a closer date is found.
@@ -390,7 +421,7 @@ that block it become Q items here, as the converter's did (Q6.6–Q6.11).
 - In prose: [quality control and repair](../roadmaps/quality-control-and-repair.md#acceptance-and-open-decisions),
   [reproducible workflows](../roadmaps/reproducible-workflows.md#dependencies-and-open-decisions).
 - [TXY converter](../roadmaps/txy-converter.md#open-decisions): Q items (Q6.7, Q6.9–Q6.11, Q12.6,
-  Q14.2, Q14.4, Q15.3, block 23, Q25.2, Q25.4), plus one smaller question there.
-- [Caching v2](../roadmaps/caching-v2.md#open-decisions): Q items (Q19.1 to confirm, Q27.3;
+  Q14.4, Q15.3, block 23, Q25.2, Q25.4), plus one smaller question there.
+- [Caching v2](../roadmaps/caching-v2.md#open-decisions): Q items (Q27.3, Q47.3;
   blocks 28, 42 and 44 decided); its design is in the store-v4 design note and stage 1's
   [addendum](sessions/2026-10-31-claude-caching-v2/design-stage1.md).

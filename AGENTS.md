@@ -184,7 +184,7 @@ Each rule names the area file with the detail.
 - **HeLab never removes the user's data, cached datasets, records, folder flags, constants or
   presets without asking.** Housekeeping is the exception, and only what is listed here:
   - the sweep deletes retired dataset and layer files, and store files no row names (store-v4's
-    `raw/` too) once over an hour old;
+    `raw/` and `txy/` too) once over an hour old;
   - pending saves and results expire after `PENDING_MAX_AGE` (1 h);
   - startup deletes the old diskcache folders and log files beyond the kept count;
   - session-only lists drop their oldest entries;
@@ -211,7 +211,7 @@ Each rule names the area file with the detail.
 **Settings** ([settings](.ai/architecture/settings.md)): open QSettings only through
 `app_settings()` (helpers: `cache_setting.open_settings`). Every key HeLab reads is a row in
 `helab/utils/settings_defaults.py`, read through `read_setting`. Read numbers untyped (PyQt's
-`type=int` is 32-bit). The `store_v4` row stays off until caching v2's stage 2 and Tony's go (Q28.3).
+`type=int` is 32-bit). The `store_v4` row stays off until Tony's check, then turns on in the v0.0.8 PR (Q28.3, Q47.4).
 
 **Analysis and plots** ([plots-and-scripts](.ai/architecture/plots-and-scripts.md),
 [dld-analyses](.ai/architecture/dld-analyses.md)):
@@ -255,8 +255,8 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | Package / module | What | Detail |
 |---|---|---|
 | `helab/main.py`, `helab/__main__.py` | entry; frozen helper dispatch first | [release-and-ci](.ai/architecture/release-and-ci.md) |
-| `helab/io_helper.py`, `helab/io_ops/` | helper process: browse, scanning, loading, save_held, live, convert (`helab_txy`: HeLab's TXY in loads), raw_fill (caching v2), icons, markers, admin, results, listings, trace_check; `infra`, `stores`, `fingerprints`, `metadata`, `summary`, `identity`, `events` | [io-and-browsing](.ai/architecture/io-and-browsing.md) |
-| `helab/convert_cli.py`, `helab/cache_cli.py` | `helab convert --watch` (headless converter); `helab cache dump\|export` (caching v2's `.hlb` files, read only; [format](docs/hlb-format.md)) | [converter](.ai/architecture/converter.md), [cache-store](.ai/architecture/cache-store.md) |
+| `helab/io_helper.py`, `helab/io_ops/` | helper process: browse, scanning, loading, save_held, live, convert (`helab_txy`: HeLab's TXY in loads; `txy_cache`: a load's disk cache, store-v3's dataset or store-v4's views and TXY layers), raw_fill (caching v2), icons, markers, admin, results, listings, trace_check; `infra`, `stores`, `fingerprints`, `metadata`, `summary`, `identity`, `events` | [io-and-browsing](.ai/architecture/io-and-browsing.md) |
+| `helab/convert_cli.py`, `helab/cache_cli.py` | `helab convert --watch` (headless converter); `helab cache dump\|export` (caching v2's `.hlb` files and TXY layers, read only; [format](docs/hlb-format.md)) | [converter](.ai/architecture/converter.md), [cache-store](.ai/architecture/cache-store.md) |
 | `helab/utils/io_service.py` | `IOService`: lanes, slots, pausing, offline gate | [io-and-browsing](.ai/architecture/io-and-browsing.md) |
 | `helab/utils/folder_cache.py` | `FolderCache`: session memory, jobs, RAM budget, presets and results state, store identity | [cache-store](.ai/architecture/cache-store.md) |
 | `helab/utils/cache_store.py`, `cache_paths.py`, `data_roots.py`, `cache_move.py`; `store_v4.py`, `legacy_store.py`, `hlb.py` | the store, location keys, markers, cache-folder move; store-v4 behind its switch, store-v3 read only under it, the `.hlb` container | [cache-store](.ai/architecture/cache-store.md), [data-roots](.ai/architecture/data-roots.md) |
@@ -265,7 +265,7 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | `helab/views/` | main window, `FolderExplorer` and `explorer_live.py` (Live, auto-convert), `live_launch.py` (one launch folder), Folder details, Settings tabs (`ConverterTab.py`: TXY converter), dialogs | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [live](.ai/architecture/live.md), [converter](.ai/architecture/converter.md) |
 | `helab/views/plots/` | `PlotWorkspace`, docks, settings panel, presets, arrangements, cached results, each plot's TXY row (`txy_source.py`) | [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
 | `helab/analysis/` | analysis core, mostly Qt-free (`QT` in `tests/test_headless_imports.py` lists the rest): `DatasetView`, runner, parameters, selection, fits and other numerics, presets, result cache | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
-| `helab/convert/`, `native/` | the TXY converter (Qt-free): `raw`, `profile`, `reconstruct` and `backends/` (numpy the default; cython ships; reference; rust, numba, mlx for developers only, A9.1), `txy`, `fastio`, `split`, `pipeline`, `provenance` (the converted-TXY index), `raw_layer` (caching v2), `user_profiles`, built-in profiles as JSON; harness `samples`, `check`, `timing` (scripts in `dev/txy/`); compiled backends' sources in `native/`; TXY sources' four modes `helab/utils/txy_sources.py` | [converter](.ai/architecture/converter.md) |
+| `helab/convert/`, `native/` | the TXY converter (Qt-free): `raw`, `profile`, `reconstruct` and `backends/` (numpy the default; cython ships; reference; rust, numba, mlx for developers only, A9.1), `txy`, `fastio`, `split`, `pipeline`, `provenance` (the converted-TXY index), `raw_layer` and `txy_layer` (caching v2: raw pulses; TXY segments, `.hlb` kind `txy`), `user_profiles`, built-in profiles as JSON; harness `samples`, `check`, `timing` (scripts in `dev/txy/`); compiled backends' sources in `native/`; TXY sources' four modes `helab/utils/txy_sources.py` | [converter](.ai/architecture/converter.md) |
 | `helab/scripts/standard/`, `helab/scripts/dld/` | Basic plots v1; the DLD Front Panel Port | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
 | `helab/utils/settings_store.py`, `settings_defaults.py`, `lab_parameters.py` | settings | [settings](.ai/architecture/settings.md) |
 | `helab/utils/app_log.py`, `gui_watchdog.py`, `events.py`, `dash_server.py` | logging, stall dumps, notifications, the Plotly server | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
