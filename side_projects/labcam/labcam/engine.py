@@ -7,6 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import dataclasses
 import logging
+import math
 import threading
 import time
 from dataclasses import asdict
@@ -22,6 +23,7 @@ from . import locks as locks_module
 from .align import Aligner
 from . import region as regions
 from . import relocate
+from . import screens
 from .config import HOME, Config, Corners
 from .detectors import Detector, Dot, Image, Motion, Needle, Reading, TraceLevel
 from .segments import SevenSegment
@@ -47,6 +49,9 @@ ALIGN_EVERY = 5.0  # s
 OCR_EVERY = (0.5, 5.0)  # s between reads of each wavemeter field: full, low
 LOW_ANALYSIS_HZ, LOW_STREAM_FPS = 2.0, 5.0
 UNFOCUSED_LOW, IDLE_LOW = 600.0, 3600.0  # s
+AUTOFIT_EVERY = 300.0  # s between fitting each screen's box to the screen itself (screens.py)
+AUTOFIT_KINDS = ("trace", "needle", "dot")
+AUTOFIT_ON_TIMER = False  # off until the fit is dependable live: on 2026-11-02 it misfitted left middle and scope dot
 OCR_WORKERS = max(1, min(4, (os.cpu_count() or 2) - 1))  # cores for the wavemeter when reading every check
 LOCK_SETTLE = 1.5  # s a loss (or unknown) must last before it shows
 LOCK_AFTER = 10.0  # s
@@ -117,6 +122,10 @@ class Engine:
         self.overlay_wanted_until = 0.0  # /frame.jpg asked: draw until then
         self.overlay_at = 0.0
         self._was_low = False
+        self.autofit: dict[str, dict[str, Any]] = {}  # instrument → last fit: ok, why, at
+        self._fit_proposals: dict[str, Corners] = {}
+        self._last_autofit = time.time() - AUTOFIT_EVERY + 15  # first fits 15 s after start
+        self._autofit_busy = threading.Event()
         self._ocr_pool = ThreadPoolExecutor(OCR_WORKERS, thread_name_prefix="labcam-ocr")
         self._ocr_busy: dict[str, int] = {}
         self._ocr_guard = threading.Lock()
@@ -258,6 +267,63 @@ class Engine:
             self.frame_seq += 1
             self.changed.notify_all()
 
+    # Boxes fitted to their screens ------------------------------------------------------------------------
+
+    def _run_autofit(self, frame: Image, now_asked: bool) -> list[str]:
+        try:
+            return self.fit_boxes(frame, now_asked)
+        except Exception:
+            log.exception("auto-fit failed")
+            return ["auto-fit failed (see the log)"]
+        finally:
+            self._autofit_busy.clear()
+
+    def snap_drawn(self, corners: Corners) -> dict[str, Any]:
+        """A drawn box's sides moved to the screen's edges near them (screens.snap_drawn), for the page to preview."""
+        if not self._recent_frames:
+            return {"error": "no frame yet"}
+        snapped = screens.snap_drawn(self._averaged(), corners)
+        return {"corners": [list(p) for p in snapped.corners], "sides": snapped.sides, "moved": snapped.moved}
+
+    def fit_boxes(self, frame: Image | None = None, now_asked: bool = True) -> list[str]:
+        """Fits each screen's box to the screen's own outline (screens.py). On the timer, a fit is applied once two
+        fits in a row agree (within 3 px) and it moves the box by over 2 px, and not while something is in front
+        or someone is moving; asked for ("Fit boxes now"), at once."""
+        frame = frame if frame is not None else self._averaged() if self._recent_frames else None
+        if frame is None:
+            return ["no frame yet"]
+        people = self.readings.get("people")
+        if not now_asked and people is not None and people.values.get("present") != "no":
+            return ["someone is moving: not fitting now"]
+        said = []
+        for name, inst in list(self.config.instruments.items()):
+            if inst.kind not in AUTOFIT_KINDS or not inst.option("auto_box", True) or name not in self.regions:
+                continue
+            if not now_asked and name in self.covered:
+                continue
+            current = self.regions[name].corners
+            found = screens.find(frame, current)
+            self.autofit[name] = {"ok": found.ok, "why": found.why or f"fits (area {found.ratio:g}x the box's)",
+                                  "at": time.time()}
+            if not found.ok:
+                self._fit_proposals.pop(name, None)
+                said.append(f"{name}: kept as it is ({found.why})")
+                continue
+            moved = max(math.dist(a, b) for a, b in zip(current, found.corners))
+            if moved <= 2:
+                said.append(f"{name}: already fits")
+                continue
+            previous = self._fit_proposals.get(name)
+            self._fit_proposals[name] = found.corners
+            if not now_asked and (previous is None or max(math.dist(a, b) for a, b in zip(previous, found.corners)) > 3):
+                said.append(f"{name}: fit found, applied if the next one agrees")
+                continue
+            self._fit_proposals.pop(name, None)
+            log.info("%s: box fitted to its screen (moved up to %.0f px)", name, moved)
+            self.set_corners(name, found.corners)
+            said.append(f"{name}: fitted (moved up to {moved:.0f} px)")
+        return said
+
     # Power --------------------------------------------------------------------------------------------
 
     def presence(self, focused: bool, active: bool) -> None:
@@ -346,6 +412,10 @@ class Engine:
             self._run_detector(name, detector, frame, self.regions[name])
         self.analysis_count += 1
         self.timings["analysis_ms"] = (time.monotonic() - t0) * 1000
+        if AUTOFIT_ON_TIMER and now - self._last_autofit >= AUTOFIT_EVERY and not self._autofit_busy.is_set():
+            self._last_autofit = now
+            self._autofit_busy.set()
+            threading.Thread(target=self._run_autofit, args=(frame, False), name="labcam-autofit", daemon=True).start()
         self._update_locks()
         self.recorder.record(now, self.config.instruments, self.readings, self.locks)
 
@@ -591,6 +661,7 @@ class Engine:
             "ocr": {"every_check": self.ocr_every_check, "workers": OCR_WORKERS},
             "power": {"mode": self.power_mode, "low": self.power()[0], "why": self.power()[1]},
             "overlay": {"font": self.style.font, "line": self.style.line},
+            "autofit": self.autofit,
             "instruments": {
                 name: {
                     "label": inst.label,

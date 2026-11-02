@@ -370,3 +370,47 @@ def test_power_modes() -> None:
     eng.power_mode = "full"
     eng._last_focused = 0.0
     assert not eng.power()[0]
+
+
+def test_slanted_line_is_flat_and_corners_ordered() -> None:
+    # A flat trace seen at a slant (the box a little steeper than the screen) is still a flat line ...
+    image = np.full((60, 100, 3), 40, np.uint8)
+    cv2.line(image, (0, 24), (99, 36), (220, 220, 220), 2)
+    reading = TraceLevel(inst("trace", tolerance=0.15)).update(image)
+    assert reading.values["shape"] == "line"
+    # ... but a steep one (a ramp across the screen) isn't.
+    steep = np.full((60, 100, 3), 40, np.uint8)
+    cv2.line(steep, (0, 5), (99, 55), (220, 220, 220), 2)
+    assert TraceLevel(inst("trace", tolerance=0.15)).update(steep).values["shape"] == "wavy"
+    # Corners clicked in any order come out top-left, top-right, bottom-right, bottom-left.
+    tl, tr, br, bl = (298.0, 274.0), (373.0, 302.0), (370.0, 352.0), (298.0, 326.0)
+    assert config.ordered([bl, br, tr, tl]) == [tl, tr, br, bl]
+    assert config.ordered([tr, bl, tl, br]) == [tl, tr, br, bl]
+
+
+def test_screen_outline_found_from_a_rough_box() -> None:
+    from labcam import screens
+
+    frame = np.full((300, 400, 3), (170, 180, 185), np.uint8)  # a light bezel
+    screen = np.array([[120, 90], [290, 105], [288, 215], [118, 205]], np.int32)  # seen a little at an angle
+    cv2.fillPoly(frame, [screen], (90, 60, 40))
+    cv2.line(frame, (125, 150), (285, 162), (230, 200, 120), 2)  # the trace across it
+    rough = [(135.0, 100.0), (270.0, 110.0), (272.0, 200.0), (130.0, 195.0)]  # drawn a bit off
+    found = screens.find(frame, rough)
+    assert found.ok
+    assert max(np.hypot(*(np.array(a) - b)) for a, b in zip(found.corners, screen)) < 4
+    assert not screens.find(np.full((300, 400, 3), 128, np.uint8), rough).ok  # no screen: kept as it is
+
+
+def test_drawn_box_snaps_to_the_screen_near_it() -> None:
+    from labcam import screens
+
+    frame = np.full((300, 400, 3), (170, 180, 185), np.uint8)  # a light bezel ...
+    cv2.rectangle(frame, (60, 50), (340, 260), (60, 60, 60), 3)  # ... with a dark rim further out
+    screen = np.array([[120, 90], [290, 105], [288, 215], [118, 205]], np.int32)
+    cv2.fillPoly(frame, [screen], (90, 60, 40))
+    cv2.line(frame, (125, 150), (285, 162), (230, 200, 120), 2)
+    drawn = [(272.0, 200.0), (130.0, 195.0), (135.0, 100.0), (270.0, 110.0)]  # rough, clicked in any order
+    snapped = screens.snap_drawn(frame, drawn)
+    assert all(snapped.sides)
+    assert max(np.hypot(*(np.array(a) - b)) for a, b in zip(snapped.corners, screen)) < 3  # the screen, not the rim
