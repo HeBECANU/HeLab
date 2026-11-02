@@ -1381,9 +1381,9 @@ class FolderCache(QObject):
         is ``[]`` for its first this session, which only records), so done shots aren't checked
         again and a file is taken as finished only after two conversions saw it unchanged. One
         conversion per folder at a time (a second asker joins it). Whether it was accepted.
-        ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` False the folder's
-        flag, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a refused
-        beside write); None: as set."""
+        ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` the folder's flag as this
+        memory knows it, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a
+        refused beside write); None: as set. The helper still writes beside only while the store's flag is on."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
@@ -1395,7 +1395,7 @@ class FolderCache(QObject):
                                    # (The setting, cache or temp: ``destination``, since every helper's
                                    # ``output`` is its private folder, set by IOService.)
                                    "destination": destination or constants.read_convert_output(settings),
-                                   "beside": self.write_beside(path) if beside is None else beside and self.write_beside(path),
+                                   "beside": self.write_beside(path) if beside is None else beside,
                                    "seen": []}
         lists = self.convert_lists.get(path)
         if lists is not None:

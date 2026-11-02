@@ -168,6 +168,8 @@ def test_the_read_says_where_it_stopped(data: bytes, line: int | None, text: str
     assert stop is not None and (stop.line, stop.text) == (line, text)
     assert stop.unread == len(data) - stop.offset > 0
     assert stop.summary() == f"read stopped at line {line}" and f"line {line}," in stop.detail()
+    # (What was read on that line before the token counts: "0,12abc" keeps the row (0, 12); Strata's nit.)
+    assert "only the hits of what was read before it" in stop.detail() and "rows before that line" not in stop.detail()
 
 
 def stop_holds(data: bytes) -> None:

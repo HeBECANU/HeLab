@@ -34,8 +34,10 @@ def one_worker(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def fresh_confirmations() -> Iterator[None]:
     explorer_convert.beside_confirmed.clear()
+    explorer_convert.instead.clear()
     yield
     explorer_convert.beside_confirmed.clear()
+    explorer_convert.instead.clear()
 
 
 @pytest.fixture
@@ -62,7 +64,7 @@ def recording(saved: list[tuple[str, bool]]) -> Any:
     """``FolderCache.set_write_beside`` noting each choice instead of asking a helper."""
     def set_write_beside(folder: str, on: bool) -> str:
         saved.append((folder, on))
-        return ""
+        return "owner"  # (Its job's owner: queued.)
     return set_write_beside
 
 
@@ -89,6 +91,7 @@ def test_auto_convert_beside_on_a_share_asks_once_and_cache_instead_writes_nothi
     assert {button.objectName() for button in box.findChildren(QPushButton)} == {
         "live_share_beside", "live_share_cache", "live_share_off"}
     assert box.defaultButton() is box.findChild(QPushButton, "live_share_cache")
+    session.convert.ended_at = -1e9  # (An answer within a check interval of the last conversion waits a tick.)
     click(box, "live_share_cache")
     qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
     payload = producer(cache, path, "convert").payload
@@ -109,6 +112,9 @@ def test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off(
     cycle(qtbot, explorer, path, tmp_path)
     beside_flag(explorer, path)
     qtbot.waitUntil(lambda: control.box is not None)
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    session.convert.ended_at = -1e9  # (An answer within a check interval of the last conversion waits a tick.)
     click(control.box, f"live_share_{choice}")
     if choice == "off":
         assert explorer.live is not None and explorer.live.convert is None and path not in cache.auto_convert
@@ -185,7 +191,8 @@ def test_a_refused_beside_write_in_live_asks_retry_or_hellabs_folders(
         assert convert_state.error and ("convert", path) not in cache.jobs
         assert "turn the folder's beside setting off" in line(explorer)[1]
     else:
-        assert not convert_state.error and not convert_state.refused and convert_state.destination == destination
+        assert not convert_state.error and not convert_state.refused
+        assert explorer_convert.instead_of_beside(path) == destination
         qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
         payload = producer(cache, path, "convert").payload
         assert payload["destination"] == (destination or "cache")
@@ -302,9 +309,9 @@ def test_converting_beside_on_the_share_asks_first_and_sets_the_folders_flag(
     converter.clicked(path)
     click(converter.box, "convert_offer_beside")
     assert saved == [(path, True)]
+    beside_flag(explorer, path)  # (The store's answer.)
     qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
-    payload = producer(cache, path, "convert").payload
-    assert "beside" in payload and payload["destination"] in ("cache", "temp")
+    assert producer(cache, path, "convert").payload["beside"] is True
     converter.close()
     explorer.close_cleanup()
 
@@ -314,6 +321,7 @@ def test_a_refused_beside_write_from_folder_details_asks_too(
         qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str], choice: str, destination: str) -> None:
     explorer, path, panel = raw_folder(qtbot, tmp_path)
     cache, converter = explorer.model.cache, explorer.converter
+    beside_flag(explorer, path)
     assert converter.start(path, "beside")
     request = producer(cache, path, "convert")
     cache.service.pending.remove(request)
@@ -330,7 +338,142 @@ def test_a_refused_beside_write_from_folder_details_asks_too(
     qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
     assert converter.conversions[path].destination == destination and not converter.conversions[path].error
     payload = producer(cache, path, "convert").payload
-    # (Beside follows the folder's flag, not known here; temp is never beside.)
-    assert payload["beside"] is False and payload["destination"] == ("temp" if destination == "temp" else "cache")
+    # (Retry: beside again, asked explicitly; temp is never beside, and is now the folder's for the session.)
+    assert payload["beside"] is (destination == "beside")
+    assert payload["destination"] == ("temp" if destination == "temp" else "cache")
+    assert explorer_convert.instead_of_beside(path) == (None if destination == "beside" else "temp")
     converter.close()
+    explorer.close_cleanup()
+
+
+# Strata's review (2026-11-03).
+
+def test_the_offers_beside_is_gated_like_the_live_menu(
+        qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finding 1: without a confirmed .helab-root (or the disk cache), beside can't be saved for the folder:
+    the offer's beside button is disabled with the reason, and choosing it starts nothing."""
+    explorer, path, panel = raw_folder(qtbot, tmp_path)
+    cache, converter = explorer.model.cache, explorer.converter
+    monkeypatch.setattr(cache, "no_root", lambda folder: "no .helab-root found here or above")
+    asked: list[str] = []
+
+    def confirm(parent: Any, folder: str, share: str) -> bool:
+        asked.append(folder)
+        return True
+    monkeypatch.setattr(explorer_convert, "confirm_beside_on_share", confirm)
+    assert explorer_convert.beside_unavailable(cache, path).startswith("no .helab-root")
+    converter.clicked(path)
+    box = converter.box
+    assert box is not None
+    beside = box.findChild(QPushButton, "convert_offer_beside")
+    assert beside is not None and not beside.isEnabled() and "no .helab-root" in box.informativeText()
+    converter._offer_answered(path, "beside")
+    assert asked == [] and path not in converter.conversions and ("convert", path) not in cache.jobs
+    box.close()
+    explorer.close_cleanup()
+
+
+def test_the_offers_beside_waits_for_the_folders_flag_then_converts_beside(
+        qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finding 1: the beside conversion starts once the store says the folder's flag is on, and asks for
+    beside explicitly; a flag that can't be saved stops it, said in the row."""
+    explorer, path, panel = raw_folder(qtbot, tmp_path)
+    cache, converter = explorer.model.cache, explorer.converter
+    monkeypatch.setattr(explorer_convert, "confirm_beside_on_share", lambda parent, folder, share: True)
+    saved: list[tuple[str, bool]] = []
+    monkeypatch.setattr(cache, "set_write_beside", recording(saved))
+    converter.clicked(path)
+    click(converter.box, "convert_offer_beside")
+    assert saved == [(path, True)] and ("convert", path) not in cache.jobs  # Not before the flag is known.
+    panel.show_explorer(explorer, None)
+    assert "beside setting" in panel.text("offer")
+    beside_flag(explorer, path)  # (The store's answer.)
+    qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
+    assert producer(cache, path, "convert").payload["beside"] is True
+    converter.close()
+    explorer.close_cleanup()
+
+
+def test_a_beside_flag_that_cant_be_saved_stops_the_offers_conversion(
+        qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    explorer, path, panel = raw_folder(qtbot, tmp_path)
+    cache, converter = explorer.model.cache, explorer.converter
+    monkeypatch.setattr(explorer_convert, "confirm_beside_on_share", lambda parent, folder, share: True)
+    monkeypatch.setattr(cache, "set_write_beside", lambda folder, on: "")  # (Not queued.)
+    converter.clicked(path)
+    click(converter.box, "convert_offer_beside")
+    conversion = converter.conversions[path]
+    assert conversion.error.startswith("the folder's beside setting couldn't be saved")
+    monkeypatch.setattr(cache, "set_write_beside", lambda folder, on: "owner")
+    converter.start(path, "beside")
+    cache.cacheAdminResult.emit("convert_prefs", {"kind": "error", "message": "the store is busy"})
+    assert converter.conversions[path].error == "the folder's beside setting couldn't be saved: the store is busy"
+    assert ("convert", path) not in cache.jobs
+    explorer.close_cleanup()
+
+
+def test_lives_question_goes_with_auto_convert_and_a_later_one_converts(
+        qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str]) -> None:
+    """Finding 2: turning auto-convert off (or Live) closes Live's open question, so a later auto-convert
+    isn't held by it."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cache, control = explorer.model.cache, explorer.live_control
+    cycle(qtbot, explorer, path, tmp_path)
+    beside_flag(explorer, path)
+    qtbot.waitUntil(lambda: control.box is not None)
+    box = control.box
+    control.set_auto_convert(False)
+    assert control.box is None and box is not None and not box.isVisible()
+    explorer_convert.confirm_share(path)
+    control.set_auto_convert(True)
+    request, _ = cycle(qtbot, explorer, path, tmp_path)  # (Not held by the closed question.)
+    assert request.payload["beside"] is True and control.box is None
+    explorer.stop_live(save=False)
+    assert control.box is None
+    explorer.close_cleanup()
+
+
+def test_lives_question_goes_when_live_stops(
+        qtbot: QtBot, service: IOService, tmp_path: Path, on_a_share: list[str]) -> None:
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    control = explorer.live_control
+    cycle(qtbot, explorer, path, tmp_path)
+    beside_flag(explorer, path)
+    qtbot.waitUntil(lambda: control.box is not None)
+    box = control.box
+    explorer.stop_live(save=False)
+    assert control.box is None and box is not None and not box.isVisible()
+    explorer.close_cleanup()
+
+
+def test_the_choice_after_a_refusal_holds_for_the_folder_in_live_and_folder_details(
+        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+    """Finding 3: HeLab's cache or temp folder instead of beside, chosen in Folder details, is the folder's
+    for the session: Live's auto-convert of that folder writes there too (and the other way round)."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cache, control, converter = explorer.model.cache, explorer.live_control, explorer.converter
+    cycle(qtbot, explorer, path, tmp_path)
+    beside_flag(explorer, path)
+    converter.conversions[path] = explorer_convert.FolderConversion(path, "beside", time.time(), error="refused",
+                                                                    refused="Not written: …")
+    converter._refusal_answered(path, "temp")
+    assert explorer_convert.instead_of_beside(path) == "temp"
+    converter.close()
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    session.convert.ended_at = -1e9
+    qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
+    payload = producer(cache, path, "convert").payload
+    assert payload["destination"] == "temp" and payload["beside"] is False
+    assert "HeLab's temp folder instead of beside" in line(explorer)[1]
+    explorer_convert.instead.clear()
+    # Live's own choice is the folder's too.
+    run_convert(cache, path)
+    session.convert.request = True
+    control._convert_event(session, {"kind": "beside_refused", "path": path, "shot": 1, "txy": "x",
+                                     "message": "Not written: …"})
+    control._convert_event(session, {"kind": "error", "message": "Not written: …"})
+    click(control.box, "beside_refused_cache")
+    assert explorer_convert.instead_of_beside(path) == "cache"
+    explorer.stop_live(save=False)
     explorer.close_cleanup()

@@ -93,3 +93,18 @@ def test_the_mount_table_is_read_at_most_every_few_seconds(monkeypatch: pytest.M
 def test_the_warning_names_the_folder_the_share_and_the_recommendation() -> None:
     text = cache_location.share_warning("run1", "//labserver/data")
     assert "run1" in text and "//labserver/data" in text and "acquisition PC" in text and "(recommended)" in text
+
+
+def test_share_of_is_called_through_its_module() -> None:
+    """Tests patch ``cache_location.share_of`` (the app's and ``helab convert``'s tests): every caller calls it
+    as ``cache_location.share_of``, never imported by value (AGENTS.md; Strata's review, finding 4)."""
+    import ast
+    from pathlib import Path
+    root = Path(__file__).parent.parent / "helab"  # (No resolve: this file's fixture refuses realpath.)
+    by_value = []
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.ImportFrom) and node.module == "helab.utils.cache_location"
+                    and any(alias.name in ("share_of", "mount_table") for alias in node.names)):
+                by_value.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+    assert by_value == []

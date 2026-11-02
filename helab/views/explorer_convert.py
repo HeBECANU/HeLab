@@ -10,16 +10,19 @@ record; the session memory only spares a second question.
 **Folder details' offer** (A39.5): a folder on a share with raw files and no TXY of any kind, not
 converted by Live, shows a Convert row; clicking it asks (``offer_conversion``): HeLab's cache folder
 (recommended), its temp folder, or beside on the share (behind ``confirm_beside_on_share``, which turns
-the folder's flag on). ``ExplorerConverter`` then runs the folder's conversions (``FolderCache.convert``
+the folder's flag on, offered only where the Live menu offers that setting: ``beside_unavailable``). A beside
+conversion starts once the store says the folder's flag is on (``folderPrefsChanged``); a flag that can't be
+saved stops it, said in the row. ``ExplorerConverter`` then runs the folder's conversions (``FolderCache.convert``
 with the destination chosen, owner ``<tab>:convert``, the background lane): the first only records, as
 every conversion's first does, so passes follow a check interval apart while files wait to settle (at
 most ``MAX_PASSES``); then the folder is listed and loaded again, so HeLab's new TXY show.
 
 **A beside write that can't be made safely** (Q38.1, Tony 2026-11-02): the helper's ``beside_refused``
 (no hard links and no rename that refuses an existing name), then the run fails as before; HeLab asks
-(``ask_after_refusal``): Retry, write to HeLab's cache or temp folder instead (that conversion, Live's
-auto-convert or this one, for the rest of the session; the folder's flag stays), or not now. Never a
-silent refusal nor a silent fallback.
+(``ask_after_refusal``): Retry, write to HeLab's cache or temp folder instead (the folder's, for the rest of
+the session: ``instead``, which Live's auto-convert and Folder details' conversions both follow; the folder's
+flag stays), or not now. Never a silent refusal nor a silent fallback. Live's "Convert to HeLab's cache
+instead" on a share is kept the same way.
 
 Every question is a non-modal ``QMessageBox`` (``open``) but the beside confirmation, which answers a
 click: none waits on a helper. Each button has an ID (``<prefix>_<choice>``).
@@ -37,7 +40,7 @@ import weakref
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox, QPushButton, QWidget
 
-from helab.utils import cache_location
+from helab.utils import cache_location, folder_cache
 from helab.utils.accessible import identify
 from helab.utils.folder_cache import FolderCache
 from helab.views.explorer_text import plural
@@ -48,6 +51,10 @@ if TYPE_CHECKING:
 
 # Folders whose TXY the user agreed this session to write beside the raw files on a share (FolderCache keys).
 beside_confirmed: set[str] = set()
+# HeLab's folder (``cache`` or ``temp``) instead of beside the raw files, by folder (FolderCache keys), for the
+# session: the user's answer after a refused beside write (Q38.1) or to Live's share question (A39.5). Live's
+# auto-convert and Folder details' conversions both follow it; choosing beside again in Folder details clears it.
+instead: dict[str, str] = {}
 # A one-off conversion's passes at most: a folder still being written after these is Live's to follow.
 MAX_PASSES = 6
 # What each destination is called in the questions and the Convert row.
@@ -65,6 +72,28 @@ def share_to_confirm(path: str) -> str:
 
 def confirm_share(path: str) -> None:
     beside_confirmed.add(FolderCache.key(path))
+
+
+def instead_of_beside(path: str) -> str | None:
+    """HeLab's folder the user chose this session instead of beside the raw files of ``path``, or None."""
+    return instead.get(FolderCache.key(path))
+
+
+def write_instead(path: str, destination: str) -> None:
+    instead[FolderCache.key(path)] = destination
+
+
+def beside_unavailable(cache: FolderCache, path: str) -> str:
+    """Why the folder's beside setting can't be saved now ("" when it can): it needs the disk cache and a
+    confirmed data root (the setting is saved with the root). The Live menu and Folder details' offer ask
+    this alike."""
+    if not folder_cache.store_options():
+        return "the disk cache is off for this session"
+    if cache.no_root(path) is not None:
+        return "no .helab-root found here or above (the choice is saved with the folder's data root)"
+    if cache.pending_root(path) is not None:
+        return "its .helab-root isn't confirmed yet (Review…)"
+    return ""
 
 
 def _name(path: str) -> str:
@@ -151,21 +180,29 @@ def ask_after_refusal(parent: QWidget, path: str, message: str, answer: Callable
         "cache", "later", answer)
 
 
-def offer_conversion(parent: QWidget, path: str, share: str, answer: Callable[[str], None]) -> QMessageBox:
+def offer_conversion(parent: QWidget, path: str, share: str, answer: Callable[[str], None],
+                     beside_why: str = "") -> QMessageBox:
     """Folder details' offer for a share folder without TXY: ``cache`` (recommended), ``temp``, ``beside``
-    (confirmed next) or ``cancel``."""
-    return question(
+    (confirmed next; disabled with ``beside_why`` when the folder's beside setting can't be saved) or
+    ``cancel``."""
+    box = question(
         parent, "convert_offer", "Convert this folder's raw files",
         f"{_name(path)} has raw files but no TXY of any kind, and it is on the network share {share}.",
         "HeLab's converter should run on the computer that owns the data (the acquisition PC), where the raw "
         "files are local. Here HeLab can convert them into its cache folder on this computer (recommended) or "
         "its temp folder, writing nothing to the share; converting beside the raw files on the share asks "
-        f"first.\n\n{path}",
+        f"first." + (f" Converting beside them isn't available here: {beside_why}." if beside_why else "")
+        + f"\n\n{path}",
         [("cache", "Convert to HeLab's cache (recommended)", QMessageBox.ButtonRole.AcceptRole),
          ("temp", "Convert to HeLab's temp folder", QMessageBox.ButtonRole.ActionRole),
          ("beside", "Convert beside on the share…", QMessageBox.ButtonRole.ActionRole),
          ("cancel", "Cancel", QMessageBox.ButtonRole.RejectRole)],
         "cache", "cancel", answer)
+    beside = box.findChild(QPushButton, "convert_offer_beside")
+    if beside is not None and beside_why:
+        beside.setEnabled(False)
+        beside.setToolTip(f"Not available: {beside_why}")
+    return box
 
 
 @dataclass(eq=False)
@@ -186,6 +223,7 @@ class FolderConversion:
     refused: str = ""  # A beside write refused (Q38.1), until answered.
     error: str = ""
     finished: bool = False
+    flag: bool = False  # Beside: waiting for the store to say the folder's flag is on.
 
 
 class ExplorerConverter:
@@ -199,6 +237,10 @@ class ExplorerConverter:
         self._timer = QTimer(explorer)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._next_passes)
+        cache = explorer.model.cache
+        self._cache = cache
+        cache.folderPrefsChanged.connect(self._flag_changed)
+        cache.cacheAdminResult.connect(self._admin_result)
 
     @property
     def explorer(self) -> FolderExplorer:
@@ -228,6 +270,8 @@ class ExplorerConverter:
             where = WHERE.get(conversion.output or conversion.destination, conversion.destination)
             if conversion.error:
                 text = f"Conversion stopped: {conversion.error}"
+            elif conversion.flag:
+                text = "Saving the folder's beside setting, then converting beside the raw files…"
             elif not conversion.finished:
                 text = (f"Converting to {where}… {conversion.done:,} of {conversion.todo:,}" if conversion.todo
                         else f"Converting to {where}…")
@@ -273,15 +317,18 @@ class ExplorerConverter:
             return
         share = self.offered(path) or cache_location.share_of(path)
         if share:
-            self.box = offer_conversion(self.explorer, path, share, lambda choice: self._offer_answered(path, choice))
+            self.box = offer_conversion(self.explorer, path, share, lambda choice: self._offer_answered(path, choice),
+                                        beside_unavailable(self.explorer.model.cache, path))
 
     def _offer_answered(self, path: str, choice: str) -> None:
         self.box = None
         if choice == "beside":
+            if why := beside_unavailable(self.explorer.model.cache, path):
+                logging.info("Converting %s beside the raw files isn't available: %s", path, why)
+                return
             share = cache_location.share_of(path)
             if not confirm_beside_on_share(self.explorer, path, share):
                 return
-            self.explorer.model.cache.set_write_beside(path, True)
         if choice in WHERE:
             self.start(path, choice)
 
@@ -290,6 +337,8 @@ class ExplorerConverter:
         conversion = self.conversions.get(path)
         if conversion is None:
             return
+        if choice in ("cache", "temp"):
+            write_instead(path, choice)  # (The folder's for the session: Live's auto-convert follows it too.)
         if choice in ("retry", "cache", "temp"):
             self.start(path, conversion.destination if choice == "retry" else choice)
 
@@ -298,13 +347,45 @@ class ExplorerConverter:
         nothing settles, then the folder is listed and loaded again. Whether its first pass was queued."""
         conversion = self.conversions[path] = FolderConversion(path, destination, time.time())
         logging.info("Converting %s to %s (Folder details)", path, WHERE.get(destination, destination))
+        cache = self.explorer.model.cache
+        if destination == "beside":
+            instead.pop(FolderCache.key(path), None)  # (Beside, chosen again: no longer instead.)
+            if not cache.write_beside(path):
+                # The folder's flag first: the helper writes beside only while the store's flag is on.
+                if not cache.set_write_beside(path, True):
+                    conversion.error = "the folder's beside setting couldn't be saved (HeLab's work queue is full)"
+                    self.explorer.loadStateChanged.emit()
+                    return False
+                conversion.flag = True
+                self.explorer.loadStateChanged.emit()
+                return True
         return self._pass(conversion)
+
+    def _flag_changed(self, path: str) -> None:
+        """A folder's flags as the store said: a beside conversion waiting for its flag starts."""
+        for conversion in self.conversions.values():
+            if (conversion.flag and FolderCache.key(conversion.path) == path
+                    and self.explorer.model.cache.write_beside(conversion.path)):
+                conversion.flag = False
+                self._pass(conversion)
+
+    def _admin_result(self, action: str, event: object) -> None:
+        """The folder's beside flag couldn't be saved: the conversions waiting for it stop, saying so."""
+        if action != "convert_prefs" or not isinstance(event, dict) or event.get("kind") not in ("error", "cancelled"):
+            return
+        for conversion in self.conversions.values():
+            if conversion.flag:
+                conversion.flag = False
+                conversion.error = ("the folder's beside setting couldn't be saved: "
+                                    + str(event.get("message") or "cancelled"))
+                logging.warning("Converting %s stopped: %s", conversion.path, conversion.error)
+        self.explorer.loadStateChanged.emit()
 
     def _pass(self, conversion: FolderConversion) -> bool:
         beside = conversion.destination == "beside"
         cache = self.explorer.model.cache
         if not cache.convert(self.owner, conversion.path, destination=None if beside else conversion.destination,
-                             beside=None if beside else False):
+                             beside=beside):
             conversion.error = "the conversion couldn't be queued"
             self.explorer.loadStateChanged.emit()
             return False
@@ -371,6 +452,11 @@ class ExplorerConverter:
 
     def close(self) -> None:
         self._timer.stop()
+        try:
+            self._cache.folderPrefsChanged.disconnect(self._flag_changed)
+            self._cache.cacheAdminResult.disconnect(self._admin_result)
+        except TypeError:
+            pass  # (Closed before.)
         for conversion in self.conversions.values():
             if conversion.request:
                 self.explorer.model.cache.cancel(self.owner, "convert", conversion.path)

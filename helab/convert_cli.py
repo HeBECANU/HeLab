@@ -296,11 +296,11 @@ def _beside_anyway(folder: str, yes: bool) -> bool:
     """A typed ``--output beside`` on a network share (A39.5): one warning naming the share, then the
     user's answer on a terminal, unless ``--yes``; without a terminal and ``--yes``, not beside (the
     setting's output). Asked once, before the first check."""
-    from helab.utils.cache_location import share_of, share_warning
-    share = share_of(folder, resolve=True)
+    from helab.utils import cache_location  # (Tests patch cache_location.share_of: called through it.)
+    share = cache_location.share_of(folder, resolve=True)
     if not share:
         return True
-    LOG.warning("%s", share_warning(folder, share))
+    LOG.warning("%s", cache_location.share_warning(folder, share))
     if yes:
         LOG.warning("Writing beside the raw files on the share anyway (--yes)")
         return True

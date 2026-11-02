@@ -108,10 +108,9 @@ class AutoConvert:
     damaged: set[str] = field(default_factory=set)
     kept: dict[int, str] = field(default_factory=dict)
     error: str = ""  # Why conversions stopped (Retry, or auto-convert off and on, starts them again).
-    # A beside write refused for want of a safe rename (Q38.1), until answered; and the user's choice then, or
-    # on a share (A39.5): HeLab's cache or temp folder instead of beside, for this session's auto-convert.
+    # A beside write refused for want of a safe rename (Q38.1), until answered (the user's choice then is the
+    # folder's for the session: ``explorer_convert.instead``).
     refused: str = ""
-    destination: str | None = None
 
     def stuck(self) -> dict[str, tuple[str, str]]:
         """Files waiting for more than being written: no final newline, off the trigger channel,
@@ -720,10 +719,7 @@ class LiveController:
         assert action is not None
         action.setCheckable(True)
         action.setChecked(cache.write_beside(path))
-        why = ("the disk cache is off for this session" if not folder_cache.store_options() else
-               "no .helab-root found here or above (the choice is saved with the folder's data root)"
-               if cache.no_root(path) is not None else
-               "its .helab-root isn't confirmed yet (Review…)" if cache.pending_root(path) is not None else "")
+        why = explorer_convert.beside_unavailable(cache, path)
         action.setEnabled(not why)
         action.setToolTip(f"Not available: {why}" if why else (
             f"HeLab's TXY (d_txy_helab_<tag>_<N>.txt) go into {name} itself, beside the raw files, instead of HeLab's "
@@ -787,6 +783,10 @@ class LiveController:
         convert, session.convert = session.convert, None
         if convert is not None and convert.request:
             self.explorer.model.cache.cancel(self.explorer.live_owner, "convert", session.path)
+        # Its open question goes with it (a later auto-convert isn't held by it; its answer would find no session).
+        box, self.box = self.box, None
+        if box is not None:
+            box.close()
 
     def _convert_tick(self, session: LiveSession) -> None:
         """Ask for the folder's next conversion with Live's check: one at a time, at least a check
@@ -797,15 +797,16 @@ class LiveController:
         if (convert is None or convert.request or convert.error or self.box is not None
                 or time.monotonic() - convert.ended_at < cache.live_interval):
             return
-        if convert.destination is None and cache.write_beside(session.path) and (
+        destination = explorer_convert.instead_of_beside(session.path)  # (The user's choice this session.)
+        if destination is None and cache.write_beside(session.path) and (
                 share := explorer_convert.share_to_confirm(session.path)):
             # A39.5: beside the raw files on a share, asked once per folder this session; nothing converts meanwhile.
             path = session.path
             self.box = explorer_convert.ask_live_beside_on_share(
                 self.explorer, path, share, lambda choice: self._share_answered(path, choice))
             return
-        if not cache.convert(self.explorer.live_owner, session.path, destination=convert.destination,
-                             beside=None if convert.destination is None else False):
+        if not cache.convert(self.explorer.live_owner, session.path, destination=destination,
+                             beside=None if destination is None else False):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
             return
@@ -822,7 +823,7 @@ class LiveController:
         if choice == "beside":
             explorer_convert.confirm_share(path)
         elif choice == "cache":
-            session.convert.destination = "cache"
+            explorer_convert.write_instead(path, "cache")
         else:
             self.set_auto_convert(False)
             return
@@ -841,7 +842,7 @@ class LiveController:
         if choice not in ("retry", "cache", "temp"):
             return
         if choice != "retry":
-            convert.destination = choice
+            explorer_convert.write_instead(path, choice)  # (The folder's for the session: Folder details too.)
         convert.error = convert.refused = ""
         self._convert_tick(session)
         self._live_changed()
@@ -1043,8 +1044,8 @@ class LiveController:
                              + (" …" if len(entries) > 8 else ""))
         if convert.stuck():
             lines.append("A waiting file is checked again only when it changes.")
-        if convert.destination is not None:
-            lines.append(f"This session: TXY go to {explorer_convert.WHERE[convert.destination]} instead of beside the "
+        if (instead := explorer_convert.instead_of_beside(session.path)) is not None:
+            lines.append(f"This session: TXY go to {explorer_convert.WHERE[instead]} instead of beside the "
                          "raw files (the folder's beside setting stays)")
         if convert.error:
             lines.append(f"Auto-convert stopped: {convert.error}. Retry converts again"

@@ -95,7 +95,7 @@ class ReadStop:
     def detail(self) -> str:
         """The longer sentence for tooltips and the log."""
         return (f"read stopped at line {self.line}, at \"{self.text}\", which isn't a number: as MATLAB's "
-                f"converter reads the file, its TXY holds only the hits of the rows before that line "
+                f"converter reads the file, its TXY holds only the hits of what was read before it "
                 f"({self.unread:,} bytes not read)")
 
 
