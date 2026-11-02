@@ -1206,3 +1206,26 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
 - **Tests:** a test that a stalled read sends no heartbeat, and one of the counts by source and after a load.
   Both fail without the fixes.
 - **Checked:** suite 8956 passed, no RERUN.
+
+## Stage 4: the policy UI (`1ad31a9`, integration check `beffbff`)
+
+- **S4~1, a folder:** `folder_choice` with policy `txy` reports `folder_raw` (`CacheStore.folder_raw`: shots,
+  bytes, only copies).
+  - FolderCache emits `rawRemovalOffered` to the tab that chose, the owner `set_folder_choice` recorded.
+  - That tab's explorer asks "Also remove HeLab's cached copy of this folder's raw pulses (N MB)? Your d files
+    aren't touched." and names any only copies.
+  - On a yes only, it sends `clear_raw` for that folder.
+- **S4~1, Settings:** saving TXY only from another policy, with raw pulses cached, asks about the folders that
+  follow the setting.
+  - The question says "up to N MB" (the inventory's total) and that folders with their own policy keep theirs.
+  - On a yes it sends `clear_raw` with `following`, through `CacheStore.remove_raw_following`.
+- **S4~2 and S4~3** hold as built in stage 2: Raw only drops HeLab layers from saves and keeps the existing ones,
+  and MATLAB's layers stay, since raw can't make them. A folder's choice applies to that folder only.
+- **S4~4:** the labels as built (Q47.3).
+- **Tests:** `tests/test_txy_only_offer.py` (4 tests, failing without the change), and the stage 4 session in
+  `test_caching_v2_session.py`.
+- **Checked:** suite 8961 passed, no RERUN.
+- **Doc proposals:**
+  - cache-store.md: `folder_raw` and `remove_raw_following`.
+  - app-runtime-and-ui.md: S4~1's two questions.
+  - the plan: stage 4 ticked, and stage 5 (raw files drive status, after MATLAB is retired) unchanged.
