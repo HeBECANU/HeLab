@@ -253,3 +253,18 @@ The run's results follow, every Tests and Converter backends job's log read for 
     is that test blocking the GUI thread, not a leftover window.
   - My own test's deliberate stall line shows in CI's log too. It could be filtered (a logger level) if
     it misleads; left as it is.
+
+## A40.1's guard test RERUN (caching-v2 CI 41451159277; Vault's reading): fixed
+
+- **The RERUN.** `test_io_service_run.py::test_a_helper_still_starting_when_helab_quits_is_stopped`,
+  `TimeoutExpired` after 10 s at :162.
+- **Cause.** Its `Popen` fake took any `HeLab-*` thread, so another IOService's helper start meanwhile
+  entered it too and could be `started[0]`, which this test never kills.
+  - `this_tests` wouldn't help: that helper's thread starts after the patch.
+- **Fix.** The fake takes only this request's start, known by its stderr file in the request's folder; the
+  request is known through `IOService.before_start`.
+- **Repro case kept:** another service's helper starts meanwhile. With the old check it enters the fake
+  too (`assert (2 == 1)`, 3 of 3).
+- **Checks.** Full suite 8935 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "A40.1's guard test took another IOService's helper start
+  as its own (caching-v2 CI 41451159277); fixed by matching its request's stderr path."
