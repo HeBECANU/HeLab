@@ -541,3 +541,35 @@ On an export of `48e3656`, whose `helab/` and `tests/` equal the floor's `HEAD` 
   - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 
 Stage 4, through `9be3e12`, has no open review findings.
+
+## `65ee050`: a load of another TXY choice says the folder is disk cached
+
+**Open findings: none.**
+
+- **The change** (`helab/io_ops/loading.py:813-818`). A store-v4 load whose own view was read and found absent
+  (`had_dataset` False, not None) also says `disk_cached` when the folder has any view (`store.folder_views`).
+  That matches what listings say (`read_dataset_infos` → `_view_infos`). `had_dataset`, and so the dataset info's
+  "created" or "updated", is unchanged.
+- **It can't claim "cached" for a folder with no usable data.**
+  - A view outlives no layer. `_remove_txy_rows`, the only `DELETE FROM txy_layers`, deletes every view of each
+    folder losing a layer, in the same transaction, and bumps its `txy:` epoch. Clear TXY data, the purges, Make
+    room, trim and Clear root all go through it or delete views themselves.
+  - `folder_views` answers `[]` on a read error, so an error never says "cached".
+  - The read runs at the end of the load, in the helper, on a fresh snapshot, so a Clear that landed meanwhile is
+    seen.
+  - When the cache is unknown (`had_dataset` None: unreadable, no store, Don't cache) the field is still left out,
+    as before. Quiet loads still say nothing.
+  - Scratch test (`.ai/temp/assay/test_zz_dc.py`, on an export of `65ee050`): load, then `clear_txy` of the
+    folder, then a load of another choice. **Views `[]`, `disk_cached: False`.**
+- **The switch-off path is unchanged.** `other_view` needs `access.layered`, which is False in store-v3, so
+  `disk_cached` there is `cached or bool(had_dataset)` as before. `folder_views` also returns `[]` below layout 4.
+- **Fails without it.** With `loading.py` as it was at `65ee050^`, the new test
+  `test_a_load_of_another_txy_choice_says_the_folder_is_disk_cached` **failed**. Restored (compared with git), it
+  passes.
+- **Checks.** On an export of `65ee050`, whose `helab/` equals the floor's `HEAD` `1485e6f` (the later merge
+  changed only tests and CI):
+  - `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` on `test_v4_listings`,
+    `test_txy_loading`, `test_folder_cache` (the CI's badge test), `test_offline_browsing`,
+    `test_caching_v2_session` and `test_convert_on_read`: **144 passed, no RERUN.**
+  - `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
+  - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
