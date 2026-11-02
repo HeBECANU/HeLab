@@ -72,7 +72,13 @@ The collection has to land inside the polish, which the nested test forces.
   known-issues; A~1 below proposes the entry.
 - `mypy helab/ --strict`, `mypy tests --strict`, `pyright helab tests`, `mypy helab/ --strict --platform win32`,
   `pyright --pythonplatform Windows helab tests`: all clean.
-- CI: CI_PLACEHOLDER
+- CI: run 41483861898 on `34e6452`, success. I read all nine Tests and Converter backends logs. macOS
+Tests (1/2) and (2/2) passed 4565 and 4570, Ubuntu 4561 and 4571, Windows 4549 and 4551, and the Converter
+backends 866, 866 and 864. Eight logs had 0 RERUN and no crash. **Windows Tests (1/2)** (job 125409160738) had
+**1 rerun**: `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]`, "worker 'gw2'
+crashed" ("node down: Not properly terminated"), with no faulthandler output (a native crash), and it passed on
+retry. That is an existing known-issues entry (the same test, Windows CI 40808815122, "Likely the QtWebEngine
+crash below"): the 3D scatter's Plotly web view, which this change doesn't touch. Add this run to that entry.
 
 ## Proposals (provisional)
 
