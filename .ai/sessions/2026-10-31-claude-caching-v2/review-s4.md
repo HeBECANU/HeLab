@@ -143,3 +143,58 @@ On an export of `beffbff`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - Scratch, not committed: S4-1 (`.ai/temp/assay/test_zz_s4.py`).
 
 On fix diffs I re-check only the fixes, their tests and the touched files' type checks.
+
+## Re-check of the fixes (`cbba723..3085e53`)
+
+**Open findings: 1 Nit (S4R-1).** S4-1, S4-2 and S4-4 are fixed. S4-3 is fixed in the tab, but its message can't be
+seen (S4R-1). No blocker.
+
+### S4R-1 · Nit · S4-3's status line is set on a Settings dialog that closes at once, so the user never sees it
+
+- `helab/views/CacheTab.py:1138-1140` (`self.message = RAW_KEPT_MESSAGE`, in `save`).
+- `helab/views/SettingsDialog.py:393-396` (`_write_settings`: `self.cache_tab.save(settings)`, then `self.accept()`).
+- `helab/views/HelabMainWindow.py:912` (each opening makes a new `SettingsDialog`).
+- **Scenario.** The user saves TXY only while Settings › Cache runs a job, or before its inventory is in.
+  - `save` sets the tab's message, and the dialog then closes and is dropped.
+  - The next Settings opening has a new tab with no message.
+  - So nothing is offered and nothing is said, as before the fix. Nothing is removed, which is safe.
+  - The test calls `tab.save` on a bare tab, so it can't show this.
+- **Fix.** Say it where the user will see it after Settings closes:
+  - a notification (`helab/utils/events.py`) or a QMessageBox information box;
+  - or keep the dialog open on the Cache tab, as a declined budget does (`save_settings`' `else`).
+  Or accept S4-3 as it stands, and note it in the handoff.
+- **How verified.** By reading `_write_settings`, `save_settings` and `HelabMainWindow`'s opening of Settings.
+
+### The fixes
+
+- **S4-1: fixed.**
+  - `inventory()["raw"]["following"]` (count, bytes, folders, only copies) uses `_FOLLOWING`, the same `WHERE`
+    string `remove_raw_following` selects with.
+  - The question names the folders and their size, without "up to", and names only those folders' only copies.
+  - The new store test sets `gone_at` in a following folder and in one with its own policy. It checks that the
+    estimate's rows and bytes equal the removal, and that the other folder's only copy is left out.
+  - My S4-1 scratch figures now agree.
+- **S4-2: fixed.**
+  - `_offer_raw_removal` only checks the owner, `closed` and the path, then defers the question with
+    `QTimer.singleShot(0, functools.partial(self._ask_raw_removal, …))`. The partial wraps a bound method, not a
+    Qt-made sender.
+  - `_ask_raw_removal` checks `closed` again before asking, so a tab closed in between asks nothing.
+  - The test checks that nothing is asked synchronously, and then that it is asked.
+  - Observation: the test's closed-tab case closes the tab before the offer, so it exercises the first check. The
+    second check is a one-line guard, read.
+- **S4-3: in the tab.** When busy, or with no inventory, `save` sets `RAW_KEPT_MESSAGE` and asks nothing. See S4R-1.
+- **S4-4: fixed.** `remove_raw_text` now sits after the constants, and the comment is back on `FOLDER_CHOICE_GLOBAL`.
+- **Fails without the fixes.** I exported `3085e53` and set its three `helab/` files back to `cbba723`.
+  - `test_txy_only_offer.py` doesn't import: `RAW_KEPT_MESSAGE` is new.
+  - With that import replaced by the constant's text: **3 failed, 2 passed**.
+  - Restored (compared with git): **5 passed**.
+
+### Checks (re-check)
+
+On an export of `3085e53`, whose `helab/` and `tests/` equal the floor's `HEAD` `ee4df2b`:
+- Touched and neighbouring tests, run with `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay`:
+  `test_txy_only_offer`, `test_txy_ui`, `test_cache_tab`, `test_raw_layers_store`, `test_caching_v2_session`,
+  `test_cache_store`, `test_accessible_names` and `test_destroyed_connections`.
+  **135 passed, no RERUN.**
+- `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
