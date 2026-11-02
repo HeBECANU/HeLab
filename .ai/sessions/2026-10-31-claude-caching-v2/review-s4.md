@@ -434,3 +434,82 @@ On an export of `4afa96a`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
 - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 - Scratch, not committed: SV-1 (`.ai/temp/assay/test_zz_views.py`).
+
+## SV-1's fix (`48e3656`) and Q50.1 (a) (`ced04aa`)
+
+**Open findings: 1 Medium (SQ-1).** SV-1 is fixed. (a) does what it says for loads, but it undoes Live's held-shot
+rule for shots Live converted on read.
+
+### SQ-1 · Medium · Under (a), Live reads a shot it converted on read again, and switches it to MATLAB's, once MATLAB's TXY appears
+
+- `helab/io_ops/helab_txy.py:275` (`on_read`: `not over_matlab and shot in (matlab or {})` leaves the shot out,
+  held or not).
+- `helab/io_ops/live.py:199` (Live passes `matlab`, but not its held origins).
+- `helab/utils/txy_sources.py:109-118` (`choose` keeps a held HeLab shot only while HeLab's TXY of it is there).
+- **Scenario.** The switch is on, with HeLab priority and Live in the lab. MATLAB's autoconverter runs beside
+  HeLab, its usual setup.
+  1. A raw file settles. MATLAB's TXY isn't there yet, so Live converts the shot on read and holds it with origin
+     `helab:<hash>`.
+  2. Seconds later MATLAB's autoconverter writes `d_txy_forc<N>.txt`.
+  3. On the next check, (a) leaves the shot out of `on_read`, so `choose`'s held rule finds no HeLab TXY to keep.
+     MATLAB's wins.
+  4. Live reads the shot again (`file_started`, a `shot` event) and its origin becomes MATLAB's.
+  - So every shot is read twice, and the plots replace each one.
+  - With a profile other than MATLAB's (a calibration, a user profile), the shot's data change, a few seconds after
+    it appeared, from the HeLab conversion the user asked for to MATLAB's.
+  - `choose`'s own docstring says the held rule is there so "a MATLAB TXY appearing for a shot HeLab filled doesn't
+    stop Live". As built (and with `CONVERT_OVER_MATLAB = True`) the shot stays as it was held.
+- **Fix.** Make `on_read` spare shots held from HeLab, as `could_take` does for MATLAB priority (`| set(held)`).
+  - Live passes its `held_origins`, and the new filter skips a shot whose held origin is HeLab's.
+  - A load has nothing held, so (a)'s rule stands for loads. A reload then takes MATLAB's for those shots, which is
+    (a)'s rule; that is worth a line in Q50.1 for Tony.
+  - Add a Live test: a held on-read shot, then MATLAB's TXY appears, then nothing is read again.
+  - Or, if CoCo and Tony prefer Live to follow the load, record the switch as (a)'s known consequence in Q50.1.
+- **How verified.** Scratch test (`.ai/temp/assay/test_zz_q50.py`, using `test_convert_on_read.py`'s `live`
+  helpers). Live holds shot 1 from an on-read conversion (`origins={"1": helab:<hash>}`), and MATLAB's
+  `d_txy_forc1.txt` is there, two checks apart.
+
+  | Run | Shots read again | `file_started` | Origin after |
+  |---|---|---|---|
+  | export of `ced04aa` | [1] | 1 | MATLAB's (`{}`) |
+  | `ced04aa`, `CONVERT_OVER_MATLAB = True` | none | 0 | held |
+  | export of `ced04aa^` | none | 0 | held |
+
+### Checked, no finding
+
+- **SV-1: fixed.**
+  - `_view_infos` parses each folder's view in its own `try` (`ValueError`, `IndexError`, `TypeError`,
+    `KeyError`). A failure goes into `damaged`, and `read_dataset_infos` answers that folder alone with
+    `_error("Saved view record is unreadable: …")`, even when it also has a seed.
+  - My SV-1 scratch now gives a per-folder error. The listing goes on, with a `cache_warning` and its `entries`.
+  - Without the fix, `test_v4_listings.py` has **1 failed**, the new test, which damages the view three ways.
+- **(a) for loads.**
+  - `on_read` leaves out a shot MATLAB's TXY has unless `converts_over_matlab(source)`: HeLab only always; HeLab
+    priority only with the flag; MATLAB's sources never.
+  - The source is normalised before (`requested_source` in loading and in Live).
+  - **A settling or damaged raw file no longer hides a shot whose MATLAB TXY exists.** The new test keeps MATLAB's
+    TXY of a fresh raw file and of an invalid one, and converts the raw-only shot. Under HeLab only the raw file
+    still decides, by design.
+- **The count matches the load.** `on_read_shots` is `raw` when the source converts over MATLAB's, else
+  `raw - txy`, the shots with no TXY file. After a load it is the load's own `helab_on_read`.
+  - MATLAB only now gives `raw - txy` instead of `raw`, but `converts_on_read` is False for it, so it stays 0.
+  - The wording is unchanged, and it names the count.
+- **Flipping `CONVERT_OVER_MATLAB` restores the as-built behaviour.**
+  - `converts_over_matlab(HELAB_PRIORITY)` becomes True. The filter then never applies, and the count is `raw`, as
+    before.
+  - The commit's test checks this for loads with the flag on (all three converted). My Live scratch with the flag
+    on behaves as `ced04aa^`.
+- **Fails without it.** With `ced04aa`'s five `helab/` files as they were at its parent, `test_convert_on_read.py`
+  gives **3 failed, 13 passed**: the sources' rule, the count, and the new settling or damaged test.
+
+### Checks (SV-1 and (a))
+
+On an export of `48e3656`, whose `helab/` and `tests/` equal the floor's `HEAD` `6b00cb0`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` on the touched tests and Live's and
+  loading's neighbours: **296 passed, no RERUN** (179 + 117). The files:
+  - `test_convert_on_read`, `test_v4_listings`, `test_offline_browsing`, `test_txy_loading`, `test_txy_sources`,
+    `test_live_convert` and `test_caching_v2_session`;
+  - `test_live_check`, `test_live`, `test_live_io`, `test_live_testdata` and `test_folder_cache*`.
+- `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+- Scratch, not committed: SQ-1 (`.ai/temp/assay/test_zz_q50.py`).
