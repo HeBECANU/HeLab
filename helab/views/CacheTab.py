@@ -1136,8 +1136,12 @@ class CacheTab(QWidget):
                 # S4~1 (Tony, 2026-11-02): nothing is removed unasked; offer the raw pulses of the folders that
                 # follow this setting (those with their own policy keep theirs), sized as the removal (S4-1).
                 if self.inventory is None or self.busy:
-                    self.message = RAW_KEPT_MESSAGE  # (S4-3: not offered now; said, not skipped silently.)
+                    # S4-3, S4R-1: not offered now; said, not skipped silently. Settings closes as it saves, so
+                    # the main window's status bar says it (in the app, not the desktop), and this tab too.
+                    self.message = RAW_KEPT_MESSAGE
                     self._update()
+                    from helab.utils import events
+                    events.notify(events.RAW_KEPT, RAW_KEPT_MESSAGE, status=True)
                 elif int(following.get("count") or 0) and self.confirm(
                         "TXY only", remove_raw_following_text(following), "Remove"):
                     self._run("Remove cached raw pulses", "clear_raw", following=True)

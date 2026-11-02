@@ -134,8 +134,17 @@ def test_settings_txy_only_asks_before_removing_the_raw_pulses(qtbot: QtBot, mon
         tab._job = ""
         tab.save(tab.settings)  # (Already TXY only: nothing asked again.)
         assert len(asked) == count
-        # S4-3: busy, or not checked yet: not offered, and said so.
+        # S4-3: busy, or not checked yet: not offered, and said so; S4R-1: in the main window's status bar too,
+        # since Settings closes as it saves (in the app, never a desktop notification).
+        from helab.utils import events
+
+        class Desktop:
+            def deliver(self, title: str, message: str) -> str:
+                raise AssertionError("a desktop notification")
         for state in ("busy", "unchecked"):
+            hub = events.reset(Desktop())
+            notices: list[str] = []
+            hub.desktop.set_status_sink(notices.append)
             folder_cache.set_cache_policy("raw+used")
             tab.message = ""
             if state == "busy":
@@ -144,7 +153,11 @@ def test_settings_txy_only_asks_before_removing_the_raw_pulses(qtbot: QtBot, mon
                 tab._job, tab.inventory = "", None
             tab.save(tab.settings)
             assert len(asked) == count and tab.message == RAW_KEPT_MESSAGE, state
+            assert notices == [RAW_KEPT_MESSAGE] and hub.history[-1].kind == events.RAW_KEPT, state
+            assert hub.history[-1].shown and not hub.history[-1].desktop
     finally:
+        from helab.utils import events
+        events.reset()
         folder_cache.set_cache_policy("raw+used")
         service.shutdown()
 
