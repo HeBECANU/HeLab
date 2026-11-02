@@ -259,6 +259,18 @@ Checks after merging `dev/v0.0.8` (a fast-forward to `db6b32e`) with the fix: th
 --reruns-delay 1`) **9157 passed, 673 skipped, 2 warnings (the known pyqtgraph one) in 231.03s; no RERUN**;
 the five type checks clean (mypy strict 204 + 200 files, win32 204; pyright both platforms 0 errors).
 
+CI **41489860538** (at `dc5219f`, the fix on `db6b32e`): **failure**, every Tests and Converter backends log
+read. Both Windows failures are `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer
+missing its window]`, RERUN 5 times then FAILED, in windows Converter backends (job 125429900442) and
+windows Tests (3/3) (job 125429900886). The rerun reasons are all `IndexUnavailable: HeLab's TXY index
+couldn't be written|opened (database is locked) … attempt 4`. This is dev's, not this branch's: dev's own
+run at `db6b32e` (41484513530) reran it on windows Tests (3/3), and dev fixed it after `db6b32e` in
+`28d8973` ("a writer tries a busy-index shot again until it lands"). One more RERUN, in ubuntu Tests (2/3)
+(job 125429900309): `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-TxyHistograms]`,
+"worker 'gw1' crashed", passed on rerun. That is dev's plot-library crash, merged since as `823589a`. Every
+other job: **0 RERUN** (macOS Tests 3,113 + 3,029 + 3,015 and Converter backends 867; Ubuntu 3,112 + 3,027 +
+3,015 and 867; Windows 3,105 + 3,012). Merged `dev/v0.0.8` again (`1e06fc2`, with both fixes): the full suite **9163 passed, 673 skipped, 2 warnings (the known pyqtgraph one) in 175.43s; no RERUN**, the five type checks clean; pushed.
+
 ## Questions for Tony (provisional)
 
 - **Q~1** The wording: Live line and Folder details `d3.txt read stopped at line 1010` (one) / `3 reads
