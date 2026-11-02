@@ -20,7 +20,7 @@ import numpy as np
 import pyqtgraph as pg
 import pytest
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent
+from PyQt6.QtCore import QEvent, QObject
 from PyQt6.QtWidgets import QApplication, QDockWidget, QLabel, QMainWindow, QTabWidget, QWidget
 from pytestqt.qtbot import QtBot
 
@@ -1647,3 +1647,32 @@ def test_transfer_fractions_highlight_follows_lives_newest_shot(
                         timeout=10_000)
         assert instance._content is content  # In place.
     assert "newest shot in red" in source(instance).text()
+
+
+
+def address_of(widget: QObject) -> int:
+    """A Qt object's C++ address (sip's stubs say ``unwrapinstance`` returns nothing)."""
+    return int(cast(Any, sip).unwrapinstance(widget))
+
+
+def test_a_replaced_plot_stays_qts_until_its_delete_later(window: Window, qtbot: QtBot) -> None:
+    """A guard for the library switch (CI 41471378031's crash was a garbage-collected Scripts panel, not
+    this): the replaced plot widget leaves the dock (its labels aren't found there) and is never Python's,
+    so the garbage collector can't delete it (mid-polish or otherwise); Qt deletes it with its
+    ``deleteLater``. Checked by its C++ object: sip drops a Qt-held widget's Python wrapper when nothing
+    refers to it."""
+    from helab.analysis.backends import BACKEND, DRAWING_GROUP
+    window.view = window.plots.live_feed.publish(lab_revision([1, 2]))
+    instance = plot(window, qtbot, transfer_fractions.TransferFractions())
+    qtbot.waitUntil(lambda: shown_revision(instance) == 1, timeout=10_000)
+    dock = cast(AnalysisDock, instance.dock_widget)
+    address = address_of(cast(QWidget, dock.widget()))
+    assert instance.parameter_root is not None
+    instance.parameter_root.child(DRAWING_GROUP, BACKEND).setValue("Matplotlib")
+    held = [widget for widget in QApplication.allWidgets() if address_of(widget) == address]
+    assert len(held) == 1 and held[0].isHidden() and not sip.ispyowned(held[0])  # Alive, never Python's.
+    assert all(address_of(child) != address for child in dock.findChildren(QWidget))
+    assert source(instance) is cast(QWidget, dock.widget()).findChild(QLabel, "plot_data_source")
+    del held
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    assert all(address_of(widget) != address for widget in QApplication.allWidgets())  # Its deleteLater.
