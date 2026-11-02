@@ -126,3 +126,45 @@ On an export of `4e14535`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - Scratch, not committed: S3R-2 (`.ai/temp/assay/test_zz_s3r.py`).
 
 On fix diffs I re-check only the fixes, their tests and the touched files' type checks.
+
+## Re-check of the fixes (`fba37fd..97c2554`)
+
+**Open findings: none.** S3R-1 and S3R-2 are fixed.
+
+| Test | At `97c2554^`'s code | With `97c2554` |
+|---|---|---|
+| `test_a_raw_file_read_that_stalls_sends_no_heartbeats_of_the_conversion` (new) | failed | passed |
+| `test_folder_cache_says_which_folders_convert_on_read` (extended) | failed | passed |
+
+(On an export of `97c2554`, with `txy_cache.py` and `folder_cache.py` as they were at its parent, then restored and
+compared with git.)
+
+- **S3R-1: fixed.** `convert_raw_file` reads the raw file first, with `_read_raw`'s per-block `Heartbeat`
+  ("reading") only, so a stalled share read still times out. Then `not_done` and `convert_shot` run under
+  `_Ticker(compute_budget(len(raw_data)))`, as `convert_folder` does.
+- **S3R-2: fixed, as Q~16 is built.** `on_read_shots` now follows the load:
+  - MATLAB priority: raw minus TXY;
+  - HeLab priority and HeLab only: every raw file, since a conversion is taken over MATLAB's TXY;
+  - once the folder is loaded with a HeLab source: that load's own `helab_on_read`.
+  - **Observation, not a finding:** before a folder's first load this session, HeLab priority counts every raw
+    file. It doesn't yet know of HeLab texts in `converted-txy/`, which only a load looks for (Auto-convert's
+    default destination), so it may over-count until then. The docstring says so; the first load gives the exact
+    figure.
+  - If Tony answers Q~16 with its alternative, this count and the load change together.
+
+### Checks (re-check)
+
+On an export of `97c2554`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` (the full suite,
+  `test_convert_on_read.py` included): **8953 passed, 673 skipped, 2 warnings, 3 failed, 15 rerun in 196.85 s.**
+  - That count includes my scratch test (`test_zz_s3r.py`), which I left in the export's `tests/` by mistake. It
+    computes its own figure, so it passes either way. Without it: 8952, which matches Vault's 8956 and 672 once
+    the export's 3 and 1 are added back.
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests (the export has no `.git`; 5 reruns each).
+    They passed in the floor checkout with no RERUN at this review.
+  - No other RERUN.
+  - The 2 warnings are the known pyqtgraph ones.
+- `mypy helab/ --strict` (203 files), `mypy tests --strict` (192), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Stage 3 has no open review findings.
