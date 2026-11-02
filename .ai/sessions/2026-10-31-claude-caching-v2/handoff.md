@@ -928,3 +928,35 @@ Green on all three OSes. I read every Tests and Converter job's log (9). One job
     subprocess tests), or run them in a job of their own.
   - The QtWebEngine entry gets this sighting.
 - Windows Tests took 12.6 and 16.2 min (pytest 10.7 and 14.6).
+
+### Checkpoint 2 review fixes (Assay, `review-s2-checkpoint2.md`, `28d5844`)
+
+Every fix is in Settings › Cache's store-v4 questions, and each has a test that fails at `c627027`.
+- **C2S2-1:** Clear all now names the only copies that `remove_txy(None)` and `remove_raw(None)` take, in one
+  sentence: "Some of it is the only copy (TXY data of N folders and raw pulses of M shots): their files are gone
+  from their folders, so it can't be read again." The inventory's `txy` gains `only_copy_folders`.
+- **C2S2-2:** the store-v4 purge's question and estimate now count TXY and raw layers as well.
+  - **The data:** the inventory's `ages` gain `txy` and `raw`, rows of `[last_used, bytes, path]` without only
+    copies (the purge's own `last_used < cutoff AND gone_at IS NULL`). `purge_estimate(datasets=True)` adds
+    `txy_folders`, `txy_bytes`, `raw_folders` and `raw_bytes`, and `bytes` then covers all of them.
+  - **The question:** it names each part ("TXY data for 1 folder, raw pulses for 2 folders (…)") and adds "Only
+    copies stay (Make room names them)."
+  - **The row:** the estimate label counts the most folders of any part, and its tooltip names the parts.
+  - **Remove…** is enabled when only layers are old.
+  - **Approach:** I built an estimate from the inventory, not a helper plan; Assay allowed either. The purge test
+    in `test_txy_fixes.py` checks the estimate against the store's layer bytes and only-copy folders.
+- **C2S2-3:** TXY data's Clear now counts only-copy folders, not layers, and its singular reads "TXY data of 1
+  folder".
+- **Checked:**
+  - Local suite (`-n 4`): 8927 passed, 672 skipped, no RERUN. An earlier run had 15 RERUNs, all three typing tests
+    five times each on my own test's type error, which was fixed before the commit.
+  - mypy strict (helab, tests, win32) and pyright (also Windows): clean.
+- **Doc proposal:** app-runtime-and-ui.md's Settings › Cache part says the store-v4 Clear all, TXY Clear and purge
+  questions name TXY data and raw pulses, with only copies named where they go.
+- **CI 41393351958 (`28d5844`):** green on all three OSes. I read all 9 Tests and Converter logs, fetched whole
+  through the API: **no RERUN in any job**. The only "rerun" matches are the plugin list and the test parameter
+  `[after the Live rerun]`.
+  - Times: Windows Tests 1/2 took pytest 10.7 min, 2/2 9.0 min; macOS 6.3 and 3.7; Ubuntu 3.4 and 5.7.
+    Converter: Windows 2.0 min, Ubuntu 28 s, macOS 20 s.
+  - The known "GUI stalled" watchdog log appears 4 times, with no failure: Windows 2/2 once, Windows 1/2 twice,
+    Ubuntu 2/2 once (A~9).
