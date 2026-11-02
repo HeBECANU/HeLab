@@ -1436,3 +1436,25 @@ CoCo's call (2026-11-03), behind the switch.
     library switch: a main-thread SIGSEGV polishing a QLabel of a replaced plot widget
     (`test_transfer_fractions_highlight_follows_lives_newest_shot`, CI 41471378031 Ubuntu, and locally
     2026-11-03); plot code, not pinned."
+
+### CI 41476804254 (`6b00cb0`: Q50.1 (a), SV-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs.
+- **One RERUN:** Windows Tests 2/2 (job 125384496288),
+  `test_live_testdata.py::test_a_run_replayed_into_live_is_converted_once_per_shot_as_matlab_did`. pytest-timeout's
+  "Timeout (0:01:40)" fired, then "node down", and it passed on retry.
+  - **Where it was:** the dump shows the test's own `run_convert`, then `convert_folder`, then `finish`, then
+    `write_atomic`, then `pin`, then `provenance.record`, `_write`, `_patient`, `_transaction`, waiting at
+    `BEGIN IMMEDIATE` (provenance.py:346) on the converted-TXY index's lock.
+  - **What that means:** each `_patient` call waits at most `BUSY_SECONDS` (10 s), so the lock was held for most
+    of the 100 s by another connection to this test's own index.
+  - **Not reachable from this branch's changes:** the switch is off, and `helab/convert/provenance.py` and
+    `io_ops/convert.py` haven't changed on this branch since A19.2. Q50.1 (a) and SV-1 touch neither this path nor
+    the index.
+  - **Cause:** not pinned.
+  - **known-issues proposal:** "`test_a_run_replayed_into_live_is_converted_once_per_shot_as_matlab_did`: its
+    in-process conversion waited on the converted-TXY index's lock (provenance.py:346, BEGIN IMMEDIATE) until
+    pytest-timeout (Windows CI 41476804254, job 125384496288); another connection held that test's index for most
+    of 100 s; passed on retry; not pinned."
+- The known "GUI stalled" log appears 5 times.
+- Windows Tests 1/2 took pytest 14.4 min and 2/2 13.7 min.
