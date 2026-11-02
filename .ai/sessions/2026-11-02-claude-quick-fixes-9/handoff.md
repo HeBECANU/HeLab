@@ -136,3 +136,57 @@ The run's results follow, every Tests and Converter backends job's log read for 
   - Tests: windows 1/2 4414, 2/2 4416; macos 4431, 4435; ubuntu 4427, 4435.
   - Converter backends: 847 / 849 / 849.
   - A39.1 passed on all three builds.
+
+## Tonight: A47.3 and A46.1 (QF9 continued)
+
+### A47.3: the GUI watchdog left running (36b2224)
+
+- **Fix, in `helab/utils/gui_watchdog.py`, not the two quit tests.** `_watch` ends once its QObject is
+  deleted (`sip.isdeleted`, checked each 0.5 s; a flag read, safe from its thread), so any window deleted
+  without its full close takes the thread with it.
+  - Before: `closeEvent` returns early while the quit window waits for saves. A test ending there had the
+    window deleted at teardown, and the thread logged "GUI stalled… capturing thread stacks" every 30 s
+    for the rest of the worker.
+  - Not a Python callable on `destroyed` (AGENTS.md rules it out), and `weakref.finalize` can't run while
+    the thread holds the wrapper.
+- **The quit test isn't pinned.** `test_quit_confirms.py` and `test_txy_last_used_quit.py` leave no
+  watchdog alone, even on the old code, as known-issues says.
+- **Tests:** the new `tests/test_gui_watchdog.py`.
+  - Cases: deleted unstopped (it ends), `stop()` (it ends), and a real `HelabMainWindow` whose close waits
+    for saves, then deleted (its watchdog ends).
+  - The two deleted cases fail on the old code: the thread is still alive after 3 s.
+- **Suite:** 8932 passed, no RERUN, and no "GUI stalled" in its log; the five type checks pass.
+- **Known-issues proposal:** move "A quit test leaves its `GUIWatchdog` running" to Fixed (36b2224).
+
+### A46.1: process-wide fakes in tests (6fa8cd9)
+
+- **The helper:** `conftest.this_tests(fake, real)`.
+  - "This test's" threads are the test's own thread plus every thread started after the patch. Its
+    IOService's `_run` threads start helpers, so the test thread alone wouldn't do.
+  - Threads alive before the patch get the real function. It compares thread objects, since idents are
+    reused.
+- **Used where a fake refuses or records every call, or replaces `Popen`:**
+  - `test_folder_cache`, `test_folder_summary` (3 blocks);
+  - `test_gui_responsiveness` (the rendering block, including `CacheStore` and `sqlite3.connect`; 3 Popen
+    fakes);
+  - `test_settle_setting`, `test_root_discovery` (an lstat refusing all), `test_scan_history`,
+    `test_two_step_browse`, `test_live_check` (2).
+- **Left as they are:**
+  - fakes that act only on the test's own paths (`test_cache_first`, `test_offline_browsing`,
+    `test_io_trace`, three in `test_root_discovery`, one in `test_two_step_browse`);
+  - `test_folder_summary`'s two already thread-aware ones.
+- **Test:** `test_a_process_wide_fake_acts_on_this_tests_threads_only` in `test_test_isolation.py`. It
+  fails with the plain fake the sites used.
+- **Suite:** 8933 passed, no RERUN; the five type checks pass.
+- **A guess, not checked:**
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked`'s
+  known flake (line 137: a killed fake helper's `poll()` still None at :292) may be this pattern. An
+  earlier test's thread starting a helper hit its Popen fake and added a stray process to `processes`. If
+  so, it stops; keep the entry until CI says.
+
+### Test files touched tonight (all outside the floors' app code)
+
+`tests/test_gui_watchdog.py` (new), `tests/conftest.py`, `tests/test_test_isolation.py`,
+`tests/test_folder_cache.py`, `tests/test_folder_summary.py`, `tests/test_gui_responsiveness.py`,
+`tests/test_settle_setting.py`, `tests/test_root_discovery.py`, `tests/test_scan_history.py`,
+`tests/test_two_step_browse.py`, `tests/test_live_check.py`. App code: `helab/utils/gui_watchdog.py` only.
