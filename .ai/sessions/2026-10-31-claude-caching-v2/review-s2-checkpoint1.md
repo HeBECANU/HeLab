@@ -155,3 +155,66 @@ On an export of `a70d261`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - Scratch checks, not committed: S2-1 and S2-2 (`.ai/temp/assay/test_zz_s2a.py`), and the three mutations above.
 
 On fix diffs I re-check only the fixes, their tests and the touched files' type checks.
+
+## Re-check of the fixes (`7d5c567..6b0f998`; `7d185eb` not included)
+
+**Open findings: 1 Nit (S2-3, new, C2-11's class for a new layer). S2-1 and S2-2 are fixed.**
+
+| Finding | Commit | Without the fix | With it |
+|---|---|---|---|
+| S2-1, S2-2, migration | `6b0f998` (`cache_store.py`, `store_v4.py`, `admin.py`, `events.py`) | 3 failed | 3 passed |
+
+(On an export of `6b0f998`, with those four files as they were at `7d5c567`, I ran
+`test_trim_keeps_only_copies_unless_its_plan_names_them`, `test_an_older_listing_landing_late_undoes_no_mark` and
+the extended `test_a_store_v4_from_stage_1_gets_stage_2s_tables`, then restored the files and compared them with
+git.)
+
+- **S2-1: fixed.**
+  - `trim` without a plan runs `_free_space(…, only_copies=False)`, which stops before group 5.
+  - `trim(…, expected)` runs the whole order under a savepoint and keeps it only if the items equal the plan the
+    user was shown, so only copies go only when named.
+  - `trim_plan` tries the whole order and rolls back (exact; `possible` when it would fit).
+  - The admin's `trim` takes `plan_only` (answers `room` and `items`) or `plan` (removes exactly those).
+  - `trim_estimate`'s docstring says it is store-v3's only.
+  - **Step 5 note:** `CacheTab` still sends `trim` without a plan and asks from `trim_estimate`. In store-v4
+    that can remove re-readable TXY and raw layers the question doesn't count (never only copies now). Build
+    the question from `plan_only` and send its `items` as `plan`.
+- **S2-2: fixed.**
+  - `txy_layers.seen_at` (default 0) is in `STAGE2_SCHEMA`, and comes through `migrate`'s own addition for a
+    store migrated before it (`no_seen_at`, checked after the stage 2 addition under the same lock).
+  - `mark_txy_seen` follows C2-10's rule: a sighting clears `gone_at` only if newer than it (`>=` keeps it), and a
+    gone mark needs a listing newer than the last sighting (`seen_at <`; `COALESCE` keeps the first).
+  - `_write_layer_row` keeps an existing layer's marks.
+
+### S2-3 · Nit · A new layer's `seen_at` is its save time, so a listing between the read and the save that found the files gone is ignored
+
+- `helab/utils/cache_store.py` `_write_layer_row` (`seen = … if stored is not None else now`). This is C2-11's
+  class (raw rows took the save time until `RawEntry.read_at`), here for a layer made by a save.
+- **Scenario.**
+  1. A load reads `d_txy_forc1.txt` at t=100.
+  2. The file is deleted, and a listing at t=150 finds it gone.
+  3. The load saves at t=200, making the MATLAB layer with `seen_at = 200` and `gone_at` NULL.
+  4. The t=150 listing's `mark_txy_seen` lands, but `seen_at < 150` is false, so the layer isn't marked gone.
+
+  Until a listing after t=200, Make room counts the only copy as group 3, "seen". If that listing landed before
+  the save, the row didn't exist yet, and the gone evidence is lost the same way. Narrow, and healed by the
+  next listing.
+- **Fix.** `save_txy` takes the time the unit's data was read, or its listing's time (the load has it in step 3;
+  default the save time), as a new layer's `seen_at`. It can land with step 3's loads.
+- **How verified.** Scratch test (`.ai/temp/assay/test_zz_s2b.py`, on the export of `6b0f998`): a new layer
+  saved 100 s after its read, then `mark_txy_seen(X, {"txy": {}}, read + 50)`, gives `seen_at - read = 100 s`
+  and `gone_at` None.
+
+### Checks (re-check)
+
+On an export of `6b0f998`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` (the full suite,
+  `test_txy_layers_store.py` and the admin tests included): **8882 passed, 673 skipped, 2 warnings, 3 failed, 15
+  rerun in 150.07 s.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests (the export has no `.git`; 5 reruns
+    each). They passed in the floor checkout with no RERUN at this review, and neither they nor `build_info.py`
+    changed since.
+  - No other RERUN.
+  - The 2 warnings are the known pyqtgraph ones.
+- `mypy helab/ --strict` (202 files), `mypy tests --strict` (188), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
