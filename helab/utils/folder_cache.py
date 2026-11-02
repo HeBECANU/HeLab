@@ -1042,19 +1042,18 @@ class FolderCache(QObject):
 
     def on_read_shots(self, path: str, raw: int, txy: int) -> int:
         """How many of a folder's shots a load converts from their raw files, when it converts on read; else 0.
-        Memory only. As the load decides (S3R-2, Q~16 as built): the raw files without a current HeLab TXY, given
-        the source. With MATLAB priority those MATLAB's TXY lacks (``raw - txy``); with HeLab priority or HeLab
-        only every raw file, since a conversion is taken over MATLAB's TXY. Once the folder's data is loaded, its
-        load's own count (a HeLab TXY in HeLab's TXY folder, which only a load looks for, is read instead)."""
+        Memory only. As the load decides (S3R-2; Q50.1): the raw files without a current HeLab TXY, given the
+        source. Those MATLAB's TXY lacks (``raw - txy``), unless the source converts over MATLAB's
+        (``txy_sources.converts_over_matlab``: HeLab only; HeLab priority only with Q50.1's flag): then every raw
+        file. Once the folder's data is loaded, its load's own count (a HeLab TXY in HeLab's TXY folder, which only
+        a load looks for, is read instead)."""
         if not raw or not self.converts_on_read(path):
             return 0
         dataset = self.latest_dataset(path)
         counts = dataset.metadata.get("load_counts") if dataset is not None else None
         if isinstance(counts, Mapping) and isinstance(counts.get("txy_helab"), int):
             return int(counts.get("helab_on_read") or 0)  # (A load of a HeLab source counted them.)
-        if self.folder_source(path) == txy_sources.MATLAB_PRIORITY:
-            return max(0, raw - txy)
-        return raw
+        return raw if txy_sources.converts_over_matlab(self.folder_source(path)) else max(0, raw - txy)
 
     def remember_choices(self, path: str, choices: object) -> None:
         """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the

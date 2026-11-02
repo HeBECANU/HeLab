@@ -93,6 +93,19 @@ def wants_helab(source: str) -> bool:
     return source != MATLAB_ONLY
 
 
+# Caching v2 stage 3 (store-v4): whether HeLab priority converts a raw file on read over a MATLAB TXY that is
+# there (Q50.1 = Q~16). Off, the safe default (CoCo, 2026-11-03): a shot whose raw file can't be converted now
+# (still settling, damaged) keeps MATLAB's TXY. On, HeLab's conversion wins, with no fallback yet (Q50.1 (b)).
+CONVERT_OVER_MATLAB = False
+
+
+def converts_over_matlab(source: str) -> bool:
+    """Whether a load of ``source`` converts on read the shots MATLAB's TXY has too: HeLab only always, HeLab
+    priority only with ``CONVERT_OVER_MATLAB``, MATLAB priority and MATLAB only never (Q50.1)."""
+    normal = normal_source(source)
+    return normal == HELAB_ONLY or normal == HELAB_PRIORITY and CONVERT_OVER_MATLAB
+
+
 def choose(source: str, matlab: bool, helab: bool, held: str | None = None) -> str | None:
     """Which kind a shot's TXY is taken from, ``"matlab"`` or ``"helab"`` (None: neither is there).
     ``held``: the origin the caller already holds the shot from (Live), kept while that kind is

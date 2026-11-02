@@ -256,11 +256,15 @@ def mark_used(marks: list[list[Any]]) -> list[list[Any]]:
 
 
 def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot], only: set[int] | None,
-            options: Mapping[str, Any]) -> dict[int, HelabShot]:
+            options: Mapping[str, Any], matlab: Mapping[int, Any] | None = None) -> dict[int, HelabShot]:
     """Caching v2 stage 3 (store-v4): the shots a load converts on read, by shot: each raw file without a
     current HeLab TXY of the profile asked for (``helab``), among those the source could take (``only``), named
     by its raw file with the raw file's size and mtime (so the settle time and the layer's key are the raw
-    file's). A raw file that can't be stat'ed is left out."""
+    file's). A shot ``matlab`` (MATLAB's TXY) has too is left out unless the source converts over MATLAB's
+    (``txy_sources.converts_over_matlab``: HeLab only; HeLab priority only with Q50.1's flag). A raw file that
+    can't be stat'ed is left out."""
+    from helab.utils import txy_sources
+    over_matlab = txy_sources.converts_over_matlab(str(options.get("source") or ""))
     wanted = str(options.get("profile_hash") or "")
     if not wanted:
         return {}
@@ -268,7 +272,7 @@ def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot],
     info = dict(profile) if isinstance(profile, Mapping) else {}
     found: dict[int, HelabShot] = {}
     for shot, entry in raw.items():
-        if shot in helab or only is not None and shot not in only:
+        if shot in helab or only is not None and shot not in only or not over_matlab and shot in (matlab or {}):
             continue
         try:
             stat = _entry_stat(entry, "helab txy: raw")
