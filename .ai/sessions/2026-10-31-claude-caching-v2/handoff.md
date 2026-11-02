@@ -1488,3 +1488,27 @@ appears 4 times. Windows Tests 1/2 took pytest 10.6 min and 2/2 11.0 min.
   - a first-start race between helpers opening the new store (`c06f342`, `768ac40`);
   - cached folders looking uncached after a restart, because listings, scans and adopt read only store-v3's table
     (`4afa96a`, `48e3656`).
+
+### The switch-on branch's first CI (41482722171, `ca9c869`, two test groups)
+
+Green on all three OSes. I read all 9 Tests and Converter logs.
+- **Windows times:** Tests 1/2 took 15m13s (pytest 13.0 min) and 2/2 15m46s (pytest 13.6 min). macOS took 8.8 and
+  3.9 min, Ubuntu 6.0 and 7.3.
+- **4 RERUNs:**
+  - **Windows Tests 1/2 (job 125405134384), three of them:**
+    `test_folder_cache.py::test_disk_badge_after_restart_ram_load_eviction_and_clear`, `assert [] ==
+    [ICON_CACHED]` at line 1201, then passed.
+    - **Cause, found and fixed** on `agent/caching-v2` at `65ee050`. In store-v4 a load of another TXY choice found
+      no view of its own, so its `loaded` said `disk_cached` False until its first save landed, and an eviction
+      in between showed the folder uncached.
+    - The fix: the load's `disk_cached` holds when the folder has any view.
+    - Test: in `test_v4_listings.py`, failing without the fix.
+  - **macOS Tests 1/2 (job 125405134241), one:**
+    `test_explorer_convert.py::test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off[off]`, "waitUntil
+    timed out in 5000 milliseconds" at line 114 (the share question box didn't appear). It passed on retry.
+    - It passed 15 of 15 runs locally on store-v4 and 15 of 15 on store-v3.
+    - **Cause:** not pinned. The question comes at Live's next convert tick, which nothing changed here delays.
+    - **known-issues proposal:** "`test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off[off]`: the
+      share question didn't appear within 5 s (line 114) on macOS CI 41482722171 (`agent/v4-switch-on`); 15/15
+      locally on both stores; not pinned."
+- The known "GUI stalled" log appears 6 times.
