@@ -225,3 +225,31 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Test:** `test_a_stall_line_names_its_window_and_the_tests` fails on the old line.
 - **Full suite:** 8934 passed, no RERUN; the five type checks pass.
 - What the next Windows run's lines name follows.
+
+### Run 41449699791 (`a00e3f6`, A~3): success, all 12 job logs read; what the stall lines name
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4441, 2/2 4457; macos 4458, 4476; ubuntu 4455, 4476.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **The stall lines, Windows only, each naming the test that made its window and the test running now:**
+  - Windows 1/2: three, all `HelabMainWindow` made in and still in
+    `test_accessible_names.py::test_every_script_and_each_library` (2.24 s, 2.28 s, **27.77 s**).
+  - Windows 2/2: `HelabMainWindow` made in and still in
+    `test_debug_runner_menu.py::test_dump_state_saves_what_the_window_shows_from_memory` (2.22 s) and
+    `::test_the_screenshot_target_is_the_window_in_front_as_the_menu_opens` (2.42 s). Plus my own test's
+    deliberate stall (`QObject 'plots_window'`, 10.50 s).
+- **Conclusion: no window outlives its test.**
+  - Every line's window was made in the test running then, so these are tests keeping the GUI thread busy
+    with their own window: real stalls of a test, not a leak.
+  - **This corrects my earlier reading.** The lines that sat among converter-test lines were another
+    worker's output interleaved in the log, not a leftover window in that worker.
+  - The longest is the scripts-and-libraries walk on Windows: 27.8 s without the event loop running, on a
+    test that takes 94–99 s there (its own 300 s timeout since 5f52068).
+- **Proposed:**
+  - Close the known-issues entry: A47.3 (36b2224) fixed the leak it described, and what remains is
+    in-test stalls.
+  - A line for testing.md: a "GUI stalled" line in a CI log whose "made in" and "now in" are the same test
+    is that test blocking the GUI thread, not a leftover window.
+  - My own test's deliberate stall line shows in CI's log too. It could be filtered (a logger level) if
+    it misleads; left as it is.
