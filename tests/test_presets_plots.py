@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterator, List, Optional, cast
 import numpy as np
 import pytest
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QWidget
 from pytestqt.qtbot import QtBot
 
@@ -62,9 +62,22 @@ def fresh_presets(qtbot: QtBot) -> Iterator[None]:
 
 
 def stored(qtbot: QtBot) -> None:
-    """Wait for the store to have the presets saved so far, and to have answered."""
+    """Wait for the store to have the presets saved so far, and to have answered: no job out, and no change
+    owed (a write waits while the cache folder is asked which store it holds, an identity probe, and is
+    written once it answers: ``_presets_again``)."""
     store = preset_store()
-    qtbot.waitUntil(lambda: store.presets_read and not store._preset_jobs, timeout=30_000)
+    qtbot.waitUntil(lambda: store.presets_read and not store._preset_jobs and not store._presets_again
+                    and not store._probe_owner, timeout=30_000)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An arrangement preset's warning would be a modal no test closes (the worker hung until killed, CI
+    41484277419): the test fails with its text instead. A test that expects one sets ``presets.warn``."""
+    def fail(parent: Optional[QWidget], title: str, text: str) -> None:
+        raise AssertionError(f"a modal warning would wait here: {title}: {text}")
+
+    monkeypatch.setattr("helab.views.plots.presets.warning_box", fail)
 
 
 def restart_presets(qtbot: QtBot) -> FolderCache:
@@ -72,6 +85,7 @@ def restart_presets(qtbot: QtBot) -> FolderCache:
     knows only what it reads from the store."""
     from helab.utils.io_service import get_io_service
     stored(qtbot)
+    assert not preset_store().presets_saving()  # (Nothing owed: a quit would wait for it.)
     get_io_service().shutdown()
     store = preset_store()
     assert not store.presets and store.presets_note() == "Reading saved presets…"
@@ -1025,6 +1039,46 @@ def presets_for(window: Window, explorer: Explorer, cache: FolderCache) -> Arran
     presets.confirm = lambda *_: True
     presets.replace_or_add = lambda *_: "replace"
     return presets
+
+
+def test_an_unexpected_preset_warning_fails_the_test_instead_of_waiting(qtbot: QtBot, cache: FolderCache,
+                                                                        windows: Windows) -> None:
+    """The seam: ``warning_box`` (patched by ``no_modal_warnings``) raises with the warning's text."""
+    window = new_window(qtbot, cache, windows)
+    presets = presets_for(window, Explorer(folder("anywhere")), cache)
+    with pytest.raises(AssertionError, match="a modal warning would wait here: Preset can't be read: .*isn't saved"):
+        presets.apply("never saved")
+
+
+def test_an_arrangement_saved_while_the_store_is_probed_survives_a_restart(qtbot: QtBot, cache: FolderCache,
+                                                                            windows: Windows) -> None:
+    """CI 41484277419 (store-v4 on) hung in the round trip below on a modal "Preset can't be read" (it
+    isn't saved now): a save while the cache folder is asked which store it holds (an identity probe out,
+    which an answer from another store starts) is owed, not written (no job), until the probe answers.
+    ``stored`` waited only for jobs, so the restart shut the helpers down with the write still owed, and the
+    preset was gone. It waits for owed writes now; the apply finds the preset."""
+    window = new_window(qtbot, cache, windows)
+    path = folder("probed")
+    explorer = Explorer(path)
+    explorer.folder_opened_path, explorer.folder_opened_data = path, "data"
+    waiting_plot(window, cache, ScriptRef("tests.counted", "Plot", "1"), path)
+    presets = presets_for(window, explorer, cache)
+    presets.ask_name = lambda *_: "probed"
+    store = preset_store()
+    stored(qtbot)  # (The reads out have answered.)
+    store._probe_owner = "an identity probe"  # (Out: the save is owed until it answers.)
+    assert presets.save() is not None
+    # Owed (no reason given yet), and no job writes it: it waits for the probe's answer.
+    assert store.preset_unsaved(ARRANGEMENT, "", "probed") == "" and not store._preset_jobs
+    QTimer.singleShot(500, lambda: store._probe_answered(store._store))
+    restart_presets(qtbot)
+    again = new_window(qtbot, cache, windows)
+    tab = Explorer(folder("somewhere"))
+    applying = presets_for(again, tab, cache)
+    warned: List[str] = []
+    applying.warn = lambda title, text: warned.append(f"{title}: {text}")
+    opened = applying.apply("probed")
+    assert warned == [] and [instance.metadata.analysis_id for instance in opened] == ["tests.counted"]
 
 
 def test_an_arrangement_preset_round_trips_every_bundled_script(qtbot: QtBot, cache: FolderCache,
