@@ -1041,3 +1041,15 @@ counts scan failures only when the box is ticked, and calls cached analysis the 
 - **Checked:** suite 8940 passed, no RERUN.
 - **Doc proposal:** converter.md: "a load's conversion from the raw layer runs Settings' backend (numpy when it
   can't run, or numba)".
+
+### A47.4's CI (41446828628, `4c7199d`)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole through the API.
+- **One RERUN:** Windows Tests 2/2 (job 125282060253),
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`,
+  "waitUntil timed out in 3000 milliseconds" at line 292, passed on retry. This is known-issues' entry for this
+  test, at the same line; this run is a new sighting to add there.
+- The known "GUI stalled" watchdog log appears 9 times, with no failure: Windows 1/2 7 times, Windows 2/2 once,
+  Ubuntu 2/2 once (A47.3).
+- Times: Windows Tests 1/2 took pytest 13.1 min and 2/2 11.6 min, under the 25-minute stop line; macOS 8.4 and
+  3.7; Ubuntu 3.4 and 5.8.
