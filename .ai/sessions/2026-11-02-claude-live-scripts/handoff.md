@@ -14,6 +14,29 @@ the worker thread", both built.
 | `63b0baf` | Scripts panel (Reload, folders menu, auto-reload, error lines) and plots adopting new code |
 | `63817b5` | A47.5: the TXY choice in records, the Keep box, reopen (D4) and script presets (D2) |
 
+## Review fixes (Prismo, `review.md`; CoCo 2026-11-03: fix all, each with a test that fails before it)
+
+Commit `a18e4c9`. Every finding fixed; tests in `tests/test_live_scripts.py`, `test_plot_txy_saved.py`,
+`test_scripts_reload.py`.
+
+| Finding | Fix | Its test fails before |
+|---|---|---|
+| M1 a reload reads the folder of a plot waiting on its own TXY choice | `adopt_script` returns without running while `_own_waits` | `test_a_reload_doesnt_count_as_reading_the_folder_for_a_waiting_choice`: fails on `e9fdd6c` |
+| M2 no test of the record holding the choice | test only (the code was right) | `test_a_plots_record_holds_the_choice_made_in_its_row`: fails with Prismo's mutation (`txy=None`) |
+| M3 user code on the GUI thread at every start | deferred `restore_folders` (200 ms into the event loop), `PlotReopen.restore` waits for `foldersRestored` (and `record` keeps last time's record meanwhile); shares not loaded at start nor watched (`on_network`, mount table only); loading marker `<app folder>/scripts-loading.json`; one-line `scripts_start_note`; skipped folders stay remembered and in the menu | four new tests (deferred plus reopen, marker, share, `on_network`) and the two updated restore tests: all fail on `e9fdd6c`. What is left: Q~3 |
+| L1 no test of the hold | test only | the waiting test's new lines: fail with Prismo's mutation (no `_held = True`) |
+| L2 "Reload (waiting)" stuck | `_try_reload` and `remove_folder` end the wait when nothing is pending | `test_removing_the_folder_a_reload_waits_for_ends_the_wait`: fails on `e9fdd6c` |
+| L3 the source-only hook takes installed packages | `_source_only_finder` refuses `_PROTECTED` | `test_installed_packages_inside_a_script_folder_keep_their_usual_imports`: fails on `e9fdd6c` |
+| L4 lazy helpers left out of the D1 hash | a helper seen imported is known (`_know_helpers`, recorded before unloading) and folded; it is watched too | `test_a_helper_imported_only_in_compute_counts_in_the_hash_once_seen`: fails on `e9fdd6c` |
+| L5 a reload with nothing changed | stamps per file, plus the load's time: a new helper file not modified since the load is stamped, not a change | `test_a_helper_first_imported_in_a_run_isnt_a_change`: fails on `e9fdd6c` |
+| N1 IDs | `identify_buttons(box, "script_error_details")`; `script_auto_reload`, `script_folder_reload`, `script_folder_remove` | in `test_the_menus_actions_and_the_details_window_have_ids_and_submenus_go`: fails on `e9fdd6c` |
+| N2 submenus leak | old submenus `deleteLater` on each fill | the same test |
+| N3 the fixture leaves the hook | `imports_restored()` also restores `sys.path_hooks`, the cached finders and `_SOURCE_ONLY` | `test_the_import_system_is_restored_after_a_test` checks the helper itself |
+
+How "fails before" was checked: the new test files were copied into a worktree of `e9fdd6c` (with stubs for
+the three new names `script_tree` exports): 12 failed, 34 passed. M2 and L1 were checked by putting Prismo's
+mutations back: each test then fails.
+
 ## What was built
 
 **Reload core** (`helab/scripts/scripts_manager.py`, Qt-free):
@@ -87,6 +110,13 @@ the worker thread", both built.
 
 ## Checks
 
+After the review fixes (`a18e4c9`): full suite `pytest -n 4 --reruns 5 --reruns-delay 1
+--basetemp=.ai/temp/pytest`: **8975 passed, 672 skipped, 2 warnings, 1 rerun**, 153.8 s. The rerun's reason:
+`tests/test_dash_server.py::test_stop_frees_the_port`, `assert 56278 == 56276` (the free-port race, A~6;
+unrelated to this change; passed on its rerun). The five type checks are clean. CI: CI2_PLACEHOLDER
+
+Before the review:
+
 - Full suite, `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`: 8963 passed, 672 skipped (private test data absent), 2 warnings (pyqtgraph NumPy 2.5 deprecation), 160.7 s; **no RERUN** (no "rerun reasons" in the summary).
 - `mypy helab/ --strict`, `mypy tests --strict`, `pyright helab tests`, `mypy helab/ --strict --platform
   win32`, `pyright --pythonplatform Windows helab tests`: all clean (203 / 194 files, 0 errors).
@@ -100,7 +130,12 @@ the worker thread", both built.
 Load Scripts…":
 
 > Live scripts (v0.0.8): the folders loaded with Load Scripts… are remembered (`script_folders`) and loaded
-> again at start, before plots reopen; Load Scripts…'s menu lists them (Reload, Remove from the list) and
+> again at start (`TreePanelWidget.restore_folders`, `RESTORE_DELAY_MS` 200 after the event loop starts, so
+> after the window shows; `PlotReopen.restore` waits for `foldersRestored`). Not at start: a folder on a
+> network share (`on_network`, from the mount table only; never watched either), and none when
+> `<app folder>/scripts-loading.json` is there (written before each folder load, removed after: a load
+> that never ended). Those wait for Reload, said in one amber line (`scripts_start_note`), and stay
+> remembered; Load Scripts…'s menu lists them (Reload, Remove from the list) and
 > turns on "Reload when a script is saved" (`script_auto_reload`, off; only then a `QFileSystemWatcher`
 > watches the script folders and their helper files, 0.75 s settle, reloads a folder only when a `.py`
 > stamp changed). `ScriptsManager` keeps each user folder on `sys.path` (appended) while loaded; its
@@ -122,7 +157,8 @@ Load Scripts…":
 is found by its tag; an unknown one or an unknown source is named and the plot stays as the folder's tab).
 A reopened plot with its own choice loads it once its data is found only if HeLab read the folder this
 session (listed, or loaded or checked), else it waits for a select of the folder or Rerun, so reopening
-never reads a folder by itself (D4). A script preset without a choice leaves a plot's choice as it is (D2);
+never reads a folder by itself (D4); a reload of its script (auto-reload too) doesn't count as a read
+either. A script preset without a choice leaves a plot's choice as it is (D2);
 records without one restore as the folder's tab."
 
 In the **Dataset analyses** paragraph, the TXY row: "each plot's settings have a TXY row (with Keep)".
@@ -144,7 +180,9 @@ In the **Dataset analyses** paragraph, the TXY row: "each plot's settings have a
 > - [x] Load errors in the Scripts panel (one line per file, traceback in tooltip and details window)
 > - [x] Helper modules re-imported (D1: their hashes in the scripts' identity)
 > - [ ] Tony's manual check (M~1, M~2), wording (Q~1)
-> - Later: A~1 to A~5.
+> - [x] At start: remembered folders load after the window shows; a share's waits for Reload; a load that
+>   never ended (the loading marker) skips them at the next start (review M3)
+> - Later: A~1 to A~4, A~6; Q~3.
 
 `AGENTS.md`, optional one line under Analysis and plots: "A reload of the user's scripts never runs while
 a `compute` of them is on the worker thread (`AnalysisRunner.in_flight`), and never touches HeLab's
@@ -176,9 +214,24 @@ bundled analyses or the interpreter's modules."
   `txy_source.known_profiles()`.
 - **A~4** The `reopen_plots_at_start` row's description could name the TXY rule ("a plot with its own TXY
   choice loads it only once HeLab read its folder this session").
-- **A~5** Remembered folders load on the GUI thread at start, as Load Scripts… always has; a folder on an
-  unreachable share could stall startup. Check it off the GUI thread first (a stat with a timeout), or
-  load script folders after the window shows.
+- **A~5** (done in the review fixes, M3: remembered folders load after the window shows, never from a
+  share, and a loading marker skips them after a load that never ended.)
+- **A~6** `tests/test_dash_server.py::test_stop_frees_the_port` reran once in the review-fix suite
+  (`assert 56278 == 56276`): `free_port()` picks a port and the server binds it later, and another process
+  (other floors' suites ran on this Mac at the same time) took it in between, so the server fell back to
+  the next free port. Not in `roadmaps/known-issues.md` now (earlier sessions noted it: 2026-10-20,
+  2026-10-21, 2026-10-22). Proposed entry: "[ ] `test_dash_server.py::test_stop_frees_the_port`: the port
+  `free_port()` returns can be taken before `DashServer.start()` binds it when suites run at once (rerun
+  on the Live Scripts floor, 2026-11-03). Fix: bind and hand the open socket over, or retry with a new
+  port when `start()` returns another." (`tests/test_dash_server.py` isn't this floor's to change.)
+- **Q~3** (M3's rest) The remembered **local** folders still import their scripts on the GUI thread, now after
+  the window shows. A script that blocks at import (`input()`, a network call) still freezes that session,
+  as Load Scripts… always could, and the marker makes the next start skip the folders, so HeLab always gets
+  a start that works. A folder the mount table calls local but that is slow (an iCloud, Dropbox or OneDrive
+  folder whose files are placeholders) is loaded too. Importing scripts off the GUI thread would remove the
+  freeze, but I don't think it is safe: scripts define Qt and PyQtGraph classes at import, and imports hold
+  Python's import lock against the GUI thread's own imports. Proposed: keep it as built (the marker as the
+  way out), and add the cloud-folder kinds to the "not at start" rule only if Tony sees it happen.
 
 ## Not done
 
