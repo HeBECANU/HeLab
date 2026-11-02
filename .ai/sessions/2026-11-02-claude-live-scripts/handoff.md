@@ -50,7 +50,7 @@ directly). It has its own slot now (`_reload_clicked`); the tests click it and t
 Tests: `test_a_marker_naming_no_remembered_folder_is_dropped_at_start`,
 `test_an_unreadable_marker_skips_one_start_only`, `test_a_deliberate_load_clears_a_marker_it_didnt_make`
 [reload, menu, load another]: all five fail on `f66a946`. Full suite 8980 passed, 672 skipped, **no RERUN**;
-the five type checks clean. CI: CI3_PLACEHOLDER
+the five type checks clean. CI: run 41459371935 on `909c66d`, success; every job read: Tests (1/2) and (2/2) on macOS (4488, 4492 passed), Ubuntu (4485, 4492) and Windows (4471, 4473), Converter backends on all three (849, 849, 847), **0 RERUN** in every log.
 
 ## What was built
 
