@@ -343,3 +343,20 @@ The run's results follow, every Tests and Converter backends job's log read for 
     junit.xml, instead of being killed.
   - **A~5: upload junit.xml `if: always()`.** Only useful with A~4: on a killed job the file doesn't exist,
     since pytest writes it at the end.
+
+## test_live_convert's offline test: fixed (d03c0c6; Vault's reading)
+
+- **The RERUN** (caching-v2 CI 41472779247, macOS Tests 2/2):
+  `test_a_conversion_refused_offline_stops_auto_convert_and_says_so`, "assert 'auto-convert stopped: not
+  while working offline' in 'Live stopped: Cancelled'" at :575.
+- **Cause.** Live checks every 20 ms here. With no check in flight, its tick submits one; while the test
+  is offline that check is refused, and its "cancelled" halts Live first.
+- **Fix, in the test.** Live's next check is queued before going offline (`next_request`). With dispatch
+  frozen it stays in flight, so Live asks for none while offline.
+- **Repro case kept** ("a Live check comes due while offline": Live's tick runs while offline). With the old
+  flow it fails with CI's exact message; now it passes.
+- **Checks.** Full suite 9133 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "A Live check asked for while the test was offline was
+  refused and halted Live (CI 41472779247); the test queues Live's next check before going offline
+  (d03c0c6)."
+- **Test file touched:** `tests/test_live_convert.py`.
