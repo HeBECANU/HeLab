@@ -282,3 +282,16 @@ The run's results follow, every Tests and Converter backends job's log read for 
   - `test_debug_runner_menu::test_the_screenshot_target_is_the_window_in_front_as_the_menu_opens`;
   - `test_helabMainWindow::test_file_menu_places_a_root_in_the_current_tabs_selected_folder`;
   - plus my own test's deliberate stall.
+
+## test_io_trace's GUI-never-touches-source test: its waits (caching-v2 CI 41456480233)
+
+- **The RERUN.** `waitUntil timed out in 20000 milliseconds` at :259, inside `wait_idle`, not the invariant
+  assertion. The test takes 9–18.5 s on Windows CI, 3.4 s here.
+- **Fix.** Its five waits on helpers share `HELPERS_MS = 60_000`: the listing, the expand, the load, and
+  both waits for idle. CI only shows `wait_idle`'s own frame, so it can't say which of the two failed.
+  - The assertions are unchanged.
+  - CI's per-test 120 s still bounds the whole test.
+  - Other tests' `wait_idle` keep 20 s.
+- **Checks.** Full suite 8946 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
+  a 20 s wait for idle helpers on Windows CI (41456480233, Tests 2/2); its helper waits are 60 s now."
