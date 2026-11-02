@@ -71,3 +71,14 @@ All 672 skipped each time, and the five type checks exit 0 each time.
 ## CI
 
 The run's results follow, every Tests and Converter backends job's log read for RERUN.
+
+### Run 41374704252 (`0406a1d`): success, all 12 job logs read
+
+- **Tests passed.** windows Tests 1/2 4412, 2/2 4416; macos 4429, 4435; ubuntu 4425, 4436. Converter
+  backends 847 / 849 / 849. No crashed worker.
+- **1 RERUN**, windows Tests 2/2 (job 125052359778):
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`,
+  `waitUntil timed out in 3000 milliseconds` at :292 (the killed fake helper's `poll()` still None).
+  Known-issues line 137 lists both `[1]` and `[2]`; this is another sighting. Not QF9's code.
+- **A39.1 passed on all three builds:** "built cleanly at 0406a1d2f6…".
+- This record is committed locally only (doc-only).
