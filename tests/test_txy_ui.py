@@ -18,13 +18,13 @@ from helab.views.CacheDialogs import room_items, room_text
 from test_cache_tab import GB, admin_request, finish, frozen_cache, inventory, make_tab
 
 MB = 10**6
-TXY = {"layers": 3, "folders": 2, "shots": 120, "bytes": 40 * MB, "only_copy": 1, "only_copy_bytes": 5 * MB,
-       "tags": {"MATLAB": 2, "m19v1": 1}, "last_used": None}
+TXY = {"layers": 3, "folders": 2, "shots": 120, "bytes": 40 * MB, "only_copy": 3, "only_copy_folders": 1,
+       "only_copy_bytes": 5 * MB, "tags": {"MATLAB": 2, "m19v1": 1}, "last_used": None}
 
 
 def v4_inventory(**changes: Any) -> dict[str, Any]:
-    return inventory(raw={"count": 40, "bytes": 30 * MB, "folders": 2, "only_copy": 0, "only_copy_bytes": 0,
-                          "last_used": None}, txy=TXY, legacy=None, older_stores=[], **changes)
+    return inventory(**{"raw": {"count": 40, "bytes": 30 * MB, "folders": 2, "only_copy": 0, "only_copy_bytes": 0,
+                                "last_used": None}, "txy": TXY, "legacy": None, "older_stores": [], **changes})
 
 
 def test_the_tab_shows_txy_data_and_the_policy_only_with_store_v4(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
@@ -39,7 +39,7 @@ def test_the_tab_shows_txy_data_and_the_policy_only_with_store_v4(qtbot: QtBot, 
         tab._update()
         assert tab.txy_button.isVisibleTo(tab) and tab.policy_combo.isVisibleTo(tab)
         assert "120 shots in 2 folders" in tab.txy_label.text() and "MATLAB, m19v1" in tab.txy_label.text()
-        assert "1 only copies" in tab.txy_label.text()
+        assert "3 only copies" in tab.txy_label.text()
         tab.clear_txy()
         assert "the only copy" in asked[-1][1] and admin_request(service, "clear_txy")
         tab._job = ""
@@ -48,6 +48,65 @@ def test_the_tab_shows_txy_data_and_the_policy_only_with_store_v4(qtbot: QtBot, 
         assert admin_request(service, "clear").payload["params"]["kinds"][-2:] == ["raw", "txy"]
         assert [tab.policy_combo.itemText(i) for i in range(3)] == [
             "Raw + what you load (default)", "Raw only, convert on load", "TXY only (no raw)"]
+    finally:
+        service.shutdown()
+
+
+def test_the_clear_questions_name_only_copies_by_folder(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                         tmp_path: Path) -> None:
+    """C2S2-1, C2S2-3: Clear all names the TXY data and raw pulses that are the only copy (remove_txy(None) and
+    remove_raw(None) take them), and TXY data's Clear counts folders, not layers, with a singular that reads."""
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        tab, asked = make_tab(qtbot, cache, tmp_path)
+        raw = {"count": 40, "bytes": 30 * MB, "folders": 2, "only_copy": 4, "only_copy_bytes": MB, "last_used": None}
+        tab.inventory = inventory(raw=raw, txy=TXY, legacy=None, older_stores=[])
+        tab._update()
+        tab.clear(list(cache_store.KINDS))
+        assert "only copy (TXY data of 1 folder and raw pulses of 4 shots)" in asked[-1][1]
+        assert "can't be read again" in asked[-1][1]
+        tab._job = ""
+        tab.inventory = v4_inventory()
+        tab._update()
+        tab.clear(list(cache_store.KINDS))
+        assert "only copy (TXY data of 1 folder)" in asked[-1][1]
+        tab._job = ""
+        tab.inventory = v4_inventory(txy={**TXY, "only_copy": 0, "only_copy_folders": 0})
+        tab.clear(list(cache_store.KINDS))
+        assert "only copy" not in asked[-1][1]
+        tab._job = ""
+        tab.inventory = v4_inventory(txy={**TXY, "folders": 1, "only_copy": 3, "only_copy_folders": 1})
+        tab.clear_txy()
+        assert "the cached TXY data of 1 folder (" in asked[-1][1]
+        assert "only copy (TXY data of 1 folder)" in asked[-1][1] and "3 folder" not in asked[-1][1]
+    finally:
+        service.shutdown()
+
+
+def test_the_purge_question_counts_txy_and_raw_folders_in_store_v4(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                                   tmp_path: Path) -> None:
+    """C2S2-2: in store-v4 a purge of cached data takes TXY layers and seen raw layers not used since the cutoff
+    (only copies stay), so its question and estimate count them, from the same comparisons as the purge."""
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        tab, asked = make_tab(qtbot, cache, tmp_path)
+        old = time.time() - 400 * 86400
+        ages = {"datasets": [], "txy": [[old, 40 * MB, "root://u/a"], [old, MB, "root://u/a"],
+                                        [time.time(), MB, "root://u/b"]],
+                "raw": [[old, 30 * MB, "root://u/a"], [old, MB, "root://u/c"]]}
+        tab.inventory = v4_inventory()
+        tab.inventory["ages"] = {**tab.inventory["ages"], **ages}
+        tab.dataset_days.setValue(30)
+        tab._update()
+        assert "(2 folders)" in tab.dataset_estimate.text() and tab.purge_datasets_button.isEnabled()
+        tab.purge_datasets()
+        text = asked[-1][1]
+        assert "TXY data for 1 folder, raw pulses for 2 folders" in text and "cached data for 0" not in text
+        assert "Only copies stay" in text
+        estimate = cache_store.purge_estimate(tab.inventory, time.time() - 30 * 86400, datasets=True)
+        assert estimate == {"datasets": 0, "bytes": 72 * MB, "txy_folders": 1, "txy_bytes": 41 * MB,
+                            "raw_folders": 2, "raw_bytes": 31 * MB}
+        assert admin_request(service, "purge").payload["params"]["what"] == "datasets"
     finally:
         service.shutdown()
 

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from helab.io_ops.admin import cache_admin
+from helab.utils import cache_store
 from test_txy_loading import data_folder, first, opened, run_load, v4_options
 
 
@@ -47,8 +48,17 @@ def test_a_purge_by_age_takes_old_layers_but_not_only_copies(tmp_path: Path) -> 
     run_load(kept, tmp_path, options)
     with opened(options, kept) as store:
         store.mark_txy_seen(str(kept), {"txy": {}}, time.time() + 60)
+    cutoff = time.time() + 3600
+    with opened(options, kept) as store:  # (C2S2-2: the question's estimate is what the purge takes.)
+        inventory = store.inventory()
+        layers = store.txy_layers(str(source)).value
+        assert layers
+        layer_bytes = sum(row.bytes for row in layers.values())
+    assert inventory["txy"]["only_copy_folders"] == 1
+    estimate = cache_store.purge_estimate(inventory, cutoff, datasets=True)
+    assert estimate["txy_folders"] == 1 and estimate["txy_bytes"] == layer_bytes > 0
     events: list[Any] = []
-    cache_admin(options, "purge", events.append, what="datasets", cutoff=time.time() + 3600)
+    cache_admin(options, "purge", events.append, what="datasets", cutoff=cutoff)
     assert any(event["kind"] == "removed" and event["kinds"] == ["txy"] for event in events)
     with opened(options, source) as store:
         assert store.txy_layers(str(source)).value == {} and store.read_view(str(source), "", "").missing

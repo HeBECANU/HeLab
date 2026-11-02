@@ -3669,13 +3669,15 @@ class CacheStore:
 
     def _txy_summary(self) -> dict[str, Any]:
         """store-v4's TXY layers for Settings › Cache (inside a transaction): layers, folders, shots, bytes,
-        those that are only copies, their tag names, when one was last used."""
+        the layers that are only copies (``only_copy``) and their folders (``only_copy_folders``), their tag
+        names, when one was last used."""
         summary: dict[str, Any] = {"layers": 0, "folders": 0, "shots": 0, "bytes": 0, "only_copy": 0,
-                                   "only_copy_bytes": 0, "tags": {}, "last_used": None}
+                                   "only_copy_folders": 0, "only_copy_bytes": 0, "tags": {}, "last_used": None}
         if self.layout < store_v4.LAYOUT:
             return summary
         tags: dict[str, int] = {}
         folders: set[str] = set()
+        only_folders: set[str] = set()
         for path, layer, layer_tags, shots, size, gone_at, last_used in self._conn.execute(
                 "SELECT path, layer, tags, shots, bytes, gone_at, last_used FROM txy_layers").fetchall():
             folders.add(str(path))
@@ -3685,10 +3687,11 @@ class CacheStore:
             if gone_at is not None:
                 summary["only_copy"] += 1
                 summary["only_copy_bytes"] += int(size)
+                only_folders.add(str(path))
             for name in json.loads(layer_tags) or (["MATLAB"] if layer == _MATLAB_LAYER else []):
                 tags[str(name)] = tags.get(str(name), 0) + 1
             summary["last_used"] = max(float(last_used), summary["last_used"] or 0.0)
-        summary.update(folders=len(folders), tags=tags)
+        summary.update(folders=len(folders), tags=tags, only_copy_folders=len(only_folders))
         return summary
 
     def _txy_groups(self, exclude: str | None) -> dict[str, list[tuple[str, str]]]:
@@ -4172,6 +4175,13 @@ class CacheStore:
                 result_ages = [[float(last_used), int(size)] for last_used, size in self._conn.execute(
                     "SELECT last_used, bytes FROM results ORDER BY last_used")] if self._results_table else []
                 ages["results"] = result_ages
+                if self.layout >= store_v4.LAYOUT:
+                    # (store-v4: what a purge of cached data takes besides datasets, only copies left out: S3-1's
+                    # purge, for its question, C2S2-2.)
+                    ages["txy"] = [[float(used), int(size), str(path)] for path, used, size in self._conn.execute(
+                        "SELECT path, last_used, bytes FROM txy_layers WHERE gone_at IS NULL ORDER BY last_used")]
+                    ages["raw"] = [[float(used), int(size), str(path)] for path, used, size in self._conn.execute(
+                        "SELECT path, last_used, bytes FROM raw_layers WHERE gone_at IS NULL ORDER BY last_used")]
                 result_bytes = self._results_live()
                 pending_results = self.pending_result_rows()
                 live, writes = self._live(), self._writes()
@@ -4438,12 +4448,21 @@ _RECORD_PURGES: dict[Kind, str] = {
 def purge_estimate(inventory: Mapping[str, Any], cutoff: float, *, datasets: bool,
                    include_failures: bool = False) -> dict[str, int]:
     """What a purge with this ``cutoff`` removes, from an :meth:`CacheStore.inventory`:
-    ``{"datasets", "bytes"}`` for cached data, else rows per record kind. Uses the
-    same comparisons as the purge, so it equals what is freed if nothing changed since."""
+    ``{"datasets", "bytes"}`` for cached data (in store-v4 also ``txy_folders``, ``txy_bytes``, ``raw_folders``
+    and ``raw_bytes``: layers and seen raw pulses not used since, only copies left out, C2S2-2; ``bytes`` then all
+    of it), else rows per record kind. Uses the same comparisons as the purge, so it equals what is freed if
+    nothing changed since."""
     ages = inventory["ages"]
     if datasets:
         old = [size for last_used, size in ages["datasets"] if last_used < cutoff]
-        return {"datasets": len(old), "bytes": sum(old)}
+        found = {"datasets": len(old), "bytes": sum(old)}
+        for kind in ("txy", "raw"):
+            if kind in ages:
+                rows = [(size, path) for last_used, size, path in ages[kind] if last_used < cutoff]
+                found[f"{kind}_folders"] = len({path for _, path in rows})
+                found[f"{kind}_bytes"] = sum(size for size, _ in rows)
+                found["bytes"] += found[f"{kind}_bytes"]
+        return found
     return {"summaries": sum(saved_at < cutoff for saved_at in ages["summaries"]),
             "subtrees": sum(saved_at < cutoff for saved_at in ages["subtrees"]),
             "listings": sum(saved_at < cutoff for saved_at in ages.get("listings", ())),

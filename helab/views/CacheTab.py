@@ -10,7 +10,7 @@ from datetime import datetime
 from fractions import Fraction
 import re
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QValidator
@@ -39,6 +39,39 @@ DEFAULT_PURGE_DAYS = 90
 # The cache policy's choices (caching v2, Q45.1), in the words S~6 proposed (Tony to confirm).
 POLICY_LABELS = (("raw+used", "Raw + what you load (default)"), ("raw", "Raw only, convert on load"),
                  ("txy", "TXY only (no raw)"))
+
+
+def _only_copies(txy: Mapping[str, Any] | None, raw: Mapping[str, Any] | None) -> str:
+    """The sentence a question that removes store-v4's TXY data or raw pulses (Clear, Clear all) gives their only
+    copies (Q22.6, C2-9: never removed unnamed), or "" when there are none."""
+    parts: list[str] = []
+    folders = int((txy or {}).get("only_copy_folders") or 0)
+    if folders:
+        parts.append(f"TXY data of {folders} folder{'' if folders == 1 else 's'}")
+    shots = int((raw or {}).get("only_copy") or 0)
+    if shots:
+        parts.append(f"raw pulses of {shots} shot{'' if shots == 1 else 's'}")
+    if not parts:
+        return ""
+    return (f"Some of it is the only copy ({' and '.join(parts)}): their files are gone from their folders, so "
+            "it can't be read again.")
+
+
+def _purged(estimate: Mapping[str, Any]) -> str:
+    """What a purge of cached data removes, from ``purge_estimate``: datasets, and in store-v4 TXY data and raw
+    pulses (C2S2-2)."""
+    def folders(count: int) -> str:
+        return f"{count} folder{'' if count == 1 else 's'}"
+    parts = [f"cached data for {folders(int(estimate['datasets']))}"] if estimate.get("datasets") or \
+        "txy_folders" not in estimate else []
+    if estimate.get("txy_folders"):
+        parts.append(f"TXY data for {folders(int(estimate['txy_folders']))}")
+    if estimate.get("raw_folders"):
+        parts.append(f"raw pulses for {folders(int(estimate['raw_folders']))}")
+    if not parts:
+        parts.append("nothing")
+    return f"{', '.join(parts)} ({byte_size(int(estimate['bytes']), 'disk')})"
+
 
 KIND_ROWS = {"datasets": ("Cached data", "Clear…"), "summaries": ("Folder summaries", "Clear…"),
              "histories": ("Scan failures", "Forget…"), "subtrees": ("Subfolder status", "Clear…"),
@@ -607,6 +640,9 @@ class CacheTab(QWidget):
                     + " folder summaries, scan failures, subfolder status and folder listings.\n\n"
                     "Loaded data stays open. Automatic checks will try failed folders again. Cached analysis "
                     "stays (its own Clear).")
+            only = _only_copies(txy, raw)
+            if only:
+                text += f"\n\n{only}"
             verb, label = "Clear all", "Clear all"
             # (store-v4: its raw pulses and TXY data too.)
             kinds = [*KINDS, *(["raw"] if raw is not None else []), *(["txy"] if txy is not None else [])]
@@ -643,11 +679,10 @@ class CacheTab(QWidget):
         txy = (inventory or {}).get("txy")
         if inventory is None or self.busy or not txy:
             return
-        only = int(txy.get("only_copy") or 0)
+        only = _only_copies(txy, None)
         text = (f"Removes the cached TXY data of {plural(int(txy['folders']), 'folder')} "
                 f"({byte_size(int(txy['bytes']), 'disk')}). It is cached again at the next load of each folder."
-                + (f"\n\n{plural(only, 'folder')}' TXY data is the only copy: its TXY files are gone from the folder, "
-                   "so it can't be read again." if only else ""))
+                + (f"\n\n{only}" if only else ""))
         if self.confirm("Clear TXY data?", text, "Clear"):
             self._run("Clear TXY data", "clear_txy")
 
@@ -704,9 +739,10 @@ class CacheTab(QWidget):
         cutoff = time.time() - days * DAY
         estimate = purge_estimate(self.inventory, cutoff, datasets=True)
         if self.confirm("Remove old cached data?",
-                        f"Removes cached data for {plural(estimate['datasets'], 'folder')} "
-                        f"({byte_size(estimate['bytes'], 'disk')}) not used in the last {plural(days, 'day')}.\n\n"
-                        f"{CLEAR_TEXT['datasets']} TXY files are never touched.", "Remove"):
+                        f"Removes {_purged(estimate)} not used in the last {plural(days, 'day')}.\n\n"
+                        f"{CLEAR_TEXT['datasets']} TXY files are never touched."
+                        + (" Only copies stay (Make room names them)." if "txy_folders" in estimate else ""),
+                        "Remove"):
             self._run("Remove old cached data", "purge", what="datasets", cutoff=cutoff)
 
     def purge_records(self) -> None:
@@ -746,8 +782,9 @@ class CacheTab(QWidget):
             return
         now = time.time()
         datasets = purge_estimate(inventory, now - self.dataset_days.value() * DAY, datasets=True)
-        self.dataset_estimate.setText(f"— frees ~{byte_size(datasets['bytes'], 'disk')} "
-                                      f"({plural(datasets['datasets'], 'folder')})")
+        most = max(datasets["datasets"], datasets.get("txy_folders", 0), datasets.get("raw_folders", 0))
+        self.dataset_estimate.setText(f"— frees ~{byte_size(datasets['bytes'], 'disk')} ({plural(most, 'folder')})")
+        self.dataset_estimate.setToolTip(f"Removes {_purged(datasets)}" if "txy_folders" in datasets else "")
         records = purge_estimate(inventory, now - self.record_days.value() * DAY, datasets=False,
                                  include_failures=self.include_failures.isChecked())
         self.record_estimate.setText(f"— {plural(sum(records.values()), 'record')}")
@@ -759,7 +796,8 @@ class CacheTab(QWidget):
         self.result_estimate.setText(f"— frees ~{byte_size(results['bytes'], 'disk')} "
                                      f"({plural(results['results'], 'result')})")
         writable = not inventory.get("read_only") and not self.busy
-        self.purge_datasets_button.setEnabled(writable and datasets["datasets"] > 0)
+        self.purge_datasets_button.setEnabled(writable and (datasets["datasets"] > 0 or datasets.get("txy_folders", 0) > 0
+                                                            or datasets.get("raw_folders", 0) > 0))
         self.purge_records_button.setEnabled(writable and sum(records.values()) > 0)
         self.purge_results_button.setEnabled(writable and results["results"] > 0)
 
