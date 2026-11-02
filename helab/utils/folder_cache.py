@@ -991,6 +991,11 @@ class FolderCache(QObject):
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
                         "profile": {"name": profile.name, "version": profile.version,
                                     "calibrated": profile.calibrated}})
+        if "backend" not in txy:
+            # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
+            from helab.utils import constants
+            from helab.utils.settings_store import app_settings
+            txy["backend"] = constants.read_convert_backend(app_settings())
         txy.update({"source": txy_sources.normal_source(txy.get("source")) or self.tab_source(),
                     "profile_hash": str(txy["profile_hash"]), "profile_tag": str(txy.get("profile_tag") or ""),
                     "cache_base": os.path.dirname(os.path.abspath(options["directory"])) if options else "",

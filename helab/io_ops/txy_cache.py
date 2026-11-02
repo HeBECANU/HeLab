@@ -85,6 +85,8 @@ class Access:
         self.store = store
         self.layered = layered(store)
         self.key = view_key(txy_source, txy)
+        # The converter backend a shot made from the raw layer runs on: Settings' (FolderCache sends it, A47.6).
+        self.backend = str(txy.get("backend") or "")
         self.layers: dict[int, str] = {}  # (The last view read: each shot's layer.)
         self.info: dict[str, Any] = {}
         # Where the row came from when the folder has no view yet (store-v4): "datasets" (its own, from stage
@@ -212,13 +214,26 @@ class Access:
             return None
         try:
             layer, _ = raw_layer.from_hlb(packed)
-            text = format_txy(reconstruct(raw_layer.decode(layer), profile))
+            text = format_txy(reconstruct(raw_layer.decode(layer), profile, self.backend_for(profile)))
         except Exception:  # (A layer or backend that can't: the text is read.)
             return None
         if not text:
             return np.empty((0, 3), dtype=np.float64)
         frame = pd.read_csv(io.BytesIO(text), sep=",", names=["t", "x", "y"], dtype=np.float64)
         return np.asarray(frame.dropna(), dtype=np.float64)
+
+    def backend_for(self, profile: Any) -> str:
+        """The backend ``from_raw`` runs (A47.6): Settings' choice when it can run here, else the app's (numpy);
+        every backend's output is the reference's byte for byte. Numba (developers only) needs the folder a
+        conversion gives its compiled code, so a load runs the app's."""
+        from helab.convert.pipeline import APP_BACKEND
+        from helab.convert.reconstruct import get_backend
+        if not self.backend or self.backend in (APP_BACKEND, "numba"):
+            return APP_BACKEND
+        try:
+            return self.backend if get_backend(self.backend).unavailable(profile) is None else APP_BACKEND
+        except Exception:  # (Unknown, or one that can't load here.)
+            return APP_BACKEND
 
     def touch(self, path: str) -> None:
         if not self.layered or self.seed:

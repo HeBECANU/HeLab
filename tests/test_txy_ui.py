@@ -359,3 +359,19 @@ def test_a_listing_read_before_a_change_was_saved_never_brings_back_the_old_choi
         assert (choices["policy"], choices["source"], choices["tag"]) == ("txy", "matlab-only", "")
     finally:
         service.shutdown()
+
+
+def test_loads_send_settings_converter_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A47.6: a load's TXY options carry Settings' converter backend, which a shot made from the raw layer runs."""
+    from helab.utils.settings_defaults import CONVERT_BACKEND_SETTING
+    from helab.utils.settings_store import app_settings
+    from helab.utils.txy_sources import TXY_FIELD
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        assert cache.with_txy("/data/run", {})[TXY_FIELD]["backend"] == "numpy"
+        app_settings().setValue(CONVERT_BACKEND_SETTING, "reference")
+        assert cache.with_txy("/data/run", {})[TXY_FIELD]["backend"] == "reference"
+        given = {TXY_FIELD: {"backend": "numpy"}}
+        assert cache.with_txy("/data/run", given)[TXY_FIELD]["backend"] == "numpy"
+    finally:
+        service.shutdown()
