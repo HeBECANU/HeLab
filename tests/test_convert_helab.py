@@ -1941,7 +1941,10 @@ from helab.convert import provenance
 root, name, count, start, pause = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
 if len(sys.argv) > 6:
     provenance.BUSY_SECONDS = float(sys.argv[6])  # (A writer that waits less: the test's repro of a slow runner.)
-TRIES = 4  # A conversion whose index is busy fails and is tried again later (IndexUnavailable): so is a shot here.
+# A conversion whose index is busy fails and is tried again later (IndexUnavailable), for as long as it takes: so is
+# a shot here, until RETRY_SECONDS (longer than the other writer needs for all its shots). Four tries weren't enough
+# for shot 0 on Windows CI 41483647539 with the 1 ms case, both writers making the index at once.
+RETRY_SECONDS = 30.0
 while time.time() < start:
     time.sleep(0.001)
 for shot in range(count):
@@ -1951,20 +1954,21 @@ for shot in range(count):
         output="temp", txy_name=provenance.txy_name("m19v1", shot), txy_size=shot, txy_mtime_ns=shot,
         txy_sha256="", hits=1, converted_at=time.time(), helab_version="0", read_seconds=0.0, parse_seconds=0.0,
         reconstruct_seconds=0.0, format_seconds=0.0, write_seconds=0.0)
-    for attempt in range(TRIES):
-        began = time.monotonic()
+    give_up, attempt = time.monotonic() + RETRY_SECONDS, 0
+    while True:
+        began, attempt = time.monotonic(), attempt + 1
         try:
             with provenance.open_index(root, write=True) as index:
                 index.record(name, "", "/data/" + name, record, time.time())
             break
         except Exception as error:  # (Said in one line, so the test's message shows it whole.)
-            if isinstance(error, provenance.IndexUnavailable) and attempt + 1 < TRIES:
+            if isinstance(error, provenance.IndexUnavailable) and time.monotonic() < give_up:
                 time.sleep(0.2)
                 continue
             cause = error.__cause__ or error.__context__
             print(f"shot {shot}: {type(error).__name__}: {error} (cause {type(cause).__name__}: {cause}; "
                   f"code {getattr(cause, 'sqlite_errorname', None)}) after {time.monotonic() - began:.2f} s, "
-                  f"attempt {attempt + 1}", file=sys.stderr)
+                  f"attempt {attempt}", file=sys.stderr)
             raise
     # A conversion reads, converts and writes a TXY between two rows (tens of milliseconds or more), so
     # two converters leave each other gaps. Back to back, with no pause, the test measured SQLite's
@@ -1980,7 +1984,8 @@ def test_two_writers_side_by_side_lose_nothing(tmp_path: Path, busy: str) -> Non
     """The app's helper and ``helab convert`` (two processes) writing one index at once: every row lands,
     and the file stays sound. Each opens it per shot, harder than a conversion (one connection per run).
 
-    A shot whose index stays busy past ``BUSY_SECONDS`` is tried again, as a conversion is (IndexUnavailable):
+    A shot whose index stays busy past ``BUSY_SECONDS`` is tried again until it lands, as a conversion is
+    (IndexUnavailable):
     on Windows CI 41476107464 one writer's open took 26-27 s and failed the test, though nothing was lost.
     ``busy``: the writers wait only that long (a slow runner's case, made on any machine)."""
     root = str(tmp_path / "converted-txy")
