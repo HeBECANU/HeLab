@@ -86,4 +86,19 @@ presets' `warn`, or patches `warning_box` itself.
 - **New test:** `test_presets_window.py::test_applying_a_missing_preset_in_the_window_fails_fast_instead_of_waiting`
   applies a preset never saved in a real `HelabMainWindow`, and fails with the warning's text.
 - **Checked against the old conftest:** without the fixture, the test hung on the modal until I killed it.
-- **Checks:** full suite 9160 passed, 673 skipped, **no RERUN**; the five type checks clean. CI: CI2_PLACEHOLDER
+- **Checks:** full suite 9160 passed, 673 skipped, **no RERUN**; the five type checks clean. CI: run 41500431969 on `767418c`.
+  - **Attempt 1 failed.** Windows Converter backends (job 125466332080) had **1 failed after 5 reruns**, and
+    Windows Tests (3/3) (job 125466332092) **4 reruns, passed**, all in one converter test that this change
+    doesn't touch: `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer missing its window]`,
+    `IndexUnavailable: HeLab's TXY index couldn't be written/opened (database is locked) (… SQLITE_BUSY) … attempt
+    4`. That is SQLite contention on the converted-TXY index, outlasting the test's own retry (`324ad79`). The
+    other ten jobs: 0 RERUN.
+  - **Attempt 2** (the failed job re-run; the others copied, with new IDs): success. The Windows Converter
+    backends job (125473590950) had **1 rerun**, the same test and error (shot 134), and passed on retry. I read
+    all twelve logs; the copies match attempt 1.
+  - The same test passed in this branch's previous run (41490372206) and in `dev/v0.0.8`'s latest Windows jobs
+    (41498972254), and it is not in known-issues.
+  - Proposed entry (A~3): "[ ] `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer
+    missing its window]` on Windows CI: SQLITE_BUSY on the converted-TXY index past its 4 attempts
+    (`agent/preset-modal-hang` CI 41500431969: failed in Converter backends after 5 reruns, 4 reruns in Tests
+    3/3; attempt 2, 1 rerun). The converter area's: a longer busy wait, or the test's writers further apart."
