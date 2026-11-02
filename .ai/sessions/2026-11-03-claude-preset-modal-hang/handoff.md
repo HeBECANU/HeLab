@@ -51,7 +51,17 @@ it.**
 
 - **Full suite** (`-n 4 --reruns 5 --reruns-delay 1`): 9159 passed, 673 skipped, **no RERUN**.
 - **Type checks:** the five are clean.
-- **CI:** CI_PLACEHOLDER
+- **CI:** CI: run 41490372206 on `142e192`, success. I read all twelve Tests (three groups, three OSes) and Converter
+backends logs. Ten had 0 RERUN. Two Windows jobs had 1 rerun each, both unrelated to this change, both passed
+on retry:
+  - **Windows Tests (3/3)** (job 125431695003):
+    `test_release_recovery.py::test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing_commit`,
+    `assert 'unknown' == 'detached'`. This is QF9's open known-issues proposal.
+  - **Windows Tests (1/3)** (job 125431695082):
+    `test_plot_backends.py::test_2d_plots_draw_with_every_library[values1-Plotly-CountsPerShot]`, "worker 'gw2'
+    crashed". This is the known-issues entry for that test, and `dev/v0.0.8`'s `b0eb914` ("a Plotly plot no
+    longer aborts its worker") fixes it. `b0eb914` came after this branch's base, `db6b32e`, so a merge with
+    `dev/v0.0.8` brings the fix in.
 
 ## Proposals (provisional)
 
