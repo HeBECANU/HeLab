@@ -295,13 +295,21 @@ class FolderDetailsPanel(QScrollArea):
             rows["state"] = (explorer.scan_message, "")
         elif node is None or node.report is None:
             rows["state"] = ("TXY count not checked", "")
-        elif node.txy_count or node.report.d_txy_shots or node.report.status in StatusReport.STATUS_CONTAINS_DATA_HERE:
+        elif (node.txy_count or node.report.d_txy_shots or node.report.status in StatusReport.STATUS_CONTAINS_DATA_HERE
+              or explorer.on_read_count(node.path, node.report)):
             rows["state"] = ("Not loaded", "Right-click it › Load data, or turn on View › Toggle Auto Load to RAM.")
         else:
             rows["state"] = ("No TXY files here", "")
-        if not loading and not shown and node is not None and (node.txy_count or node.report and node.report.d_txy_shots):
+        on_read = explorer.on_read_count(node.path, node.report) if node is not None else 0
+        if not loading and not shown and node is not None and (node.txy_count or node.report and node.report.d_txy_shots
+                                                              or on_read):
             found = node.txy_count or (len(node.report.d_txy_shots or []) if node.report else 0)
-            rows["files"] = (f"{found:,} TXY found", "")
+            # (store-v4, stage 3: raw files without TXY, converted when the folder is loaded, S3~5.)
+            rows["files"] = ((f"{found:,} TXY found" + (f" · {on_read:,} converted when loaded" if on_read else ""))
+                             if found else f"{on_read:,} raw found · converted when loaded",
+                             "HeLab converts these shots' raw files when it loads the folder, with the TXY "
+                             "converter's profile, and keeps them in the disk cache; no TXY file is written."
+                             if on_read else "")
         large = explorer.large_state(path)
         if large is not None and (shown or opened) and not loading and not explorer.load_error:
             # The update didn't load for being large: say so beside the data still shown.
@@ -400,6 +408,12 @@ class FolderDetailsPanel(QScrollArea):
             parts.append(f"{helab:,} {tag}")
             lines.append(f"HeLab's current TXY of the profile conversions use, tag {tag} (d_txy_helab_{tag}_<N>.txt), "
                          "in HeLab's TXY folder or beside the raw files. Other profiles' aren't counted.")
+            on_read = counts.get("helab_on_read")
+            if isinstance(on_read, int) and on_read:
+                # (store-v4, stage 3: shots without a HeLab TXY, made from their raw files, S3~6.)
+                parts.append(f"{on_read:,} {tag} converted from raw")
+                lines.append(f"HeLab {tag}, converted from raw: shots with no HeLab TXY file, converted from their "
+                             "raw files when loaded and kept in the disk cache (no TXY file written).")
         else:
             lines.append("HeLab's TXY not looked for: this folder's TXY source reads MATLAB's only.")
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])

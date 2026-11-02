@@ -846,7 +846,16 @@ class FolderExplorer(QWidget):
         if node and node.cached_report:
             return False
         report = self.model.fetch_status(path)
-        return report.status in StatusReport.STATUS_CONTAINS_DATA_HERE and bool(report.d_txy_shots)
+        return report.status in StatusReport.STATUS_CONTAINS_DATA_HERE and bool(
+            report.d_txy_shots or self.on_read_count(path, report))
+
+    def on_read_count(self, path: str, report: StatusReport | None) -> int:
+        """The folder's shots a load converts from their raw files (store-v4, stage 3, S3~5); 0 otherwise.
+        Memory only."""
+        node = self.model.nodes.get(path)
+        raw = node.raw_count if node else len((report.d_dld_shots if report else None) or [])
+        txy = node.txy_count if node else len((report.d_txy_shots if report else None) or [])
+        return self.model.cache.on_read_shots(path, raw, txy)
 
     def load_to_ram_cache(self, path: str, *, dwell: bool = True, explicit: bool = False) -> bool:
         """Show this folder's data, loading it as the tab's visible load."""
@@ -1838,10 +1847,13 @@ class FolderExplorer(QWidget):
                     "TXY count not checked · Retry manually" if history["blocked"] or node and node.scan_skipped else
                     "Could not check folder · Retry" if scan_error else
                     scan_message or "TXY count not checked")
-        elif report.d_txy_shots or node and node.txy_count:
+        elif report.d_txy_shots or node and node.txy_count or self.on_read_count(path, report):
             found = (self.load_total_files if self.loading and self._load_path == path
                      and self.load_total_files is not None else node.txy_count if node else len(report.d_txy_shots or []))
-            text = f"{found:,} TXY found"
+            on_read = self.on_read_count(path, report)
+            # (store-v4, stage 3: raw files a load converts, S3~5.)
+            text = (f"{found:,} TXY found" + (f" · {on_read:,} converted when loaded" if on_read else "")
+                    if found or not on_read else f"{on_read:,} raw found · converted when loaded")
             if self.loading and self._load_path == path:
                 text += f" · {self.loading_message}"
             elif dataset and dataset.path == path:
@@ -2003,7 +2015,8 @@ class FolderExplorer(QWidget):
             self.folder_cache_label.setText("Cache not checked")
             self.folder_cache_label.setToolTip("Cache availability is reported by the folder listing or a load.")
             return
-        if not (cache.disk_cached(path) or report is None or report.d_txy_shots or node and node.txy_count):
+        if not (cache.disk_cached(path) or report is None or report.d_txy_shots or node and node.txy_count
+                or self.on_read_count(path, report)):
             self.folder_cache_label.setText("No data to cache")
             self.folder_cache_label.setToolTip("This folder has no TXY files.")
             return

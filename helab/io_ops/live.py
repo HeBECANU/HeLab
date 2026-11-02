@@ -235,6 +235,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     held_helab = set(held_origins)
     dropped = sorted(shot for shot in held_helab if shot not in names)
     helab_rereads: list[tuple[int, int, int]] = []
+    held_on_read: set[int] = set()  # (Held shots made from their raw files when read: the record names them.)
     for shot in sorted(held_helab - set(dropped)):
         origin = origins.get(shot, "")
         found_shot = helab_found.get(shot)
@@ -243,6 +244,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
             # Held from its raw file, converted on read (stage 3): a TXY of the same profile converted since is
             # the same data by contract, so it isn't read again.
             stat_now: tuple[int, int] | None = raw_now
+            held_on_read.add(shot)
         elif origin and found_shot is not None:
             stat_now = (found_shot.size, found_shot.mtime_ns)
         else:
@@ -468,7 +470,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
           "base_signature": "", "modified": summary["modified"], "modified_observed_at": time.time(),
           "signature": str(summary["signature"]),
           "txy": helab_txy.record(txy_source, data_origins, {**on_read, **helab_found}, txy.get("profiles"), txy,
-                                  helab_state, {shot for shot in on_read if shot in data_origins}),
+                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins}),
           **state(True, unsettled, True)})
 
 

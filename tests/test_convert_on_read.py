@@ -224,3 +224,58 @@ def test_folder_cache_asks_live_to_convert_on_read_only_with_store_v4(monkeypatc
         assert cache.with_txy("/data/run", {})[txy_sources.TXY_FIELD]["on_read"] is True
     finally:
         service.shutdown()
+
+
+# 3c: what users see (S3~5, S3~6)
+
+def test_folder_cache_says_which_folders_convert_on_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from helab.utils import folder_cache
+    from test_cache_tab import frozen_cache
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        assert not cache.converts_on_read("/data/run") and cache.on_read_shots("/data/run", 5, 2) == 0  # (store-v3.)
+        monkeypatch.setattr(folder_cache, "store_root", lambda folder: str(tmp_path / "caches" / "store-v4"))
+        assert cache.converts_on_read("/data/run") and cache.on_read_shots("/data/run", 5, 2) == 3
+        assert cache.on_read_shots("/data/run", 2, 2) == 0
+        cache.remember_choices("/data/mat", {"policy": "", "source": txy_sources.MATLAB_ONLY, "tag": "",
+                                             "source_set_at": 1.0})
+        assert not cache.converts_on_read("/data/mat")  # (Its own source reads MATLAB's only.)
+        cache.remember_prefs("/data/off", {"no_cache": True, "no_auto_load": False, "set_at": 1.0})
+        assert not cache.converts_on_read("/data/off")  # (Not cached: RAM only, no layers to keep them in.)
+    finally:
+        service.shutdown()
+
+
+def test_the_wording_names_shots_converted_from_raw() -> None:
+    from types import SimpleNamespace
+    from helab.models.SnapshotFileSystemModel import SnapshotFileSystemModel
+    from helab.views.FolderDetailsPanel import FolderDetailsPanel
+    origin = txy_sources.helab_origin("h")
+    profiles = {"h": {"name": "matlab-2019", "version": 1}}
+    assert txy_sources.describe(txy_sources.HELAB_ONLY, {1: origin, 2: origin}, profiles, 2, 2) == \
+        "TXY: HeLab's (matlab-2019 v1), converted from raw"
+    assert txy_sources.describe(txy_sources.HELAB_PRIORITY, {1: origin, 2: origin}, profiles, 3, 1) == \
+        "TXY: HeLab's (matlab-2019 v1) for 2 of 3 shots (1 converted from raw), MATLAB's for the rest"
+    assert txy_sources.describe(txy_sources.HELAB_ONLY, {1: origin, 2: origin}, profiles, 2) == \
+        "TXY: HeLab's (matlab-2019 v1)"
+    meta = {"load_counts": {"txy_matlab": 0, "txy_helab": 1, "helab_on_read": 2},
+            txy_sources.TXY_FIELD: {"profile_tag": "m19v1"}}
+    text, tip = FolderDetailsPanel._txy_row(meta)
+    assert text == "0 MATLAB · 1 m19v1 · 2 m19v1 converted from raw" and "HeLab m19v1, converted from raw" in tip
+    cache = SimpleNamespace(on_read_shots=lambda path, raw, txy: raw - txy)
+    node = SimpleNamespace(path="/data/run", raw_count=5, txy_count=2, report=object())
+    text = SnapshotFileSystemModel._on_read_text(SimpleNamespace(cache=cache), node)  # type: ignore[arg-type]
+    assert text == " · 3 converted when loaded"
+    assert txy_sources.on_read_of({txy_sources.TXY_FIELD: {"on_read": [2, 1]}}) == {1, 2}
+    assert txy_sources.on_read_of({}) == set()
+
+
+def test_a_views_on_read_shots_follow_its_revisions() -> None:
+    from helab.analysis.dataset_view import DatasetView, ViewIdentity
+    origin = txy_sources.helab_origin("h")
+    view = DatasetView(ViewIdentity("/data/run", "", "s", "helab-only", "c"), 1,
+                       {1: np.zeros((1, 3)), 2: np.zeros((1, 3))}, {}, None, None,  # type: ignore[arg-type]
+                       origins={1: origin, 2: origin}, on_read=frozenset({1}))
+    assert view.txy_text() == "TXY: HeLab's (profile h) (1 converted from raw)"
+    later = view.with_shots({3: np.zeros((1, 3)), 1: np.zeros((1, 3))}, origins={3: origin, 1: origin}, on_read=[3])
+    assert later.on_read == frozenset({3}) and later.txy_text().endswith("(1 converted from raw)")

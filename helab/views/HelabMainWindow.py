@@ -1710,7 +1710,7 @@ class HelabMainWindow(QMainWindow):
             return f"Showing previous data for {name} — see Folder details", ""
         node = explorer.model.nodes.get(path)
         if node is not None and node.report is not None and not node.error and not explorer.scan_message:
-            if node.txy_count or node.report.d_txy_shots:
+            if node.txy_count or node.report.d_txy_shots or explorer.on_read_count(path, node.report):
                 return f"{name} is not loaded — right-click it › Load data", ""
             return f"No TXY files in {name} — select a data folder", ""
         return "Select a data folder to begin", ""

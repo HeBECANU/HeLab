@@ -190,17 +190,27 @@ def profiles_of(metadata: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if isinstance(profiles, Mapping) else {}
 
 
+def on_read_of(metadata: Mapping[str, Any]) -> set[int]:
+    """The HeLab shots of a dataset made from their raw files when read (caching v2 stage 3, S3~6)."""
+    record = metadata.get(TXY_FIELD)
+    shots = record.get("on_read") if isinstance(record, Mapping) else None
+    return {int(shot) for shot in shots if isinstance(shot, int)} if isinstance(shots, list) else set()
+
+
 def describe(source: str, origins: Mapping[int, str], profiles: Mapping[str, Mapping[str, Any]],
-             shots: int) -> str:
-    """``TXY: MATLAB's`` / ``TXY: HeLab's (matlab-2019 v1) for 3 of 10 shots, MATLAB's for the rest``."""
+             shots: int, on_read: int = 0) -> str:
+    """``TXY: MATLAB's`` / ``TXY: HeLab's (matlab-2019 v1) for 3 of 10 shots, MATLAB's for the rest``; with
+    ``on_read`` of the HeLab shots made from their raw files when read, "converted from raw" (S3~6)."""
     count = len(origins)
     names = sorted({_profile_text(origin[len(HELAB_ORIGIN):], profiles) for origin in origins.values()})
     helab = f"HeLab's ({', '.join(names)})" if names else "HeLab's"
     if not count:
         return "TXY: none of HeLab's (no current HeLab TXY)" if source == HELAB_ONLY else "TXY: MATLAB's"
+    from_raw = ("" if not on_read else ", converted from raw" if on_read >= count
+                else f" ({on_read:,} converted from raw)")
     if count >= shots:
-        return f"TXY: {helab}"
-    return f"TXY: {helab} for {count:,} of {shots:,} shots, MATLAB's for the rest"
+        return f"TXY: {helab}{from_raw}"
+    return f"TXY: {helab} for {count:,} of {shots:,} shots{from_raw}, MATLAB's for the rest"
 
 
 def _profile_text(profile_hash: str, profiles: Mapping[str, Mapping[str, Any]]) -> str:

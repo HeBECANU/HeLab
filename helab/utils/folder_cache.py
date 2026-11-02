@@ -1024,6 +1024,20 @@ class FolderCache(QObject):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
+    def converts_on_read(self, path: str) -> bool:
+        """Whether a load of ``path`` converts its raw files on read (caching v2 stage 3, S3~5): store-v4 (the
+        switch on), a TXY source that reads HeLab's (the folder's own, else the tabs'), and the folder cached.
+        Memory only."""
+        if "policy" not in store_options():
+            return False
+        source = txy_sources.normal_source((self.folder_choices.get(path) or {}).get("source")) or self.tab_source()
+        return txy_sources.wants_helab(source) and not self.folder_prefs(path).get("no_cache")
+
+    def on_read_shots(self, path: str, raw: int, txy: int) -> int:
+        """How many of a folder's shots a load would convert from their raw files (raw files without a TXY
+        file), when it converts on read; else 0. Memory only."""
+        return max(0, raw - txy) if raw > txy and self.converts_on_read(path) else 0
+
     def remember_choices(self, path: str, choices: object) -> None:
         """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the
         admin's). Each part (the policy; the TXY source with its tag) keeps its later one by its own set time, so a
