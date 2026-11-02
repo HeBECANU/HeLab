@@ -62,6 +62,15 @@ REFUSED_TOOLTIP = "Folders larger than 30% of RAM are never loaded."
 # The user's choice for a folder (S10): selecting it loads nothing.
 AUTO_LOAD_OFF = "Auto-load off for this folder"
 # A folder's own TXY source or cache policy (caching v2 stage 2): following the global one.
+def remove_raw_text(path: str, size: int, only_copy: int) -> str:
+    """S4~1's question (Tony's wording, 2026-11-02): a folder now keeps no raw pulses; remove those it has?"""
+    name = os.path.basename(path.rstrip(os.sep)) or path
+    only = (f"\n\n{only_copy:,} of them are the only copy: their raw files are gone from the folder, so they can't "
+            "be read again." if only_copy else "")
+    return (f"{name} keeps no raw pulses from now on. Also remove HeLab's cached copy of this folder's raw pulses "
+            f"({byte_size(size, 'disk')})? Your d files aren't touched.{only}")
+
+
 FOLDER_CHOICE_GLOBAL = "As Settings (every folder)"
 AUTO_LOAD_OFF_TOOLTIP = ("Load this folder now. You chose not to load it automatically "
                          "(right-click › Don't auto-load this folder).")
@@ -253,6 +262,8 @@ class FolderExplorer(QWidget):
         # would keep this widget's wrapper alive after Qt deletes it.)
         self.confirm_large: Callable[[str, int], bool] | None = None
         self.ask_remove_cached: Callable[[str, int | None], bool] | None = None
+        # S4~1's question (path, bytes, only copies) → remove; tests set it.
+        self.ask_remove_raw: Callable[[str, int, int], bool] | None = None
         # (Tests: answers QInputDialog.getItem for a folder's own TXY source and cache policy.)
         self.ask_item: Callable[..., tuple[str, bool]] | None = None
         self.report_flag_failure: Callable[[str, str], None] | None = None
@@ -442,6 +453,7 @@ class FolderExplorer(QWidget):
         self.model.cache.datasetChanged.connect(self._shared_dataset_changed)
         self.model.cache.autoLoadPauseChanged.connect(self._auto_load_pause_changed)
         self.model.cache.folderPrefsChanged.connect(self._folder_prefs_changed)
+        self.model.cache.rawRemovalOffered.connect(self._offer_raw_removal)
         self.model.cache.folderPrefsFailed.connect(self._folder_prefs_failed)
         self.model.cache.folderConstantsFailed.connect(self._folder_constants_failed)
         self.model.cache.mountWarningChanged.connect(self._mount_warning_changed)
@@ -2402,7 +2414,8 @@ class FolderExplorer(QWidget):
 
     def choose_folder_policy(self, path: str) -> None:
         """Right-click › Cache policy for this folder… (store-v4, Q45.1): what its saves keep; "As Settings"
-        follows Settings › Cache's. Changing it removes nothing."""
+        follows Settings › Cache's. Changing it removes nothing; TXY only then offers to remove the folder's raw
+        pulses, when the store says it has some (S4~1, ``_offer_raw_removal``)."""
         from helab.views.CacheTab import POLICY_LABELS
         cache = self.model.cache
         current = str((cache.folder_choices.get(path) or {}).get("policy") or "")
@@ -2412,7 +2425,24 @@ class FolderExplorer(QWidget):
             self, "Cache policy for this folder", "This folder's saves keep:", names, index, False)
         if accepted:
             policy = "" if chosen == FOLDER_CHOICE_GLOBAL else POLICY_LABELS[names.index(chosen) - 1][0]
-            cache.set_folder_choice(path, policy=policy)
+            cache.set_folder_choice(path, policy=policy, owner=self.model.owner)
+
+    def _offer_raw_removal(self, owner: str, path: str, size: int, only_copy: int) -> None:
+        """S4~1 (Tony, 2026-11-02): this tab set a folder to keep no raw pulses and the store holds some; ask, and
+        remove only those, only on a yes. HeLab never removes d raw files."""
+        if owner != self.model.owner or self.closed or not path:
+            return
+        if (self.ask_remove_raw or self._ask_remove_raw)(path, size, only_copy):
+            self.model.cache.cache_admin("clear_raw", paths=[path])
+
+    def _ask_remove_raw(self, path: str, size: int, only_copy: int) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "TXY only for this folder", remove_raw_text(path, size, only_copy),
+                          parent=self)
+        remove = box.addButton("Remove cached raw pulses", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Keep them", QMessageBox.ButtonRole.RejectRole)
+        identify_buttons(box, "txy_only_raw_confirm")
+        box.exec()
+        return box.clickedButton() is remove
 
     def set_folder_flag(self, path: str, key: str, on: bool) -> None:
         """Right-click › Don't cache / Don't auto-load this folder (this folder only). Ticking
@@ -2649,6 +2679,7 @@ class FolderExplorer(QWidget):
         self.model.cache.datasetChanged.disconnect(self._shared_dataset_changed)
         self.model.cache.autoLoadPauseChanged.disconnect(self._auto_load_pause_changed)
         self.model.cache.folderPrefsChanged.disconnect(self._folder_prefs_changed)
+        self.model.cache.rawRemovalOffered.disconnect(self._offer_raw_removal)
         self.model.cache.folderPrefsFailed.disconnect(self._folder_prefs_failed)
         self.model.cache.folderConstantsFailed.disconnect(self._folder_constants_failed)
         self.model.cache.mountWarningChanged.disconnect(self._mount_warning_changed)

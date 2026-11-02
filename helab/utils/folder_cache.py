@@ -204,6 +204,8 @@ class FolderCache(QObject):
     folderIconChanged = pyqtSignal(str)
     # A folder's flags (S10: Don't cache, Don't auto-load) changed.
     folderPrefsChanged = pyqtSignal(str)
+    # A folder set to keep no raw pulses still has some (S4~1): (the tab's owner, path, bytes, only copies).
+    rawRemovalOffered = pyqtSignal(str, str, int, int)
     # A flag couldn't be saved (path, why, the owner that set it); memory shows the saved state again.
     folderPrefsFailed = pyqtSignal(str, str, str)
     # Constants the analyses use changed: a folder's own (its path; its subfolders inherit them),
@@ -339,6 +341,8 @@ class FolderCache(QObject):
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
         # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
         self._choice_writes: dict[str, str] = {}
+        # And the tab that set each (S4~1: its offer to remove raw pulses goes to that tab): job → owner.
+        self._choice_owners: dict[str, str] = {}
         # Constants (F0b): the lab's (Settings → Lab parameters, set by the main window), and each
         # folder's own, as the store or this session last said: {"values": {key: float}, "set_at"}.
         # Folders with no disk cache keep theirs for the session only (``constants_session_only``).
@@ -1068,7 +1072,7 @@ class FolderCache(QObject):
             self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
 
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
-                          tag: str | None = None) -> str:
+                          tag: str | None = None, owner: str = "") -> str:
         """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
         one): kept now (the tab's next load and Live follow it), then saved; the store's answer
         (``folder_choices``) wins. The job's owner, "" if it couldn't be queued."""
@@ -1088,6 +1092,8 @@ class FolderCache(QObject):
         job = self.cache_admin("folder_choice", **params)
         if job:
             self._choice_writes[job] = path
+            if owner:
+                self._choice_owners[job] = owner
         return job
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
@@ -3883,12 +3889,18 @@ class FolderCache(QObject):
             logging.info("Disk cache cleanup: %s", event)
         elif kind in ("error", "cancelled"):
             logging.warning("Disk cache %s: %s", action, event.get("message", "Cancelled"))
+        if action == "folder_choice" and kind == "admin_result" and isinstance(raw := event.get("folder_raw"), dict) \
+                and int(raw.get("shots") or 0) and (asker := self._choice_owners.get(producer.owner)):
+            # S4~1: the folder now keeps no raw pulses; the tab that chose it offers to remove those it has.
+            self.rawRemovalOffered.emit(asker, self._choice_writes.get(producer.owner, ""), int(raw.get("bytes") or 0),
+                                        int(raw.get("only_copy") or 0))
         if kind in ("inventory", "admin_result", "swept", "error", "cancelled") and not stale:
             self.cacheAdminResult.emit(action, event)
         if kind in ("done", "error", "cancelled"):
             self._admin.pop(producer.owner, None)
             self._started.pop(producer.owner, None)
             self._choice_writes.pop(producer.owner, None)
+            self._choice_owners.pop(producer.owner, None)
             write = self._pref_writes.pop(producer.owner, None)
             if write is not None and kind != "done":
                 self._prefs_not_saved(write[0], write[1], str(event.get("message") or "the save was cancelled"),

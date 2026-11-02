@@ -3088,6 +3088,27 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return RawRemoval(tuple(self._source_path(key) for key in keys), count, size)
 
+    def remove_raw_following(self) -> RawRemoval:
+        """S4~1 for the global policy (the user asked, after Settings › Cache's TXY only): the raw pulses of every
+        folder that follows Settings' policy (none of its own), each folder's ``raw:`` epoch bumped as
+        :meth:`remove_raw` does; folders with their own policy keep theirs."""
+        if self.layout < store_v4.LAYOUT:
+            return RawRemoval((), 0, 0)
+        now = time.time()
+        try:
+            with self.transaction():
+                keys = [str(key) for (key,) in self._conn.execute(
+                    "SELECT DISTINCT path FROM raw_layers WHERE path NOT IN "
+                    "(SELECT path FROM cache_policy WHERE policy != '')")]
+                for key in keys:
+                    self._conn.execute("INSERT INTO folder_epochs (path, epoch) VALUES (?, 1) ON CONFLICT (path) "
+                                       "DO UPDATE SET epoch = epoch + 1", (_raw_epoch(key),))
+                _, count, size = self._remove_raw_rows(
+                    f" WHERE path IN ({','.join('?' * len(keys)) or 'NULL'})", keys, now)
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return RawRemoval(tuple(self._source_path(key) for key in keys), count, size)
+
     def _raw_summary(self) -> dict[str, Any]:
         """store-v4's raw layers for Settings › Cache (inside a transaction): rows, bytes, folders, the
         rows whose raw files were gone at the last look (``only_copy``), when one was last used."""
@@ -3799,6 +3820,21 @@ class CacheStore:
                 return {**dict(values), "set_at": set_at}
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def folder_raw(self, path: str) -> dict[str, int]:
+        """A folder's raw pulses (store-v4's raw layers): ``shots``, ``bytes`` and ``only_copy`` (shots whose raw
+        files were gone at the last look), for S4~1's offer; zeros in store-v3."""
+        if self.layout < store_v4.LAYOUT:
+            return {"shots": 0, "bytes": 0, "only_copy": 0}
+        key = self._path_key(path)
+        try:
+            with self.transaction(write=False):
+                shots, size, only = self._conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COALESCE(SUM(gone_at IS NOT NULL), 0) FROM raw_layers "
+                    "WHERE path = ?", (key,)).fetchone()
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be read: {exc}") from exc
+        return {"shots": int(shots), "bytes": int(size), "only_copy": int(only)}
 
     def read_folder_choices(self, paths: Sequence[str]) -> dict[str, Read[dict[str, Any]]]:
         """Each folder's stage 2 choices: ``policy``, ``source`` and ``tag`` ("" for none) with when each was

@@ -273,7 +273,7 @@ def test_the_explorers_dialogs_set_exactly_what_was_picked(monkeypatch: pytest.M
 
         def ask(parent: Any, title: str, label: str, items: list[str], index: int, editable: bool) -> tuple[str, bool]:
             return answers.pop(0), True
-        explorer = SimpleNamespace(model=SimpleNamespace(cache=cache), ask_item=ask)
+        explorer = SimpleNamespace(model=SimpleNamespace(cache=cache, owner="tab"), ask_item=ask)
         answers[:] = [txy_sources.LABELS["helab-only"], "m19v1"]
         FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
         assert admin_request(service, "folder_choice").payload["params"] | {"set_at": 0} == {

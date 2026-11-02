@@ -109,6 +109,7 @@ class AdminResultFields(TypedDict, total=False):
     recorded: bool
     results: int  # saved results removed (R2)
     raw: int  # store-v4's raw layer rows removed (``clear_raw``, caching v2)
+    folder_raw: dict[str, int]  # a folder's raw pulses when its policy became TXY only (S4~1): shots, bytes, only_copy
     txy: int  # store-v4's TXY layers removed (``clear_txy``, caching v2 stage 2)
     choices: dict[str, Any]  # a folder's stage 2 choices after ``folder_choice`` (policy, source, tag)
     legacy: dict[str, Any]  # store-v3 beside store-v4 after ``legacy_choice``/``clear_legacy`` (``measure_legacy``)
