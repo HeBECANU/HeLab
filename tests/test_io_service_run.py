@@ -129,3 +129,38 @@ def test_shutdown_stops_its_helpers_itself_not_only_from_the_reapers(
         if helper.poll() is None:
             helper.kill()
             helper.wait()
+
+
+def test_a_helper_still_starting_when_helab_quits_is_stopped(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A40.1 (IO Fixes' A~1): HeLab quits while ``_run`` is inside ``Popen`` (no ``process`` yet, so ``shutdown``
+    can't kill it). ``shutdown`` cancels every active request first, and ``_run`` kills a cancelled request's
+    process as soon as ``Popen`` returns: the helper doesn't outlive HeLab. (A ``self.closed`` check there, as
+    proposed, would add nothing: no request is closed without being cancelled.)"""
+    service = IOService()
+    service.timer.stop()
+    real_popen = subprocess.Popen
+    in_popen, quitting = threading.Event(), threading.Event()
+    started: list[subprocess.Popen[str]] = []
+
+    def popen(*args: Any, **kwargs: Any) -> Any:
+        if not threading.current_thread().name.startswith("HeLab-"):
+            return real_popen(*args, **kwargs)  # (Not the helper's start: another thread's.)
+        in_popen.set()
+        assert quitting.wait(10)
+        process = real_popen([sys.executable, "-c", "import time; time.sleep(60)"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, text=True)
+        started.append(process)
+        return process
+    monkeypatch.setattr("helab.utils.io_service.subprocess.Popen", popen)
+    service.submit("tab", 0, "/somewhere", "list")
+    service._dispatch()
+    assert in_popen.wait(10)
+    service.shutdown()  # HeLab quits now.
+    quitting.set()
+    qtbot.waitUntil(lambda: bool(started), timeout=10_000)
+    try:
+        assert started[0].wait(timeout=10) != 0
+    finally:
+        if started[0].poll() is None:
+            started[0].kill()
+            started[0].wait()
