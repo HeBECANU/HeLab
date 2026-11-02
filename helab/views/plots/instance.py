@@ -953,7 +953,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         (in place: the dock, its place, number and the page's window stay), the settings it had are put
         back where they still fit (``check_plot``; one that was removed, retyped or no longer fits starts
         at the new default, named in the Presets row's note, "Reloaded · ⚠ …"), and it reruns, drawn
-        anew. A waiting (reopened) plot keeps waiting; a released one reloads as Rerun would. If the new
+        anew. A waiting (reopened) plot keeps waiting, also one waiting to load its own TXY choice (D4); a
+        released one reloads as Rerun would. If the new
         script's hooks fail, it keeps the old code (``keep_script``). Whether it took the new code."""
         if self.is_closed:
             return False
@@ -991,7 +992,9 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._cached_link = None
         self._content, self._drawn_with = None, ""  # Drawn anew by the new code (not its update).
         self._retitle()
-        if self.waiting():
+        if self.waiting() or self._own_waits:
+            # Still waiting for its data, or to load its own TXY choice: a reload isn't the user's word to
+            # read its folder (D4); a select of the folder or Rerun still is.
             self._show_follow()
             return True
         self.run()

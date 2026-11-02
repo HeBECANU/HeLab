@@ -197,3 +197,38 @@ def test_a_script_preset_carries_the_choice_and_one_without_leaves_it(
     instance.set_txy_keep(False)
     instance.presets._save_as("mine, no TXY", ask=False)
     assert written[-1].txy is None
+
+
+def test_a_reload_doesnt_count_as_reading_the_folder_for_a_waiting_choice(
+        qtbot: QtBot, cache: FolderCache, windows: Windows) -> None:
+    """M1 (D4): a reopened plot waiting to load its own choice takes its script's new code without loading
+    it: a reload (auto-reload too) is not the user's word to read the folder."""
+    path = folder("reloaded")
+    data = {shot: np.full((10, 3), float(shot)) for shot in range(1, 3)}
+    cached = Dataset(path, "sig-reloaded", data, {"fingerprint": [[shot, 100 + shot, 1_000 + shot] for shot in data],
+                                                  "bytes": 480, "verified": False}, 0)
+    cache.datasets[cache.dataset_key(cached)] = cached
+    instance = reopened(qtbot, cache, windows, SavedPlot(REF, path, txy=TxyChoice("helab-only")))
+    qtbot.waitUntil(lambda: instance._own_waits, timeout=10_000)
+    instance.hold_for_reload()
+    assert instance.adopt_script(instance.metadata, type(instance.script)()) is True
+    assert loads(cache) == [] and instance._own_waits
+    instance.run()  # Rerun still loads it.
+    assert len(loads(cache)) == 1
+
+
+def test_a_plots_record_holds_the_choice_made_in_its_row(qtbot: QtBot, cache: FolderCache, windows: Windows) -> None:
+    """M2: the choice made in an open plot's TXY row is in its record (Keep on), survives the record's
+    text, and a reopen of that record takes it."""
+    path = folder("chosen")
+    load_through_the_cache(cache, path, range(1, 4), "v1", allow_missing=False)
+    instance = reopened(qtbot, cache, windows, SavedPlot(REF, path, values={"bins": 3}))
+    qtbot.waitUntil(lambda: instance.shown is not None, timeout=10_000)
+    instance.set_txy_source("helab-only", "plates-2022")
+    saved = instance.saved_plot()
+    assert saved.txy == TxyChoice("helab-only", "plates-2022", "p22v1") and saved.txy_keep is True
+    again = parse(Arrangement((saved,)).dumps()).plots[0]
+    assert again.txy == saved.txy
+    reopen = reopened(qtbot, cache, windows, again)
+    assert reopen.txy_source == "helab-only" and reopen.txy_profile is not None
+    assert reopen.txy_profile.name == "plates-2022"

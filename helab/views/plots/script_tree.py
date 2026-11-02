@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING, Union
 
 from PyQt6 import sip
@@ -19,11 +21,12 @@ from helab.analysis.presets import SavedPlot, ScriptRef, waiting_view
 from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.scripts import dld, standard
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
-from helab.scripts.scripts_manager import LoadError, ScriptsManager, Stamp
-from helab.utils.accessible import id_part, identify
+from helab.scripts.scripts_manager import LoadError, ScriptsManager
+from helab.utils.accessible import id_part, identify, identify_buttons
 from helab.utils.colours import AMBER
 from helab.utils.settings_defaults import SCRIPT_AUTO_RELOAD_SETTING, SCRIPT_FOLDERS_SETTING, read_setting
 from helab.utils.settings_store import app_settings
+from helab.views.ElidedLabel import ElidedLabel
 from helab.views.plots.dock import AnalysisDock, DockTabCloser
 from helab.views.plots.instance import AnalysisInstance, LinkedAnalysisInstance
 if TYPE_CHECKING:
@@ -35,6 +38,53 @@ AUTO = "auto"
 # Auto-reload: a change starts this wait (ms) before the folder's files are compared, so an editor's save
 # (often a temporary file, then a rename) has finished.
 SETTLE_MS = 750
+# The remembered folders load this long after the panel is made: once the event loop runs, so after the main
+# window has shown (M3), and before the plots reopen (``PlotReopen.restore`` waits for ``foldersRestored``).
+RESTORE_DELAY_MS = 200
+# In the app folder while a script folder loads (written before, removed after): found at start, the last
+# load never ended (a script that blocks or crashes at import), so the remembered folders aren't loaded.
+LOADING_MARKER = "scripts-loading.json"
+# File systems that are network shares (as ``cache_paths``' mounts name them).
+NETWORK_TYPES = ("smbfs", "cifs", "smb", "smb2", "smb3", "afpfs", "nfs", "nfs4", "webdav", "davfs", "remote")
+
+
+def marker_path() -> str:
+    from helab.utils.constants import app_folder
+    return os.path.join(app_folder(), LOADING_MARKER)
+
+
+def loading_marker() -> Optional[str]:
+    """The folder named by the loading marker ("" if it names none), or None when there is no marker."""
+    path = marker_path()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return ""  # (There, but unreadable: still a load that never ended.)
+    folder = data.get("folder") if isinstance(data, dict) else None
+    return folder if isinstance(folder, str) else ""
+
+
+def on_network(folder: str) -> bool:
+    """Whether ``folder`` is on a network share, from the mount table alone (never touching the folder, which
+    may be unreachable): a UNC path on Windows, else the longest mount holding it is remote."""
+    if sys.platform == "win32" and folder.replace("/", "\\").startswith("\\\\"):
+        return True
+    from helab.utils import cache_paths
+    try:
+        mounts = cache_paths.current_mounts()
+    except Exception:  # (The mount table can't be read: taken as local, as before live scripts.)
+        logging.exception("Mounts unreadable: %s taken as local", folder)
+        return False
+    path = os.path.normcase(folder)
+    holding = [mount for mount in mounts if mount.path and (
+        path == os.path.normcase(mount.path) or path.startswith(os.path.normcase(mount.path).rstrip("/\\") + os.sep))]
+    if not holding:
+        return False
+    mount = max(holding, key=lambda entry: len(entry.path))
+    return mount.remote or mount.fstype.lower() in NETWORK_TYPES
 
 
 def read_script_folders() -> List[str]:
@@ -62,7 +112,9 @@ class TreePanelWidget(QWidget):
     then, helab/views/plots/arrangement.py).
 
     **Live scripts:** the folders added with Load Scripts… are remembered (``script_folders``) and
-    loaded again at start, before plots reopen; Load Scripts…'s menu removes one from the list and
+    loaded again at start (``restore_folders``: after the window shows, before plots reopen; never a
+    folder on a network share, nor any after a start whose load never ended, ``LOADING_MARKER``: those
+    wait for Reload, said in the panel's one-line note); Load Scripts…'s menu removes one from the list and
     turns on reloading when a script is saved (``script_auto_reload``, off by default: only then a
     ``QFileSystemWatcher`` watches the script folders and their helper modules, never a data
     folder). **Reload** loads the folders again with their helper modules (``ScriptsManager``); a
@@ -74,6 +126,7 @@ class TreePanelWidget(QWidget):
     """
 
     plotsChanged = pyqtSignal()
+    foldersRestored = pyqtSignal()  # The remembered folders were loaded (or skipped) at start.
 
     def __init__(self, workspace: Optional[PlotWorkspace] = None,
                  parent: Any = None) -> None:
@@ -112,6 +165,7 @@ class TreePanelWidget(QWidget):
         self.folders_menu.aboutToShow.connect(self._fill_folders_menu)
         self.load_dir_button.setMenu(self.folders_menu)
         self.auto_reload_action = QAction("Reload when a script is saved", self)
+        self.auto_reload_action.setObjectName("script_auto_reload")
         self.auto_reload_action.setCheckable(True)
         self.auto_reload_action.setToolTip("Watch the script folders (only those) and reload one when a script or "
                                            "helper module in it is saved")
@@ -131,6 +185,11 @@ class TreePanelWidget(QWidget):
 
         controls_layout.addStretch()
         self.panel_layout_right_bottom.addLayout(controls_layout)
+        # One line, only when remembered folders weren't loaded at start (the folders and why: its tooltip).
+        self.start_note = identify(ElidedLabel(), "scripts_start_note")
+        self.start_note.setStyleSheet(f"color: {AMBER};")
+        self.start_note.hide()
+        self.panel_layout_right_bottom.addWidget(self.start_note)
 
         # Tree list widget
         self.tree_widget = identify(QTreeWidget(), "scripts", "Scripts", "The group's scripts and their run buttons")
@@ -148,9 +207,16 @@ class TreePanelWidget(QWidget):
         # Add tree widget to the layout
         self.panel_layout_right_bottom.addWidget(self.tree_widget)
 
-        # Live scripts: what each folder's files were when last loaded (auto-reload compares), the
-        # folders waiting to reload (until their runs end), and the watcher (only while auto-reload is on).
-        self._stamps: Dict[str, Stamp] = {}
+        # Live scripts: the remembered folders (the setting's list: loaded or not), those not loaded at start
+        # and why, what each folder's files were when last loaded and when (auto-reload compares), the
+        # folders on a network share (never watched), the folders waiting to reload (until their runs end),
+        # and the watcher (only while auto-reload is on).
+        self._remembered: List[str] = [ScriptsManager.normal(folder) for folder in read_script_folders()]
+        self._skipped: Dict[str, str] = {}
+        self._stamps: Dict[str, Dict[str, Tuple[int, int]]] = {}
+        self._stamped_at: Dict[str, int] = {}
+        self._remote: Set[str] = set()
+        self._submenus: List[QMenu] = []
         self._pending: Set[str] = set()
         self._waiting_on: List[AnalysisRunner] = []
         self._watcher: Optional[QFileSystemWatcher] = None
@@ -161,9 +227,18 @@ class TreePanelWidget(QWidget):
         self._details: Optional[QMessageBox] = None
         self.tree_widget.itemDoubleClicked.connect(self._show_error_details)
 
-        # HeLab's bundled analyses, then the user's remembered folders (before plots reopen)
+        # HeLab's bundled analyses now; the user's remembered folders once the window has shown (M3)
         self._load_default_scripts()
-        self._restore_folders()
+        auto = bool(read_setting(app_settings(), SCRIPT_AUTO_RELOAD_SETTING, typed=True))
+        self.auto_reload_action.blockSignals(True)
+        self.auto_reload_action.setChecked(auto)
+        self.auto_reload_action.blockSignals(False)
+        self.folders_pending = bool(self._remembered)
+        self.reload_button.setEnabled(bool(self._remembered))
+        if self.folders_pending:
+            QTimer.singleShot(RESTORE_DELAY_MS, self.restore_folders)
+        else:
+            self._watch(auto)
 
         logging.info(f"TreePanelWidget initialized. {type(self.parent()) = }")
 
@@ -203,38 +278,100 @@ class TreePanelWidget(QWidget):
 
     # Live scripts: the user's folders
 
-    def _restore_folders(self) -> None:
-        """Load the remembered folders (a missing one is listed with "folder not found"), and start
-        watching them if auto-reload is on."""
-        for folder in read_script_folders():
-            self._load_folder(folder)
+    def restore_folders(self) -> None:
+        """At start, once the window has shown (M3): load the remembered folders, but not a folder on a
+        network share (it may be unreachable: listing it could stall HeLab), and none if the last start's load
+        never ended (the loading marker: a script that blocks or crashes at import). Those wait for Reload,
+        named in the panel's note. Then watch them if auto-reload is on, and say so (``foldersRestored``)."""
+        if not self.folders_pending:
+            return
+        self.folders_pending = False
+        stuck = loading_marker()
+        for folder in self._remembered:
+            if stuck is not None:
+                self._skipped[folder] = (f"HeLab stopped while loading {stuck} last time" if stuck else
+                                         "HeLab stopped while loading script folders last time")
+            elif on_network(folder):
+                self._skipped[folder] = "on a network share"
+            else:
+                self._load_folder(folder)
         self._refresh()
-        auto = bool(read_setting(app_settings(), SCRIPT_AUTO_RELOAD_SETTING, typed=True))
-        self.auto_reload_action.blockSignals(True)
-        self.auto_reload_action.setChecked(auto)
-        self.auto_reload_action.blockSignals(False)
-        self._watch(auto)
+        self._show_start_note()
+        self._watch(self.auto_reload_action.isChecked())
+        self.foldersRestored.emit()
+
+    def _show_start_note(self) -> None:
+        """One line while remembered folders wait for Reload; their reasons in its tooltip."""
+        skipped = self._skipped
+        if not skipped:
+            self.start_note.hide()
+            self.start_note.setText("")
+            return
+        count = len(skipped)
+        reasons = sorted(set(skipped.values()))
+        self.start_note.setText(f"⚠ {count:,} script folder{'' if count == 1 else 's'} not loaded at start "
+                                f"({reasons[0]}{'; …' if len(reasons) > 1 else ''}): Reload to load "
+                                f"{'it' if count == 1 else 'them'}")
+        self.start_note.setToolTip("\n".join(f"{folder}: {why}" for folder, why in sorted(skipped.items())))
+        self.start_note.show()
 
     def _load_folder(self, folder: str) -> bool:
+        """Load one folder (on the GUI thread, as Load Scripts… always has), the loading marker set around it:
+        if a script blocks or crashes HeLab at import, the next start loads no remembered folder. A marker
+        left by an earlier load stays until that folder loads or is removed."""
+        folder = ScriptsManager.normal(folder)
+        stuck = loading_marker()
+        own = stuck is None
+        if own:
+            self._mark(folder)
         try:
             loaded = self.script_manager.add_folder(folder)
         except Exception:  # (Never expected: the manager keeps each file's failure. It stays listed.)
             logging.exception("Error loading scripts from %s", folder)
-            return False
-        self._stamps[ScriptsManager.normal(folder)] = self._stamp_of(folder)
+            loaded = False
+        finally:
+            if own or stuck == folder:
+                self._unmark()
+        self._skipped.pop(folder, None)
+        if on_network(folder):
+            self._remote.add(folder)  # (Never watched: auto-reload stats only local folders.)
+        else:
+            self._remote.discard(folder)
+        self._stamps[folder] = self._stamp_of(folder)
+        self._stamped_at[folder] = time.time_ns()
         return loaded
 
-    def _stamp_of(self, folder: str) -> Stamp:
+    @staticmethod
+    def _mark(folder: str) -> None:
+        path = marker_path()
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"folder": folder, "pid": os.getpid(), "at": time.time()}, handle)
+        except OSError:
+            logging.exception("The script loading marker couldn't be written (%s)", path)
+
+    @staticmethod
+    def _unmark() -> None:
+        try:
+            os.remove(marker_path())
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logging.exception("The script loading marker couldn't be removed")
+
+    def _stamp_of(self, folder: str) -> Dict[str, Tuple[int, int]]:
         manager = self.script_manager
-        return manager.stamp(manager.watched_files(folder))
+        return {file: (size, mtime) for file, size, mtime in manager.stamp(manager.watched_files(folder))}
 
     def add_folder(self, folder: str) -> None:
         """Load Scripts…: a new folder is loaded and remembered; one loaded already reloads (its plots
         take the new code)."""
         folder = ScriptsManager.normal(folder)
-        if any(os.path.normcase(known) == os.path.normcase(folder) for known in self.script_manager.folders()):
+        if any(os.path.normcase(known) == os.path.normcase(folder)
+               for known in (*self.script_manager.folders(), *self._remembered)):
             self.reload_scripts([folder])
             return
+        self._remembered.append(folder)
         self._load_folder(folder)
         self._save_folders()
         self._refresh()
@@ -249,26 +386,42 @@ class TreePanelWidget(QWidget):
             instance.keep_script("its folder was removed from the Scripts list")
         self._pending.discard(folder)
         self.script_manager.remove_folder(folder)
-        self._stamps.pop(folder, None)
+        self._remembered = [known for known in self._remembered if os.path.normcase(known) != os.path.normcase(folder)]
+        self._skipped.pop(folder, None)
+        if loading_marker() == folder:
+            self._unmark()  # (Its load never ended: gone from the list, it can't stop a start now.)
+        for table in (self._stamps, self._stamped_at):
+            table.pop(folder, None)
+        self._remote.discard(folder)
         self._save_folders()
         self._refresh()
+        self._show_start_note()
         self._sync_watch()
+        if not self._pending:
+            self._stop_waiting()  # (A reload waiting only for this folder's runs: nothing waits now, L2.)
 
     def _save_folders(self) -> None:
-        app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps(self.script_manager.folders()))
+        app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps(self._remembered))
 
     def _fill_folders_menu(self) -> None:
         menu = self.folders_menu
         menu.clear()
-        folders = self.script_manager.folders()
+        for old in self._submenus:  # (clear() deletes the actions, not the submenus: N2.)
+            old.deleteLater()
+        self._submenus = []
+        folders = list(self._remembered)
         if folders:
             menu.addSection("Script folders")
         for folder in folders:
-            sub = menu.addMenu(folder)
+            why = self._skipped.get(folder)
+            sub = menu.addMenu(folder + (f" (not loaded: {why})" if why else ""))
             assert sub is not None
+            self._submenus.append(sub)
             reload = sub.addAction("Reload")
             remove = sub.addAction("Remove from the list")
             assert reload is not None and remove is not None
+            reload.setObjectName("script_folder_reload")
+            remove.setObjectName("script_folder_remove")
             reload.setData(folder)
             remove.setData(folder)
             reload.triggered.connect(self._reload_chosen)
@@ -306,7 +459,7 @@ class TreePanelWidget(QWidget):
         """Reload ``folders`` (default: every loaded one). Their plots are held and their runs cancelled;
         the reload itself waits until no run of those folders' scripts is queued or computing (a
         ``compute`` on the worker thread is never under a reload), then runs (``_try_reload``)."""
-        chosen = self.script_manager.folders() if folders is None else [ScriptsManager.normal(f) for f in folders]
+        chosen = list(self._remembered) if folders is None else [ScriptsManager.normal(f) for f in folders]
         if not chosen:
             return
         self._pending.update(chosen)
@@ -330,6 +483,7 @@ class TreePanelWidget(QWidget):
 
     def _try_reload(self) -> None:
         if not self._pending:
+            self._stop_waiting()  # (L2: the folder it waited for was removed meanwhile.)
             return
         busy = self._busy(self._pending)
         if busy:
@@ -346,6 +500,7 @@ class TreePanelWidget(QWidget):
         for folder in sorted(folders):
             self._load_folder(folder)
         self._refresh()
+        self._show_start_note()
         self._sync_watch()
         adopted, kept = self._adopt(folders)
         self.plotsChanged.emit()  # (Their records name the new code.)
@@ -465,7 +620,7 @@ class TreePanelWidget(QWidget):
             return
         manager = self.script_manager
         wanted: Set[str] = set()
-        for folder in manager.folders():
+        for folder in self._local_folders():
             if os.path.isdir(folder):
                 wanted.add(folder)
                 wanted.update(os.path.dirname(file) for file in manager.watched_files(folder))
@@ -480,14 +635,33 @@ class TreePanelWidget(QWidget):
     def _changed(self, _path: str) -> None:
         self._settle.start()  # (Restarted by each event: compared once they stop.)
 
+    def _local_folders(self) -> List[str]:
+        """The loaded folders auto-reload watches and stats: never one on a network share."""
+        return [folder for folder in self.script_manager.folders() if folder not in self._remote]
+
     def _check_changes(self) -> None:
         """After the settle wait: reload each folder whose ``.py`` files or helper modules changed (added,
         removed, resized or modified), only those."""
         self._sync_watch()
-        changed = [folder for folder in self.script_manager.folders()
-                   if self._stamp_of(folder) != self._stamps.get(folder)]
+        changed = [folder for folder in self._local_folders() if self._folder_changed(folder)]
         if changed:
             self.reload_scripts(changed)
+
+    def _folder_changed(self, folder: str) -> bool:
+        """Whether a file of ``folder`` changed since its load: one stamped then changed or went, or a new
+        ``.py`` file in it. A helper file first imported since the load (lazily, in a run) that wasn't
+        modified since the load isn't a change: it is stamped from now on (L5)."""
+        old, now = self._stamps.get(folder), self._stamp_of(folder)
+        if old is None:
+            return True
+        if any(now.get(file) != stamp for file, stamp in old.items()):
+            return True
+        since = self._stamped_at.get(folder, 0)
+        for file in now.keys() - old.keys():
+            if os.path.normcase(os.path.dirname(file)) == os.path.normcase(folder) or now[file][1] > since:
+                return True
+            old[file] = now[file]
+        return False
 
     # Live scripts: load errors
 
@@ -504,7 +678,7 @@ class TreePanelWidget(QWidget):
             self._load_current_group()
         else:
             self._show_errors()
-        self.reload_button.setEnabled(bool(self.script_manager.folders()))
+        self.reload_button.setEnabled(bool(self._remembered or self.script_manager.folders()))
 
     def _show_errors(self) -> None:
         """``⚠ N script files didn't load`` at the tree's end, one line per file, its traceback in the tooltip."""
@@ -549,6 +723,7 @@ class TreePanelWidget(QWidget):
         identify(box, "script_error_details", "Script didn't load")
         box.setInformativeText(error.path)
         box.setDetailedText(error.details or error.message)
+        identify_buttons(box, "script_error_details")
         box.setModal(False)
         box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         box.show()

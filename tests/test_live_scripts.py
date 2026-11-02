@@ -8,11 +8,16 @@ The manager's reload alone: tests/test_scripts_reload.py.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
 import pytest
+from typing import Iterator
+
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
@@ -22,7 +27,12 @@ from helab.utils.folder_cache import FolderCache
 from helab.utils.settings_defaults import SCRIPT_AUTO_RELOAD_SETTING, SCRIPT_FOLDERS_SETTING, read_setting
 from helab.utils.settings_store import app_settings
 from helab.views.plots.instance import AnalysisInstance
-from helab.views.plots.script_tree import TreePanelWidget, read_script_folders
+from helab.analysis.presets import Arrangement, SavedPlot, ScriptRef
+from helab.utils.cache_paths import Mount
+from helab.utils.settings_defaults import OPEN_PLOTS_SETTING
+from helab.views.plots import script_tree
+from helab.views.plots.arrangement import PlotReopen
+from helab.views.plots.script_tree import TreePanelWidget, loading_marker, marker_path, on_network, read_script_folders
 from test_presets_plots import (Window, Windows, cache, dataset, folder, fresh_presets, new_window,  # noqa: F401
                                       no_disk_cache, runner, set_values, windows)
 from test_scripts_reload import restored_imports  # noqa: F401
@@ -60,6 +70,20 @@ SPECS = ('ParameterSpec("bins", "Bins", "int", 10, (1, 100)), ParameterSpec("sca
 # The edited script: Scale removed, Mode now a number, Extra new.
 EDITED = ('ParameterSpec("bins", "Bins", "int", 10, (1, 100)), ParameterSpec("mode", "Mode", "int", 0, (0, 9)), '
           'ParameterSpec("extra", "Extra", "bool", True)')
+
+
+@pytest.fixture(autouse=True)
+def no_marker() -> Iterator[None]:
+    """No loading marker before or after a test (the app folder lasts the xdist worker)."""
+    def remove() -> None:
+        try:
+            os.remove(marker_path())
+        except FileNotFoundError:
+            pass
+
+    remove()
+    yield
+    remove()
 
 
 def write_script(folder_: Path, helper: str, tag: str, *, specs: str = SPECS, name: str = "Live",
@@ -175,6 +199,11 @@ def test_a_reload_waits_for_a_run_of_its_scripts_on_the_worker_thread(
     window.scripts.reload_scripts()
     assert window.scripts.reload_button.text() == "Reload (waiting)"
     assert window.scripts.script_manager.get_script(f"{tmp_path / 'live.py'}::Live") is old_class  # Not yet.
+    # L1: held meanwhile: a Rerun (or a Live revision) submits nothing on the old code.
+    job = instance.job_id
+    instance.run()
+    assert instance.status_label.text() == "Waiting for its script to reload…"
+    assert len(instance.runner.in_flight()) == 1 and instance.job_id == job
     gate.set()  # Its compute returns (as cancelled): the reload goes on.
     qtbot.waitUntil(lambda: instance.shown is not None and shown_tag(instance) == "new", timeout=10_000)
     assert window.scripts.reload_button.text() == "Reload"
@@ -191,9 +220,10 @@ def test_folders_are_remembered_restored_and_removed(qtbot: QtBot, tmp_path: Pat
     scripts.add_folder(str(missing))
     assert json.loads(read_setting(app_settings(), SCRIPT_FOLDERS_SETTING, typed=True)) == [str(first), str(missing)]
     assert scripts.reload_button.isEnabled()
-    # At the next start: both listed, the missing one with its line.
+    # At the next start: both listed, the missing one with its line (once the deferred restore has run).
     again = TreePanelWidget()
     qtbot.addWidget(again)
+    again.restore_folders()
     assert again.script_manager.folders() == [str(first), str(missing)] and "Lab" in again.groups
     assert [item.text(0) for item in again.error_items()] == ["missing: folder not found"]
     again._fill_folders_menu()
@@ -232,6 +262,7 @@ def test_auto_reload_watches_only_the_script_folders_while_on(qtbot: QtBot, tmp_
     # Restored at the next start; off again drops the watcher.
     again = TreePanelWidget()
     qtbot.addWidget(again)
+    again.restore_folders()
     assert again.auto_reload_action.isChecked() and again.watched()
     again.set_auto_reload(False)
     assert again._watcher is None and again.watched() == []
@@ -271,3 +302,164 @@ def test_loading_a_loaded_folder_again_is_a_reload(qtbot: QtBot, tmp_path: Path,
     scripts.add_folder(str(tmp_path) + "/.")
     assert called == [[str(tmp_path)]]
 
+
+
+# M3: remembered folders at start
+
+
+def test_remembered_folders_load_after_the_panel_is_made_and_plots_wait_for_them(
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
+    """M3: no user code runs while the panel (and the window) is made; the folders load once the event
+    loop runs, and the plots to reopen wait for them, so a plot of a user's script reopens."""
+    write_script(tmp_path, "lab_live_h", "start")
+    app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(tmp_path)]))
+    app_settings().setValue(OPEN_PLOTS_SETTING, Arrangement((SavedPlot(ScriptRef("lab.live", "Plot", "1"),
+                                                                       folder("run")),)).dumps())
+    window = new_window(qtbot, cache, windows)
+    scripts = window.scripts
+    assert scripts.folders_pending and "Lab" not in scripts.groups and "lab_live_h" not in sys.modules
+    reopen = PlotReopen(window.plots, scripts)
+    assert reopen.restore() == []  # (Waits for the folders.)
+    with qtbot.waitSignal(scripts.foldersRestored, timeout=10_000):
+        pass
+    assert not scripts.folders_pending and "Lab" in scripts.groups
+    qtbot.waitUntil(lambda: len(scripts.instances()) == 1, timeout=10_000)
+    assert scripts.instances()[0].name == "Live"
+
+
+def test_a_load_that_never_ended_skips_the_remembered_folders_at_the_next_start(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """M3: the loading marker is set while a folder loads; a start that finds it (a script blocked or
+    crashed HeLab) loads no remembered folder and says so in one line; Reload loads them."""
+    write_script(tmp_path, "lab_live_i", "one")
+    seen: List[Optional[str]] = []
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    load = scripts.script_manager.add_folder
+
+    def spying(folder_: str) -> bool:
+        seen.append(loading_marker())
+        return load(folder_)
+
+    monkeypatch.setattr(scripts.script_manager, "add_folder", spying)
+    scripts.add_folder(str(tmp_path))
+    assert seen == [str(tmp_path)] and loading_marker() is None  # Set during the load, removed after.
+    # A start after a load that never ended.
+    with open(marker_path(), "w", encoding="utf-8") as handle:
+        json.dump({"folder": str(tmp_path)}, handle)
+    again = TreePanelWidget()
+    qtbot.addWidget(again)
+    again.restore_folders()
+    assert "Lab" not in again.groups and again.script_manager.folders() == []
+    assert not again.start_note.isHidden() and again.start_note.objectName() == "scripts_start_note"
+    assert again.start_note.text().startswith("⚠ 1 script folder not loaded at start (HeLab stopped while loading")
+    assert loading_marker() == str(tmp_path)  # (Kept until that folder loads.)
+    assert read_script_folders() == [str(tmp_path)]  # Still remembered.
+    again._fill_folders_menu()
+    assert any("not loaded" in action.text() for action in again.folders_menu.actions())
+    again.reload_scripts()
+    assert "Lab" in again.groups and again.start_note.isHidden() and loading_marker() is None
+
+
+def test_a_remembered_folder_on_a_share_waits_for_reload_and_is_never_watched(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """M3: a folder on a network share isn't listed at start (it may be unreachable): it waits for Reload,
+    and auto-reload never stats it."""
+    write_script(tmp_path, "lab_live_j", "one")
+    app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(tmp_path)]))
+    app_settings().setValue(SCRIPT_AUTO_RELOAD_SETTING, True)
+    monkeypatch.setattr(script_tree, "on_network", lambda folder_: True)
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.restore_folders()
+    assert scripts.script_manager.folders() == [] and "on a network share" in scripts.start_note.text()
+    assert scripts.watched() == []
+    scripts.reload_scripts()  # The user's word: loaded.
+    assert "Lab" in scripts.groups and scripts.start_note.isHidden()
+    assert scripts.watched() == []  # Never watched.
+
+
+def test_on_network_reads_the_mount_table_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    mounts = [Mount("/dev/disk1", "/", "apfs"), Mount("//lab@server/data", "/Volumes/data", "smbfs", True),
+              Mount("server:/export", "/mnt/nfs", "nfs")]
+    monkeypatch.setattr("helab.utils.cache_paths.current_mounts", lambda: mounts)
+    assert on_network("/Volumes/data/scripts") and on_network("/mnt/nfs/lab")
+    assert not on_network("/Users/lab/scripts") and not on_network("/Volumes/database")
+
+    def broken() -> List[Mount]:
+        raise OSError("no mount table")
+
+    monkeypatch.setattr("helab.utils.cache_paths.current_mounts", broken)
+    assert not on_network("/Volumes/data/scripts")  # (Unknown: taken as local, as before.)
+
+
+# Lows and nits
+
+
+def test_removing_the_folder_a_reload_waits_for_ends_the_wait(
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
+    """L2: "Reload (waiting)" ends when the folder it waits for is removed from the list."""
+    window = new_window(qtbot, cache, windows)
+    write_script(tmp_path, "lab_live_k", "old", wait="lab_live_k.GATE.wait(30)\n        ")
+    window.scripts.add_folder(str(tmp_path))
+    gate = sys.modules["lab_live_k"].GATE
+    gate.set()
+    instance = open_plot(qtbot, window, cache)
+    gate.clear()
+    instance.run()
+    qtbot.waitUntil(lambda: bool(instance.runner.in_flight()), timeout=10_000)
+    window.scripts.reload_scripts()
+    assert window.scripts.reload_button.text() == "Reload (waiting)"
+    window.scripts.remove_folder(str(tmp_path))
+    assert window.scripts.reload_button.text() == "Reload" and window.scripts._waiting_on == []
+    gate.set()
+    qtbot.waitUntil(lambda: not instance.runner.in_flight(), timeout=10_000)
+
+
+def test_a_helper_first_imported_in_a_run_isnt_a_change(qtbot: QtBot, tmp_path: Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """L5: a helper in a subpackage imported lazily after the load is stamped, not a change; an edit of
+    it afterwards is one."""
+    package = tmp_path / "lab_pkg_l"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "inner.py").write_text("TAG = 'one'\n")
+    (tmp_path / "live.py").write_text(SCRIPT.replace("import {helper}\n", "").replace(
+        "{wait}return ({helper}.TAG", "import lab_pkg_l.inner\n        return (lab_pkg_l.inner.TAG").format(
+        specs=SPECS, name="Live", version="1"))
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.add_folder(str(tmp_path))
+    reloaded: List[Optional[List[str]]] = []
+    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None: reloaded.append(folders))
+    script_class = scripts.script_manager.get_script(f"{tmp_path / 'live.py'}::Live")
+    assert script_class is not None
+    __import__("lab_pkg_l.inner")  # (As its compute would, in a run after the load.)
+    (tmp_path / "notes.txt").write_text("an unrelated save")
+    scripts._check_changes()
+    assert reloaded == []
+    inner = package / "inner.py"
+    inner.write_text("TAG = 'two, edited'\n")
+    os.utime(inner, ns=(inner.stat().st_atime_ns, inner.stat().st_mtime_ns + 2_000_000_000))
+    scripts._check_changes()
+    assert reloaded == [[str(tmp_path)]]
+
+
+def test_the_menus_actions_and_the_details_window_have_ids_and_submenus_go(qtbot: QtBot, tmp_path: Path) -> None:
+    """N1, N2."""
+    (tmp_path / "raises.py").write_text("raise ValueError('x')\n")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.add_folder(str(tmp_path))
+    assert scripts.auto_reload_action.objectName() == "script_auto_reload"
+    scripts._fill_folders_menu()
+    (old,) = scripts._submenus
+    assert sorted(action.objectName() for action in old.actions()) == ["script_folder_reload", "script_folder_remove"]
+    scripts._fill_folders_menu()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(old) and len(scripts._submenus) == 1
+    (error,) = scripts.script_manager.errors()
+    box = scripts.show_error_details(error)
+    names = [button.objectName() for button in box.buttons()]
+    assert "script_error_details_close" in names and all(name.startswith("script_error_details_") for name in names)
+    box.close()

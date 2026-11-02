@@ -6,13 +6,16 @@ The Scripts panel and open plots: tests/test_live_scripts.py.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Iterator
 
 import pytest
 
+from helab.scripts import scripts_manager
 from helab.scripts.scripts_manager import ScriptsManager
 from test_scripts_folder import analysis, write
 
@@ -36,14 +39,30 @@ class Uses({base}):
 '''
 
 
+@contextlib.contextmanager
+def imports_restored() -> Iterator[None]:
+    """The import system as it was: ``sys.path``, ``sys.modules``, ``sys.path_hooks``, the finders cached
+    and the folders imported from source (``scripts_manager._SOURCE_ONLY``)."""
+    path, modules, hooks = list(sys.path), set(sys.modules), list(sys.path_hooks)
+    finders, source_only = dict(sys.path_importer_cache), set(scripts_manager._SOURCE_ONLY)
+    try:
+        yield
+    finally:
+        sys.path[:] = path
+        for name in set(sys.modules) - modules:
+            del sys.modules[name]
+        sys.path_hooks[:] = hooks
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache.update(finders)
+        scripts_manager._SOURCE_ONLY.clear()
+        scripts_manager._SOURCE_ONLY.update(source_only)
+
+
 @pytest.fixture(autouse=True)
 def restored_imports() -> Iterator[None]:
-    """sys.path and sys.modules as they were: a test's helper modules and folders don't outlive it."""
-    path, modules = list(sys.path), set(sys.modules)
-    yield
-    sys.path[:] = path
-    for name in set(sys.modules) - modules:
-        del sys.modules[name]
+    """A test's helper modules, folders and import hook don't outlive it (``imports_restored``)."""
+    with imports_restored():
+        yield
 
 
 def uses(folder: Path, helper: str, base: str = "DatasetAnalysis") -> Path:
@@ -226,3 +245,47 @@ def test_watched_files_and_their_stamps(tmp_path: Path) -> None:
     assert manager.stamp(manager.watched_files(str(tmp_path))) != before
     assert manager.stamp([str(tmp_path / "missing.py")]) == ()
     assert manager.watched_files(str(tmp_path / "missing")) == []
+
+
+def test_the_import_system_is_restored_after_a_test(tmp_path: Path) -> None:
+    """N3: the fixture puts the import hook and the source-only folders back, not only sys.path and
+    sys.modules."""
+    hooks, source_only = list(sys.path_hooks), set(scripts_manager._SOURCE_ONLY)
+    with imports_restored():
+        write(tmp_path, "counts.py", analysis())
+        ScriptsManager().load_directory(str(tmp_path))
+        assert scripts_manager._source_only_finder in sys.path_hooks and str(tmp_path) in scripts_manager._SOURCE_ONLY
+    assert sys.path_hooks == hooks and scripts_manager._SOURCE_ONLY == source_only
+
+
+def test_installed_packages_inside_a_script_folder_keep_their_usual_imports(tmp_path: Path) -> None:
+    """L3: the source-only hook never takes a folder under the interpreter's own (a script folder that
+    holds a venv or the stdlib), as helper_modules never counts their modules."""
+    purelib = sysconfig.get_paths()["purelib"]
+    scripts_manager._source_only(str(Path(purelib).parent))  # A script folder holding site-packages.
+    with pytest.raises(ImportError):
+        scripts_manager._source_only_finder(purelib)
+    scripts_manager._source_only(str(tmp_path))
+    assert scripts_manager._source_only_finder(str(tmp_path)) is not None
+
+
+def test_a_helper_imported_only_in_compute_counts_in_the_hash_once_seen(tmp_path: Path) -> None:
+    """L4: a lazily imported helper, seen in a run, is folded into the scripts' hash at the next reload,
+    so editing it changes the hash."""
+    helper = tmp_path / "lab_helper_h.py"
+    helper.write_text("VALUE = 1\n")
+    write(tmp_path, "uses.py", USES_HELPER.replace("import {helper}\n", "").replace(
+        "return {helper}.VALUE", "import {helper}\n        return {helper}.VALUE").format(
+        helper="lab_helper_h", base="DatasetAnalysis"))
+    manager = ScriptsManager()
+    manager.load_directory(str(tmp_path))
+    assert value_of(manager, tmp_path) == 1  # (Imported now.)
+    manager.reload()
+    (metadata,) = manager.get_scripts_in_group("Lab")
+    seen = metadata.file_hash
+    assert seen != hashlib.sha256((tmp_path / "uses.py").read_bytes()).hexdigest()
+    helper.write_text("VALUE = 22\n")
+    manager.reload()
+    (metadata,) = manager.get_scripts_in_group("Lab")
+    assert metadata.file_hash != seen
+    assert str(helper) in manager.watched_files(str(tmp_path))  # (Known, though not imported now.)

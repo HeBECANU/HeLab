@@ -88,6 +88,7 @@ def _source_file(module: object) -> str:
 
 # The user's script folders (and below), whose modules import from source alone (``_SourceOnlyLoader``).
 _SOURCE_ONLY: set[str] = set()
+_PROTECTED = _protected_roots()
 
 
 class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
@@ -103,7 +104,11 @@ class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
 
 def _source_only_finder(path: str) -> importlib.machinery.FileFinder:
     """``sys.path_hooks``' entry for the user's script folders and their packages (others: the next hook)."""
-    if not isinstance(path, str) or not path or not any(_inside(_normal(path), folder) for folder in _SOURCE_ONLY):
+    if not isinstance(path, str) or not path:
+        raise ImportError("not a script folder")
+    path = _normal(path)
+    # (Never the interpreter's or HeLab's folders inside a script folder: their modules aren't helpers.)
+    if not any(_inside(path, folder) for folder in _SOURCE_ONLY) or any(_inside(path, root) for root in _PROTECTED):
         raise ImportError("not a script folder")
     return importlib.machinery.FileFinder(
         path, (importlib.machinery.ExtensionFileLoader, importlib.machinery.EXTENSION_SUFFIXES),
@@ -165,11 +170,11 @@ class ScriptsManager:
         self._errors: Dict[str, LoadError] = {}  # File (or folder not found) -> why it didn't load
         # Each folder's files known as helper modules (by an import now or before): a helper whose script
         # fails to import isn't imported, and isn't a failure either.
-        self._helper_files: Dict[str, set[str]] = {}
+        self._helper_files: Dict[str, Dict[str, str]] = {}  # Folder (normcase) -> {normcase file: file}
         self._loaded_at: Dict[str, float] = {}  # Script id -> when its code was loaded (wall clock)
         # Every class loaded from a user folder, this load's and earlier ones' while alive -> its folder.
         self._class_folders: "weakref.WeakKeyDictionary[type, str]" = weakref.WeakKeyDictionary()
-        self._protected = _protected_roots()
+        self._protected = _PROTECTED
 
     # The user's folders (live scripts)
 
@@ -228,7 +233,9 @@ class ScriptsManager:
         except OSError:
             names = []
         files = {os.path.join(directory, name) for name in names if name.endswith(".py")}
-        return sorted(files | set(self.helper_modules(directory).values()))
+        known = self._helper_files.get(os.path.normcase(directory), {})
+        return sorted(files | set(self.helper_modules(directory).values())
+                      | {file for file in known.values() if os.path.isfile(file)})
 
     @staticmethod
     def stamp(files: List[str]) -> Stamp:
@@ -305,9 +312,11 @@ class ScriptsManager:
         if not any(_same(folder, directory) for folder in self._folders):
             self._folders.append(directory)
 
-        # Clear existing scripts from this directory, and its helper modules: they import fresh.
+        # Clear existing scripts from this directory, and its helper modules: they import fresh (those
+        # imported since the last load, lazily in a run too, are known helpers from now on: L4).
         self._clear_directory_scripts(directory)
         self._clear_errors(directory)
+        self._know_helpers(directory)
         self._unload_helpers(directory)
         _source_only(directory)
         invalidate_caches()  # (A helper file added since the last import is found.)
@@ -330,9 +339,7 @@ class ScriptsManager:
                 logging.error(f"Unexpected error loading {file_path}: {e}")
                 self._errors[file_path] = LoadError(file_path, f"{type(e).__name__}: {e}", traceback.format_exc())
         # A file without scripts that the folder's scripts import (now or before) is a helper module, not a failure.
-        known = self._helper_files.setdefault(os.path.normcase(directory), set())
-        known.update(os.path.normcase(file) for file in self.helper_modules(directory).values())
-        helpers = {file for file in known if os.path.exists(file)}
+        helpers = {os.path.normcase(file) for file in self._know_helpers(directory)}
         for path, error in list(self._errors.items()):
             if os.path.normcase(path) in helpers and error.message == NO_SCRIPT:
                 del self._errors[path]
@@ -341,11 +348,19 @@ class ScriptsManager:
                 logging.warning(f"Failed to load script {path}: {message}")
         self._fold_helper_hashes(directory)
 
+    def _know_helpers(self, directory: str) -> List[str]:
+        """The folder's known helper files that are still there: those imported now, and those seen imported
+        before (a helper a script imports only in ``compute`` is known once a run imported it)."""
+        known = self._helper_files.setdefault(os.path.normcase(directory), {})
+        for file in self.helper_modules(directory).values():
+            known[os.path.normcase(file)] = file
+        return sorted(file for file in known.values() if os.path.isfile(file))
+
     def _fold_helper_hashes(self, directory: str) -> None:
-        """D1: when the folder's files imported helper modules, each of its scripts' ``file_hash`` is the
-        hash of its file's hash and every helper's (its path in the folder, and hash)."""
+        """D1: when the folder's files imported helper modules (now, or seen before: L4), each of its scripts'
+        ``file_hash`` is the hash of its file's hash and every helper's (its path in the folder, and hash)."""
         helpers = sorted((os.path.relpath(file, directory).replace(os.sep, "/"), file_hash(file))
-                         for file in set(self.helper_modules(directory).values()))
+                         for file in self._know_helpers(directory))
         if not helpers:
             return
         for script_id in self.script_ids(directory):
