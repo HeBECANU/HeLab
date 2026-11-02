@@ -1173,3 +1173,36 @@ Checked: suite 8955 passed, no RERUN.
 - **Q~16:** see 3a above. Built as proposed: under the default "HeLab priority", store-v4 converts every raw shot
   that has no HeLab text, in place of reading MATLAB's TXY.
 - **The S3~4 label:** see 3b above.
+
+### Stage 3's CI (41456480233, `2247b69`)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
+- **One RERUN:** Windows Tests 2/2 (job 125314458602),
+  `test_io_trace.py::test_the_gui_process_never_touches_source_folders`.
+  - The error: "waitUntil timed out in 20000 milliseconds" at line 259, which is `wait_idle`: the helpers didn't
+    go idle within 20 s. It passed on retry.
+  - It is not the I/O invariant: the `gui.calls == []` assertion comes after that wait.
+  - **Cause, from timing:** this test took 17.9 s on Windows in A47.4's run (41446828628, before stage 3), 9.4 s
+    and 10.6 s in the next two runs, and 18.5 s on this run's retry. Locally it takes 3.4 s. The test runs with
+    store-v3, where none of stage 3 runs. So a slow Windows runner tipped a test that already sits near its 20 s
+    wait; stage 3 isn't the cause.
+  - **known-issues proposal:** "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
+    `wait_idle`'s 20 s at line 259 timed out on Windows CI 41456480233 (`agent/caching-v2`, job 125314458602).
+    The test takes 9–18 s on Windows runners, close to the wait; passed on retry. Fix: give `wait_idle` 60 s
+    here." The test file is outside my owned paths.
+- The known "GUI stalled" log appears 7 times, with no failure (A47.3).
+- Times: Windows Tests 1/2 took pytest 13.4 min and 2/2 12.5 min; macOS 8.0 and 6.9; Ubuntu 5.3 and 5.7.
+
+### Stage 3 review fixes (Assay, `fba37fd`, `97c2554`)
+
+- **S3R-1:** `convert_raw_file` now reads the raw file outside the converter's ticker, with `_read_raw`'s
+  per-block heartbeat, so a read that stalls times out. Only the checks and the conversion run under the ticker,
+  as `convert_folder` does.
+- **S3R-2:** "converted when loaded" now follows what the load does, as built for Q~16.
+  - With MATLAB priority: the raw files that MATLAB's TXY lacks.
+  - With HeLab priority or HeLab only: every raw file.
+  - Once loaded: the load's own `helab_on_read`.
+  - If Tony picks Q~16's alternative, this count changes with the load (`folder_source` and the source rule).
+- **Tests:** a test that a stalled read sends no heartbeat, and one of the counts by source and after a load.
+  Both fail without the fixes.
+- **Checked:** suite 8956 passed, no RERUN.
