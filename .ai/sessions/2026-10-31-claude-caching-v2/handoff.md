@@ -1259,3 +1259,22 @@ on retry.
     125325725389; passed on retry; its output is cut in the rerun reasons. Likely the QtWebEngine teardown
     flakiness of the 'QtWebEngine crashes xdist workers' entry; not pinned."
 - The known "GUI stalled" log appears 5 times (A47.3, done on Ground).
+
+### Stage 4's CI (41461329739, `ba11e8a`)
+
+Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole: **no RERUN in any job**.
+- The known "GUI stalled" log appears 3 times (A47.3).
+- Times: Windows Tests 1/2 took pytest 11.5 min and 2/2 11.7 min; macOS 6.4 and 3.0; Ubuntu 5.9 and 3.3.
+
+### Stage 4 review fixes (Assay, `73f49cb`, `3085e53`; `dev/v0.0.8` merged first at `cbba723`)
+
+- **S4-1:** the inventory's raw summary gains `following`, counted with `remove_raw_following`'s own condition
+  (`_FOLLOWING`). Settings' question names those folders and their size, with no "up to", and only their only
+  copies.
+- **S4-2:** the folder's question opens after FolderCache's handler returns (`QTimer.singleShot(0)`), and a tab
+  closed meanwhile asks nothing.
+- **S4-3:** when Settings can't offer (busy, or the cache not checked yet), the tab's status line says "Cached raw
+  pulses kept: Clear raw pulses removes them".
+- **S4-4:** `remove_raw_text` moved below the constants.
+- **Tests:** all in `test_txy_only_offer.py`. The three changed tests fail without the fixes.
+- **Checked:** suite 9133 passed, 673 skipped, no RERUN. Types clean.
