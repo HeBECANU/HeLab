@@ -454,6 +454,13 @@ class PresetBar(QWidget):
 # Arrangement presets
 
 
+def warning_box(parent: Optional[QWidget], title: str, text: str) -> None:
+    """The arrangement presets' warning (modal, ``QMessageBox.warning``). Called by its module name, so a
+    test replaces it (``helab.views.plots.presets.warning_box``) to fail rather than wait on a modal no one
+    closes."""
+    QMessageBox.warning(parent, title, text)
+
+
 class PresetFolder(QObject):
     """An arrangement preset's folder after it is applied (the tab has opened it as typing its path
     would): it loads as a deliberate selection (cache first; a large folder asks) once it is known
@@ -599,7 +606,7 @@ class ArrangementPresets(QObject):
             self.fill_menu(menu, read=False)
 
     def _warn(self, title: str, text: str) -> None:
-        QMessageBox.warning(self.parent_widget, title, text)
+        warning_box(self.parent_widget, title, text)
 
     def cache(self) -> FolderCache:
         return self._given_cache if self._given_cache is not None else self.plots.folder_cache()
