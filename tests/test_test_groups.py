@@ -124,3 +124,16 @@ def test_a_bad_group_stops_the_run(tmp_path: Path) -> None:
     done = nested_collect(tmp_path, "--test-group", "3/2")
     assert done.returncode == pytest.ExitCode.USAGE_ERROR, done.stdout + done.stderr
     assert "--test-group takes N/M" in done.stdout + done.stderr
+
+
+def test_ci_ends_pytest_itself_before_a_test_jobs_limit() -> None:
+    """A~4 of Quick Fixes 9: a test job the runner cancels at its limit keeps no summary, rerun reasons or junit.xml
+    (Ubuntu CI 41468043383), so pytest's --session-timeout ends it first: with room left in the job for the test
+    running then (its tries) and the steps after."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-test.yml").read_text(encoding="utf-8")
+    [(windows_job, other_job)] = re.findall(r"timeout-minutes: \$\{\{ inputs\.os == 'windows' && (\d+) \|\| (\d+) \}\}",
+                                            workflow.split("name: Tests", 1)[1])
+    [(windows_pytest, other_pytest)] = re.findall(r"--session-timeout=\$\{\{ inputs\.os == 'windows' && (\d+) \|\| (\d+) \}\}",
+                                                  workflow)
+    for job, pytest_seconds in ((windows_job, windows_pytest), (other_job, other_pytest)):
+        assert int(pytest_seconds) <= int(job) * 60 - 8 * 60, (job, pytest_seconds)  # (8 min for the rest.)
