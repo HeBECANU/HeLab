@@ -119,3 +119,56 @@ On an export of `a39a94d`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - `8be1be6`'s fails-without-its-change claim, as above.
 
 On fix diffs I re-check only the fixes, their tests and the touched files' type checks.
+
+## Re-check of the fixes (`c627027..28d5844`)
+
+**Open findings: none.** C2S2-1, C2S2-2 and C2S2-3 are fixed.
+
+| Test | At `c627027`'s code | With `28d5844` |
+|---|---|---|
+| `test_the_clear_questions_name_only_copies_by_folder` | failed | passed |
+| `test_the_purge_question_counts_txy_and_raw_folders_in_store_v4` | failed | passed |
+| `test_a_purge_by_age_takes_old_layers_but_not_only_copies` (extended) | failed | passed |
+| `test_the_tab_shows_txy_data_and_the_policy_only_with_store_v4` (edited only) | passed | passed |
+
+(On an export of `28d5844`, with `cache_store.py` and `CacheTab.py` as they were at `c627027`, then restored and
+compared with git.)
+
+- **C2S2-1: fixed.** `_only_copies` gives Clear all, and the TXY row's Clear, one sentence naming the only copies:
+  "TXY data of N folders" from `txy.only_copy_folders`, and "raw pulses of M shots" from `raw.only_copy`.
+  `_txy_summary` now counts only-copy folders separately from layers.
+- **C2S2-2: fixed.**
+  - In store-v4 the inventory's `ages` gains `txy` and `raw`: rows `gone_at IS NULL` with `last_used`, `bytes`
+    and `path`.
+  - `purge_estimate(…, datasets=True)` adds `txy_folders`, `txy_bytes`, `raw_folders` and `raw_bytes` with the
+    purge's own condition (`last_used < cutoff`, only copies left out), and `bytes` covers all of it.
+  - The question names datasets, TXY data and raw pulses with their folders, and adds "Only copies stay (Make
+    room names them)". The row's estimate and the button follow it.
+  - **The estimate equals what the store-v4 purge removes.** Scratch test (`.ai/temp/assay/test_zz_s2c.py`, on
+    the export):
+    - the setup: an old folder with two layers, a recent one, an old only-copy layer, old and recent raw rows,
+      and an old raw only copy;
+    - `purge_estimate` gave 17,143 bytes (1 TXY folder, 15,665 B; 1 raw folder, 1,478 B);
+    - the admin's purge freed exactly 17,143 bytes of usage, and its `removed` events carried 15,665 B (`txy`) and
+      1,478 B (`raw`);
+    - recent data and both only copies stayed.
+
+    The match holds because `txy_layers.bytes` is kept equal to the layer's segment bytes, which is what
+    `_remove_txy_rows` sums. Views (records) aren't counted, as datasets' records never were.
+- **C2S2-3: fixed.** The TXY Clear question uses the same sentence, counting folders.
+
+### Checks (re-check)
+
+On an export of `28d5844`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` (the full suite, `test_txy_ui.py` and
+  `test_txy_fixes.py` included): **8923 passed, 673 skipped, 2 warnings, 3 failed, 15 rerun in 154.85 s.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests (the export has no `.git`; 5 reruns each).
+    They passed in the floor checkout with no RERUN at this review, and neither they nor `build_info.py` changed
+    since.
+  - No other RERUN.
+  - The 2 warnings are the known pyqtgraph ones.
+  - The totals match Vault's 8927 passed and 672 skipped, once the export's 3 and 1 are added back.
+- `mypy helab/ --strict` (203 files), `mypy tests --strict` (191), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Stage 2 has no open review findings.
