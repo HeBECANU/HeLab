@@ -61,9 +61,12 @@ Cache dirs resolve via `QSettings` (`dir_caches` / `dir_temps`) to `DIR_CACHES` 
 ## store-v4 (caching v2, behind the switch)
 
 Built on `agent/caching-v2` (stage 0 and checkpoint 2, landed `ad86bd3`; checkpoint 3, landed `c2d0ece`;
-stage 2, landed `1cd586c`; design: the [stage 1 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage1.md)
-and the [stage 2 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage2.md)). Stages 1 and 2 are
-complete behind the switch. **Off by default, and stays off while stages 3 and 4 are built; after Tony's check
+stage 2, landed `1cd586c`; the A47 checkpoint, landed `1d91897`; stage 3, landed `d4f28f3`; design: the
+[stage 1 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage1.md), the
+[stage 2 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage2.md), the
+[purge note](../sessions/2026-10-31-claude-caching-v2/design-purge.md) and the
+[stage 3 note](../sessions/2026-10-31-claude-caching-v2/design-stage3.md)). Stages 1–3 are complete behind the
+switch; stage 4 is under review. **Off by default, and stays off while stages 3 and 4 are built; after Tony's check
 it is switched on in the v0.0.8 PR, so v0.0.8 ships with store-v4 on (Q28.3, Q45.11, Q47.4); the row is kept
 one release.**
 
@@ -126,7 +129,10 @@ layers](#txy-layers-stage-2) below).
   `None` save's tombstone `legacy-hidden:<kind>:<key>`; purges by age in `meta.legacy_purged`), answered under
   v4's `store_id` with `legacy: true`; a result found there is copied into v4 as `result_find` returns it (A42.1,
 below). v3's live bytes count in
-  v4's fit checks (`meta.legacy_bytes`, measured at each inventory). Ignore and Clear never open v3.
+  v4's fit checks (`meta.legacy_bytes`, measured at each inventory). Ignore and Clear never open v3. **How long:**
+store-v3 is read through Keep in v0.0.8 only; Keep's read-through ends when v0.0.9 starts, and from then on only
+"Clear old stores…" removes it, asked first (Q50.15; nothing built yet). No bulk import at the first start:
+folders seed when used (Q50.16).
 - **The store-v3 question** (Q19.4, Q22.3, Q44.1; `CacheDialogs`): with store-v4 live and a store-v3 not
   answered yet, asked once a session: "An older disk cache" with Keep using it / Ignore it / Clear it…. The
   choice goes in `meta.legacy_v3` with v3's `store_id` (admin `legacy_choice`), and Settings › Cache's Older
@@ -218,9 +224,15 @@ raw file is listed; the two priority modes share one view; whole rows in Make ro
 - **Clear:** `remove_txy` (admin `clear_txy`, `removed` kind `txy` with `layers` and `bytes`) joins Clear all,
   `clear_root` and Don't cache's "remove cached data" (only copies kept, C2-9). A folder's Clear data cache
   (`invalidate`, `clear_folder_data`) takes its layers, views and seen raw layers, only copies kept (S3-1).
-  **The purge by age** (`purge_datasets`) takes datasets, layers and seen raw layers not used since the
-  cutoff, only copies kept (S3-1; `purge_estimate` counts each part, C2S2-2); Q47.1 splits it per kind plus
-  one for everything (A47.4, not built yet). The inventory's `txy` (shots, folders, bytes, tags,
+  **The purge by age** is per kind (A47.4, `5cbf1d4`, landed `1d91897`; Q47.1, Q50.12, Q50.13; the
+  [purge note](../sessions/2026-10-31-claude-caching-v2/design-purge.md)): `purge_cached(cutoff, kinds)` over
+  `PURGE_KINDS` (`datasets`, `txy`: TXY layers with their segments and their folders' views, `raw`: raw layers),
+  in one transaction with the same epochs and generations, taking only layers with `last_used < cutoff AND
+  gone_at IS NULL`, so only copies stay; `purge_datasets` takes datasets only; `purge_estimate(…, kinds=)` uses
+  the same comparison (C2S2-2's per-part counts). The helper's `purge` takes `what` from `PURGES` (`datasets`,
+  `txy`, `raw`, `records`, `results`, `all`); `all` takes every cached kind the store has, folder records (scan
+  failures only when asked) and cached analysis, sending each purge's `removed` events; the result's `bytes`
+  counts layers too, and an empty removal sends no event. store-v3 has only `datasets`. The inventory's `txy` (shots, folders, bytes, tags,
   `only_copy_folders`) and `ages` (`txy`, `raw`) feed Settings › Cache.
 - **Seeds** (Q45.4, Q45.5): a folder with no view yet reuses store-v4's own `datasets` row, else store-v3's
   under Keep (`LegacyStore.dataset_row`, `CacheStore.legacy_dataset`; never one store-v4 removed); the load's
@@ -230,9 +242,26 @@ raw file is listed; the two priority modes share one view; whole rows in Make ro
 - **The sweep, `_live`, the inventory and cache moves** cover `txy/` (segments named by a row or a waiting
   part are kept; `cache_move` verifies `txy_segments`). **`rekey_subtree`** (a nested marker) moves raw
   layers per shot and a folder's TXY layers, segments, views and choices as one set (S2-0).
+- **TXY only's offer** (S4-1, Q50.9; stage 4's first commit `1ad31a9`, merged with stage 3): the admin's
+  `folder_choice` with policy `txy` reports the folder's raw pulses (`CacheStore.folder_raw`: shots, bytes,
+  only copies) as `folder_raw`, and the app asks before `clear_raw` for that folder; Settings' TXY only asks
+  for the folders following the setting (`clear_raw` with `following`, `CacheStore.remove_raw_following`:
+  their raw layers, each folder's `raw:` epoch bumped). A policy change alone removes nothing (Q50.10).
 - **Export** (A44.1): `helab cache export --folder F --kind txy [--layer matlab|<tag>|helab:<hash>]` writes the
   layer's shots as `d_txy<N>.<ext>` (`t_s`, `x_m`, `y_m`); without `--layer`, the only layer, or a list of
   them. A segment `.hlb` exports as one file with a `shot` column. Format: [`docs/hlb-format.md`](../../docs/hlb-format.md).
+
+### Convert on read (stage 3)
+
+Store-v4 only, the switch off (`912f928`, `4e86094`, `0cd133f`, `4e14535`, review fixes `97c2554`; landed
+`d4f28f3`; the [stage 3 note](../sessions/2026-10-31-claude-caching-v2/design-stage3.md); Q50.1–Q50.8). A load or
+Live check whose source reads HeLab's TXY converts in the helper a shot that has a raw file and no current HeLab
+text of the profile asked for, and saves only a TXY layer entry, kind `raw` (keyed by the raw file); a load alone
+never writes text or a raw row (R~1, R~2: `raw_fill` still fills the raw layer after it). The order per shot is its
+TXY layer, the raw layer, a current HeLab text, then converting the raw file (Q50.5). Mechanics:
+[io-and-browsing](io-and-browsing.md#loads-with-txy-layers), [converter](converter.md), [live](live.md).
+`tests/test_caching_v2_session.py`'s stage 3 session checks it with the switch on, beside store-v3
+([testing](testing.md)).
 
 ## Folder metadata and scan history
 

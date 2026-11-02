@@ -243,9 +243,10 @@ In [DECISIONS_TODO](../.ai/DECISIONS_TODO.md):
 - Q25.2: channel 7 (proposed: ignored in every profile). Q25.4: the logs' posixtime.
 - Q14.2 (= Q23.4), decided yes 2026-11-02: save a plot's source and profile with presets, arrangements and
   reopened plots, with a toggle to turn it off (A47.5).
-- Q14.4: count HeLab's TXY in a folder's status. Q15.3: the low-count threshold (later).
-- Q23.1 (tags `m23v1`, `p17v1`, frozen once released: before v0.0.7 ships), Q23.2, Q23.3, Q23.5,
-  Q23.6, Q23.7.
+- Q14.4: count HeLab's TXY in a folder's status (Tony, 2026-11-02: after caching v2's stage 3, which has
+  landed: to ask again). Q15.3: the low-count threshold, kept (Tony, 2026-11-02).
+- Q23.1 (tags `m23v1`, `p17v1`, frozen once released: before v0.0.7 ships), Q23.6, Q23.7; Q23.2, Q23.3 and
+  Q23.5 kept as built (Tony, 2026-11-02).
 
 Here only: which channel starts a raw file in each era (`start_channel` was switched between `5`
 and `4` in 2023).

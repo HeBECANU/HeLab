@@ -133,7 +133,7 @@ Built by the TXY Live floor (`6454b4a`) and the follow-ups (`c718c71`); mechanic
 - **One launch folder** (Q9.6, Q18.3): Live runs in one folder only; a folder set to start Live
   and auto-convert at launch opens alone, and Live on collapses the left panel.
 - **Low-count alerts** through system notifications: `convert_low_hits`, default 100 hits, once
-  per shot; a rate or per-folder thresholds later (Q15.3, open).
+  per shot; kept as it is (Q15.3, Tony 2026-11-02).
 
 ## Plots following Live: L3 (decided by Tony 2026-10-19)
 
