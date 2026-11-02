@@ -295,3 +295,15 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Checks.** Full suite 8946 passed, no RERUN; the five type checks pass.
 - **Known-issues proposal:** add it as Fixed. "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
   a 20 s wait for idle helpers on Windows CI (41456480233, Tests 2/2); its helper waits are 60 s now."
+
+### Run 41460607344 (`daed254`): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4448, 2/2 4462; macos 4465, 4481; ubuntu 4461, 4482.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **`test_the_gui_process_never_touches_source_folders` took 12 s on Windows 2/2.**
+- **That job took 24 min 40 s (usually 10–13).** No single test explains it.
+  - The longest test was 94 s (`test_analysis_gui`'s other-library one), then the type checks (43–71 s).
+  - The longest gap between two results was 18 s.
+  - So it was a slow runner, not a hang.
