@@ -23,7 +23,7 @@ from helab.analysis.physics import TABLE, ResolvedConstants
 from helab.analysis.budget import RamBudget
 from helab.analysis.budget_core import RELOAD_GRACE, Restored, hollow, restore, shots_list, view_buffers
 from helab.analysis.dataset_view import DatasetView, ViewKey, revise, view_of
-from helab.analysis.follow import FOLLOW, Follow, changes, live_specs, policy_of, shots_text
+from helab.analysis.follow import FOLLOW, Follow, LivePolicy, changes, live_specs, policy_of, shots_text
 from helab.analysis.live_feed import LiveFeed
 from helab.analysis.parameter_tree import build_tree, commit_pending_text, parameter_of, settings_widget, tree_values
 from helab.analysis import result_cache
@@ -243,6 +243,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._waiting_message: Optional[QLabel] = None
         self.reopen_check: Optional[PlotCheck] = None  # What its saved settings gave when reopened
         self.open_error = ""  # Why its settings page couldn't open ("": it did)
+        self._page: Optional[QWidget] = None  # Its settings page (``_fill_page``)
+        # Live scripts (``adopt_script``): held while its script's folder reloads (it submits nothing),
+        # and why it still runs the code it had when the last reload of its script failed.
+        self._held = False
+        self._script_note = ""
+        self.code_loaded_at = 0.0  # When its script's code was loaded (wall clock; the Scripts panel sets it)
         # Its TXY choice (Q6.6, Q18.2, ``txy_source``): a source ("": as the folder's tab) and the profile
         # whose HeLab TXY it reads (None: the conversion profile's). The tab's choice is the tab's data;
         # another is a dataset the plot loads itself (``_source_owner``: that load in flight), again
@@ -296,6 +302,22 @@ class AnalysisInstance(LinkedAnalysisInstance):
 
     def _open_settings(self) -> None:
         """The plot's settings page (its parameters, Drawing and Live) and its RAM budget entry."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._page = tab
+        self._fill_page(tab)
+        self.setup_param_tab(tab, self._title())
+        if self.param_tab is not None and self.workspace is not None:
+            self.workspace.panel_right_top_plot_settings.plotShown.connect(self._plot_shown)
+        if self.budget is not None:
+            self.budget.add(self)
+
+    def _fill_page(self, tab: QWidget) -> None:
+        """The page's contents from the script's parameters, libraries and Live policy (again after a
+        reload of its script, ``adopt_script``: the page itself stays, in the Settings panel or its
+        floating window)."""
         if isinstance(self.dock_widget, AnalysisDock):
             self.dock_widget.set_minimum_plot_size(*self.script.minimum_size(self.action))
         specs = self.script.parameters(self.action)
@@ -307,10 +329,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
             parameter_of(self.parameter_root, spec).sigValueChanged.connect(self._backend_changed)
         for spec in live:
             parameter_of(self.parameter_root, spec).sigValueChanged.connect(self._live_settings_changed)
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout = tab.layout()
+        assert isinstance(layout, QVBoxLayout)
         self.input_label.setToolTip(self.path)
         layout.addWidget(self.input_label)
         self.txy_row = TxySourceRow(self.txy_source, self.set_txy_source,
@@ -323,15 +343,22 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.rerun_button.clicked.connect(self.run)
         layout.addWidget(self.rerun_button)
         layout.addWidget(self.status_label)
+        self.presets = None
         if specs:
             from helab.views.plots.presets import PresetBar
             self.presets = PresetBar(self)
             layout.insertWidget(1, self.presets)
-        self.setup_param_tab(tab, self._title())
-        if self.param_tab is not None and self.workspace is not None:
-            self.workspace.panel_right_top_plot_settings.plotShown.connect(self._plot_shown)
-        if self.budget is not None:
-            self.budget.add(self)
+
+    def _empty_page(self) -> None:
+        """Take the page's contents out (its input and status lines stay, to be placed again)."""
+        tab = self._page
+        layout = tab.layout() if tab is not None and not sip.isdeleted(tab) else None
+        while layout is not None and (item := layout.takeAt(0)) is not None:
+            widget = item.widget()
+            if widget is not None and widget not in (self.input_label, self.status_label):
+                widget.hide()
+                widget.deleteLater()
+        self.parameter_root, self.txy_row, self.presets = None, None, None
 
     def values(self) -> Dict[str, Any]:
         """The analysis's parameters as set (not the plot's Live settings)."""
@@ -407,8 +434,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 one_off: bool = False) -> None:
         """Run on ``view``. A ``one_off`` run (the user's: Rerun, the first run, a reload, a reopened
         plot's; never Live's) of a script whose results may be saved looks itself up in the disk
-        cache first (R2)."""
+        cache first (R2). Held while its script reloads: nothing is submitted (what waits stays)."""
         self._follow_timer.stop()
+        if self._held:
+            self.status_label.setText("Waiting for its script to reload…")
+            return
         if not reloading:
             self._reload_note = ""
         try:
@@ -726,7 +756,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
     def script_ref(self) -> ScriptRef:
         return ScriptRef.of(self.metadata.identity(), self.action, self.metadata.name)
 
-    def apply_saved(self, saved: SavedPlot | ScriptPreset, kept: str) -> PlotCheck:
+    def apply_saved(self, saved: SavedPlot | ScriptPreset, kept: str, what: str = "Reopened") -> PlotCheck:
         """Put saved settings into the plot's settings: each that fits the script now (``check_plot``);
         the others aren't applied, named in the Presets row's note (one line, the rest in its tooltip),
         ``kept`` as they are ("at the script's defaults" for a plot just opened, "left as they were"
@@ -749,8 +779,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 parameter_of(root, spec).setValue(check.live[spec.name])
         if isinstance(saved, ScriptPreset):
             self.note_saved(f"Preset “{saved.name}”", check, kept)
-        else:  # Reopened: said only if a setting wasn't restored, or the script changed.
-            self.note_saved("Reopened", check, kept, quiet=True)
+        else:  # Reopened (or reloaded): said only if a setting wasn't restored, or the script changed.
+            self.note_saved(what, check, kept, quiet=True)
         return check
 
     def note_saved(self, what: str, check: PlotCheck, kept: str, quiet: bool = False) -> None:
@@ -819,6 +849,113 @@ class AnalysisInstance(LinkedAnalysisInstance):
                     pass
             wait.stop()
         self._waiting_message = None
+
+    # Live scripts (helab/views/plots/script_tree.py reloads a folder's scripts)
+
+    def hold_for_reload(self) -> None:
+        """Its script's folder is about to reload: its run in flight is cancelled (it ran the old code)
+        and it submits nothing until ``adopt_script`` or ``keep_script``; what Live brings meanwhile
+        waits, as for a run in flight."""
+        if self.is_closed:
+            return
+        self._held = True
+        if self.job_id:
+            self._cancel_run()
+
+    def adopt_script(self, metadata: ScriptMetadata, script: DatasetAnalysis) -> bool:
+        """Run on the reloaded code of its script: its settings page is made again from the new script
+        (in place: the dock, its place, number and the page's window stay), the settings it had are put
+        back where they still fit (``check_plot``; one that was removed, retyped or no longer fits starts
+        at the new default, named in the Presets row's note, "Reloaded · ⚠ …"), and it reruns, drawn
+        anew. A waiting (reopened) plot keeps waiting; a released one reloads as Rerun would. If the new
+        script's hooks fail, it keeps the old code (``keep_script``). Whether it took the new code."""
+        if self.is_closed:
+            return False
+        try:  # The new script's hooks, before anything changes.
+            policy, constant_keys = script.live_policy(self.action), script.constant_keys(self.action)
+        except Exception as error:
+            logging.exception("%s: its reloaded script failed", metadata.name)
+            self.keep_script(f"{type(error).__name__}: {error}")
+            return False
+        commit_pending_text()
+        saved = self.saved_plot()
+        old = (self.metadata, self.script, self.policy, self.constant_keys)
+        if self.job_id:  # (A disk-cache lookup in flight: forgotten; a run has ended before a reload.)
+            self._cancel_run()
+            self.job_id = ""
+            self.follow.end(time.monotonic())
+        self._swap_script(metadata, script, policy, constant_keys)
+        try:
+            self._rebuild_page()
+        except Exception as error:  # The new script's parameters(), backends() or minimum_size().
+            logging.exception("%s: its reloaded script's settings failed", metadata.name)
+            self._swap_script(*old)
+            self._rebuild_page()
+            self.keep_script(f"{type(error).__name__}: {error}")
+            return False
+        try:
+            old[1].plot_closed(self.action, self.instance_id, self.path)  # What the old code kept for it.
+        except Exception:
+            logging.exception("%s: plot_closed failed", self.name)
+        # Its saved script reference is the new one's, so a reload isn't "another copy"; a new version says so.
+        ref = self.script_ref()
+        self.apply_saved(replace(saved, script=replace(saved.script, file_hash=ref.file_hash)),
+                         "at the script's defaults", what="Reloaded")
+        self._held, self._script_note = False, ""
+        self._cached_link = None
+        self._content, self._drawn_with = None, ""  # Drawn anew by the new code (not its update).
+        self._retitle()
+        if self.waiting():
+            self._show_follow()
+            return True
+        self.run()
+        return True
+
+    def keep_script(self, why: str) -> None:
+        """Its script didn't reload (``why``: the file's error, its class or action gone, its folder
+        removed): it keeps the code it has and its last result, says so in amber, and goes on (Rerun
+        and Live run the code it has) until a reload gives it new code."""
+        if self.is_closed:
+            return
+        when = self.code_loaded_at
+        loaded = f" loaded at {datetime.fromtimestamp(when).strftime('%H:%M')}" if when else ""
+        self._script_note = f"⚠ Script didn't reload ({why}): still running the code{loaded}"
+        self._held = False
+        self.status_label.setText(self._script_note)
+        self.status_label.setToolTip("Fix the script and Reload it in the Scripts panel (its load error is "
+                                     "listed there); meanwhile Rerun and Live run the code this plot has.")
+        self._show_follow()
+        if not self.job_id and not self.waiting():
+            self._follow_next()  # What waited while it was held.
+
+    def _swap_script(self, metadata: ScriptMetadata, script: DatasetAnalysis, policy: LivePolicy,
+                     constant_keys: Tuple[str, ...]) -> None:
+        had_constants = bool(self.constant_keys)
+        self.metadata, self.script, self.name = metadata, script, metadata.name
+        self.policy, self.constant_keys = policy, tuple(constant_keys)
+        self.follow.policy = policy
+        cache = self._cache()
+        if had_constants and not self.constant_keys:
+            try:
+                cache.constantsChanged.disconnect(self._constants_changed)
+            except TypeError:
+                pass
+        elif self.constant_keys and not had_constants:
+            cache.constantsChanged.connect(self._constants_changed)
+
+    def _rebuild_page(self) -> None:
+        self._empty_page()
+        if self._page is not None and not sip.isdeleted(self._page):
+            self._fill_page(self._page)
+            if self.budget is not None:
+                self.budget.schedule()
+
+    def _retitle(self) -> None:
+        """The dock's and the page's title after a reload (a script may be renamed)."""
+        dock = self.dock_widget
+        if dock is not None and not sip.isdeleted(dock):
+            dock.setWindowTitle(f"{self.name} ({self.instance_id})")
+        self._show_follow()
 
     # Constants (F0b)
 
@@ -1168,7 +1305,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
             return
         dock.setProperty("plotFollow", self.follow_text())
         dock.setProperty("plotFollowing", following)
-        dock.setProperty("plotError", " · ".join(filter(None, (self.error or self._reload_note,
+        dock.setProperty("plotError", " · ".join(filter(None, (self._script_note, self.error or self._reload_note,
                                                                self._constants_note, self._cache_note,
                                                                self._save_note))))
         plots.update_plot_source(dock)

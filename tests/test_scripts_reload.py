@@ -14,7 +14,7 @@ from typing import Iterator
 import pytest
 
 from helab.scripts.scripts_manager import ScriptsManager
-from tests.test_scripts_folder import analysis, write
+from test_scripts_folder import analysis, write
 
 # A script whose compute returns its helper's VALUE (the helper's name is given, unique per test:
 # Python's module names are one namespace).

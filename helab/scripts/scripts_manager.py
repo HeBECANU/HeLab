@@ -7,7 +7,9 @@ import logging
 import os
 import sys
 import sysconfig
+import time
 import traceback
+import weakref
 from dataclasses import dataclass
 from importlib import invalidate_caches
 from typing import Any, Dict, List, Optional, Tuple, Type
@@ -161,9 +163,20 @@ class ScriptsManager:
         self._groups: Dict[str, List[str]] = {}  # group -> list of script paths
         self._folders: List[str] = []  # The user's folders, as added (normalised)
         self._errors: Dict[str, LoadError] = {}  # File (or folder not found) -> why it didn't load
+        # Each folder's files known as helper modules (by an import now or before): a helper whose script
+        # fails to import isn't imported, and isn't a failure either.
+        self._helper_files: Dict[str, set[str]] = {}
+        self._loaded_at: Dict[str, float] = {}  # Script id -> when its code was loaded (wall clock)
+        # Every class loaded from a user folder, this load's and earlier ones' while alive -> its folder.
+        self._class_folders: "weakref.WeakKeyDictionary[type, str]" = weakref.WeakKeyDictionary()
         self._protected = _protected_roots()
 
     # The user's folders (live scripts)
+
+    @staticmethod
+    def normal(directory: str) -> str:
+        """A folder's path as the manager records it."""
+        return _normal(directory)
 
     def folders(self) -> List[str]:
         """The user's script folders loaded (or tried) so far, in the order added."""
@@ -185,9 +198,14 @@ class ScriptsManager:
         return [script_id for script_id in self._metadata
                 if _same(os.path.dirname(script_id.rpartition("::")[0]), directory)]
 
-    def script_classes(self, directory: str) -> List[Type[HelabAnalysisScript]]:
-        """The classes of the scripts loaded from ``directory`` now."""
-        return [self._scripts[script_id] for script_id in self.script_ids(directory)]
+    def class_folder(self, script_class: type) -> str:
+        """The user folder a script class was loaded from, by this load or an earlier one ("": a bundled
+        analysis', or unknown)."""
+        return self._class_folders.get(script_class, "")
+
+    def loaded_at(self, script_id: str) -> float:
+        """When the script's code was loaded (wall clock; 0: unknown)."""
+        return self._loaded_at.get(script_id, 0.0)
 
     def helper_modules(self, directory: str) -> Dict[str, str]:
         """The folder's helper modules now: name -> file (``sys.modules`` entries whose file is inside
@@ -225,17 +243,18 @@ class ScriptsManager:
         return tuple(stamps)
 
     def add_folder(self, directory: str) -> bool:
-        """Record a user folder and load it. A folder that isn't there is recorded with an error ("folder
-        not found"; it loads on a later ``reload`` once it is back). Whether it loaded."""
+        """Record a user folder and load it. A folder that isn't there (or can't be listed) is recorded with
+        an error ("folder not found"; it loads on a later ``reload`` once it is back). Whether it loaded."""
         directory = _normal(directory)
         try:
             self.load_directory(directory)
-        except ValueError:
+        except (ValueError, OSError) as error:
             if not any(_same(folder, directory) for folder in self._folders):
                 self._folders.append(directory)
             self._clear_directory_scripts(directory)
             self._clear_errors(directory)
-            self._errors[directory] = LoadError(directory, "folder not found")
+            self._errors[directory] = LoadError(directory, "folder not found" if isinstance(error, ValueError)
+                                                else f"can't be read ({error.strerror or error})")
             return False
         return True
 
@@ -252,6 +271,7 @@ class ScriptsManager:
         self._unload_helpers(directory)
         self._clear_errors(directory)
         self._folders = [folder for folder in self._folders if not _same(folder, directory)]
+        self._helper_files.pop(os.path.normcase(directory), None)
         sys.path[:] = [entry for entry in sys.path
                        if not (isinstance(entry, str) and entry and _same(_normal(entry), directory))]
 
@@ -294,6 +314,7 @@ class ScriptsManager:
         if not any(isinstance(entry, str) and entry and _same(_normal(entry), directory) for entry in sys.path):
             sys.path.append(directory)
 
+        failed: Dict[str, str] = {}  # Logged once the folder's helper modules are known (they aren't failures).
         for filename in sorted(os.listdir(directory)):
             if not filename.endswith('.py'):
                 continue
@@ -302,17 +323,22 @@ class ScriptsManager:
             try:
                 self._load_script_file(file_path)
             except ScriptLoadError as e:
-                logging.warning(f"Failed to load script {file_path}: {e}")
+                failed[file_path] = str(e)
                 self._errors[file_path] = LoadError(file_path, str(e).removeprefix("Failed to load script: "),
                                                     e.details)
             except Exception as e:
                 logging.error(f"Unexpected error loading {file_path}: {e}")
                 self._errors[file_path] = LoadError(file_path, f"{type(e).__name__}: {e}", traceback.format_exc())
-        # A file without scripts that the folder's scripts import is a helper module, not a failure.
-        helpers = {os.path.normcase(file) for file in self.helper_modules(directory).values()}
+        # A file without scripts that the folder's scripts import (now or before) is a helper module, not a failure.
+        known = self._helper_files.setdefault(os.path.normcase(directory), set())
+        known.update(os.path.normcase(file) for file in self.helper_modules(directory).values())
+        helpers = {file for file in known if os.path.exists(file)}
         for path, error in list(self._errors.items()):
             if os.path.normcase(path) in helpers and error.message == NO_SCRIPT:
                 del self._errors[path]
+        for path, message in failed.items():
+            if path in self._errors:
+                logging.warning(f"Failed to load script {path}: {message}")
         self._fold_helper_hashes(directory)
 
     def _fold_helper_hashes(self, directory: str) -> None:
@@ -350,6 +376,7 @@ class ScriptsManager:
                 if not self._groups[metadata.group]:
                     del self._groups[metadata.group]
             del self._scripts[script_id]
+            self._loaded_at.pop(script_id, None)
             if script_id in self._metadata:
                 del self._metadata[script_id]
 
@@ -414,6 +441,9 @@ class ScriptsManager:
                 # Store script class and metadata
                 self._scripts[script_id] = obj
                 self._metadata[script_id] = metadata
+                self._loaded_at[script_id] = time.time()
+                if folder := self.folder_of(script_id):
+                    self._class_folders[obj] = folder
 
                 # Update groups
                 if metadata.group not in self._groups:
