@@ -267,7 +267,8 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
                              _dataset_info(data, fingerprint, names, listed_at, counts, unsettled, had_dataset, None,
                                            record, signature),
                              txy_cache.entry_keys(fingerprint, data_origins, raw_entries), data_origins,
-                             _raw_list(times, (entry[0] for entry in fingerprint)), record, cache_options or {}, send)
+                             _raw_list(times, (entry[0] for entry in fingerprint)), record, cache_options or {}, send,
+                             seen_at=listed_at)
                 return
             _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, counts, unsettled,
                            had_dataset, (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),

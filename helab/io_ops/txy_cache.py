@@ -205,7 +205,8 @@ class Access:
     def write(self, path: str, txy_guard: SaveGuard, data: Mapping[int, Any], fingerprint: Sequence[Sequence[int]],
               problematic: Sequence[int], info: dict[str, Any], keys: Mapping[int, tuple[int, int, str]],
               origins: Mapping[int, str], raw_times: list[list[int]], txy_record: Mapping[str, Any],
-              cache_options: Mapping[str, Any], send: Emit, *, hold: bool = True) -> None:
+              cache_options: Mapping[str, Any], send: Emit, *, hold: bool = True,
+              seen_at: float | None = None) -> None:
         """store-v4's save of one load or Live save (design addendum §5): a part per layer with the shots it
         lacks, and the view; the same events as a dataset save (``cache_saved``, or the pending question).
         Raises on failure (``_save_failed``)."""
@@ -248,7 +249,7 @@ class Access:
                                      budget=cache_options.get("budget"),
                                      budget_set_at=cache_options.get("budget_set_at"),
                                      default_policy=str(cache_options.get("policy") or store_v4.DEFAULT_POLICY),
-                                     hold=hold)
+                                     hold=hold, seen_at=seen_at)
         from helab.io_ops.stores import _deadline
         if result.reason and not hold:
             send({"kind": "cache_warning", "message": "Not cached: it doesn't fit the disk budget"})

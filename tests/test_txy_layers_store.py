@@ -485,3 +485,28 @@ def test_store_v3_has_no_txy_layers(tmp_path: Path) -> None:
         with pytest.raises(cache_store.StoreError):
             store.start_txy_job(RUN)
     assert store_v4.DEFAULT_POLICY == "raw+used"
+
+
+def test_a_new_layer_is_first_seen_when_its_job_listed(tmp_path: Path) -> None:
+    """S2-3 (Assay, C2-11's class): a load lists at t0 and saves later; a listing between them that found the
+    TXY gone lands after the save. It still makes the new layer an only copy (its first sighting is t0, not
+    the save's time)."""
+    with v4(tmp_path) as store:
+        listed = time.time() - 100
+        store.save_txy(RUN, "", "", [part(store, MATLAB, {1: 10})], None, store.start_txy_job(RUN), seen_at=listed)
+        assert store.mark_txy_seen(RUN, {"txy": {}}, listed + 50) == 1
+        assert (store.txy_layers(RUN).value or {})[MATLAB].gone_at == listed + 50
+
+
+def test_a_clear_of_the_folders_datasets_fences_its_layer_saves(tmp_path: Path) -> None:
+    """Assay's note for step 3: a load may seed layers from the folder's store-v4 datasets (Q45.4); a Clear of
+    them since the job started (for the folder, or every dataset) must stop its save."""
+    with v4(tmp_path) as store:
+        for selected in ([RUN], None):  # (The folder's datasets, then every one.)
+            guard = store.start_txy_job(RUN)
+            late = part(store, MATLAB, {1: 10})
+            store.remove(("datasets",), selected)
+            with pytest.raises(SaveRejected):
+                store.save_txy(RUN, "", "", [late], None, guard)
+            assert late.file in retired(store)
+        assert save(store, RUN, part(store, MATLAB, {1: 10})).saved == (MATLAB,)  # (A job after the Clear saves.)

@@ -2124,7 +2124,7 @@ class CacheStore:
                 for part in waiting:  # (Each part under its own job's sequence: Q45.8.)
                     self._apply_txy_unit(str(path), str(unit.get("source", "")), str(unit.get("tag", "")),
                                          [TxyPart.from_json(part)], {str(part["file"]): int(part["bytes"])}, None,
-                                         int(part["job_seq"]), now)
+                                         int(part["job_seq"]), now, part.get("seen_at"))
                 if unit.get("view") is not None:
                     self._apply_txy_unit(str(path), str(unit.get("source", "")), str(unit.get("tag", "")), [], {},
                                          unit["view"], int(unit.get("view_job_seq", job_seq)), now)
@@ -3088,8 +3088,9 @@ class CacheStore:
         return self._write_v4_file(self.txy_dir, store_v4.TXY_DIRNAME, packed, "TXY segment")
 
     def start_txy_job(self, path: str) -> SaveGuard:
-        """A guard for a job that may save ``path``'s TXY layers and views: ``gen_txy``, the folder's ``txy:``
-        epoch and its root's, and the folder's next ``job_seq`` (shared with its raw and dataset saves)."""
+        """A guard for a job that may save ``path``'s TXY layers and views: ``gen_txy`` and ``gen_datasets``, the
+        folder's ``txy:`` epoch, its own (a Clear of its datasets: a load may seed layers from them, Q45.4) and
+        its root's, and the folder's next ``job_seq`` (shared with its raw and dataset saves)."""
         self._needs_v4()
         key = self._path_key(path)
         try:
@@ -3097,13 +3098,13 @@ class CacheStore:
                 self._conn.execute("INSERT INTO folder_epochs (path, job_seq) VALUES (?, 1) "
                                    "ON CONFLICT (path) DO UPDATE SET job_seq = job_seq + 1", (key,))
                 (job_seq,) = self._conn.execute("SELECT job_seq FROM folder_epochs WHERE path = ?", (key,)).fetchone()
-                epochs = {_txy_epoch(key): self._epoch(_txy_epoch(key))}
+                epochs = {_txy_epoch(key): self._epoch(_txy_epoch(key)), key: self._epoch(key)}
                 if root := _root_epoch(key):
                     epochs[root] = self._epoch(root)
-                generation = int(self._meta()["gen_txy"])
+                meta = self._meta()
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
-        return SaveGuard({"txy": generation}, epochs, int(job_seq))
+        return SaveGuard({"txy": int(meta["gen_txy"]), "datasets": int(meta["gen_datasets"])}, epochs, int(job_seq))
 
     def _txy_guard_holds(self, guard: Mapping[str, Any], key: str) -> bool:
         """Whether a TXY guard (a ``SaveGuard``'s generations and epochs) still holds for ``key``; raises for
@@ -3112,8 +3113,12 @@ class CacheStore:
         epoch, root = _txy_epoch(key), _root_epoch(key)
         if "txy" not in generations or epoch not in epochs:
             raise SaveRejected("cleared", REKEYED)
-        return (int(self._meta()["gen_txy"]) == int(generations["txy"]) and self._epoch(epoch) == int(epochs[epoch])
-                and (root is None or self._epoch(root) == int(epochs.get(root, 0))))
+        meta = self._meta()
+        return (int(meta["gen_txy"]) == int(generations["txy"]) and self._epoch(epoch) == int(epochs[epoch])
+                and (root is None or self._epoch(root) == int(epochs.get(root, 0)))
+                # (A Clear of the folder's datasets since, by kind or for it: a seed from them is stale.)
+                and ("datasets" not in generations or int(meta["gen_datasets"]) == int(generations["datasets"]))
+                and (key not in epochs or self._epoch(key) == int(epochs[key])))
 
     def _check_txy_guard(self, guard: SaveGuard, key: str) -> None:
         if not self._txy_guard_holds({"generations": guard.generations, "epochs": guard.epochs}, key):
@@ -3128,14 +3133,16 @@ class CacheStore:
 
     def save_txy(self, path: str, source: str, tag: str, parts: Sequence[TxyPart], view: ViewRecord | None,
                  guard: SaveGuard, *, budget: int | None = None, budget_set_at: float | None = None,
-                 default_policy: str = store_v4.DEFAULT_POLICY, hold: bool = True, now: float | None = None) -> TxySave:
+                 default_policy: str = store_v4.DEFAULT_POLICY, hold: bool = True, seen_at: float | None = None,
+                 now: float | None = None) -> TxySave:
         """Save one unit (design addendum §5): each part's new segment, the layer rows and the view, in one
         transaction with one fit check, if ``guard`` holds and the folder may be cached. Under policy ``raw``
         HeLab layers aren't written (their files are retired). A shot a later job saved is kept (``refused``).
         Over the budget, or growing a folder's layers while usage is at 80 % or more, the unit waits as the
         folder's one pending save, merged with one already waiting (Q45.8); without ``hold`` (a plot's own TXY
-        choice, Q19.3) it is dropped instead, its files retired, and nothing asks. A rejected unit raises
-        :class:`SaveRejected` and retires its files."""
+        choice, Q19.3) it is dropped instead, its files retired, and nothing asks. ``seen_at``: when the job's
+        listing saw these sources, a new layer's first sighting (S2-3: a listing after it that found one gone
+        still counts; default: now). A rejected unit raises :class:`SaveRejected` and retires its files."""
         self._needs_v4()
         key = self._path_key(path)
         now = time.time() if now is None else now
@@ -3156,7 +3163,7 @@ class CacheStore:
                 before = self._live()
                 had = self._conn.execute("SELECT 1 FROM txy_layers WHERE path = ?", (key,)).fetchone() is not None
                 self._conn.execute("SAVEPOINT txy_fit")
-                refused = self._apply_txy_unit(key, source, tag, kept, sizes, view, guard.job_seq, now)
+                refused = self._apply_txy_unit(key, source, tag, kept, sizes, view, guard.job_seq, now, seen_at)
                 usage = self._live()
                 grows = sum(sizes.values()) > 0
                 reason = ""
@@ -3173,7 +3180,8 @@ class CacheStore:
                             self._retire(part.file, now)
                         return TxySave((), (), dropped, reason, "", sum(sizes.values()), self._live(), self._writes(),
                                        budget)
-                    pending_id = self._insert_txy_pending(key, source, tag, kept, sizes, view, guard, reason, now)
+                    pending_id = self._insert_txy_pending(key, source, tag, kept, sizes, view, guard, reason, now,
+                                                          seen_at)
                     return TxySave((), (), dropped, reason, pending_id, sum(sizes.values()), self._live(),
                                    self._writes(), budget)
                 self._conn.execute("RELEASE txy_fit")
@@ -3186,7 +3194,8 @@ class CacheStore:
                        writes, budget)
 
     def _apply_txy_unit(self, key: str, source: str, tag: str, parts: Sequence[TxyPart], sizes: Mapping[str, int],
-                        view: ViewRecord | None, job_seq: int, now: float) -> tuple[tuple[str, int], ...]:
+                        view: ViewRecord | None, job_seq: int, now: float,
+                        seen_at: float | None = None) -> tuple[tuple[str, int], ...]:
         """Write a unit's parts and view (inside a write transaction): each part a new segment of its layer
         holding the shots it replaces or adds; a shot whose entry a later job saved is kept and named; a
         segment left without a live shot is deleted and its file retired. The view is replaced only by a
@@ -3228,7 +3237,7 @@ class CacheStore:
                                (key, part.layer))
             tags = sorted({*(json.loads(row[0]) if row is not None else ()), *part.tags})
             self._write_layer_row(key, part.layer, tags, entries, part.precision, maker, job_seq, now,
-                                  keep_gone=row is not None)
+                                  keep_gone=row is not None, seen_at=seen_at)
         if view is not None:
             stored = self._conn.execute("SELECT job_seq FROM txy_views WHERE path = ? AND source = ? AND tag = ?",
                                         (key, source, tag)).fetchone()
@@ -3241,16 +3250,18 @@ class CacheStore:
         return tuple(refused)
 
     def _write_layer_row(self, key: str, layer: str, tags: Sequence[str], entries: Mapping[int, TxyEntry],
-                         precision: str, maker: str, job_seq: int, now: float, *, keep_gone: bool = True) -> None:
+                         precision: str, maker: str, job_seq: int, now: float, *, keep_gone: bool = True,
+                         seen_at: float | None = None) -> None:
         """A layer row from its entries; its bytes are its segments'. ``gone_at`` stays as a listing set it."""
         (size,) = self._conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM txy_segments WHERE path = ? AND layer = ?",
                                      (key, layer)).fetchone()
         rows = sum(entry.rows for entry in entries.values())
         stored = self._conn.execute("SELECT gone_at, seen_at, job_seq FROM txy_layers WHERE path = ? AND layer = ?",
                                     (key, layer)).fetchone()
-        # (A new layer was just seen by the job that saved it; an existing one keeps its marks, S2-2.)
+        # (A new layer was seen when the job that saves it listed its sources, S2-3; an existing one keeps its
+        # marks, S2-2.)
         gone = stored[0] if stored is not None and keep_gone else None
-        seen = float(stored[1]) if stored is not None else now
+        seen = float(stored[1]) if stored is not None else (now if seen_at is None else seen_at)
         self._conn.execute(
             "INSERT OR REPLACE INTO txy_layers (path, layer, tags, entries, shots, rows, ram_bytes, bytes, precision, "
             "gone_at, seen_at, maker, job_seq, saved_at, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3261,7 +3272,7 @@ class CacheStore:
 
     def _insert_txy_pending(self, key: str, source: str, tag: str, parts: Sequence[TxyPart],
                             sizes: Mapping[str, int], view: ViewRecord | None, guard: SaveGuard, reason: str,
-                            now: float) -> str:
+                            now: float, seen_at: float | None = None) -> str:
         """Keep a unit waiting for the user's answer as the folder's one pending save (Q45.8): merged with a
         unit already waiting, layer by layer (a later job's part replaces an earlier one's; an earlier one's
         arriving later is dropped), the later job's view kept. A dataset waiting from stage 1 is replaced by
@@ -3289,7 +3300,7 @@ class CacheStore:
                 continue
             if previous is not None:
                 self._retire(str(previous["file"]), now)
-            merged[part.layer] = part.to_json(sizes[part.file], guard)
+            merged[part.layer] = {**part.to_json(sizes[part.file], guard), "seen_at": seen_at}
         if not merged:
             raise SaveRejected("newer", "Newer data is already waiting to be cached")
         pending_id = uuid.uuid4().hex

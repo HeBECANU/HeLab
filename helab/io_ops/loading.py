@@ -803,7 +803,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                          _dataset_info(data, fingerprint, names, listed_at, load_counts, unsettled, bool(had_dataset),
                                        folder_mtime_ns, txy_record, str(summary["signature"])),
                          keys, origins, _raw_list(raw_times, (entry[0] for entry in fingerprint)), txy_record,
-                         cache_options or {}, _quietly(send) if quiet else send, hold=not quiet)
+                         cache_options or {}, _quietly(send) if quiet else send, hold=not quiet, seen_at=listed_at)
             return
         _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, load_counts,
                        unsettled, bool(had_dataset), budget, budget_set_at, send, raw_times, folder_mtime_ns,
