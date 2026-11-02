@@ -247,7 +247,7 @@ def test_auto_reload_watches_only_the_script_folders_while_on(qtbot: QtBot, tmp_
     assert read_setting(app_settings(), SCRIPT_AUTO_RELOAD_SETTING, typed=True) is True
     assert scripts.watched() == sorted([str(tmp_path), str(tmp_path / "lab_live_f.py"), str(tmp_path / "live.py")])
     reloaded: List[Optional[List[str]]] = []
-    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None: reloaded.append(folders))
+    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None, deliberate=True: reloaded.append(folders))
     scripts._check_changes()
     assert reloaded == []  # Nothing changed.
     (tmp_path / "notes.txt").write_text("not a script")
@@ -298,7 +298,7 @@ def test_loading_a_loaded_folder_again_is_a_reload(qtbot: QtBot, tmp_path: Path,
     qtbot.addWidget(scripts)
     scripts.add_folder(str(tmp_path))
     called: List[Any] = []
-    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None: called.append(folders))
+    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None, deliberate=True: called.append(folders))
     scripts.add_folder(str(tmp_path) + "/.")
     assert called == [[str(tmp_path)]]
 
@@ -431,7 +431,7 @@ def test_a_helper_first_imported_in_a_run_isnt_a_change(qtbot: QtBot, tmp_path: 
     qtbot.addWidget(scripts)
     scripts.add_folder(str(tmp_path))
     reloaded: List[Optional[List[str]]] = []
-    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None: reloaded.append(folders))
+    monkeypatch.setattr(scripts, "reload_scripts", lambda folders=None, deliberate=True: reloaded.append(folders))
     script_class = scripts.script_manager.get_script(f"{tmp_path / 'live.py'}::Live")
     assert script_class is not None
     __import__("lab_pkg_l.inner")  # (As its compute would, in a run after the load.)
@@ -463,3 +463,69 @@ def test_the_menus_actions_and_the_details_window_have_ids_and_submenus_go(qtbot
     names = [button.objectName() for button in box.buttons()]
     assert "script_error_details_close" in names and all(name.startswith("script_error_details_") for name in names)
     box.close()
+
+
+# R1 (Prismo's re-check): a marker never sticks
+
+
+def stale_marker(folder_: object) -> None:
+    with open(marker_path(), "w", encoding="utf-8") as handle:
+        if folder_ is None:
+            handle.write("{not json")
+        else:
+            json.dump({"folder": folder_}, handle)
+
+
+def test_a_marker_naming_no_remembered_folder_is_dropped_at_start(qtbot: QtBot, tmp_path: Path) -> None:
+    """R1: HeLab stopped while Load Scripts… loaded a new folder, not yet remembered: the next start drops
+    that marker and loads the remembered folders."""
+    write_script(tmp_path, "lab_live_m", "one")
+    app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(tmp_path)]))
+    stale_marker(str(tmp_path / "never-remembered"))
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.restore_folders()
+    assert "Lab" in scripts.groups and scripts.start_note.isHidden() and loading_marker() is None
+
+
+def test_an_unreadable_marker_skips_one_start_only(qtbot: QtBot, tmp_path: Path) -> None:
+    """R1: a marker that can't be read still means a load never ended (this start skips the folders), but it
+    is dropped, so the next start loads them."""
+    write_script(tmp_path, "lab_live_n", "one")
+    app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(tmp_path)]))
+    stale_marker(None)
+    first = TreePanelWidget()
+    qtbot.addWidget(first)
+    first.restore_folders()
+    assert "Lab" not in first.groups and not first.start_note.isHidden() and loading_marker() is None
+    second = TreePanelWidget()
+    qtbot.addWidget(second)
+    second.restore_folders()
+    assert "Lab" in second.groups
+
+
+@pytest.mark.parametrize("how", ["reload", "menu", "load another"])
+def test_a_deliberate_load_clears_a_marker_it_didnt_make(qtbot: QtBot, tmp_path: Path, how: str) -> None:
+    """R1: Reload, or Load Scripts… of another folder, ends a marker left by a load that never ended (of a
+    folder Remove can't reach); an automatic reload doesn't."""
+    first, other = tmp_path / "first", tmp_path / "other"
+    first.mkdir()
+    other.mkdir()
+    write_script(first, "lab_live_o", "one")
+    write_script(other, "lab_live_p", "two")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.add_folder(str(first))
+    stale_marker(str(tmp_path / "gone"))
+    scripts.reload_scripts([str(first)], deliberate=False)  # (Auto-reload: not the user's word.)
+    assert loading_marker() == str(tmp_path / "gone")
+    if how == "reload":
+        scripts.reload_button.click()  # (As the button sends it.)
+    elif how == "menu":
+        scripts._fill_folders_menu()
+        (sub,) = scripts._submenus
+        (reload,) = [action for action in sub.actions() if action.objectName() == "script_folder_reload"]
+        reload.trigger()  # (As the menu sends it.)
+    else:
+        scripts.add_folder(str(other))
+    assert loading_marker() is None

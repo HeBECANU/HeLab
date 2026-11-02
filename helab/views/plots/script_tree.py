@@ -174,7 +174,7 @@ class TreePanelWidget(QWidget):
         self.reload_button = identify(QPushButton("Reload"), "reload_scripts", "Reload scripts",
                                       "Import the loaded folders' scripts and their helper modules again; open "
                                       "plots of them rerun on the new code")
-        self.reload_button.clicked.connect(self.reload_scripts)
+        self.reload_button.clicked.connect(self._reload_clicked)
         controls_layout.addWidget(self.reload_button)
         # The row shrinks with the panel, never sets its width (Q33.2; on Windows it held the settings panel at
         # ~548 px): the combo to a few characters, the button to its text.
@@ -218,6 +218,7 @@ class TreePanelWidget(QWidget):
         self._remote: Set[str] = set()
         self._submenus: List[QMenu] = []
         self._pending: Set[str] = set()
+        self._pending_deliberate = False  # A reload waiting is the user's (Reload, its menu, Load Scripts…)
         self._waiting_on: List[AnalysisRunner] = []
         self._watcher: Optional[QFileSystemWatcher] = None
         self._settle = QTimer(self)
@@ -287,6 +288,15 @@ class TreePanelWidget(QWidget):
             return
         self.folders_pending = False
         stuck = loading_marker()
+        if stuck == "":
+            # (Unreadable: a load never ended, of a folder it can't name. This start skips them; dropped, so it
+            # never sticks: R1.)
+            self._unmark()
+        elif stuck is not None and not any(os.path.normcase(stuck) == os.path.normcase(folder)
+                                           for folder in self._remembered):
+            # (It names no remembered folder: a new folder Load Scripts… was loading. Not loaded at start: R1.)
+            self._unmark()
+            stuck = None
         for folder in self._remembered:
             if stuck is not None:
                 self._skipped[folder] = (f"HeLab stopped while loading {stuck} last time" if stuck else
@@ -371,6 +381,7 @@ class TreePanelWidget(QWidget):
                for known in (*self.script_manager.folders(), *self._remembered)):
             self.reload_scripts([folder])
             return
+        self._unmark()  # (The user's load: a marker left by a load that never ended goes, R1.)
         self._remembered.append(folder)
         self._load_folder(folder)
         self._save_folders()
@@ -455,14 +466,20 @@ class TreePanelWidget(QWidget):
                 if os.path.normcase(manager.folder_of(instance.metadata.script_id)
                                     or manager.class_folder(type(instance.script))) in keys]
 
-    def reload_scripts(self, folders: Optional[List[str]] = None) -> None:
-        """Reload ``folders`` (default: every loaded one). Their plots are held and their runs cancelled;
+    @pyqtSlot()
+    def _reload_clicked(self) -> None:
+        self.reload_scripts()  # (Not connected directly: ``clicked`` would pass its ``checked`` as the folders.)
+
+    def reload_scripts(self, folders: Optional[List[str]] = None, deliberate: bool = True) -> None:
+        """Reload ``folders`` (default: every remembered one). Their plots are held and their runs cancelled;
         the reload itself waits until no run of those folders' scripts is queued or computing (a
-        ``compute`` on the worker thread is never under a reload), then runs (``_try_reload``)."""
+        ``compute`` on the worker thread is never under a reload), then runs (``_try_reload``).
+        ``deliberate`` (not auto-reload): it also ends a loading marker it didn't make (R1)."""
         chosen = list(self._remembered) if folders is None else [ScriptsManager.normal(f) for f in folders]
         if not chosen:
             return
         self._pending.update(chosen)
+        self._pending_deliberate = self._pending_deliberate or deliberate
         for instance in self._plots_of(set(chosen)):
             instance.hold_for_reload()
         self._try_reload()
@@ -497,6 +514,9 @@ class TreePanelWidget(QWidget):
             return
         self._stop_waiting()
         folders, self._pending = set(self._pending), set()
+        deliberate, self._pending_deliberate = self._pending_deliberate, False
+        if deliberate:
+            self._unmark()  # (The user's reload: a marker left by a load that never ended goes, R1.)
         for folder in sorted(folders):
             self._load_folder(folder)
         self._refresh()
@@ -645,7 +665,7 @@ class TreePanelWidget(QWidget):
         self._sync_watch()
         changed = [folder for folder in self._local_folders() if self._folder_changed(folder)]
         if changed:
-            self.reload_scripts(changed)
+            self.reload_scripts(changed, deliberate=False)
 
     def _folder_changed(self, folder: str) -> bool:
         """Whether a file of ``folder`` changed since its load: one stamped then changed or went, or a new
