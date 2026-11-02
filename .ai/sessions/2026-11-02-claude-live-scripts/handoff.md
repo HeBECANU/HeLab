@@ -113,7 +113,7 @@ mutations back: each test then fails.
 After the review fixes (`a18e4c9`): full suite `pytest -n 4 --reruns 5 --reruns-delay 1
 --basetemp=.ai/temp/pytest`: **8975 passed, 672 skipped, 2 warnings, 1 rerun**, 153.8 s. The rerun's reason:
 `tests/test_dash_server.py::test_stop_frees_the_port`, `assert 56278 == 56276` (the free-port race, A~6;
-unrelated to this change; passed on its rerun). The five type checks are clean. CI: CI2_PLACEHOLDER
+unrelated to this change; passed on its rerun). The five type checks are clean. CI: run 41454753537 on `944fbd6`, success; every job read: Tests (1/2) and (2/2) on macOS (4485, 4490 passed), Ubuntu (4482, 4491) and Windows (4468, 4471), Converter backends on all three (849, 849, 847), **0 RERUN** in every log.
 
 Before the review:
 
