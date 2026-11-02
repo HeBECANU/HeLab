@@ -124,3 +124,15 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Merged tree (3c1720f):** 8865 passed, no RERUN; the five type checks pass.
 - **CI 41392473183: success.** All 12 job logs read: no RERUN, no crashed worker; A39.1 passed on all three
   builds.
+
+## A~2 done: the walk's own timeout (5f52068; CoCo's yes)
+
+- **Change.** `test_every_script_and_each_library` gets `pytest.mark.timeout(300)`, with a guard test.
+- **Not split per library:** one walk keeps the IDs check as one check, with the window and folder set up
+  once.
+- **Shown:** with `--timeout=5`, the walk (8 s here) times out without the mark and passes with it.
+- **Full suite:** 8866 passed, no RERUN; the five type checks pass.
+- **CI 41394539355 (`5f52068`): success.** All 12 job logs read, no RERUN, no crashed worker.
+  - Tests: windows 1/2 4414, 2/2 4416; macos 4431, 4435; ubuntu 4427, 4435.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
