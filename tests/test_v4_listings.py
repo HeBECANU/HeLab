@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from helab.io_ops.admin import cache_admin
+from helab.io_ops import stores
 from helab.io_ops.browse import list_folder
 from helab.io_ops.scanning import _check_cached_shots
 from helab.utils import file_kinds
@@ -72,3 +73,21 @@ def test_an_adopted_save_answers_with_its_views_cache_info(tmp_path: Path) -> No
                 pending_id=held["pending_id"])
     result = first(sent, "admin_result")
     assert result["adopted"] is True and result["cache_info"]
+
+
+def test_a_damaged_view_is_an_error_for_its_folder_and_the_others_list_on(tmp_path: Path) -> None:
+    """SV-1: one folder's unreadable view record answers an error for that folder only (as store-v3 does for a
+    dataset), never "not cached", and never fails the listing of the others."""
+    source = data_folder(tmp_path)
+    other = data_folder(tmp_path / "other")
+    options = v4_options(tmp_path)
+    run_load(source, tmp_path, options)
+    run_load(other, tmp_path, options)
+    for damage in ("not json", "[[1]]", "[5]"):
+        with stores._cache_store(options["directory"], [str(source), str(other)]) as store:
+            with store.transaction():
+                store._conn.execute("UPDATE txy_views SET fingerprint = ? WHERE path = ?",
+                                    (damage, store._path_key(str(source))))
+            found = store.read_dataset_infos([str(source), str(other)])
+        assert found[str(source)].failed and "unreadable" in found[str(source)].error, damage
+        assert found[str(other)].value is not None, damage

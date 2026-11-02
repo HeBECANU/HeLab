@@ -2185,10 +2185,11 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return True
 
-    def _view_infos(self, keys: Sequence[str],
-                    wanted: tuple[str, str] | None) -> dict[str, tuple[int, int, str, float, int]]:
+    def _view_infos(self, keys: Sequence[str], wanted: tuple[str, str] | None,
+                    damaged: dict[str, str]) -> dict[str, tuple[int, int, str, float, int]]:
         """store-v4 (inside a transaction): each folder's view as ``read_dataset_infos`` reads a dataset (bytes,
-        RAM bytes, info, last used, its TXY files' bytes): the ``wanted`` view, else the most recently used."""
+        RAM bytes, info, last used, its TXY files' bytes): the ``wanted`` view, else the most recently used. A
+        folder whose view can't be read goes into ``damaged`` (key → why), never failing the others (SV-1)."""
         marks = ",".join("?" * len(keys))
         chosen: dict[str, tuple[str, str, str, float]] = {}
         for path, source, tag, fingerprint, info, last_used in self._conn.execute(
@@ -2205,15 +2206,20 @@ class CacheStore:
                                tuple(keys))}
         found: dict[str, tuple[int, int, str, float, int]] = {}
         for key, (_, fingerprint, info, last_used) in chosen.items():
-            entries = json.loads(fingerprint)
-            named: dict[str, int] = {}
-            for entry in entries:
-                named[str(entry[4])] = named.get(str(entry[4]), 0) + 1
+            try:
+                entries = json.loads(fingerprint)
+                named: dict[str, int] = {}
+                for entry in entries:
+                    named[str(entry[4])] = named.get(str(entry[4]), 0) + 1
+                source_bytes = sum(int(entry[1]) for entry in entries)
+            except (ValueError, IndexError, TypeError, KeyError) as exc:
+                damaged[key] = f"{type(exc).__name__}: {exc}"
+                continue
             size = sum(layers[(key, layer)][0] for layer in named if (key, layer) in layers)
             # (A layer's rows by the share of its shots the view names: listings read no entries.)
             rows = sum(layers[(key, layer)][2] * count // max(1, layers[(key, layer)][1])
                        for layer, count in named.items() if (key, layer) in layers)
-            found[key] = (size, rows * TXY_ROW_BYTES, info, last_used, sum(int(entry[1]) for entry in entries))
+            found[key] = (size, rows * TXY_ROW_BYTES, info, last_used, source_bytes)
         return found
 
     def cached_matlab_shots(self, path: str) -> Read[set[int]]:
@@ -2265,6 +2271,7 @@ class CacheStore:
         unique = list(dict.fromkeys(paths))
         keys = list(dict.fromkeys(self._path_key(path) for path in unique))
         rows: dict[str, tuple[int, int, str, float, int]] = {}
+        damaged: dict[str, str] = {}  # (store-v4: a folder whose view can't be read; the others list on, SV-1.)
         try:
             with self.transaction(write=False):
                 for start in range(0, len(keys), 500):
@@ -2275,13 +2282,16 @@ class CacheStore:
                             f"WHERE path IN ({','.join('?' * len(chunk))})", chunk):
                         rows[path] = (size, ram_bytes, info, last_used, source)
                     if self.layout >= store_v4.LAYOUT:
-                        rows.update(self._view_infos(chunk, wanted))
+                        rows.update(self._view_infos(chunk, wanted, damaged))
         except (sqlite3.Error, StoreError) as exc:
             failure = _error(f"Disk cache could not be read: {exc}")
             return {path: failure for path in unique}
         result: dict[str, Read[DatasetInfo]] = {}
         for path in unique:
             key = self._path_key(path)
+            if key in damaged:
+                result[path] = _error(f"Saved view record is unreadable: {damaged[key]}")
+                continue
             if key not in rows:
                 result[path] = _missing()
                 continue
