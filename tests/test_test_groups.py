@@ -1,10 +1,12 @@
-"""``--test-group N/M`` (``tests/conftest.py``): CI runs the suite in two groups per OS (Q16.2), and
+"""``--test-group N/M`` (``tests/conftest.py``): CI runs the suite in three groups per OS (Q16.2), and
 every test must be in exactly one of them, or a test would run twice or never on CI."""
 from __future__ import annotations
 
 from collections import Counter
+import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -22,22 +24,41 @@ def is_slow(nodeid: str) -> bool:
     return nodeid.split("::")[0].rsplit("/", 1)[-1] in SLOW_FIRST_MODULES
 
 
-def test_the_whole_collection_splits_into_two_groups_of_about_half(request: pytest.FixtureRequest) -> None:
-    """This run's own collection (every test, before a group's selection): each test is in group 1
-    or 2, the two are close in size, and each has its share of the slow-first tests."""
+@pytest.mark.parametrize("groups", [2, 3])
+def test_the_whole_collection_splits_into_groups_of_about_equal_size(request: pytest.FixtureRequest,
+                                                                     groups: int) -> None:
+    """This run's own collection (every test, before a group's selection): each test is in one of the groups,
+    their sizes are close, and each has its share of the slow-first tests. Three for CI's required jobs, two
+    for its compatibility jobs (``CI_GROUPS``)."""
     everything = request.config.stash[ALL_TESTS]
     assert len(everything) == len(set(everything)) > 0
-    numbers = group_numbers(everything, 2)
-    assert set(numbers) <= {1, 2}
+    numbers = group_numbers(everything, groups)
+    assert set(numbers) <= set(range(1, groups + 1))
     if len(everything) >= 1000:  # (the full suite, not a file or two run alone)
         sizes = Counter(numbers)
-        assert abs(sizes[1] - sizes[2]) < 0.05 * len(everything), sizes
+        assert max(sizes.values()) - min(sizes.values()) < 0.05 * len(everything), sizes
     slow = Counter(number for nodeid, number in zip(everything, numbers) if is_slow(nodeid))
-    assert abs(slow[1] - slow[2]) <= 1, slow
+    shares = [slow.get(n, 0) for n in range(1, groups + 1)]
+    assert max(shares) - min(shares) <= 1, slow
     group = group_option(request.config.getoption("test_group"))
-    if group is not None and group[1] == 2:  # (CI's run of one group: it runs only that group's tests)
+    if group is not None and group[1] == groups:  # (CI's run of one group: it runs only that group's tests)
         mine = {nodeid for nodeid, number in zip(everything, numbers) if number == group[0]}
         assert {item.nodeid for item in request.session.items} <= mine
+
+
+# The groups CI's test jobs run: (required 3.13 jobs, compatibility jobs).
+CI_GROUPS = (3, 2)
+
+
+def test_ci_runs_three_groups_for_the_required_jobs_and_two_for_compatibility() -> None:
+    """With two groups Windows' required jobs took 20.3 and 21.1 min of pytest (Ground CI 41476107464) against
+    a 30-min limit, and the suite grows: three now, on every OS. The compatibility jobs (PRs only) keep two."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-test.yml").read_text(encoding="utf-8")
+    [matrix] = re.findall(r"group: \$\{\{ fromJSON\(inputs\.experimental && '(\[.*?\])' \|\| '(\[.*?\])'\) \}\}", workflow)
+    compatibility, required = (json.loads(text) for text in matrix)
+    assert required == [f"{n}/{CI_GROUPS[0]}" for n in range(1, CI_GROUPS[0] + 1)]
+    assert compatibility == [f"{n}/{CI_GROUPS[1]}" for n in range(1, CI_GROUPS[1] + 1)]
+    assert '--test-group "${{ matrix.group }}"' in workflow
 
 
 def test_a_tests_group_depends_on_its_node_id_only() -> None:

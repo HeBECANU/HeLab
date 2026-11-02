@@ -184,11 +184,11 @@ SLOW_FIRST_MODULES = frozenset({"test_typing.py"})
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--test-group", metavar="N/M", default=None,
-                     help="run only group N of M (each test is in exactly one; CI runs two per OS)")
+                     help="run only group N of M (each test is in exactly one; CI runs three per OS)")
 
 
-# CI runs the suite in two groups per OS, each a job of its own (Q16.2), so neither job nears its
-# time limit. A test's group is a hash of its node ID: the same on every OS, xdist worker and run,
+# CI runs the suite in three groups per OS (two for the compatibility jobs), each a job of its own
+# (Q16.2), so no job nears its time limit. A test's group is a hash of its node ID: the same on every OS, xdist worker and run,
 # with nothing to record or keep up to date, and each module's tests split about evenly, so the
 # groups' times stay close as the suite grows. The slow-first tests are dealt out in turn instead,
 # so each group gets its share of them (and still runs them first, below).
