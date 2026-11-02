@@ -63,8 +63,11 @@ def test_the_clear_questions_name_only_copies_by_folder(qtbot: QtBot, monkeypatc
         tab.inventory = inventory(raw=raw, txy=TXY, legacy=None, older_stores=[])
         tab._update()
         tab.clear(list(cache_store.KINDS))
-        assert "only copy (TXY data of 1 folder and raw pulses of 4 shots)" in asked[-1][1]
-        assert "can't be read again" in asked[-1][1]
+        assert "only copy (TXY data of 1 folder and HeLab's cached raw pulses of 4 shots)" in asked[-1][1]
+        assert "can't be read again" in asked[-1][1] and "your d files aren't touched" in asked[-1][1]
+        tab._job = ""
+        tab.clear_raw()
+        assert asked[-1][0] == "Clear HeLab's cached raw pulses?" and "Your d files aren't touched" in asked[-1][1]
         tab._job = ""
         tab.inventory = v4_inventory()
         tab._update()
@@ -83,30 +86,83 @@ def test_the_clear_questions_name_only_copies_by_folder(qtbot: QtBot, monkeypatc
         service.shutdown()
 
 
-def test_the_purge_question_counts_txy_and_raw_folders_in_store_v4(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
-                                                                   tmp_path: Path) -> None:
-    """C2S2-2: in store-v4 a purge of cached data takes TXY layers and seen raw layers not used since the cutoff
-    (only copies stay), so its question and estimate count them, from the same comparisons as the purge."""
+def v4_ages(tab: Any) -> None:
+    """Old TXY layers in 1 folder (2 rows) and a newer one, old raw layers in 2 folders, no old dataset."""
+    old = time.time() - 400 * 86400
+    tab.inventory = v4_inventory()
+    tab.inventory["ages"] = {**tab.inventory["ages"], "datasets": [],
+                             "txy": [[old, 40 * MB, "root://u/a"], [old, MB, "root://u/a"], [time.time(), MB, "root://u/b"]],
+                             "raw": [[old, 30 * MB, "root://u/a"], [old, MB, "root://u/c"]]}
+    for _, days, _, _ in tab.purge_rows.values():
+        days.setValue(30)
+    tab._update()
+
+
+def test_each_kind_of_cached_data_has_its_own_purge_in_store_v4(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                               tmp_path: Path) -> None:
+    """A47.4: store-v4 shows a purge row for cached data, TXY data and HeLab's cached raw pulses; each asks with
+    its own count and size and sends its own kind; store-v3 shows only cached data's."""
     service, cache = frozen_cache(monkeypatch)
     try:
         tab, asked = make_tab(qtbot, cache, tmp_path)
-        old = time.time() - 400 * 86400
-        ages = {"datasets": [], "txy": [[old, 40 * MB, "root://u/a"], [old, MB, "root://u/a"],
-                                        [time.time(), MB, "root://u/b"]],
-                "raw": [[old, 30 * MB, "root://u/a"], [old, MB, "root://u/c"]]}
-        tab.inventory = v4_inventory()
-        tab.inventory["ages"] = {**tab.inventory["ages"], **ages}
-        tab.dataset_days.setValue(30)
+        tab.inventory = inventory()
         tab._update()
-        assert "(2 folders)" in tab.dataset_estimate.text() and tab.purge_datasets_button.isEnabled()
+        assert not tab.purge_txy_button.isVisibleTo(tab) and not tab.purge_raw_button.isVisibleTo(tab)
+        assert tab.purge_all_button.isVisibleTo(tab)
+        v4_ages(tab)
+        assert tab.purge_txy_button.isVisibleTo(tab) and tab.purge_raw_button.isVisibleTo(tab)
+        assert tab.dataset_estimate.text() == "— frees ~0 B (0 folders)" and not tab.purge_datasets_button.isEnabled()
+        assert tab.txy_estimate.text() == "— frees ~41.0 MB (1 folder)" and tab.purge_txy_button.isEnabled()
+        assert tab.raw_estimate.text() == "— frees ~31.0 MB (2 folders)" and tab.purge_raw_button.isEnabled()
+        tab.purge_txy()
+        assert asked[-1][0] == "Remove old TXY data?"
+        assert "TXY data of 1 folder (41.0 MB) not used in the last 30 days" in asked[-1][1]
+        assert "Only copies stay" in asked[-1][1] and "TXY files are never touched" in asked[-1][1]
+        assert admin_request(service, "purge").payload["params"]["what"] == "txy"
+        tab._job = ""
+        tab.purge_raw()
+        assert asked[-1][0] == "Remove old cached raw pulses?"
+        assert "HeLab's cached raw pulses of 2 folders (31.0 MB)" in asked[-1][1]
+        assert "Your d files aren't touched" in asked[-1][1] and "Only copies stay" in asked[-1][1]
+        tab._job = ""
         tab.purge_datasets()
-        text = asked[-1][1]
-        assert "TXY data for 1 folder, raw pulses for 2 folders" in text and "cached data for 0" not in text
-        assert "Only copies stay" in text
-        estimate = cache_store.purge_estimate(tab.inventory, time.time() - 30 * 86400, datasets=True)
-        assert estimate == {"datasets": 0, "bytes": 72 * MB, "txy_folders": 1, "txy_bytes": 41 * MB,
-                            "raw_folders": 2, "raw_bytes": 31 * MB}
-        assert admin_request(service, "purge").payload["params"]["what"] == "datasets"
+        assert "cached data for 0 folders (0 B)" in asked[-1][1] and "TXY data" not in asked[-1][1]
+        assert {r.payload["params"]["what"] for r in service.pending if r.payload.get("action") == "purge"} == {
+            "txy", "raw", "datasets"}
+    finally:
+        service.shutdown()
+
+
+def test_remove_everything_old_names_every_part_and_its_size(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                            tmp_path: Path) -> None:
+    """A47.4 (CoCo): the question names each part with its size, cached analysis as the user's results, and scan
+    failures only with the box; it sends one purge of ``all`` with the box's choice."""
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        tab, asked = make_tab(qtbot, cache, tmp_path)
+        v4_ages(tab)
+        assert tab.all_estimate.text().startswith("— frees ~72.0 MB") and tab.purge_all_button.isEnabled()
+        tab.purge_all()
+        title, text = asked[-1][:2]
+        assert title == "Remove everything old?" and "not used, checked or shown in the last 30 days" in text
+        for part in ("cached data for 0 folders (0 B)", "TXY data for 1 folder (41.0 MB)",
+                     "HeLab's cached raw pulses for 2 folders (31.0 MB); your d files aren't touched",
+                     "folder record", "(scan failures are kept)", "cached analysis: ", "saved result",
+                     "of your plots", "Only copies stay", "Raw files and TXY files are never touched"):
+            assert part in text, part
+        params = admin_request(service, "purge").payload["params"]
+        assert params["what"] == "all" and params["include_failures"] is False
+        tab._job = ""
+        tab.include_failures.setChecked(True)
+        tab.purge_all()
+        assert "scan failures are kept" not in asked[-1][1] and "try folders whose scan failed again" in asked[-1][1]
+        assert [r.payload["params"]["include_failures"] for r in service.pending
+                if r.payload.get("action") == "purge"][-1] is True
+        tab._job = ""
+        tab.inventory = inventory()  # (store-v3: no TXY data or raw pulses to name.)
+        tab._update()
+        tab.purge_all()
+        assert "TXY data" not in asked[-1][1] and "raw pulses" not in asked[-1][1]
     finally:
         service.shutdown()
 

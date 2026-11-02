@@ -26,6 +26,8 @@ ADMIN_ACTIONS = ("inventory", "clear", "purge", "trim", "adopt", "discard", "swe
                  "constants", "presets", "forget_root", "root_same", "clear_root", "clear_results",
                  "clear_root_results", "adopt_result", "discard_result", "identity", "clear_raw", "legacy_choice",
                  "clear_legacy", "clear_txy", "folder_choice")
+# What ``purge`` takes by age (A47.4): one kind of cached data, folder records, cached analysis, or all of them.
+PURGES = ("datasets", "txy", "raw", "records", "results", "all")
 
 
 def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, **params: Any) -> None:
@@ -37,7 +39,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
     """
     from dataclasses import asdict
     from helab.utils.cache_store import (
-        KINDS, CacheStore, Kind, SaveRejected, StoreError, StoreReadOnly, remove_old_caches,
+        KINDS, PURGE_KINDS, CacheStore, Kind, SaveRejected, StoreError, StoreReadOnly, remove_old_caches,
     )
     if action not in ADMIN_ACTIONS:
         raise ValueError(f"Unknown cache action: {action}")
@@ -111,26 +113,39 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 txy = store.remove_txy()
                 send(_txy_removed_event(None, [], txy.bytes))
         elif action == "purge":
+            # By age (A47.4): one kind of cached data (datasets, TXY layers, raw layers), folder records, cached
+            # analysis, or ``all`` of them with one cutoff; only copies stay.
             cutoff = float(params["cutoff"])
-            if params["what"] == "results":
+            what = params["what"]
+            if what not in PURGES:
+                raise ValueError(f"Unknown purge: {what}")
+            removals: list[Any] = []
+            if what in ("results", "all"):
                 # Saved analysis results not shown since ``cutoff`` (R2).
                 purged = store.remove_results(cutoff=cutoff)
                 send(_results_removed_event(purged))
                 result["removed"] = {"results": purged.results}
                 result["bytes"] = purged.bytes
-                removals = []
-            elif params["what"] == "datasets":
-                removals = [store.purge_datasets(cutoff)]
-            elif params["what"] == "records":
-                removals = store.purge_records(cutoff, bool(params.get("include_failures")))
-            else:
-                raise ValueError(f"Unknown purge: {params['what']}")
+            cached = [kind for kind in PURGE_KINDS if what in (kind, "all")]
+            if cached:
+                removals.append(store.purge_cached(cutoff, cached))
+            if what in ("records", "all"):
+                removals.extend(store.purge_records(cutoff, bool(params.get("include_failures"))))
             for removal in removals:
                 for event in _removal_events(removal):  # (store-v4: the layers a purge of cached data took, S3-1.)
-                    send(event)
+                    if event["kinds"] or event["paths"]:
+                        send(event)
             if removals:
-                result["removed"] = {kind: len(removal.paths or ()) for removal in removals for kind in removal.kinds}
-                result["bytes"] = sum(removal.dataset_bytes for removal in removals)
+                removed = result.setdefault("removed", {})
+                for removal in removals:
+                    for kind in removal.kinds:
+                        removed[kind] = removed.get(kind, 0) + len(removal.paths or ())
+                    if removal.txy_bytes or removal.txy_seen:
+                        removed["txy"] = removed.get("txy", 0) + len({path for path, _ in removal.txy_seen})
+                    if removal.raw_rows:
+                        removed["raw"] = removed.get("raw", 0) + len(removal.raw_paths)
+                result["bytes"] = int(result.get("bytes") or 0) + sum(
+                    removal.dataset_bytes + removal.txy_bytes + removal.raw_bytes for removal in removals)
         elif action == "trim":
             # In Make room's order (A42.2): datasets, then in store-v4 TXY layers and raw layers. With ``plan_only``
             # it says what that would remove, only copies named (S2-1); with ``plan`` (those items) only copies

@@ -24,8 +24,8 @@ import shutil
 import sqlite3
 import stat
 import time
-from typing import (Any, Callable, Generator, Generic, Iterable, Literal, Mapping, NotRequired, Sequence, TypeVar,
-                    TypedDict, cast)
+from typing import (Any, Callable, Collection, Generator, Generic, Iterable, Literal, Mapping, NotRequired, Sequence,
+                    TypeVar, TypedDict, cast)
 import uuid
 
 from helab.io_ops.events import PresetRowFields, ResultCountField, UsageFields
@@ -61,6 +61,8 @@ OLD_CACHE_DIRS = ("data_ram_cache", "status_cache", "os_file_system_cache")
 # (cache-only browsing C2; written by ``list`` helpers, ``io_ops.listings``).
 Kind = Literal["datasets", "summaries", "histories", "subtrees", "listings"]
 KINDS: tuple[Kind, ...] = ("datasets", "summaries", "histories", "subtrees", "listings")
+# What a purge of cached data by age can take (A47.4): datasets, and in store-v4 TXY layers and raw layers.
+PURGE_KINDS: tuple[str, ...] = ("datasets", "txy", "raw")
 RECORD_TABLES: dict[Kind, str] = {
     "summaries": "folder_summaries", "histories": "scan_histories", "subtrees": "subtrees", "listings": "listings"}
 TABLES: dict[Kind, str] = {"datasets": "datasets", **RECORD_TABLES}
@@ -4088,15 +4090,25 @@ class CacheStore:
                         removal.txy_only, removal.txy_bytes)
 
     def purge_datasets(self, cutoff: float) -> Removal:
-        """Remove cached data not used since ``cutoff`` (a timestamp): datasets, and in store-v4 TXY layers (with
-        their folders' views) and raw layers not used since, whose sources were seen; only copies stay, named
-        only in Make room (S3-1, Q22.6, C2-9; CoCo's call, for Tony to confirm)."""
+        """Remove datasets not used since ``cutoff`` (a timestamp): :meth:`purge_cached` of datasets alone."""
+        return self.purge_cached(cutoff, ("datasets",))
+
+    def purge_cached(self, cutoff: float, kinds: Iterable[str] = PURGE_KINDS) -> Removal:
+        """Remove cached data of ``kinds`` (any of :data:`PURGE_KINDS`) not used since ``cutoff`` (a timestamp), in
+        one transaction: ``datasets``; in store-v4 ``txy``, TXY layers with their segments and their folders' views;
+        ``raw``, raw layers. Only layers whose sources were seen go: only copies stay, named only by Make room and
+        Clear (A47.4, Q47.1; S3-1, Q22.6, C2-9). store-v3 has datasets only."""
+        asked = set(kinds)
+        if unknown := asked - set(PURGE_KINDS):
+            raise ValueError(f"Unknown purge kinds: {sorted(unknown)}")
         try:
             with self.transaction():
                 paths = [path for (path,) in self._conn.execute(
-                    "SELECT path FROM datasets WHERE last_used < ?", (cutoff,))]
-                removal = self.remove(("datasets",), paths, _stored_keys=True)
-                return self._with_layers_removed(removal, " WHERE last_used < ? AND gone_at IS NULL", (cutoff,), [])
+                    "SELECT path FROM datasets WHERE last_used < ?", (cutoff,))] if "datasets" in asked else []
+                removal = (self.remove(("datasets",), paths, _stored_keys=True) if "datasets" in asked
+                           else Removal((), ()))
+                return self._with_layers_removed(removal, " WHERE last_used < ? AND gone_at IS NULL", (cutoff,), [],
+                                                 kinds=asked)
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
@@ -4113,14 +4125,15 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
     def _with_layers_removed(self, removal: Removal, where: str, args: Sequence[Any],
-                             folders: Sequence[str]) -> Removal:
+                             folders: Sequence[str], *, kinds: Collection[str] = ("raw", "txy")) -> Removal:
         """In store-v4 (inside a transaction), also remove the raw and TXY layers ``where`` selects (with the
-        TXY layers' folders' views) and every view of ``folders``; ``removal`` with them (unchanged in store-v3)."""
+        TXY layers' folders' views; ``kinds`` says which of the two) and every view of ``folders``; ``removal``
+        with them (unchanged in store-v3)."""
         if self.layout < store_v4.LAYOUT:
             return removal
         now = time.time()
-        keys, count, size = self._remove_raw_rows(where, args, now)
-        pairs, txy_bytes = self._remove_txy_rows(where, args, now)
+        keys, count, size = self._remove_raw_rows(where, args, now) if "raw" in kinds else ([], 0, 0)
+        pairs, txy_bytes = self._remove_txy_rows(where, args, now) if "txy" in kinds else ([], 0)
         for key in folders:
             self._conn.execute("DELETE FROM txy_views WHERE path = ?", (key,))
         return dataclasses.replace(removal, raw_paths=tuple(self._source_path(key) for key in keys), raw_rows=count,
@@ -4446,18 +4459,20 @@ _RECORD_PURGES: dict[Kind, str] = {
 
 
 def purge_estimate(inventory: Mapping[str, Any], cutoff: float, *, datasets: bool,
-                   include_failures: bool = False) -> dict[str, int]:
+                   include_failures: bool = False, kinds: Iterable[str] = PURGE_KINDS) -> dict[str, int]:
     """What a purge with this ``cutoff`` removes, from an :meth:`CacheStore.inventory`:
-    ``{"datasets", "bytes"}`` for cached data (in store-v4 also ``txy_folders``, ``txy_bytes``, ``raw_folders``
-    and ``raw_bytes``: layers and seen raw pulses not used since, only copies left out, C2S2-2; ``bytes`` then all
-    of it), else rows per record kind. Uses the same comparisons as the purge, so it equals what is freed if
-    nothing changed since."""
+    ``{"datasets", "bytes"}`` for cached data of ``kinds`` (:meth:`CacheStore.purge_cached`; in store-v4 also
+    ``txy_folders``, ``txy_bytes``, ``raw_folders`` and ``raw_bytes`` for those asked: layers and seen raw pulses
+    not used since, only copies left out, C2S2-2, A47.4; ``datasets`` is 0 when not asked; ``bytes`` all of it),
+    else rows per record kind. Uses the same comparisons as the purge, so it equals what is freed if nothing
+    changed since."""
     ages = inventory["ages"]
     if datasets:
-        old = [size for last_used, size in ages["datasets"] if last_used < cutoff]
+        asked = set(kinds)
+        old = [size for last_used, size in ages["datasets"] if last_used < cutoff] if "datasets" in asked else []
         found = {"datasets": len(old), "bytes": sum(old)}
         for kind in ("txy", "raw"):
-            if kind in ages:
+            if kind in ages and kind in asked:
                 rows = [(size, path) for last_used, size, path in ages[kind] if last_used < cutoff]
                 found[f"{kind}_folders"] = len({path for _, path in rows})
                 found[f"{kind}_bytes"] = sum(size for size, _ in rows)

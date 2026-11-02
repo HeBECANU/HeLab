@@ -155,7 +155,7 @@ def test_make_room_names_raw_pulses_and_only_copies_and_removes_exactly_them() -
     text = room_text(room)
     assert "cached data for 1 folder (100 MB)" in text and "raw pulses of 1 folder" in text
     assert "only copy: their raw files are gone from c" in text
-    assert f"({byte_size(30 * MB, 'disk')} of raw pulses in all.)" in text
+    assert f"({byte_size(30 * MB, 'disk')} of raw pulses in all.) Your d files aren't touched." in text
     assert room_items(room) == ["/data/a", "raw:/data/b", "raw-only:/data/c"]
     assert legacy_text(LEGACY) == "6.0 MB · not answered yet: kept"
     assert legacy_text({**LEGACY, "choice": "ignore"}) == "6.0 MB · ignored" and legacy_text(None) == ""
@@ -210,7 +210,8 @@ def test_the_tab_shows_raw_pulses_and_the_older_store_only_with_store_v4(
         assert admin_request(service, "clear_raw").payload["params"] == {}
         tab._job = ""
         tab.clear(["datasets", "summaries", "histories", "subtrees", "listings"])  # (Clear all.)
-        assert f"raw pulses for 2 folders ({byte_size(30 * MB, 'disk')})" in asked[-1][1]
+        assert (f"HeLab's cached raw pulses for 2 folders ({byte_size(30 * MB, 'disk')}; your d files aren't touched)"
+                in asked[-1][1])
         assert admin_request(service, "clear").payload["params"]["kinds"][-1] == "raw"
         tab._job = ""
         tab.toggle_legacy()
