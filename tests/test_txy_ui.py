@@ -12,6 +12,8 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from helab.utils import cache_store, folder_cache
+from helab.utils.folder_cache import FolderCache
+from helab.utils.io_service import IOService
 from helab.utils.settings_defaults import CACHE_POLICY_SETTING, read_setting
 from helab.views.CacheDialogs import room_items, room_text
 
@@ -293,3 +295,67 @@ def test_folder_details_names_a_folders_own_choices() -> None:
     text, tip = FolderDetailsPanel._with_choices(row, {"source": "helab-only", "tag": "m19v1", "policy": "txy"})
     assert "this folder: " in text and "(m19v1)" in text and "cache: TXY only (no raw)" in text
     assert "right-click › TXY for this folder…" in tip
+
+
+def test_a_listing_tells_folder_cache_each_folders_own_choices(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                              tmp_path: Path) -> None:
+    """A47.2 (Q47.2): a listing reads the folder's and each child's own choices beside their prefs, so Live and
+    the first load of a child follow its own TXY source at once, before any load of it."""
+    from helab.io_ops.browse import list_folder
+    from test_txy_loading import opened, v4_options
+    parent = tmp_path / "data"
+    child = parent / "run"
+    child.mkdir(parents=True)
+    (parent / "plain").mkdir()
+    options = v4_options(tmp_path)
+    with opened(options, child) as store:
+        store.set_txy_source_pref(str(child), "helab-only", "m19v1", 5.0)
+        store.set_cache_policy(str(parent), "txy", 6.0)
+    events: list[dict[str, Any]] = []
+    list_folder(str(parent), events.append, options)  # type: ignore[arg-type]
+    assert {"kind": "folder_choices", "path": str(parent), "choices": {
+        "policy": "txy", "policy_set_at": 6.0, "source": "", "tag": ""}} in events
+    entries = {entry["path"]: entry for event in events if event["kind"] == "entries" for entry in event["entries"]}
+    assert entries[str(child)]["choices"]["source"] == "helab-only" and "choices" not in entries[str(parent / "plain")]
+    service = IOService()
+    service.timer.stop()
+    monkeypatch.setattr(service, "_dispatch", lambda: None)
+    cache = FolderCache(service)
+    try:
+        changed: list[str] = []
+        cache.folderPrefsChanged.connect(changed.append)
+        assert cache.submit("tab-1", 0, str(parent), "list", {"cache": options}, force=True)
+        request = next(r for r in service.pending if r.operation == "list")
+        for event in (*events, {"kind": "done"}):
+            service.resultReady.emit(request, event)
+        assert cache.folder_choices[str(child)]["tag"] == "m19v1" and cache.folder_choices[str(parent)]["policy"] == "txy"
+        assert str(parent / "plain") not in cache.folder_choices
+        from helab.utils.txy_sources import TXY_FIELD
+        assert cache.with_txy(str(child), {})[TXY_FIELD]["source"] == "helab-only"
+        count = len(changed)
+        for entry in entries.values():  # (The same choices again: no change to tell.)
+            if "choices" in entry:
+                cache.remember_choices(entry["path"], entry["choices"])
+        assert len(changed) == count
+    finally:
+        service.shutdown()
+
+
+def test_a_listing_read_before_a_change_was_saved_never_brings_back_the_old_choice(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each part keeps its later choice by its own set time: an older policy or source never replaces a newer one,
+    and a newer one of either part is taken."""
+    service, cache = frozen_cache(monkeypatch)
+    try:
+        cache.remember_choices("/data/run", {"policy": "raw", "policy_set_at": 1.0, "source": "helab-only",
+                                             "tag": "m19v1", "source_set_at": 1.0})
+        cache.set_folder_choice("/data/run", policy="txy")  # (Now; its answer hasn't come.)
+        cache.remember_choices("/data/run", {"policy": "raw", "policy_set_at": 1.0, "source": "helab-only",
+                                             "tag": "m19v1", "source_set_at": 1.0})
+        assert cache.folder_choices["/data/run"]["policy"] == "txy"
+        cache.remember_choices("/data/run", {"policy": "raw", "policy_set_at": 1.0, "source": "matlab-only",
+                                             "tag": "", "source_set_at": time.time() + 60})
+        choices = cache.folder_choices["/data/run"]
+        assert (choices["policy"], choices["source"], choices["tag"]) == ("txy", "matlab-only", "")
+    finally:
+        service.shutdown()

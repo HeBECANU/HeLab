@@ -1011,13 +1011,19 @@ class FolderCache(QObject):
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
     def remember_choices(self, path: str, choices: object) -> None:
-        """Keep a folder's stage 2 choices (``folder_choices``, store-v4); a later one (``source_set_at``) wins."""
+        """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the
+        admin's). Each part (the policy; the TXY source with its tag) keeps its later one by its own set time, so a
+        listing read before a change was saved never brings back the choice it replaced."""
         if not isinstance(choices, dict):
             return
         saved = self.folder_choices.get(path)
-        if saved is None or float(saved.get("source_set_at", 0)) <= float(choices.get("source_set_at", 0)):
-            self.folder_choices[path] = dict(choices)
-            self.folderPrefsChanged.emit(path)
+        merged: dict[str, Any] = dict(saved or {"policy": "", "source": "", "tag": ""})
+        for fields, stamp in ((("policy",), "policy_set_at"), (("source", "tag"), "source_set_at")):
+            if saved is None or float(choices.get(stamp, 0)) >= float(saved.get(stamp, 0)):
+                merged.update({field: choices[field] for field in (*fields, stamp) if field in choices})
+        if merged != saved:
+            self.folder_choices[path] = merged
+            self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
 
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
                           tag: str | None = None) -> str:
@@ -4187,6 +4193,8 @@ class FolderCache(QObject):
                         self.remember_subtree(entry["path"], entry["subtree"], notify=False)
                     if "prefs" in entry:
                         self.remember_prefs(entry["path"], entry["prefs"], known=False)
+                    if "choices" in entry:
+                        self.remember_choices(entry["path"], entry["choices"])  # (A47.2: with its listing.)
                     if "constants" in entry:
                         self.remember_constants(entry["path"], entry["constants"], known=False)
                     if "disk_cached" in entry and not self._cleared_since(job, entry["path"]):
