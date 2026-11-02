@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import QApplication
 from helab.resources.icons import IconsInitUtil
 from helab.views.HelabMainWindow import HelabMainWindow
 
+from conftest import qt_application
+
 import pytest
 import os
 pytestmark = pytest.mark.skipif("PYTEST_XDIST_WORKER" in os.environ, reason="Skip parallel tests due to PyQt concurrency issues.")
@@ -21,10 +23,7 @@ class TestMainWindow(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         # IconsInitUtil.initialise_icons()
-        if not QCoreApplication.instance():
-            cls.app = QApplication([])
-        else:
-            cls.app = QCoreApplication.instance()
+        cls.app = qt_application()  # never QApplication([]): QtWebEngine needs the program name
         thread_pool = QThreadPool.globalInstance()
         cls.thread_pool = thread_pool if thread_pool is not None else QThreadPool()
 

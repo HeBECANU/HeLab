@@ -12,6 +12,8 @@ from pytablericons import OutlineIcon
 
 from helab.resources.icons import tablerIcon, StatusIcons, ToolIcons, IconsInitUtil
 
+from conftest import qt_application
+
 
 class TestIcons(unittest.TestCase):
     app: QCoreApplication
@@ -19,11 +21,7 @@ class TestIcons(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        app = QApplication.instance()
-        if app is None: app = QApplication([])
-        cls.app = app
-        if not cls.app:
-            cls.app = QApplication([])
+        cls.app = qt_application()  # never QApplication([]): QtWebEngine needs the program name
         IconsInitUtil.initialise_icons()
         thread_pool = QThreadPool.globalInstance()
         cls.thread_pool = thread_pool if thread_pool is not None else QThreadPool()

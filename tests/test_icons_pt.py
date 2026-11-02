@@ -14,12 +14,10 @@ from helab.resources.icons import tablerIcon, StatusIcons, ToolIcons, IconsInitU
 
 # @pytest.fixture(scope="module", autouse=True)
 @pytest.fixture(scope="session", autouse=True)
-def app() -> QCoreApplication:
-    app = QApplication.instance()
-    if not app:
-        app = QApplication([])
+def app(qapp: QApplication) -> QCoreApplication:
+    # pytest-qt's, never QApplication([]): QtWebEngine needs the program name (conftest.qt_application).
     IconsInitUtil.initialise_icons()
-    return app
+    return qapp
 
 def test_tabler_icon() -> None:
     icon = tablerIcon(OutlineIcon.ABC, '#00bb39', size=128)
