@@ -45,7 +45,7 @@ Not flaky: the test gave Windows a macOS smbfs source (`//tony@LabServer/Data`),
 `cache_paths._smb_source` reads as WebDAV on Windows, and `share_of`'s fallback cut it at the `@`. Fixed in
 `7a60998` (the test spells each OS's mount; an `@` in a UNC source is kept). Every other job's log read:
 **0 RERUN** (macOS Tests 1/2 and 2/2, Converter backends; Ubuntu Tests 1/2 and 2/2, Converter backends;
-Windows Tests 1/2, Converter backends). The run after `7a60998`: see the summary sent to CoCo.
+Windows Tests 1/2, Converter backends). CI **41451877093** (at `e388d87`, after the fix): **success**, every job; each Tests and Converter backends job's log read: **0 RERUN** (macOS 4,506 + 4,530 and 866; Ubuntu 4,502 + 4,530 and 866; Windows 4,490 + 4,511 and 864 passed). This line's commit is local only (a docs-only push would run CI again).
 
 ## Part A: A37.1, a raw read stopped early
 
