@@ -14,6 +14,7 @@ Worker: Ember (Claude Opus 5.5). Brief: [brief.md](brief.md). Base `a0bc26d` (`d
 | `7648e27` | A39.5 (2) and Q38.1 for `helab convert`: `--output beside` on a share asks (`--yes`); `beside_refused` from the helper; the CLI's Retry / cache / temp prompt |
 | `a36bc95` | A39.5 (2, 3) and Q38.1 in the app: `helab/views/explorer_convert.py`, Live's share question, the beside setting's warning, Folder details' Convert offer, Retry / cache / temp; `FolderCache.convert` overrides |
 | `2915d53` | The offer's test also loads the folder afterwards |
+| `7a60998` | Share names on Windows (CI 41449571421's failure): the test's mount in each OS's spelling; `@` kept in UNC sources |
 
 Objectives 2–4 of part B share files (`convert_cli.py`, `explorer_convert.py`), so they are two commits by
 side (command line, app) rather than one per objective.
@@ -37,7 +38,14 @@ Converter output byte for byte: `dev/txy/check_samples.py --positions all`, from
 `--via-layer` (samples read only): 309 checked, **303 identical + the 6 proved exceptions** (1 cut, 2 variant,
 3 empty), exit 0, both ways. None of the 309 sample raw files stops early (counted with `parse_raw`).
 
-CI: not pushed yet at this writing (see the summary sent to CoCo for the run).
+CI **41449571421** (at `28e46af`, the handoff's first commit): every job green but **windows Tests (2/2)**:
+`tests/test_share_detection.py::test_a_folder_on_an_smb_mount_is_on_its_share_named_without_the_account`
+RERUN 5 times then FAILED ("rerun reasons": `AssertionError: assert 'LabServer/Data' == '//labserver/data'`).
+Not flaky: the test gave Windows a macOS smbfs source (`//tony@LabServer/Data`), which
+`cache_paths._smb_source` reads as WebDAV on Windows, and `share_of`'s fallback cut it at the `@`. Fixed in
+`7a60998` (the test spells each OS's mount; an `@` in a UNC source is kept). Every other job's log read:
+**0 RERUN** (macOS Tests 1/2 and 2/2, Converter backends; Ubuntu Tests 1/2 and 2/2, Converter backends;
+Windows Tests 1/2, Converter backends). The run after `7a60998`: see the summary sent to CoCo.
 
 ## Part A: A37.1, a raw read stopped early
 
