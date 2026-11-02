@@ -82,3 +82,45 @@ The run's results follow, every Tests and Converter backends job's log read for 
   Known-issues line 137 lists both `[1]` and `[2]`; this is another sighting. Not QF9's code.
 - **A39.1 passed on all three builds:** "built cleanly at 0406a1d2f6…".
 - This record is committed locally only (doc-only).
+
+## Follow-up: the type checks' timeout (e8a28a1; merged with Tony's Labcam cc82398 as 3c1720f)
+
+- **The failure.** caching-v2 CI 41389534725, macOS (job 125097691928): `test_typing.py::test_pyright_helab`
+  hit `--timeout=120` five times.
+- **Measured from CI log timestamps** (a test's start line to its result line).
+
+  `test_pyright_helab`:
+
+  | Run | macOS | Windows | Ubuntu |
+  |---|---|---|---|
+  | the slow runner | 115–142 s | | |
+  | QF9's 41374704252 | 58 s | 73 s | 40 s |
+  | this push's 41392473183 | 81 s | 97 s | 42 s |
+
+  mypy took 20–56 s.
+- **Fix.** A module-level `pytest.mark.timeout(300)` on `test_typing.py`, with a guard test.
+  - Why a mark and not a CI step: CI has no type-check step (`test_typing` is its only mypy and pyright
+    run, on every OS), and a type error fails the suite locally too (AGENTS.md).
+  - Shown: with `--timeout=2`, pyright (12.7 s here) times out without the mark and passes with it.
+- **`test_accessible_names.py::test_every_script_and_each_library` is near 120 s too.**
+
+  | Run | macOS | Windows | Ubuntu |
+  |---|---|---|---|
+  | the slow runner | 123 s (timed out), 109 s on its rerun | | |
+  | QF9's run | 66 s | 94 s | 29 s |
+  | this push's run | 85 s | 99 s | 27 s |
+
+  **Proposed (A~2):** give it its own `pytest.mark.timeout(300)`, or split it per library. It isn't
+  changed here, since that wasn't asked.
+- **Local suite before the commit:** 8865 passed, 2 new RERUNs, under a load average of ~37 (other agents).
+  Both passed 5 of 5 alone, and the suite after the merge (load lower) had none.
+  - **Proposed known-issues lines:**
+    - `test_live_io.py::test_a_live_check_pauses_background_work_only_while_it_reads`: `waitUntil` 10 s
+      at :136.
+    - `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
+      `waitUntil` 30 s at :71.
+
+    Both are local, under heavy load, and passed on retry; the cause hasn't been looked into.
+- **Merged tree (3c1720f):** 8865 passed, no RERUN; the five type checks pass.
+- **CI 41392473183: success.** All 12 job logs read: no RERUN, no crashed worker; A39.1 passed on all three
+  builds.
