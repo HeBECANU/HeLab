@@ -185,6 +185,41 @@ class Access:
             data.update(read.value or {})
         return data
 
+    def from_raw(self, path: str, shot: int, key: tuple[int, int, str] | None, origin: str) -> Any | None:
+        """The loading order's second step (design addendum §4): a HeLab shot from the raw layer instead of
+        its TXY text, when the raw layer holds the raw file's current fingerprint with the current parser and
+        the shot's profile is a built-in (its hash). Converted and formatted as the converter writes it, then
+        parsed as a TXY file is (``infra._read_txy_file``), so the data is the text's exactly. None when it
+        can't be (the text is read)."""
+        if not self.layered or key is None or key[2] != "raw" or not origin:
+            return None
+        import io
+        import numpy as np
+        import pandas as pd
+        from helab.convert import raw_layer
+        from helab.convert.profile import BUILTIN_PROFILES
+        from helab.convert.reconstruct import reconstruct
+        from helab.convert.txy import format_txy
+        wanted = origin.split(":", 1)[1]
+        profile = next((item for item in BUILTIN_PROFILES.values() if item.content_hash() == wanted), None)
+        if profile is None:
+            return None
+        read = self.store.read_raw(path, shot)
+        if read.value is None:
+            return None
+        row, packed = read.value
+        if (row.size, row.mtime_ns, row.parser) != (key[0], key[1], raw_layer.RAW_PARSER_VERSION):
+            return None
+        try:
+            layer, _ = raw_layer.from_hlb(packed)
+            text = format_txy(reconstruct(raw_layer.decode(layer), profile))
+        except Exception:  # (A layer or backend that can't: the text is read.)
+            return None
+        if not text:
+            return np.empty((0, 3), dtype=np.float64)
+        frame = pd.read_csv(io.BytesIO(text), sep=",", names=["t", "x", "y"], dtype=np.float64)
+        return np.asarray(frame.dropna(), dtype=np.float64)
+
     def touch(self, path: str) -> None:
         if not self.layered or self.seed:
             from helab.io_ops.fingerprints import _touch

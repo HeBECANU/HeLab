@@ -661,11 +661,20 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         info = _stat(filename, reason)
         return (info.st_size, info.st_mtime_ns) == fingerprint[index][1:]
 
+    # store-v4: each shot's layer key (MATLAB's by its TXY file, HeLab's by its raw file where listed, Q45.3).
+    keys = txy_cache.entry_keys(fingerprint, origins, raw_entries) if access is not None and access.layered else {}
+
     def read_txy(shot: int, filename: str, reason: str = "load: read") -> Any:
         if shot in origins and listed_stats[shot][0] == 0:
             # HeLab's TXY of a shot with no hits (Q10.3): converted, empty.
             data[shot] = np.empty((0, 3), dtype=np.float64)
             return data[shot]
+        if access is not None and access.layered and shot in origins:
+            # (store-v4: from the raw layer when it holds this raw file, design addendum §4, step 2.)
+            converted = access.from_raw(path, shot, keys.get(shot), origins[shot])
+            if converted is not None:
+                data[shot] = converted
+                return converted
         _read_gate(filename)
         frame = infra._read_txy_file(filename, reason)
         if frame.isna().any().any():
@@ -785,7 +794,6 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     # The caller already has its data; updating the disk cache no longer
     # delays it. Shots only the caller holds are read again for completeness.
     assert access is not None
-    keys = txy_cache.entry_keys(fingerprint, origins, raw_entries) if access.layered else {}
     # store-v3 writes the dataset whole, so a shot only the caller holds is read again; store-v4 only those its
     # layers lack under their key (a held shot already kept isn't read from the share again).
     lacking = access.lacking(path, {shot for shot in in_memory if shot not in data}, keys, origins)

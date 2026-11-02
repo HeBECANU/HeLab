@@ -324,3 +324,46 @@ def test_a_store_v3_dataset_store_v4_removed_is_never_read_through(tmp_path: Pat
         store.remove(("datasets",), [str(source)])  # (The user cleared the folder's data in store-v4.)
     loaded = first(run_load(source, tmp_path, options), "loaded")
     assert loaded["load_counts"]["read"] == 2  # (From the files, not store-v3.)
+
+
+# The loading order's second step: from the raw layer (step 3e)
+
+def test_a_helab_shot_comes_from_the_raw_layer_equal_to_its_text(tmp_path: Path, monkeypatch: Any) -> None:
+    """A conversion into the cache folder (store-v4) saved the raw layers; a load of HeLab's TXY then makes the
+    shots from them without reading the TXY text, and the data is the text's exactly."""
+    import pandas as pd
+    from helab.convert.profile import MATLAB_2019
+    from helab.io_ops import infra
+    from helab.io_ops.convert import convert_folder
+    from test_convert_helab import raw_bytes, write_raw
+    source = tmp_path / "data" / "run"
+    source.mkdir(parents=True)
+    for shot in (1, 2):
+        write_raw(source, shot, raw_bytes(*(10_000 * k for k in range(1, shot + 2))))
+    caches = tmp_path / "caches"
+    options = v4_options(tmp_path)
+    request: dict[str, Any] = {"path": str(source), "profile": MATLAB_2019.to_dict(), "temps": str(tmp_path / "temps"),
+                               "seen": None, "destination": "cache", "workers": 1, "cache": options}
+    convert_folder(str(source), request, lambda event: None)  # type: ignore[arg-type]
+    with opened(options, source) as store:
+        assert sorted(store.raw_rows(str(source)).value or {}) == [1, 2]
+    texts = sorted(caches.rglob("d_txy_helab_*.txt"))
+    assert len(texts) == 2
+    expected = {int(path.stem.rsplit("_", 1)[1]): np.asarray(pd.read_csv(path, names=["t", "x", "y"]), dtype=float)
+                for path in texts}
+    read = infra._read_txy_file
+
+    def refuse_helab(filename: str, reason: str) -> Any:
+        if "d_txy_helab_" in os.path.basename(filename):
+            raise AssertionError(f"read HeLab's TXY text {filename}")
+        return read(filename, reason)
+    monkeypatch.setattr(infra, "_read_txy_file", refuse_helab)
+    txy = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+           "cache_base": str(caches), "temps": str(tmp_path / "temps")}
+    events = run_load(source, tmp_path, options, txy=txy)
+    shots = {event["shot"]: np.load(event["artifact"]) for event in events if event["kind"] == "shot"}
+    assert sorted(shots) == [1, 2] and first(events, "loaded")["problematic"] == []
+    assert all(np.array_equal(shots[shot], expected[shot]) for shot in shots)
+    with opened(options, source) as store:  # (Saved into the HeLab layer, keyed by the raw files.)
+        layer = (store.txy_layers(str(source)).value or {})["helab:" + MATLAB_2019.content_hash()]
+        assert {entry.kind for entry in layer.entries.values()} == {"raw"}
