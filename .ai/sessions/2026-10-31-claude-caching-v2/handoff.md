@@ -1542,3 +1542,18 @@ Tests and Converter logs.
       warning (a modal) after the restart's re-read, on store-v4 (Ubuntu CI 41484277419, job 125410633098); a
       100 s hang; 15/15 locally; not pinned."
 - The known "GUI stalled" log appears 7 times.
+
+### The switch-on branch's CI with 65ee050 (41490797588, `d3b4931`, three test groups)
+
+**Green on all three OSes.** I read all 12 Tests and Converter logs.
+- **Windows times:**
+  - Tests 1/3: 10m47s (pytest 9.0 min);
+  - Tests 2/3: 11m54s (10.1 min);
+  - Tests 3/3: 12m16s (10.3 min).
+- **Other times:** macOS 7.2, 4.0 and 7.5 min; Ubuntu 4.0, 3.5 and 5.0.
+- **One RERUN:** Windows Tests 1/3 (job 125433258156),
+  `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: a collection error in
+  pathlib's `lstat`, at line 49. It passed on retry. This is known-issues' entry for this test; add this run as a
+  sighting.
+- The disk-badge test that failed in 41484277419 passed with no RERUN.
+- The known "GUI stalled" log appears 5 times.
