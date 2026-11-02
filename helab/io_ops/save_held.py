@@ -5,12 +5,12 @@ import os
 import time
 from typing import Any, TYPE_CHECKING
 
-from helab.io_ops import fingerprints, helab_txy, infra
+from helab.io_ops import fingerprints, helab_txy, infra, txy_cache
 from helab.io_ops.events import RawMtimeField
 from helab.io_ops.fingerprints import _clock_ahead, _fingerprint_signature, _raw_list, _settled
 from helab.io_ops.identity import _folder_identity, _location_identity
 from helab.io_ops.infra import Emit, Heartbeat, Pause, _entry_stat, _is_dir, _read_gate, _scandir, _stat
-from helab.io_ops.loading import _save_failed, _write_dataset
+from helab.io_ops.loading import _dataset_info, _save_failed, _write_dataset
 from helab.io_ops.stores import _data_root, _open_store
 from helab.io_ops.summary import _summary
 from helab.utils import file_kinds, txy_sources
@@ -53,9 +53,12 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
     store = _open_store(cache_options, send, path)
     try:
         guard: SaveGuard | None = None
+        txy_guard: SaveGuard | None = None
         if store is not None:
             try:
                 guard = store.start_dataset_job(path, ("summaries",))
+                if txy_cache.layered(store):  # (store-v4: the layers' and views' guard, stage 2.)
+                    txy_guard = store.start_txy_job(path)
             except StoreError as exc:
                 send({"kind": "cache_warning", "message": f"Disk cache can't be updated: {exc}"})
             prefs = store.read_prefs([path])[path]
@@ -208,9 +211,10 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         names = [file_names.get(shot) or txy_name(tag, shot) for shot, _, _ in fingerprint]
         saving = store is not None and guard is not None and not no_cache and bool(data)
         had_dataset = False
+        access = txy_cache.Access(store, txy_source, txy) if store is not None else None
         if saving:
-            assert store is not None
-            row = store.read_dataset_row(path)
+            assert access is not None
+            row = access.row(path)
             had_dataset = row.value is not None
         kept = sorted(set(data) - set(replaced))
         again = [entry for entry in reread if entry["read"]]
@@ -252,8 +256,19 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
               "folder_mtime_ns": None})
         if not saving:
             return
-        assert store is not None and guard is not None
+        assert store is not None and guard is not None and access is not None
         try:
+            if access.layered:
+                # (Live's save in store-v4: a segment of the shots its layers lack, one per save, Q45.7.)
+                if txy_guard is None:
+                    return
+                access.mark_seen(path, list(raw_entries), [*matlab, *helab_found], listed_at)
+                access.write(path, txy_guard, data, fingerprint, problematic,
+                             _dataset_info(data, fingerprint, names, listed_at, counts, unsettled, had_dataset, None,
+                                           record, signature),
+                             txy_cache.entry_keys(fingerprint, data_origins, raw_entries), data_origins,
+                             _raw_list(times, (entry[0] for entry in fingerprint)), record, cache_options or {}, send)
+                return
             _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, counts, unsettled,
                            had_dataset, (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
                            send, times, txy_record=record, signature=signature)

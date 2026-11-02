@@ -3128,12 +3128,13 @@ class CacheStore:
 
     def save_txy(self, path: str, source: str, tag: str, parts: Sequence[TxyPart], view: ViewRecord | None,
                  guard: SaveGuard, *, budget: int | None = None, budget_set_at: float | None = None,
-                 default_policy: str = store_v4.DEFAULT_POLICY, now: float | None = None) -> TxySave:
+                 default_policy: str = store_v4.DEFAULT_POLICY, hold: bool = True, now: float | None = None) -> TxySave:
         """Save one unit (design addendum §5): each part's new segment, the layer rows and the view, in one
         transaction with one fit check, if ``guard`` holds and the folder may be cached. Under policy ``raw``
         HeLab layers aren't written (their files are retired). A shot a later job saved is kept (``refused``).
         Over the budget, or growing a folder's layers while usage is at 80 % or more, the unit waits as the
-        folder's one pending save, merged with one already waiting (Q45.8). A rejected unit raises
+        folder's one pending save, merged with one already waiting (Q45.8); without ``hold`` (a plot's own TXY
+        choice, Q19.3) it is dropped instead, its files retired, and nothing asks. A rejected unit raises
         :class:`SaveRejected` and retires its files."""
         self._needs_v4()
         key = self._path_key(path)
@@ -3167,6 +3168,11 @@ class CacheStore:
                 if reason:
                     self._conn.execute("ROLLBACK TO txy_fit")
                     self._conn.execute("RELEASE txy_fit")
+                    if not hold:
+                        for part in kept:
+                            self._retire(part.file, now)
+                        return TxySave((), (), dropped, reason, "", sum(sizes.values()), self._live(), self._writes(),
+                                       budget)
                     pending_id = self._insert_txy_pending(key, source, tag, kept, sizes, view, guard, reason, now)
                     return TxySave((), (), dropped, reason, pending_id, sum(sizes.values()), self._live(),
                                    self._writes(), budget)
@@ -3349,6 +3355,18 @@ class CacheStore:
         except ValueError as exc:
             return _error(f"Saved view record is unreadable: {exc}")
 
+    def folder_views(self, path: str) -> list[tuple[str, str, float]]:
+        """A folder's views: (source, profile, last used) each ([] in store-v3, or when unreadable)."""
+        if self.layout < store_v4.LAYOUT:
+            return []
+        key = self._path_key(path)
+        try:
+            with self.transaction(write=False):
+                return [(str(source), str(tag), float(used)) for source, tag, used in self._conn.execute(
+                    "SELECT source, tag, last_used FROM txy_views WHERE path = ?", (key,))]
+        except (sqlite3.Error, StoreError):
+            return []
+
     def read_txy_shots(self, path: str, layer: str,
                        shots: Iterable[int] | None = None) -> Read[dict[int, Any]]:
         """Shots of a layer (every one, or ``shots`` it holds) as read-only float64 (n, 3) arrays, each from
@@ -3386,7 +3404,8 @@ class CacheStore:
         return _error("A cached TXY segment is missing")  # (Not reached.)
 
     def confirm_view(self, path: str, source: str, tag: str, fingerprint: Sequence[Sequence[Any]],
-                     info: Mapping[str, Any], guard: SaveGuard, *, now: float | None = None) -> bool:
+                     info: Mapping[str, Any], guard: SaveGuard, *, raw_times: Sequence[Sequence[int]] | None = None,
+                     now: float | None = None) -> bool:
         """A load that found every shot of a view unchanged (A40.3): only the view's ``info`` (signature,
         listing, ``unsettled``, the TXY record with its folders) is written, if the guard holds, the view
         still has this fingerprint and no later job wrote it. Nothing is rewritten. Whether it was written."""
@@ -3404,6 +3423,9 @@ class CacheStore:
                 self._conn.execute("UPDATE txy_views SET info = ?, job_seq = ?, last_used = ? WHERE path = ? "
                                    "AND source = ? AND tag = ?", (_dumps(dict(info)), guard.job_seq, now, key, source,
                                                                   tag))
+                if raw_times is not None:  # (Shot times a cache saved before them lacked.)
+                    self._conn.execute("UPDATE txy_views SET raw_times = ? WHERE path = ? AND source = ? AND tag = ?",
+                                       (_dumps([list(item) for item in raw_times]), key, source, tag))
                 return True
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc

@@ -29,7 +29,7 @@ from helab.io_ops.loading import load
 from helab.io_ops.raw_fill import raw_fill
 from helab.utils import cache_move
 from helab.utils.cache_move import COPY
-from helab.utils.cache_store import CacheStore
+from helab.utils.cache_store import CacheStore, txy_item
 from helab.utils.folder_cache import store_options
 
 from test_store_v4 import files, switch_on, v3_with_state  # noqa: F401  (switch_on: a fixture)
@@ -137,9 +137,11 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
     assert [kind for event in removed for kind in event["kinds"]][-2:] == ["raw", "txy"]
     assert next(event for event in removed if "raw" in event["kinds"])["raw"] == 3
     with opened(options, run) as store:
-        assert store.raw_rows(str(run)).value == {} and store.read_dataset_row(str(run)).missing
+        assert store.raw_rows(str(run)).value == {} and store.txy_layers(str(run)).value == {}
+        assert store.read_dataset_row(str(run)).missing  # (Stage 2: loads write TXY layers, never datasets.)
 
-    # Make room's order: X's dataset, Y's raw layers (files there), Z's (the only copy, gone from its folder).
+    # Make room's order: X's MATLAB layer (its TXY files there), Y's raw layers (files there), Z's (the only copy,
+    # gone from its folder).
     x = folder(data, "x", {1: CASE}, txy=True)
     assert loaded(x, tmp_path, options)["kind"] == "cache_saved"
     y = folder(data, "y", {1: synthetic(1, 3000), 2: synthetic(2, 3000)})
@@ -153,30 +155,32 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
     assert held["kind"] == "cache_full"
     pending = held["pending_id"]
     with opened(options, run, x, y, z) as store:
-        x_row = store.read_dataset_row(str(x)).value
-        assert x_row is not None
-        x_bytes = x_row["bytes"]
+        x_layers = store.txy_layers(str(x)).value or {}
+        assert set(x_layers) == {"matlab"} and store.read_dataset_row(str(x)).missing
+        x_bytes = x_layers["matlab"].bytes
         y_bytes = sum(row.bytes for row in (store.raw_rows(str(y)).value or {}).values())
         z_bytes = sum(row.bytes for row in (store.raw_rows(str(z)).value or {}).values())
         assert z_bytes > x_bytes + y_bytes
         assert store.inventory()["raw"]["only_copy"] == 2
         everything = store.room_plan(pending, 1 << 40)
         assert everything.possible and everything.items == ()  # (Fits: nothing to remove.)
-        # Find the budget that needs X's dataset and Y's raw layers, then one that needs part of Z's too.
-        enough = next(budget for budget in range(store.usage() + held["bytes"], 0, -512)
-                      if store.room_plan(pending, budget).items)
-        enough -= x_bytes + y_bytes - 512
+        # Find the budget that needs X's layer and Y's raw layers, then one that needs part of Z's too.
+        # (Stepping the budget down: the first plan that needs Y's raw layers.)
+        enough = next(budget for budget in range(store.usage() + held["bytes"], 0, -256)
+                      if f"raw:{y}" in store.room_plan(pending, budget).items)
         plan = store.room_plan(pending, enough)
-        assert plan.items == (str(x), f"raw:{y}")  # (Z's only copy stays, though it alone would do.)
+        x_item = txy_item("txy-seen:", str(x), "matlab")
+        assert plan.items == (x_item, f"raw:{y}")  # (Z's only copy stays, though it alone would do.)
         deeper = store.room_plan(pending, enough - z_bytes // 2)
-        assert deeper.items == (str(x), f"raw:{y}", f"raw-only:{z}")
+        assert deeper.items == (x_item, f"raw:{y}", f"raw-only:{z}")
     sent.clear()
     cache_admin({**options, "budget": enough, "budget_set_at": time.time()}, "adopt", sent.append,
                 pending_id=pending, make_room=True, room_paths=list(plan.items))
     [result] = [event for event in sent if event["kind"] == "admin_result"]
     assert result["adopted"] is True
     with opened(options, run, x, y, z) as store:
-        assert store.read_dataset_row(str(run)).found and store.read_dataset_row(str(x)).missing
+        assert store.txy_layers(str(run)).value and store.txy_layers(str(x)).value == {}
+        assert store.read_dataset_row(str(run)).missing
         assert store.raw_rows(str(y)).value == {} and sorted(store.raw_rows(str(z)).value or {}) == [1, 2]
 
     # store-v3 as it was, and opened by nothing but LegacyStore.
