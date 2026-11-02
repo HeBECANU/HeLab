@@ -326,10 +326,30 @@ class Access:
         if result.reason:
             send(pending_event(self.store, path, result, txy_guard.job_seq))
             return
+        for layer in result.saved:
+            self.compact(path, layer, txy_guard, cache_options, send)
         send({"kind": "cache_saved", "cache_info": saved_info, "superseded": [], "job_seq": txy_guard.job_seq,
               "next_deadline": _deadline(self.store), "usage": result.usage,
               "usage_seq": [self.store.store_id, result.usage_seq]})
         send({"kind": "disk_cached", "disk_cached": True})
+
+    def compact(self, path: str, layer: str, txy_guard: SaveGuard, cache_options: Mapping[str, Any],
+                send: Emit) -> bool:
+        """Q45.7: after a save, a layer of many segments (Live's, one per autosave) or mostly superseded bytes
+        is rewritten as one, in the same job, only if that fits beside the old ones; else it waits for a later
+        save and never asks. Under the converter's ticker (a large layer's rewrite is progress). Best effort:
+        whether it did."""
+        from helab.io_ops.convert import _Ticker, compute_budget
+        from helab.utils.cache_store import StoreError
+        row = (self.store.txy_layers(path).value or {}).get(layer)
+        if row is None or not self.store.compaction_due(row):
+            return False
+        try:
+            with _Ticker(send, "compacting", compute_budget(4 * row.bytes)):
+                return self.store.compact_txy(path, layer, txy_guard, budget=cache_options.get("budget"),
+                                              budget_set_at=cache_options.get("budget_set_at"))
+        except (StoreError, OSError):
+            return False
 
 
 def pending_event(store: CacheStore, path: str, result: Any, job_seq: int) -> Any:

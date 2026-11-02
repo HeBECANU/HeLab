@@ -367,3 +367,33 @@ def test_a_helab_shot_comes_from_the_raw_layer_equal_to_its_text(tmp_path: Path,
     with opened(options, source) as store:  # (Saved into the HeLab layer, keyed by the raw files.)
         layer = (store.txy_layers(str(source)).value or {})["helab:" + MATLAB_2019.content_hash()]
         assert {entry.kind for entry in layer.entries.values()} == {"raw"}
+
+
+# Live's segments and compaction (Q45.7, step 4)
+
+def test_lives_autosaves_append_a_segment_each_and_compact_when_they_pile_up(tmp_path: Path) -> None:
+    """Each Live save writes one segment of its new shots; once a layer has more than eight, the save that
+    makes it so rewrites it as one (it fits here), and the data reads back the same."""
+    from helab.utils.cache_store import COMPACT_SEGMENTS
+    source = data_folder(tmp_path, range(1, 2))
+    options = v4_options(tmp_path)
+    held = [list(entry) for entry in first(run_load(source, tmp_path, options), "loaded")["fingerprint"]]
+    held_dir = tmp_path / "held"
+    held_dir.mkdir()
+    np.save(held_dir / "1.npy", np.array([[1.0, 2, 3], [1.1, 2, 3]]), allow_pickle=False)
+    counts: list[int] = []
+    for shot in range(2, COMPACT_SEGMENTS + 3):  # (One new shot per autosave.)
+        write_shot(source, shot)
+        np.save(held_dir / f"{shot}.npy", np.array([[shot + 0.0, 2, 3], [shot + 0.1, 2, 3]]), allow_pickle=False)
+        info = (source / f"d_txy_forc{shot}.txt").stat()
+        held.append([shot, info.st_size, info.st_mtime_ns])
+        sent: list[dict[str, Any]] = []
+        save_held(str(source), sent.append, options, held, [], str(held_dir))  # type: ignore[arg-type]
+        assert first(sent, "cache_saved")
+        counts.append(len(segments(options, source)))
+    # (A segment per save, up to eight; the save that makes nine compacts them into one; the next appends.)
+    assert counts == [*range(2, COMPACT_SEGMENTS + 1), 1, 2]
+    assert [count for _, count in segments(options, source)] == [COMPACT_SEGMENTS + 1, 1]
+    with opened(options, source) as store:
+        data = store.read_txy_shots(str(source), "matlab").value or {}
+    assert sorted(data) == list(range(1, COMPACT_SEGMENTS + 3)) and np.array_equal(data[5], [[5.0, 2, 3], [5.1, 2, 3]])
