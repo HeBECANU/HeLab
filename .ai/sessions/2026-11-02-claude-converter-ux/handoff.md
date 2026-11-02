@@ -210,7 +210,22 @@ Live keeps ticking). They now set `ended_at` back first, as the Q38.1 test did; 
 in a row.
 
 Checks at `bc73f0c`: the full suite (`-n 4 --reruns 5 --reruns-delay 1`) **9043 passed, 673 skipped, 2 warnings
-(the known pyqtgraph one) in 170.64s; no RERUN**; the five type checks clean. CI: see the summary sent to CoCo.
+(the known pyqtgraph one) in 170.64s; no RERUN**; the five type checks clean.
+
+CI **41457940413** (at `baf7a1c`, the review fixes): **success**, every job; each Tests and Converter backends
+job's log read. **One RERUN**, windows Tests (2/2) (job 125319510384):
+`tests/test_io_trace.py::test_the_gui_process_never_touches_source_folders`, rerun reason
+`pytestqt.exceptions.TimeoutError: waitUntil timed out in 20000 milliseconds` at `tests\test_io_trace.py:259`
+(`wait_idle`: the I/O service idle within 20 s, real helper processes). The first attempt ran 34 s, the rerun
+passed in 8 s; no other output was captured. Not explained by this branch as far as I can tell: the test builds
+no Folder details panel and runs no Live or conversion, so `share_of` and the mount-table read aren't reached;
+the branch's only code on its path is `FolderExplorer` constructing `ExplorerConverter` (a timer, two signal
+connections) and one owner check in `_io_event`. It wasn't seen in the branch's two earlier runs (41449571421,
+41451877093: that job 0 RERUN) nor locally (three full suites, no RERUN). Every other job: **0 RERUN** (macOS
+4,510 + 4,533 and 866; Ubuntu 4,507 + 4,533 and 866; Windows 4,494 + 4,514 and 864 passed).
+**Proposed known-issues entry** (A~5): "`test_the_gui_process_never_touches_source_folders`: `wait_idle`'s 20 s
+timed out once on Windows CI (41457940413, `agent/converter-ux`), passed on rerun in 8 s; a slow runner's real
+helpers, cause not found. If it recurs: log `service.pending/active/retired` and `_deliveries` on timeout."
 
 ## Questions for Tony (provisional)
 
