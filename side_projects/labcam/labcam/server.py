@@ -211,6 +211,18 @@ def make_handler(engine: Engine, ring: RingHandler) -> type[BaseHTTPRequestHandl
             elif self.path == "/api/presence":
                 engine.presence(bool(body.get("focused")), bool(body.get("active")))
                 self._json({"low": engine.power()[0]})
+            elif self.path == "/api/snap_preview":
+                try:
+                    drawn = [(float(x), float(y)) for x, y in body.get("corners", [])]
+                except (TypeError, ValueError):
+                    drawn = []
+                if len(drawn) != 4:
+                    self._json({"error": "need corners [[x, y] × 4]"}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._json(engine.snap_drawn(drawn))
+            elif self.path == "/api/autofit":
+                said = engine.fit_boxes()
+                self._json({"message": "; ".join(said) or "no screens to fit"})
             elif self.path == "/api/lowpower":
                 engine.low_power_now()
                 self._json({"message": "low power until the next input on a page" if engine.power_mode == "auto"
