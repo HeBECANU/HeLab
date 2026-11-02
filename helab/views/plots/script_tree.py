@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKIN
 
 from PyQt6 import sip
 from PyQt6.QtCore import QFileSystemWatcher, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QAction, QBrush, QColor
+from PyQt6.QtGui import QAction, QBrush, QColor, QPalette
 from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
                              QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
@@ -187,7 +187,12 @@ class TreePanelWidget(QWidget):
         self.panel_layout_right_bottom.addLayout(controls_layout)
         # One line, only when remembered folders weren't loaded at start (the folders and why: its tooltip).
         self.start_note = identify(ElidedLabel(), "scripts_start_note")
-        self.start_note.setStyleSheet(f"color: {AMBER};")
+        # Amber by its palette, not a style sheet: polishing a style sheet sets the palette, which runs
+        # ElidedLabel's Python changeEvent during the panel's polish; a panel the garbage collector frees
+        # then (tests drop theirs at once) is deleted mid-polish and Qt crashes (SIGSEGV in updateIsOpaque).
+        palette = self.start_note.palette()
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(AMBER))
+        self.start_note.setPalette(palette)
         self.start_note.hide()
         self.panel_layout_right_bottom.addWidget(self.start_note)
 
