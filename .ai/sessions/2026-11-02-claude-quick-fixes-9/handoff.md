@@ -482,3 +482,76 @@ CI: `.github/workflows/ci-test.yml`.
   - Its fourth sighting today: 41481668334 macOS 2/3; 41484513530 Ubuntu 2/3 and macOS 2/3; this run.
   - **Proposed:** a priority to hunt it. The worker dies in the Plotly case each time, now on Ubuntu too.
 - `test_two_writers_side_by_side_lose_nothing`, both cases, and the detached-stamp test passed on every OS.
+
+## The Plotly/QtWebEngine worker death (known-issues 139, 162): fixed (b0eb914)
+
+**Cause.** Four test files made the worker's QApplication with an **empty argument list**:
+- `test_memroyUsageWindow.py`'s session fixture;
+- `test_icons_pt.py`'s autouse fixture;
+- `test_icons_ut.py`'s `setUpClass`;
+- `test_main_ut.py`'s `setUpClass`.
+
+This happened whenever one of them ran as the worker's first Qt test. pytest-qt's `qapp` passes a program name. QtWebEngine needs that name: without it, the first web view ends the process.
+
+**The native stack.**
+- Qt's message (seen with `-s`): "Argument list is empty, the program name is not passed to QCoreApplication. base::CommandLine cannot be properly initialized."
+- The macOS crash report (`python3.13-2026-11-03-043014.ips`) shows SIGABRT from `QMessageLogger::fatal`, in this chain:
+  - `QtWebEngineCore::WebContentsAdapter::WebContentsAdapter()`
+  - called by `QWebEnginePage::QWebEnginePage`
+  - called by `QWebEngineView::setUrl`
+  - called by `panes.py:50` (`PlotlyPane.__init__`).
+
+**It is not Lumen's GC mechanism.** The Plotly tests' panes are added with `qtbot.addWidget`, and the web view has its pane as Qt parent. The crash depends on test order alone:
+- I replayed gw1's 259-test order from CI 41488725971 (job 125426673030) in one process. It aborted 5 of 5.
+- In a bisect by file, only `test_memroyUsageWindow.py` followed by the Plotly case aborts.
+- Forced gc doesn't apply: the abort comes before any collection could matter.
+
+**Every sighting I checked fits.** Seven worker deaths in `test_plot_backends`' Plotly cases, on all three OSes:
+
+| Run | Job | Worker, OS | Where `test_memroyUsageWindow.py` ran |
+|---|---|---|---|
+| 41481668334 | 125401582979 | gw1, macOS 2/3 | 6th file; `test_plot_backends` 17th |
+| 41484513530 | 125411487772 | gw1, Ubuntu 2/3 | 6th file; `test_plot_backends` 17th |
+| 41484513530 | 125411487889 | gw1, macOS 2/3 | 6th file; `test_plot_backends` 17th |
+| 41488725971 | 125426673030 | gw1, macOS 2/3 | 6th file; `test_plot_backends` 17th |
+| 41389534725 | 125097691928 | gw8, macOS ("Fatal Python error: Aborted") | 1st file |
+| 41158691080 | 124411181934 | gw1, Windows | 10th file |
+| 41084197666 | 124161029996 | gw3, Windows | 6th file |
+
+The three-group split made it frequent: it put this order on gw1 of group 2/3 on every run.
+
+**Not this cause:** `test_accessible_names`' worker deaths (jobs 124217404251 and 124231159424, gw0). No empty-argument fixture ran on those workers before them. The SIGTRAP on a QtWebEngineCore thread stays open.
+
+**Fix (test only).**
+- The two pytest fixtures take `qapp`.
+- The unittest classes call the new `conftest.qt_application()`, which makes the QApplication as `qapp` does (named "pytest-qt-qapp") and keeps it for the session.
+- `test_number_format`'s subprocess script passes `sys.argv[:1]`.
+- `helab/main.py` already passes `argv`, which always holds the program.
+
+**New tests** (`tests/test_qt_application.py`):
+- A guard: no `Q*Application()` or `Q*Application([])` anywhere in `helab/` or `tests/`, including subprocess scripts held in strings.
+- A self-test of that guard.
+- A nested pytest that runs the memory window test, then `[values0-Plotly-TxyHistograms]`, in one process.
+
+Both the guard and the nested run fail on the old fixture: the nested run exits −6.
+
+**Checks.**
+- The gw1 replay passes 4 of 4 on the fix, with the Plotly case PASSED.
+- The full suite `-n 12 --reruns 5`: 9166 passed, 673 skipped, no RERUN.
+- The five type checks are clean.
+
+**Test files touched:** `tests/conftest.py` (`qt_application`), `tests/test_memroyUsageWindow.py`, `tests/test_icons_pt.py`, `tests/test_icons_ut.py`, `tests/test_main_ut.py`, `tests/test_number_format.py`, and the new `tests/test_qt_application.py`. No app code.
+
+**Proposed known-issues edits:**
+- Move the `[values0-Plotly-CountsPerShot]` entry (line 162) and the `[values2-Plotly-TxyHistograms]` abort (in the QtWebEngine entry, line 139) to Fixed. Text: "Plotly worker deaths: tests made the worker's QApplication([]) (test_memroyUsageWindow, test_icons_pt/_ut, test_main_ut) and QtWebEngine qFatals at the first web view without a program name; they take qapp or conftest.qt_application, and test_qt_application guards it (QF9 b0eb914)."
+- Keep the QtWebEngine entry open for `test_accessible_names`' SIGTRAP and the Scatter3D rerun (line 124). The Scatter3D rerun is unchecked: it may be this cause, so check its worker order if it recurs.
+- Note the `[values1-Matplotlib-CountsPerShot]` crash in the line-162 entry. It is not a web view, so it is not this cause. Keep it as its own line.
+
+**Proposed A item (A~6):** a conftest check that fails any test whose QApplication was made with an empty argument list (`QCoreApplication.arguments()` empty at the first `qapp`), for code the AST guard can't see. Optional; the guard covers the code today.
+
+### Run 41493818761 (`b0eb914`): success, all 15 job logs read, no RERUN
+
+- Every Tests, Converter backends and Build job on macOS, Windows and Ubuntu succeeded, and no log has a RERUN, a rerun reason or a crashed worker.
+- The three new tests passed on each OS.
+- The Plotly cases passed everywhere. On Ubuntu Tests 2/3 (job 125443599258), gw1 ran the old crash order: `test_memroyUsageWindow.py` as its 14th file, then `test_plot_backends.py` as its 16th. The worker survived.
+- Windows pytest per group: 9.3, 7.7 and 7.8 min.
