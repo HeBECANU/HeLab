@@ -137,3 +137,13 @@ def test_ci_ends_pytest_itself_before_a_test_jobs_limit() -> None:
                                                   workflow)
     for job, pytest_seconds in ((windows_job, windows_pytest), (other_job, other_pytest)):
         assert int(pytest_seconds) <= int(job) * 60 - 8 * 60, (job, pytest_seconds)  # (8 min for the rest.)
+
+
+def test_each_test_jobs_junit_xml_is_kept_whatever_its_outcome() -> None:
+    """A~5 of Quick Fixes 9: the junit.xml of every test job, cancelled ones too (``if: always()``), right after the
+    run, under a name each job has to itself (two can't upload one name)."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-test.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Keep the test results (junit.xml)", 1)[1].split("\n      - name:", 1)[0]
+    assert "if: always()" in step and "uses: actions/upload-artifact@" in step and "path: junit.xml" in step
+    assert "${{ inputs.os }}" in step and "${{ inputs.python-minor }}" in step and "${{ strategy.job-index }}" in step
+    assert workflow.index("- name: Run Tests") < workflow.index("- name: Keep the test results")
