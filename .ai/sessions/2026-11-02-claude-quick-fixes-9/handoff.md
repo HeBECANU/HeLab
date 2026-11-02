@@ -190,3 +190,28 @@ The run's results follow, every Tests and Converter backends job's log read for 
 `tests/test_folder_cache.py`, `tests/test_folder_summary.py`, `tests/test_gui_responsiveness.py`,
 `tests/test_settle_setting.py`, `tests/test_root_discovery.py`, `tests/test_scan_history.py`,
 `tests/test_two_step_browse.py`, `tests/test_live_check.py`. App code: `helab/utils/gui_watchdog.py` only.
+
+### Run 41446664564 (`910e59f`: A47.3, A46.1): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4441, 2/2 4456; macos 4458, 4475; ubuntu 4454, 4475.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **"GUI stalled" lines remain on Windows only:** 3 in Tests 1/2, 2 in Tests 2/2.
+  - Every Windows run I have shows 1–3, before and after tonight: QF8's 41165963510 had 3+1, QF9's runs
+    3+3, 1+3 and 3+1.
+  - **Not what A47.3 fixed.** That was a deleted window's watchdog running on (now it ends). These come
+    from a watchdog whose window is still alive.
+    - One (2.18 s, Windows 2/2) is a test busy on the main thread with its window open (a plot hook in
+      `test_constant_layers`), which is the watchdog working as meant.
+    - The others (2.30 s, 2.18 s and 28 s, Windows 1/2) fire during converter tests that open no window,
+      so an earlier test's window is still alive in that worker.
+  - The stack dumps go to the worker's raw stderr, which xdist doesn't put in CI's log, so the window
+    can't be named from this run.
+- **Proposed:**
+  - Keep the known-issues entry open, retitled "a test leaves a window (and its GUIWatchdog) alive".
+  - **A~3, a diagnostic:** under pytest, the stall line also names the running test
+    (`PYTEST_CURRENT_TEST`) and the watchdog's window (`parent().objectName()` or its creation test), so
+    the next CI sighting names the leak.
+  - Or: conftest fails a test that leaves a `HelabMainWindow` alive, as it does for web views
+    (`delete_left_widgets`).
