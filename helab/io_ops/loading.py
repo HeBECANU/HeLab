@@ -267,7 +267,9 @@ def load(path: str, output: str, send: Emit = emit,
     After its scan phase (saved as the folder's summary), a load whose new data is large
     (``limits``) stops with ``too_large`` before reading anything, unless ``allow_large``.
     A folder the user chose not to cache (``no_cache``, or its saved flag) is read into RAM
-    only: its cached data is neither used nor written.
+    only: its cached data is neither used nor written. In store-v4 a ``no_cache`` request (a plot's own
+    TXY choice) is cached all the same under its own view (Q19.3), quietly: it never waits for an answer,
+    and it sends none of the tab's cache events; only the folder's saved flag keeps it RAM only.
     ``txy``: which TXY to load (``txy_sources``: the source, the profile HeLab's must be made with,
     and where HeLab's folders are, ``helab_txy``); without it, MATLAB's with HeLab's current ones
     filling the shots MATLAB lacks. ``memory_origins``: the held shots' origins (``{shot: origin}``,
@@ -276,6 +278,7 @@ def load(path: str, output: str, send: Emit = emit,
     from helab.utils.cache_store import StoreError
     store = _open_store(cache_options, send, path)
     no_cache_reason = NOT_CACHED_REASON
+    quiet = False
     try:
         guard: SaveGuard | None = None
         txy_guard: SaveGuard | None = None
@@ -293,17 +296,20 @@ def load(path: str, output: str, send: Emit = emit,
                 # Unknown whether the user chose not to cache it: load from the files, without the cache.
                 send({"kind": "cache_warning", "message": f"Disk cache not used: the folder's settings couldn't be "
                                                          f"read ({prefs.error})"})
-            chosen = no_cache or bool(prefs.value and prefs.value.get("no_cache"))
+            # (store-v4: a plot's own TXY choice asks no_cache, and is cached quietly instead, Q19.3.)
+            quiet = no_cache and txy_cache.layered(store)
+            chosen = (no_cache and not quiet) or bool(prefs.value and prefs.value.get("no_cache"))
             if prefs.failed and not chosen:
                 no_cache_reason = "Disk cache not used: the folder's settings couldn't be read"
             no_cache = chosen or prefs.failed
+            quiet = quiet and not no_cache
         _load(path, output, send, store, guard, bool(cache_options), memory, base_signature, expected,
               (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
               limits=limits, allow_large=allow_large, no_cache=no_cache, no_cache_reason=no_cache_reason,
               full_check=full_check, cache_base=cache_base, check_level=check_level,
               allow_missing=allow_missing, memory_check=memory_check, memory_raw_times=memory_raw_times,
               txy=txy, memory_origins=memory_origins, txy_guard=txy_guard,
-              cache_options=cache_options or {})
+              cache_options=cache_options or {}, quiet=quiet)
     finally:
         if store is not None:
             store.close()
@@ -317,7 +323,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
           allow_missing: bool = False, memory_check: dict[str, Any] | None = None,
           memory_raw_times: list[list[int]] | None = None, txy: dict[str, Any] | None = None,
           memory_origins: dict[str, str] | None = None, txy_guard: SaveGuard | None = None,
-          cache_options: dict[str, Any] | None = None) -> None:
+          cache_options: dict[str, Any] | None = None, quiet: bool = False) -> None:
     from helab.utils.cache_store import StoreError
     txy = dict(txy or {})
     txy_source = txy["source"] = txy_sources.requested_source(txy.get("source"))
@@ -731,8 +737,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     names = [filename if shot in origins and os.path.dirname(filename) != os.path.dirname(matlab_dir(shot))
              else os.path.basename(filename) for shot, filename in files]
     txy_record = helab_txy.record(txy_source, origins, helab_found, None, txy, helab_state)
-    # Left out when the cache couldn't be read: unknown, not "not cached".
-    known_cached: DiskCachedField = {} if had_dataset is None and not cached else {
+    # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
+    # cache state is its tab's, never a plot choice's).
+    known_cached: DiskCachedField = {} if (had_dataset is None and not cached) or quiet else {
         "disk_cached": cached or bool(had_dataset)}
     send({"kind": "loaded", "rows": rows, "bytes": size, "files": loaded,
           "loaded_at": time.time(),
@@ -740,7 +747,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
           "unsettled_files": unsettled,
           "problematic": sorted(set(problematic)),
           "source": source, "cached": cached, **_data_root(store, path), **known_cached,
-          "disk_cache_pending": guard is not None and not cached and not no_cache,
+          "disk_cache_pending": guard is not None and not cached and not no_cache and not quiet,
           "cache_info": cache_info, "load_counts": load_counts,
           "cache_reason": cache_reason, "raw_times": _raw_list(raw_times, current),
           "fingerprint": fingerprint, "memory_shots": sorted(in_memory), "base_signature": base_signature,
@@ -796,7 +803,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                          _dataset_info(data, fingerprint, names, listed_at, load_counts, unsettled, bool(had_dataset),
                                        folder_mtime_ns, txy_record, str(summary["signature"])),
                          keys, origins, _raw_list(raw_times, (entry[0] for entry in fingerprint)), txy_record,
-                         cache_options or {}, send)
+                         cache_options or {}, _quietly(send) if quiet else send, hold=not quiet)
             return
         _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, load_counts,
                        unsettled, bool(had_dataset), budget, budget_set_at, send, raw_times, folder_mtime_ns,
@@ -855,6 +862,17 @@ def _dataset_info(data: dict[int, Any], fingerprint: list[tuple[int, int, int]],
             # For the large-folder check before a later cached read.
             "txy_bytes": large_folder.estimate(fingerprint),
             "ram_bytes": sum(int(array.nbytes) for array in data.values())}
+
+
+QUIET_KINDS = ("cache_saved", "disk_cached", "cache_full", "cache_approval", "cache_warning")
+
+
+def _quietly(send: Emit) -> Emit:
+    """``send`` without the cache events a plot choice's save mustn't give the folder's tab (Q19.3)."""
+    def quiet(event: Any) -> None:
+        if event.get("kind") not in QUIET_KINDS:
+            send(event)
+    return quiet
 
 
 def _save_failed(store: CacheStore, exc: Exception, send: Emit) -> None:

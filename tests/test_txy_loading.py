@@ -194,3 +194,39 @@ def test_folder_cache_sends_the_tabs_source_with_a_cached_read(monkeypatch: Any,
         assert request.payload["txy"]["source"] == cache.tab_source()
     finally:
         service.shutdown()
+
+
+def test_a_plots_own_choice_is_cached_quietly_in_store_v4(tmp_path: Path) -> None:
+    """Q19.3: a plot's TXY choice (a ``no_cache`` request) is cached under its own view in store-v4, sends none of
+    the tab's cache events and never waits for an answer; the folder's Don't cache flag still keeps it RAM only."""
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    choice = {"source": "matlab-only"}
+    events = run_load(source, tmp_path, options, no_cache=True, txy=choice)
+    loaded = first(events, "loaded")
+    assert not any(event["kind"] in ("cache_saved", "disk_cached", "cache_full", "cache_approval") for event in events)
+    assert "disk_cached" not in loaded and loaded["disk_cache_pending"] is False
+    with opened(options, source) as store:
+        assert store.read_view(str(source), "matlab-only", "").found and store.read_view(str(source), "", "").missing
+    again = first(run_load(source, tmp_path, options, no_cache=True, txy=choice), "loaded")
+    assert again["source"] == "disk" and again["load_counts"]["read"] == 0  # (From its layers now.)
+    write_shot(source, 3)
+    over = run_load(source, tmp_path, {**options, "budget": 1, "budget_set_at": time.time()}, no_cache=True, txy=choice)
+    with opened(options, source) as store:
+        assert not store._conn.execute("SELECT 1 FROM pending_saves").fetchone()  # (Never asks.)
+        assert 3 not in (store.txy_layers(str(source)).value or {})["matlab"].entries
+    assert not any(event["kind"] == "cache_full" for event in over)
+    other = data_folder(tmp_path / "other")
+    with opened(options, other) as store:
+        store.set_prefs(str(other), True, False, time.time())
+    run_load(other, tmp_path, options, no_cache=True, txy=choice)
+    with opened(options, other) as store:
+        assert store.txy_layers(str(other)).value == {} and store.read_view(str(other), "matlab-only", "").missing
+
+
+def test_a_plots_own_choice_stays_ram_only_in_store_v3(tmp_path: Path) -> None:
+    source = data_folder(tmp_path)
+    options = {"directory": str(tmp_path / "caches" / "store-v3")}
+    run_load(source, tmp_path, options, no_cache=True, txy={"source": "matlab-only"})
+    with opened(options, source) as store:
+        assert store.read_dataset_row(str(source)).missing
