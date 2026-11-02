@@ -92,7 +92,7 @@ the worker thread", both built.
   win32`, `pyright --pythonplatform Windows helab tests`: all clean (203 / 194 files, 0 errors).
 - New tests: `tests/test_scripts_reload.py` (10), `tests/test_live_scripts.py` (8),
   `tests/test_plot_txy_saved.py` (16), all with temporary script folders and in-memory datasets.
-- CI: CI_PLACEHOLDER
+- CI: run 41448691912 on `2617cfa`, success; every job read: Tests (1/2) and (2/2) on macOS (4480, 4483 passed), Ubuntu (4477, 4483) and Windows (4463, 4464), Converter backends on all three (849, 849, 847 passed), **0 RERUN** in every log.
 
 ## Proposed doc changes (for the Coordinator)
 
