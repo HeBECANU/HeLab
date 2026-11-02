@@ -602,7 +602,7 @@ class CacheTab(QWidget):
         if self.busy or not legacy_clearable(legacy):
             return
         if other_instances(app_folder()):
-            self.message = "Another HeLab is running: quit it before clearing the older cache"
+            self.message = "A HeLab converter (helab convert) is running. Stop it before clearing the older cache."
             self._update()
             return
         if self.confirm("Clear the older cache?", legacy_clear_text(legacy), "Remove"):
