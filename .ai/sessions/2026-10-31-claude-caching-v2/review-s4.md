@@ -340,3 +340,97 @@ WAL pragma. It makes the new 6-thread test fail about 1 run in 4.
   - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 
 Stage 4, its race fix included, has no open review findings.
+
+## The views fix (`768ac40..4afa96a`: store-v4's listings, scans and adopt read the folder's view)
+
+**Verdict: no blocker. 1 finding: 0 High, 0 Medium, 1 Low.** With the switch on, cached badges, cache-first and
+offline browsing after a restart now find store-v4's cached folders. The handoff's sweep holds. Store-v3 is
+unchanged.
+
+### SV-1 · Low · One damaged view record makes the whole listing fail, where store-v3 reports an error for that folder
+
+- `helab/utils/cache_store.py:2209-2215` (`_view_infos`: `json.loads(fingerprint)`, then `entry[4]` and
+  `entry[1]` for each entry, unguarded).
+- `:2277-2279` (`read_dataset_infos` catches only `sqlite3.Error` and `StoreError`).
+- **Scenario.** The switch is on. One folder's `txy_views.fingerprint` is unreadable: damaged, or written by a
+  HeLab whose entries have another shape.
+  - `json.loads` raises `JSONDecodeError`, a `ValueError`; a short entry would raise `IndexError`, a non-list
+    `TypeError`.
+  - The exception leaves `read_dataset_infos`, then `_read_saved`, then `list_folder`. The listing of the parent
+    folder fails outright, so every sibling's listing, badges and saved status are lost with it.
+  - Store-v3 doesn't do this. A malformed fingerprint fails inside SQLite's `json_each`, as a `sqlite3.Error`, which
+    is caught. A malformed `info` is `_error`'d per folder. Either way it becomes a `cache_warning`, and the listing
+    goes on: "a read answers found / missing / error".
+- **Fix.** In `_view_infos`, parse each folder's view in its own `try` for `ValueError`, `IndexError` and
+  `TypeError`. Let `read_dataset_infos` answer `_error("Saved dataset record is unreadable: …")` for that folder
+  only, for example by returning the failures beside the rows. Add a case to `test_v4_listings.py` with one damaged
+  view among two folders.
+- **How verified.** Scratch test (`.ai/temp/assay/test_zz_views.py`, using `test_txy_loading.py`'s helpers, on an
+  export of `4afa96a`):
+  - after a store-v4 load, set the folder's `txy_views.fingerprint` to `'not json'`;
+  - `read_dataset_infos` raised `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`;
+  - `list_folder` of its parent raised the same.
+
+### Checked, no finding
+
+- **Listings find store-v4's cached folders.**
+  - `read_dataset_infos` still reads `datasets` first, which in store-v4 holds stage 1's seeds only. It then
+    overlays `_view_infos` for folders that have views, so a view wins over a seed, and a folder with only a seed
+    still answers from it.
+  - Which view: the one `wanted` names, else the most recently used. The `ORDER BY last_used` loop keeps a wanted
+    view once found.
+  - What it gives:
+    - bytes: those of the layers the view names;
+    - RAM: each layer's `rows` times the share of its shots the view names, times `TXY_ROW_BYTES`;
+    - TXY bytes: the fingerprint's sizes (entries are `[shot, size, mtime, "txy", layer]`, as `txy_cache` writes
+      them);
+    - info: the view's own, which `_cache_info` accepts with its `saved_at` and `signature`.
+  - So `disk_cached` and `cache_info` in the listing are the view's: the badges, cache-first's local lane and
+    offline browsing see the folder as cached after a restart.
+- **Observation, not a finding:** no caller passes `wanted` yet, so listings show the most recently used view,
+  whatever the tab's TXY source. That is usually the source the tab last loaded with. A folder whose only view is
+  of another source shows as cached, and its load then reads the source. Wiring the tab's (source, tag) is for
+  later, if Tony wants the badge per source.
+- **Nothing is read from source folders.** `_view_infos`, `cached_matlab_shots`, `folder_views` and `read_view`
+  read store tables only. A scan's mismatch rule still compares against the shots the listing found.
+- **The scan's mismatch rule.**
+  - store-v3: `cached_matlab_shots` reads the dataset row's fingerprint shots, as `_saved_fingerprint` did.
+  - store-v4: the most recently used view's MATLAB-layer shots. A HeLab-only latest view gives none, so no
+    mismatch, which is never a false one. Before this commit store-v4 found nothing at all.
+  - Unreadable is no answer: `folder_views` gives `[]` on an error, and `read_view`'s error returns `_error`.
+- **Adopt's `cache_info`:** `read_dataset_infos([path])`, the same answer a listing gives, the view's in store-v4.
+- **The handoff's "left as is" list holds.** I checked every remaining reader of `datasets` in `helab/`:
+  - the inventory's "Cached data" row (`inventory`) and the purge (`purge_cached`): store-v4's datasets are seeds,
+    and its layers have their own rows and purges;
+  - Make room and trim (`_room_plan`, `_free_space`): they have their layer groups;
+  - file accounting (`_dataset_bytes`, the known-files union);
+  - `cache_move`'s verify: it covers `txy_segments`;
+  - `txy_cache.Access`: `row`, `confirm` and `touch` go to `datasets` only when `not self.layered`, or for a seed
+    (`_seed_row`); `confirm_dataset` is called only when not layered.
+- **Store-v3 unchanged.**
+  - `read_dataset_infos`' SQL is the same, and `_view_infos` runs only for `layout >= store_v4.LAYOUT`.
+  - `cached_matlab_shots` gives the dataset's fingerprint shots.
+  - Adopt reads the same dataset through `read_dataset_infos`.
+  - `test_offline_browsing.py` runs its restart with both stores.
+- **Fails without it.** On an export of `4afa96a`, with `admin.py`, `scanning.py` and `cache_store.py` as they were
+  at `768ac40`: `test_v4_listings.py` and `test_offline_browsing.py` give **6 failed** (the 4 new tests and 2
+  offline-restart tests) and **54 passed**. Restored (compared with git): all pass.
+
+### Checks (views)
+
+On an export of `4afa96a`, whose `helab/` and `tests/` equal the floor's `HEAD` `1cffaba`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` (the full suite, since stage 4 lands
+  after this): **9144 passed, 674 skipped, 2 warnings, 3 failed, 15 rerun in 210.06 s.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests. The export has no `.git`, and each ran
+    with 5 reruns.
+  - In the floor checkout: **3 passed, no RERUN**.
+  - No other RERUN.
+  - The 2 warnings are the known pyqtgraph ones.
+  - The totals match Vault's 9148 passed and 673 skipped, once the export's 3 and 1 are added back.
+  - My first run had the test data linked inside an empty `testdata/` folder, so 17 test-data tests skipped. I
+    fixed the link and reran; the figures above are from the second run.
+- Touched tests: `test_v4_listings`, `test_offline_browsing`, `test_store_v4`, `test_cache_store`,
+  `test_txy_loading` and `test_caching_v2_session`, with the same options: **164 passed, no RERUN**.
+- `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+- Scratch, not committed: SV-1 (`.ai/temp/assay/test_zz_views.py`).
