@@ -3,7 +3,9 @@
 ``parse_strict`` reads a raw file as the TDC writes it, every line ``<digits>,<digits>`` ended
 by ``\\r\\n``, or every line by ``\\n`` (``raw._STRICT_CRLF``/``_STRICT_LF`` describe the same
 files), with NumPy and no Python per value; anything else gives None and ``raw`` takes the
-general reader, as does a field longer than 16 digits. Each field's digits are read eight at a
+general reader, as does a field longer than 16 digits. A strict file has nothing textscan can't
+read, so a read through here never stops early (``raw.ReadStop``: the general reader says where
+one did, A37.1). Each field's digits are read eight at a
 time from 64-bit words (SWAR) into an integer, converted to float64, which rounds to nearest
 like textscan's decimal reading. NumPy releases the GIL for these steps.
 

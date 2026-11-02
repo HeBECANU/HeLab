@@ -15,7 +15,13 @@ TXY (stage 1 design addendum §6).
   file order.
 
 ``Facts`` keep what the done-writing checks read from the text (``raw.not_done``), so ``not_done``
-here gives the same answer without the file, for any trigger channel.
+here gives the same answer without the file, for any trigger channel. ``Facts.stop_line`` is where
+the read stopped before the end of the file (``raw.ReadStop.line``, A37.1), None when it read to the end.
+It was added to the facts' JSON without a parser bump: ``parse_raw``'s pulses didn't change (only which
+line the general reader stopped at is now said), a layer without the key reads as None (a ``COMPACT``
+layer never stopped: the strict path reads whole files; an older ``FLOAT`` one simply doesn't say), and an
+older HeLab reading a newer layer ignores the key. Nothing decides from it: conversions read the raw text
+and their event says the stop; a layer's is for ``helab cache dump`` and later readers.
 
 ``RAW_PARSER_VERSION`` is bumped only when ``parse_raw``'s output changes for some input: a layer of
 an older parser is then read again from its file while that file is there.
@@ -52,8 +58,9 @@ class Facts:
     """What the done-writing checks and the converter read from a raw file's text: ``rows`` parsed,
     ``t_zero`` (the first row's time, NaN for none), ``first_channel`` (the integer ``not_done`` reads
     on the first line, None when it finds none), ``blank`` (nothing but whitespace), ``final_newline``,
-    ``line_endings`` (``none``, ``crlf``, ``lf``, ``cr``, ``mixed``) and ``reader`` (``strict`` or
-    ``general``)."""
+    ``line_endings`` (``none``, ``crlf``, ``lf``, ``cr``, ``mixed``), ``reader`` (``strict`` or
+    ``general``) and ``stop_line`` (where the read stopped before the end, ``raw.ReadStop``; None: it read
+    to the end, or a layer from before A37.1 doesn't say)."""
     rows: int
     t_zero: float
     first_channel: int | None
@@ -61,11 +68,12 @@ class Facts:
     final_newline: bool
     line_endings: str
     reader: str
+    stop_line: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {"rows": self.rows, "t_zero": repr(self.t_zero), "first_channel": self.first_channel,
                 "blank": self.blank, "final_newline": self.final_newline, "line_endings": self.line_endings,
-                "reader": self.reader}
+                "reader": self.reader, "stop_line": self.stop_line}
 
     @classmethod
     def from_json(cls, value: Any) -> Facts:
@@ -76,14 +84,16 @@ class Facts:
             rows, t_zero, first = value["rows"], float(value["t_zero"]), value["first_channel"]
             flags = (value["blank"], value["final_newline"])
             endings, reader = value["line_endings"], value["reader"]
+            stop = value.get("stop_line")  # (Absent in layers from before A37.1.)
         except (KeyError, TypeError, ValueError) as exc:
             raise hlb.HlbError(f"The raw layer's facts are malformed ({exc})") from None
         if (not isinstance(rows, int) or isinstance(rows, bool) or rows < 0
                 or not (first is None or isinstance(first, int) and not isinstance(first, bool))
                 or not all(isinstance(flag, bool) for flag in flags)
-                or endings not in _ENDINGS or reader not in _READERS):
+                or endings not in _ENDINGS or reader not in _READERS
+                or not (stop is None or isinstance(stop, int) and not isinstance(stop, bool) and stop >= 1)):
             raise hlb.HlbError("The raw layer's facts are malformed")
-        return cls(rows, t_zero, first, flags[0], flags[1], endings, reader)
+        return cls(rows, t_zero, first, flags[0], flags[1], endings, reader, stop)
 
 
 @dataclass(frozen=True)
@@ -110,7 +120,7 @@ def facts_of(data: bytes, pulses: RawPulses, strict: bool) -> Facts:
     return Facts(rows=len(pulses), t_zero=float(pulses.times[0]) if len(pulses) else math.nan,
                  first_channel=None if first is None else int(first.group(1)), blank=not data.strip(),
                  final_newline=data.endswith(b"\n"), line_endings=_endings(data),
-                 reader="strict" if strict else "general")
+                 reader="strict" if strict else "general", stop_line=None if pulses.stop is None else pulses.stop.line)
 
 
 def encode(data: bytes) -> RawLayer:
@@ -119,7 +129,7 @@ def encode(data: bytes) -> RawLayer:
     if strict is None:
         pulses = raw.parse_raw(data)  # (The general reader: parse_strict says None again at once.)
     else:
-        pulses = RawPulses(channels=strict[0], times=strict[1])
+        pulses = RawPulses(channels=strict[0], times=strict[1])  # (Read whole: no stop.)
     facts = facts_of(data, pulses, strict is not None)
     channels, times = pulses.channels, pulses.times
     # (The strict path reads only digits: every value is a non-negative integer float64.)

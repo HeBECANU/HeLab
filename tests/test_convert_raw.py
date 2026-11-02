@@ -138,3 +138,59 @@ def test_pulses_are_float64_arrays_in_file_order(tmp_path: Path) -> None:
     assert len(pulses) == 3
     with pytest.raises(ValueError):
         RawPulses(np.zeros(2), np.zeros(3))
+
+
+# Where the read stops before the end (A37.1): the line (as the read counts lines in the file's mode, \r\n
+# as one), and the start of the unreadable text, escaped. None: it read to the end, a cut line included.
+STOPS = [
+    (b"5,100\r\n0,200\r\n1,300\r\n", None, ""),
+    (b"5,100\r\n0,200\r\n1,", None, ""),
+    (b"", None, ""),
+    (b"5,100\r\n0,abc\r\n1,300\r\n", 2, "abc"),
+    (b"5,100\r\n0,200\r\nabc,300\r\n1,400\r\n", 3, "abc,300"),
+    (b"5,100\r\n0,12abc\r\n1,300\r\n", 2, "abc"),
+    (b"5,100\r\n\r\n0,200\r\nx\r\n", 4, "x"),
+    (b"5,100\n0,200\nnot,a,number\n1,300\n", 3, "not,a,number"),
+    (b"5,100\r0,200\rbad\r", 3, "bad"),
+    (b"\xef\xbb\xbf5,100\r\n0,200\r\n", 1, "\\xef\\xbb\\xbf5,100"),
+    (b"1,10\n2,20\r\n3,30\n", 2, "\\r"),  # (\n mode: a \r stops the read.)
+    (b"\n\r0,10\r\n", 1, "\\n"),  # (\r mode: the leading \n stops it at once.)
+    (b"5,100\r\n0," + b"y" * 40 + b"\r\n", 2, "y" * 24),
+]
+
+
+@pytest.mark.parametrize(("data", "line", "text"), STOPS, ids=[repr(case[0][:24]) for case in STOPS])
+def test_the_read_says_where_it_stopped(data: bytes, line: int | None, text: str) -> None:
+    stop = parse_raw(data).stop
+    if line is None:
+        assert stop is None
+        return
+    assert stop is not None and (stop.line, stop.text) == (line, text)
+    assert stop.unread == len(data) - stop.offset > 0
+    assert stop.summary() == f"read stopped at line {line}" and f"line {line}," in stop.detail()
+
+
+def stop_holds(data: bytes) -> None:
+    """A stop is where the rows end: the bytes before it read the same rows, to their end."""
+    pulses = parse_raw(data)
+    if pulses.stop is None:
+        return
+    before = parse_raw(data[:pulses.stop.offset])
+    assert before.stop is None and same(rows(before), rows(pulses))
+
+
+@pytest.mark.parametrize("data", [case[0] for case in TEXTSCAN], ids=[repr(case[0][:24]) for case in TEXTSCAN])
+def test_a_stop_is_where_the_rows_end(data: bytes) -> None:
+    stop_holds(data)
+
+
+def test_every_probes_stop_is_where_its_rows_end() -> None:
+    for folder, line in probe_files():
+        stop_holds((PROBES / folder / f"{line.split()[0]}.txt").read_bytes())
+
+
+def test_the_fast_path_never_stops() -> None:
+    from helab.convert import fastio, raw
+    data = b"5,21405148161\r\n0,21405378461\r\n"
+    assert fastio.parse_strict(data) is not None and parse_raw(data).stop is None
+    assert raw._parse_textscan(data).stop is None
