@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import contextlib
 import logging
 from typing import TYPE_CHECKING, List
 from helab._version import __version__
@@ -505,6 +506,35 @@ def set_cache_dir(path: str, refused: str = "", enabled: bool = True) -> None:
 def app_folder() -> str:
     """The per-user app folder, outside every cache: the cache-move record and the locks."""
     return os.environ.get("HELAB_APP_DIR_OVERRIDE") or os.path.dirname(default_app_dir("caches"))
+
+
+# The cache folder the GUI resolved (A44.2), for ``helab cache``, which reads no settings (no Qt).
+CACHE_FOLDER_FILE = "cache-folder.json"
+
+
+def record_cache_folder() -> None:
+    """Write the cache folder in use (``cache_dir()``) to ``<app folder>/cache-folder.json`` (A44.2), atomically
+    (temporary name, then rename). Only the GUI calls it: at startup once the cache folder is resolved, and
+    after a cache move. The GUI never reads it, and no housekeeping removes it. A write that fails is
+    logged and changes nothing else."""
+    import json
+    import time
+    import uuid
+    folder = app_folder()
+    target = os.path.join(folder, CACHE_FOLDER_FILE)
+    temporary = os.path.join(folder, f".{CACHE_FOLDER_FILE}.{uuid.uuid4().hex[:8]}.tmp")
+    record = {"cache_folder": cache_dir(), "enabled": cache_dir_enabled(), "written_at": time.time()}
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(record, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except OSError as exc:
+        logging.warning("Couldn't record the cache folder for helab cache (%s): %s", target, exc)
+        with contextlib.suppress(OSError):
+            os.remove(temporary)
 
 
 # DIR_TEMPS = os.path.join(CURRENT_WORKING_DIRECTORY, 'helab_temps')

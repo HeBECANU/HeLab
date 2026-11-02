@@ -98,6 +98,7 @@ class AdminResultFields(TypedDict, total=False):
     message: str
     path: str
     room: dict[str, Any] | None
+    items: list[str]  # ``trim``'s plan as Make room's items (``plan_only``, S2-1)
     cache_info: dict[str, Any]
     discarded: bool
     forgotten: str
@@ -106,6 +107,8 @@ class AdminResultFields(TypedDict, total=False):
     recorded: bool
     results: int  # saved results removed (R2)
     raw: int  # store-v4's raw layer rows removed (``clear_raw``, caching v2)
+    txy: int  # store-v4's TXY layers removed (``clear_txy``, caching v2 stage 2)
+    choices: dict[str, Any]  # a folder's stage 2 choices after ``folder_choice`` (policy, source, tag)
     legacy: dict[str, Any]  # store-v3 beside store-v4 after ``legacy_choice``/``clear_legacy`` (``measure_legacy``)
     result_id: str  # an adopted result's saved row (R2)
     folder_results: dict[str, ResultCountField]  # an adoption's folders' saved results after it (R2)
@@ -287,6 +290,14 @@ class FolderPrefsEvent(TypedDict):
     kind: Literal["folder_prefs"]
     path: str
     prefs: dict[str, Any]
+
+
+class FolderChoicesEvent(TypedDict):
+    """A folder's stage 2 choices (store-v4, Q45.1, Q45.2): ``policy``, ``source`` and ``tag`` ("" each: the
+    global one), with when each was set; FolderCache applies the source to the tab's loads and Live."""
+    kind: Literal["folder_choices"]
+    path: str
+    choices: dict[str, Any]
 
 
 class FolderConstantsEvent(TypedDict):
@@ -553,6 +564,9 @@ class RemovedEvent(TypedDict):
     results: NotRequired[int]
     # Kind ``raw`` (store-v4's raw layers, caching v2): the rows removed.
     raw: NotRequired[int]
+    # Kind ``txy`` (store-v4's TXY layers, caching v2 stage 2): the layers removed, each [folder, layer].
+    txy: NotRequired[int]
+    layers: NotRequired[list[list[str]]]
     root: NotRequired[str | None]
     # Saved results Make room removed for a waiting one, [folder, lookup, result_id] each: not a clear
     # (no epoch moved; a newer copy of one of those keys has another result_id).
@@ -1087,7 +1101,8 @@ HelperEvent = Union[
     CacheWarningEvent, CacheSkippedEvent,
     EntriesEvent, ListedStatusEvent, OfflineListingEvent, ScanStatusEvent, MountsSeenEvent, SaveGuardEvent, ScanHistoryEvent,
     ScanHistorySavedEvent, ScanHistoryWarningEvent, ScanModeEvent, ScanCachedEvent, SubtreeCachedEvent,
-    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderConstantsEvent, PresetsEvent, CacheMismatchEvent,
+    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderChoicesEvent, FolderConstantsEvent, PresetsEvent,
+    CacheMismatchEvent,
     FolderIconEvent,
     LoadSourceEvent, ProgressEvent, FileStartedEvent, FileFinishedEvent, ShotEvent, ScanSummaryEvent,
     ShotsMissingEvent, TooLargeEvent, CachedLoadedEvent, UnchangedCachedLoadedEvent, UnchangedHeldLoadedEvent,
@@ -1109,7 +1124,7 @@ KINDS = frozenset({
     "done", "error", "paused", "resumed", "heartbeat", "drives", "resolved", "cache_warning", "cache_skipped",
     "entries", "status", "mounts_seen", "save_guard", "scan_history", "scan_history_saved",
     "scan_history_warning", "scan_mode", "scan_cached", "subtree_cached", "subtree_saved", "summary_save_failed",
-    "folder_prefs", "folder_constants", "presets", "cache_mismatch", "folder_icon",
+    "folder_prefs", "folder_choices", "folder_constants", "presets", "cache_mismatch", "folder_icon",
     "load_source", "progress", "file_started", "file_finished", "shot", "scan_summary", "shots_missing",
     "too_large", "loaded", "live_unchanged",
     "cache_saved", "disk_cached", "cache_save_failed", "cache_full", "cache_approval", "removed", "inventory",

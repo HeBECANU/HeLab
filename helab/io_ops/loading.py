@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
-from helab.io_ops import fingerprints, helab_txy, infra
+from helab.io_ops import fingerprints, helab_txy, infra, txy_cache
 from helab.io_ops.events import DiskCachedField, PendingSaveEvent, RawMtimeField
 from helab.io_ops.fingerprints import (DEFAULT_CHECK_LEVEL, _as_of, _cached_signature, _clock_ahead,
                                        _fingerprint_signature, _mtime_unchanged, _quick_mtime, _raw_list,
@@ -25,17 +25,17 @@ if TYPE_CHECKING:
 def read_cached(path: str, output: str, send: Emit = emit,
                 cache_options: dict[str, Any] | None = None, *,
                 limits: dict[str, Any] | None = None, allow_large: bool = False,
-                verified_volumes: list[list[str]] | None = None) -> None:
+                verified_volumes: list[list[str]] | None = None, txy: dict[str, Any] | None = None) -> None:
     """Send a folder's dataset from the local disk cache, never touching the source folder.
 
     The caller shows it as not yet checked; a later ``load`` with it as the RAM
     base checks the folder. A large dataset (its TXY files' size) stops with
     ``too_large`` before it is read, unless ``allow_large``. On a volume not yet
     verified (``verified_volumes``) it fails with ``VolumeUnverified``; the app
-    reads it again once verification has checked that volume.
+    reads it again once verification has checked that volume. In store-v4 it is the view of ``txy``'s source
+    (the tab's); without one, the folder's view used last, the priority modes' first (stage 2).
     """
     import numpy as np
-    from helab.utils.cache_store import unpack_dataset
     store = _open_store(cache_options, send, path, local_lane=True, verified_volumes=verified_volumes)
     if store is None:
         raise ValueError("Disk cache unavailable")
@@ -46,23 +46,24 @@ def read_cached(path: str, output: str, send: Emit = emit,
             raise ValueError(f"The folder's settings couldn't be read: {flags.error}")
         if flags.value and flags.value.get("no_cache"):
             raise ValueError(NOT_CACHED_REASON)  # Chosen since the read was asked for.
-        record = store.read_dataset_row(path)
+        access = txy_cache.Access.for_cached_read(store, path, txy)
+        record = access.row(path)
         if record.value is not None and _too_large(
                 large_folder.estimate(_saved_fingerprint(record.value)), limits, allow_large, send):
             return
-        found = store.read_dataset(path)
+        found = access.full(path)
         if found.failed:
             raise ValueError(found.error)
         if found.value is None:
             raise ValueError("No cached data for this folder")
-        row, packed = found.value
+        row, loader = found.value
         # Checked again on what was read: the dataset may have been replaced since.
         if _too_large(large_folder.estimate(_saved_fingerprint(row)), limits, allow_large, send):
             return
-        data = unpack_dataset(packed)
+        data = loader()
         if data is None:
             raise ValueError("No cached data for this folder")
-        _touch(store, path)
+        access.touch(path)
         root = _data_root(store, path)
     finally:
         store.close()
@@ -135,8 +136,8 @@ def _helab_unchanged(path: str, store: CacheStore | None, txy: dict[str, Any], s
 
 def _unchanged_since_cache(path: str, send: Emit, store: CacheStore,
                            base_signature: str, memory: list[list[int]], check_level: str,
-                           txy: dict[str, Any] | None = None, held_origins: dict[int, str] | None = None
-                           ) -> bool | None:
+                           txy: dict[str, Any] | None = None, held_origins: dict[int, str] | None = None,
+                           access: txy_cache.Access | None = None) -> bool | None:
     """One folder stat instead of listing and checking every file.
 
     When the caller holds the cached dataset (``base_signature``), the cache has
@@ -149,7 +150,8 @@ def _unchanged_since_cache(path: str, send: Emit, store: CacheStore,
     has the same (size, mtime) and kind in each (``held_origins``: the held shots' HeLab origins): another
     HeLab on this computer may have saved the folder with a shot from another TXY (Codex on PR #10).
     """
-    found = store.read_dataset_row(path)
+    access = access or txy_cache.Access(store, txy_sources.requested_source((txy or {}).get("source")), txy or {})
+    found = access.row(path)
     if found.value is None:
         return None
     row = found.value
@@ -173,7 +175,7 @@ def _unchanged_since_cache(path: str, send: Emit, store: CacheStore,
         return False
     held = sorted({int(entry[0]) for entry in memory} & {int(entry[0]) for entry in fingerprint})
     problematic = [value for value in row["problematic"] if isinstance(value, int) and value in held]
-    _touch(store, path)
+    access.touch(path)
     send({"kind": "load_source", "source": "memory", "cache_reason": ""})
     send({"kind": "loaded", "rows": 0, "bytes": 0, "files": len(held), "loaded_at": time.time(),
           "total_files": len(fingerprint), "failed_files": len(fingerprint) - len(held), "unsettled_files": 0,
@@ -265,7 +267,9 @@ def load(path: str, output: str, send: Emit = emit,
     After its scan phase (saved as the folder's summary), a load whose new data is large
     (``limits``) stops with ``too_large`` before reading anything, unless ``allow_large``.
     A folder the user chose not to cache (``no_cache``, or its saved flag) is read into RAM
-    only: its cached data is neither used nor written.
+    only: its cached data is neither used nor written. In store-v4 a ``no_cache`` request (a plot's own
+    TXY choice) is cached all the same under its own view (Q19.3), quietly: it never waits for an answer,
+    and it sends none of the tab's cache events; only the folder's saved flag keeps it RAM only.
     ``txy``: which TXY to load (``txy_sources``: the source, the profile HeLab's must be made with,
     and where HeLab's folders are, ``helab_txy``); without it, MATLAB's with HeLab's current ones
     filling the shots MATLAB lacks. ``memory_origins``: the held shots' origins (``{shot: origin}``,
@@ -274,13 +278,17 @@ def load(path: str, output: str, send: Emit = emit,
     from helab.utils.cache_store import StoreError
     store = _open_store(cache_options, send, path)
     no_cache_reason = NOT_CACHED_REASON
+    quiet = False
     try:
         guard: SaveGuard | None = None
+        txy_guard: SaveGuard | None = None
         if store is not None:
             try:
                 # Taken first, before anything is read or imported: only a later job's
                 # save may replace this one's, and a removal from now on stops it.
                 guard = store.start_dataset_job(path, ("summaries",))
+                if txy_cache.layered(store):  # (store-v4: the TXY layers' and views' guard, stage 2.)
+                    txy_guard = store.start_txy_job(path)
             except StoreError as exc:
                 send({"kind": "cache_warning", "message": f"Disk cache can't be updated: {exc}"})
             prefs = store.read_prefs([path])[path]
@@ -288,16 +296,27 @@ def load(path: str, output: str, send: Emit = emit,
                 # Unknown whether the user chose not to cache it: load from the files, without the cache.
                 send({"kind": "cache_warning", "message": f"Disk cache not used: the folder's settings couldn't be "
                                                          f"read ({prefs.error})"})
-            chosen = no_cache or bool(prefs.value and prefs.value.get("no_cache"))
+            # (store-v4: a plot's own TXY choice asks no_cache, and is cached quietly instead, Q19.3.)
+            quiet = no_cache and txy_cache.layered(store)
+            chosen = (no_cache and not quiet) or bool(prefs.value and prefs.value.get("no_cache"))
             if prefs.failed and not chosen:
                 no_cache_reason = "Disk cache not used: the folder's settings couldn't be read"
             no_cache = chosen or prefs.failed
+            quiet = quiet and not no_cache
+            if txy_cache.layered(store):
+                # The folder's own TXY source and policy (store-v4, Q45.1, Q45.2): told to the app, which applies
+                # the source to the tab's Live and later loads; and to this load if it is the tab's.
+                choices = store.read_folder_choices([path])[path]
+                if choices.value is not None:
+                    send({"kind": "folder_choices", "path": path, "choices": choices.value})
+                    txy = txy_sources.with_choices(txy or {}, choices.value, txy_cache.builtin_for_tag)
         _load(path, output, send, store, guard, bool(cache_options), memory, base_signature, expected,
               (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
               limits=limits, allow_large=allow_large, no_cache=no_cache, no_cache_reason=no_cache_reason,
               full_check=full_check, cache_base=cache_base, check_level=check_level,
               allow_missing=allow_missing, memory_check=memory_check, memory_raw_times=memory_raw_times,
-              txy=txy, memory_origins=memory_origins)
+              txy=txy, memory_origins=memory_origins, txy_guard=txy_guard,
+              cache_options=cache_options or {}, quiet=quiet)
     finally:
         if store is not None:
             store.close()
@@ -310,16 +329,19 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
           full_check: bool = False, cache_base: bool = False, check_level: str = DEFAULT_CHECK_LEVEL,
           allow_missing: bool = False, memory_check: dict[str, Any] | None = None,
           memory_raw_times: list[list[int]] | None = None, txy: dict[str, Any] | None = None,
-          memory_origins: dict[str, str] | None = None) -> None:
+          memory_origins: dict[str, str] | None = None, txy_guard: SaveGuard | None = None,
+          cache_options: dict[str, Any] | None = None, quiet: bool = False) -> None:
     from helab.utils.cache_store import StoreError
     txy = dict(txy or {})
     txy_source = txy["source"] = txy_sources.requested_source(txy.get("source"))
+    # The folder's cached data: its dataset (store-v3), or its view and TXY layers (store-v4, stage 2).
+    access = txy_cache.Access(store, txy_source, txy) if store is not None else None
     # The held shots' origins (HeLab's; the rest are MATLAB's).
     held_origins = helab_txy.origins_from(memory_origins)
     held_from = "memory"  # Where the shots counted as held are: the caller's RAM, or its cached read.
-    if cache_base and not memory and not no_cache and store is not None:
+    if cache_base and not memory and not no_cache and access is not None:
         # The caller reads the cached dataset itself, beside this check: count its shots as held.
-        cached_row = store.read_dataset_row(path).value
+        cached_row = access.row(path).value
         if cached_row is not None:
             memory = [list(entry) for entry in _saved_fingerprint(cached_row)]
             base_signature = _cached_signature(cached_row)
@@ -328,7 +350,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     quick: bool | None = None
     if (not no_cache and not full_check and base_signature and store is not None and memory
             and expected in ("", base_signature)):
-        quick = _unchanged_since_cache(path, send, store, base_signature, memory, check_level, txy, held_origins)
+        quick = _unchanged_since_cache(path, send, store, base_signature, memory, check_level, txy, held_origins,
+                                       access)
         if quick:
             return
     if (quick is None and memory_check and not full_check and base_signature and memory
@@ -441,6 +464,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                  and held_origins.get(int(shot), "") == origins.get(int(shot), "")}
     if guard is not None and store is not None:
         _save_summary(store, path, summary, guard, send)
+        if access is not None and not no_cache:
+            # (store-v4: this listing's sources, for Make room's only copies, Q45.6.)
+            access.mark_seen(path, list(raw_entries), [*matlab, *helab_found], listed_at)
     # What this load would add to RAM: shots the caller doesn't hold already.
     if _too_large(large_folder.estimate(fingerprint, in_memory), limits, allow_large, send):
         return
@@ -491,9 +517,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         # Not cached: the user's choice. Its cached data (if any) is neither read nor written.
         cache_reason, had_dataset = no_cache_reason or NOT_CACHED_REASON, None
     elif store is not None:
-        from helab.utils.cache_store import unpack_dataset
         try:
-            row_read = store.read_dataset_row(path)
+            assert access is not None
+            row_read = access.row(path)
             if row_read.failed:
                 raise StoreError(row_read.error)
             row = row_read.value
@@ -503,13 +529,15 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
             if stop_if_missing(held | ({int(entry[0]) for entry in row["fingerprint"]} if row is not None else set()),
                                set(saved_origins)):
                 return
-            packed: bytes | None = None
+            # The cached data's loader, when it is needed (store-v3: the dataset file; store-v4: the layers).
+            packed: Callable[[], dict[int, Any] | None] | None = None
             same_kind = {shot for shot in current if saved_origins.get(shot, "") == origins.get(shot, "")}
+            signed = (not access.signature_matters
+                      or (row is not None and _cache_info(row["info"]).get("signature") == summary["signature"]))
             if row is not None and not (_saved_fingerprint(row) == fingerprint and saved_origins == origins
-                                        and _cache_info(row["info"]).get("signature") == summary["signature"]
-                                        and in_memory >= set(current)):
+                                        and signed and in_memory >= set(current)):
                 # The dataset itself is needed: read it with its row, which may have changed meanwhile.
-                full = store.read_dataset(path)
+                full = access.full(path)
                 if full.failed:
                     raise StoreError(full.error)
                 row, packed = full.value if full.value is not None else (None, None)
@@ -539,22 +567,30 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                 large_folder.estimate(_saved_fingerprint(row)), limits, allow_large))
 
             def unpack() -> dict[int, Any] | None:
-                return unpack_dataset(packed) if packed is not None and not too_big else None
+                return packed() if packed is not None and not too_big else None
 
             # The signature too: from the folder's MATLAB TXY, it changes without the fingerprint when one
-            # arrives or settles for a shot held from HeLab's; such a dataset is saved again, with no TXY
-            # read (area review io-5, 2026-10-31).
+            # arrives or settles for a shot held from HeLab's; in store-v3 such a dataset is saved again, with
+            # no TXY read (area review io-5, 2026-10-31); in store-v4 only the view's info is (A40.3).
             whole = (saved_fingerprint == fingerprint and saved_origins == origins
-                     and cache_info.get("signature") == summary["signature"])
+                     and (not access.signature_matters or cache_info.get("signature") == summary["signature"]))
             if whole and packed is None:
                 # The caller already holds every shot: no need to decompress the cache.
                 cached, problematic = True, previous
             elif whole:
                 cache_reason = "Cached dataset invalid"
                 unpacked = unpack()
-                if unpacked is not None:
+                complete = unpacked is not None and (
+                    not access.layered or set(unpacked) >= set(current) - set(previous))
+                if unpacked is not None and complete:
                     data, cached, problematic = unpacked, True, previous
                     reused = set(data)
+                elif unpacked:
+                    # (store-v4: a layer lacks some of the view's shots, a policy or Make room since: read them.)
+                    cache_reason = "Some cached shots are gone"
+                    data = {shot: array for shot, array in unpacked.items() if shot in current}
+                    reused = set(data)
+                    problematic = [shot for shot in previous if shot in reused]
             elif saved_fingerprint is not None:
                 cache_reason = "TXY files changed since caching"
                 # Keep shots whose converted file is unchanged; only new or
@@ -565,6 +601,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                 problematic = [shot for shot in previous if shot in reused]
             if too_big:
                 cache_reason = "Cached dataset too large to reuse"
+            if cached and access.seed:
+                # (store-v4: data from stage 1's dataset or store-v3's, Q45.4, Q45.5: saved into the layers.)
+                cached = False
         except Exception as exc:
             # A cache miss/failure must not prevent loading the actual files.
             data, cached, reused, problematic = {}, False, set(), []
@@ -622,6 +661,23 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         info = _stat(filename, reason)
         return (info.st_size, info.st_mtime_ns) == fingerprint[index][1:]
 
+    # store-v4: each shot's layer key (MATLAB's by its TXY file, HeLab's by its raw file where listed, Q45.3).
+    keys = txy_cache.entry_keys(fingerprint, origins, raw_entries) if access is not None and access.layered else {}
+
+    def from_raw(shot: int) -> Any:
+        """store-v4: a HeLab shot from the raw layer when it holds this raw file (design addendum §4, step 2),
+        before any file is announced (so a file's per-file timeout never covers it) and under the converter's
+        ticker for its raw size (S3-2); None when it can't (the text is read)."""
+        if access is None or not access.layered or shot not in origins or listed_stats[shot][0] == 0:
+            return None
+        from helab.io_ops.convert import _Ticker, compute_budget
+        key = keys.get(shot)
+        with _Ticker(send, "converting", compute_budget(key[0] if key else 0)):
+            converted = access.from_raw(path, shot, key, origins[shot])
+        if converted is not None:
+            data[shot] = converted
+        return converted
+
     def read_txy(shot: int, filename: str, reason: str = "load: read") -> Any:
         if shot in origins and listed_stats[shot][0] == 0:
             # HeLab's TXY of a shot with no hits (Q10.3): converted, empty.
@@ -640,11 +696,16 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         # Only a file read is announced (the file being read, its per-file timeouts); a reused
         # shot counts in the progress events alone.
         reading = shot not in in_memory and shot not in reused and not cached
+        converted = from_raw(shot) if reading else None
+        reading = reading and converted is None  # (Converted from the raw layer: no file read.)
         if reading:
             send({"kind": "file_started", "filename": filename})
         try:
             array = None
-            if shot in in_memory:
+            if converted is not None:
+                load_counts["read"] += 1
+                array = converted
+            elif shot in in_memory:
                 # Unchanged and already in the caller's RAM: nothing to read or send. Its time is the
                 # caller's or the cache's; one still missing (its raw file was still being written
                 # when it was read, or a cache saved before shot times) the listing can give, and
@@ -708,8 +769,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     names = [filename if shot in origins and os.path.dirname(filename) != os.path.dirname(matlab_dir(shot))
              else os.path.basename(filename) for shot, filename in files]
     txy_record = helab_txy.record(txy_source, origins, helab_found, None, txy, helab_state)
-    # Left out when the cache couldn't be read: unknown, not "not cached".
-    known_cached: DiskCachedField = {} if had_dataset is None and not cached else {
+    # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
+    # cache state is its tab's, never a plot choice's).
+    known_cached: DiskCachedField = {} if (had_dataset is None and not cached) or quiet else {
         "disk_cached": cached or bool(had_dataset)}
     send({"kind": "loaded", "rows": rows, "bytes": size, "files": loaded,
           "loaded_at": time.time(),
@@ -717,7 +779,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
           "unsettled_files": unsettled,
           "problematic": sorted(set(problematic)),
           "source": source, "cached": cached, **_data_root(store, path), **known_cached,
-          "disk_cache_pending": guard is not None and not cached and not no_cache,
+          "disk_cache_pending": guard is not None and not cached and not no_cache and not quiet,
           "cache_info": cache_info, "load_counts": load_counts,
           "cache_reason": cache_reason, "raw_times": _raw_list(raw_times, current),
           "fingerprint": fingerprint, "memory_shots": sorted(in_memory), "base_signature": base_signature,
@@ -726,27 +788,36 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
           # For a quick check of this data held in RAM (``_unchanged_since_memory``).
           "listed_at": listed_at, "names": names, "identity": _location_identity(path, "load: identity"),
           "folder_mtime_ns": folder_mtime_ns})
-    if store is not None and (cached or reused):
-        _touch(store, path)
+    if access is not None and (cached or reused):
+        access.touch(path)
     if cached and not young and store is not None and guard is not None and not no_cache:
         # This listing found the cache complete: it dates from now (a later non-TXY change no longer
         # rules out the quick check), and older caches get their file names for its samples.
         from helab.utils.cache_store import SaveRejected
         filled = _raw_list(raw_times, current)
         try:
-            store.confirm_dataset(path, fingerprint, names, listed_at, guard,
-                                  filled if filled != _raw_list(saved_raw, current) else None, folder_mtime_ns)
+            assert access is not None
+            access.confirm(path, fingerprint, names, listed_at, guard, txy_guard,
+                           filled if filled != _raw_list(saved_raw, current) else None, folder_mtime_ns,
+                           signature=str(summary["signature"]), txy_record=txy_record)
         except (StoreError, SaveRejected):
             pass  # Best effort: the next full check tries again.
     if store is None or guard is None or cached or no_cache:
         return
     # The caller already has its data; updating the disk cache no longer
     # delays it. Shots only the caller holds are read again for completeness.
+    assert access is not None
+    # store-v3 writes the dataset whole, so a shot only the caller holds is read again; store-v4 only those its
+    # layers lack under their key (a held shot already kept isn't read from the share again).
+    lacking = access.lacking(path, {shot for shot in in_memory if shot not in data}, keys, origins)
     try:
         reread = False
         for shot, filename in files:
-            if shot in in_memory and shot not in data:
+            if shot in lacking:
                 Pause.checkpoint(send)
+                if from_raw(shot) is not None:
+                    raw_time(shot)
+                    continue  # (From the raw layer, before any file is announced: S3-2.)
                 send({"kind": "file_started", "filename": filename})
                 reread = True
                 try:
@@ -759,6 +830,15 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         # Checked again only if files were read since the check above (else nothing came between).
         if reread and changed():
             raise ValueError("Folder changed before cache could be saved")
+        if access.layered:
+            if txy_guard is None:
+                return
+            access.write(path, txy_guard, data, fingerprint, problematic,
+                         _dataset_info(data, fingerprint, names, listed_at, load_counts, unsettled, bool(had_dataset),
+                                       folder_mtime_ns, txy_record, str(summary["signature"])),
+                         keys, origins, _raw_list(raw_times, (entry[0] for entry in fingerprint)), txy_record,
+                         cache_options or {}, _quietly(send) if quiet else send, hold=not quiet, seen_at=listed_at)
+            return
         _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, load_counts,
                        unsettled, bool(had_dataset), budget, budget_set_at, send, raw_times, folder_mtime_ns,
                        txy_record, str(summary["signature"]))
@@ -781,18 +861,9 @@ def _write_dataset(store: CacheStore, path: str, guard: SaveGuard, data: dict[in
     (``_save_failed``)."""
     from helab.utils.cache_store import DATASET_FORMAT, pack_dataset
     file = store.write_dataset_file(pack_dataset(data))
-    record = txy_record or helab_txy.default_record()
-    info = {"saved_at": time.time(), "snapshot_at": listed_at,
-            "signature": signature or helab_txy.matlab_signature(fingerprint,
-                                                                 helab_txy.origins_from(record.get("origins"))),
-            "action": "updated" if had_dataset else "created", txy_sources.TXY_FIELD: record,
-        "counts": counts, "unsettled": unsettled, "kind": file_kinds.TXY.name, "format": DATASET_FORMAT,
-        # Its TXY files' names, in fingerprint order, for the quick check's samples.
-        "names": names, "folder_mtime_ns": folder_mtime_ns,
-        # For the large-folder check before a later cached read.
-        "txy_bytes": large_folder.estimate(fingerprint),
-        "ram_bytes": sum(int(array.nbytes) for array in data.values()),
-        "disk_bytes": os.path.getsize(os.path.join(store.datasets_dir, file))}
+    info = {**_dataset_info(data, fingerprint, names, listed_at, counts, unsettled, had_dataset, folder_mtime_ns,
+                            txy_record, signature),
+            "format": DATASET_FORMAT, "disk_bytes": os.path.getsize(os.path.join(store.datasets_dir, file))}
     result = store.save_dataset(path, file, {
         "ram_bytes": sum(int(array.nbytes) for array in data.values()),
         "rows": sum(len(array) for array in data.values()), "shots": len(data),
@@ -808,6 +879,34 @@ def _write_dataset(store: CacheStore, path: str, guard: SaveGuard, data: dict[in
           "next_deadline": _deadline(store),
           "usage": result.usage, "usage_seq": [store.store_id, result.usage_seq]})
     send({"kind": "disk_cached", "disk_cached": True})
+
+
+def _dataset_info(data: dict[int, Any], fingerprint: list[tuple[int, int, int]], names: list[str], listed_at: float,
+                  counts: dict[str, int], unsettled: int, had_dataset: bool, folder_mtime_ns: int | None,
+                  txy_record: dict[str, Any] | None, signature: str) -> dict[str, Any]:
+    """A saved load's ``info``: what its quick check and its listing need (a dataset's, or a store-v4 view's)."""
+    record = txy_record or helab_txy.default_record()
+    return {"saved_at": time.time(), "snapshot_at": listed_at,
+            "signature": signature or helab_txy.matlab_signature(fingerprint,
+                                                                 helab_txy.origins_from(record.get("origins"))),
+            "action": "updated" if had_dataset else "created", txy_sources.TXY_FIELD: record,
+            "counts": counts, "unsettled": unsettled, "kind": file_kinds.TXY.name,
+            # Its TXY files' names, in fingerprint order, for the quick check's samples.
+            "names": names, "folder_mtime_ns": folder_mtime_ns,
+            # For the large-folder check before a later cached read.
+            "txy_bytes": large_folder.estimate(fingerprint),
+            "ram_bytes": sum(int(array.nbytes) for array in data.values())}
+
+
+QUIET_KINDS = ("cache_saved", "disk_cached", "cache_full", "cache_approval", "cache_warning")
+
+
+def _quietly(send: Emit) -> Emit:
+    """``send`` without the cache events a plot choice's save mustn't give the folder's tab (Q19.3)."""
+    def quiet(event: Any) -> None:
+        if event.get("kind") not in QUIET_KINDS:
+            send(event)
+    return quiet
 
 
 def _save_failed(store: CacheStore, exc: Exception, send: Emit) -> None:

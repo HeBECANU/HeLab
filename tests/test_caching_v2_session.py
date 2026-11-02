@@ -29,7 +29,7 @@ from helab.io_ops.loading import load
 from helab.io_ops.raw_fill import raw_fill
 from helab.utils import cache_move
 from helab.utils.cache_move import COPY
-from helab.utils.cache_store import CacheStore
+from helab.utils.cache_store import CacheStore, txy_item
 from helab.utils.folder_cache import store_options
 
 from test_store_v4 import files, switch_on, v3_with_state  # noqa: F401  (switch_on: a fixture)
@@ -130,16 +130,18 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
             assert format_txy(reconstruct(raw_layer.decode(layer), MATLAB_2019)) == convert_raw(
                 text, MATLAB_2019) == (run / f"d_txy_forc{shot}.txt").read_bytes()
 
-    # Clear (Settings › Cache's Clear all): every kind, raw pulses too.
+    # Clear (Settings › Cache's Clear all): every kind, raw pulses and (stage 2) TXY layers too.
     sent: list[Any] = []
     cache_admin(options, "clear", sent.append)
     removed = [event for event in sent if event["kind"] == "removed"]
-    assert [kind for event in removed for kind in event["kinds"]][-1] == "raw"
+    assert [kind for event in removed for kind in event["kinds"]][-2:] == ["raw", "txy"]
     assert next(event for event in removed if "raw" in event["kinds"])["raw"] == 3
     with opened(options, run) as store:
-        assert store.raw_rows(str(run)).value == {} and store.read_dataset_row(str(run)).missing
+        assert store.raw_rows(str(run)).value == {} and store.txy_layers(str(run)).value == {}
+        assert store.read_dataset_row(str(run)).missing  # (Stage 2: loads write TXY layers, never datasets.)
 
-    # Make room's order: X's dataset, Y's raw layers (files there), Z's (the only copy, gone from its folder).
+    # Make room's order: X's MATLAB layer (its TXY files there), Y's raw layers (files there), Z's (the only copy,
+    # gone from its folder).
     x = folder(data, "x", {1: CASE}, txy=True)
     assert loaded(x, tmp_path, options)["kind"] == "cache_saved"
     y = folder(data, "y", {1: synthetic(1, 3000), 2: synthetic(2, 3000)})
@@ -153,30 +155,32 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
     assert held["kind"] == "cache_full"
     pending = held["pending_id"]
     with opened(options, run, x, y, z) as store:
-        x_row = store.read_dataset_row(str(x)).value
-        assert x_row is not None
-        x_bytes = x_row["bytes"]
+        x_layers = store.txy_layers(str(x)).value or {}
+        assert set(x_layers) == {"matlab"} and store.read_dataset_row(str(x)).missing
+        x_bytes = x_layers["matlab"].bytes
         y_bytes = sum(row.bytes for row in (store.raw_rows(str(y)).value or {}).values())
         z_bytes = sum(row.bytes for row in (store.raw_rows(str(z)).value or {}).values())
         assert z_bytes > x_bytes + y_bytes
         assert store.inventory()["raw"]["only_copy"] == 2
         everything = store.room_plan(pending, 1 << 40)
         assert everything.possible and everything.items == ()  # (Fits: nothing to remove.)
-        # Find the budget that needs X's dataset and Y's raw layers, then one that needs part of Z's too.
-        enough = next(budget for budget in range(store.usage() + held["bytes"], 0, -512)
-                      if store.room_plan(pending, budget).items)
-        enough -= x_bytes + y_bytes - 512
+        # Find the budget that needs X's layer and Y's raw layers, then one that needs part of Z's too.
+        # (Stepping the budget down: the first plan that needs Y's raw layers.)
+        enough = next(budget for budget in range(store.usage() + held["bytes"], 0, -256)
+                      if f"raw:{y}" in store.room_plan(pending, budget).items)
         plan = store.room_plan(pending, enough)
-        assert plan.items == (str(x), f"raw:{y}")  # (Z's only copy stays, though it alone would do.)
+        x_item = txy_item("txy-seen:", str(x), "matlab")
+        assert plan.items == (x_item, f"raw:{y}")  # (Z's only copy stays, though it alone would do.)
         deeper = store.room_plan(pending, enough - z_bytes // 2)
-        assert deeper.items == (str(x), f"raw:{y}", f"raw-only:{z}")
+        assert deeper.items == (x_item, f"raw:{y}", f"raw-only:{z}")
     sent.clear()
     cache_admin({**options, "budget": enough, "budget_set_at": time.time()}, "adopt", sent.append,
                 pending_id=pending, make_room=True, room_paths=list(plan.items))
     [result] = [event for event in sent if event["kind"] == "admin_result"]
     assert result["adopted"] is True
     with opened(options, run, x, y, z) as store:
-        assert store.read_dataset_row(str(run)).found and store.read_dataset_row(str(x)).missing
+        assert store.txy_layers(str(run)).value and store.txy_layers(str(x)).value == {}
+        assert store.read_dataset_row(str(run)).missing
         assert store.raw_rows(str(y)).value == {} and sorted(store.raw_rows(str(z)).value or {}) == [1, 2]
 
     # store-v3 as it was, and opened by nothing but LegacyStore.
@@ -198,3 +202,146 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
     for shot, text in z_text.items():
         with np.load(out / f"d{shot}.npz") as exported:
             assert np.array_equal(exported["time_bins"], raw_layer.columns(raw_layer.encode(text))["time_bins"])
+
+
+def test_a_stage_2_session_with_layers_leaves_store_v3_as_it_was(switch_on: None, private_store: str,  # noqa: F811
+                                                                 tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 2's integration check (brief step 6), the switch on, as the helpers run it, beside an older HeLab's
+    store-v3:
+    1. a conversion into the cache folder saves raw layers;
+    2. the tab's load makes its HeLab shots from the raw layer (no TXY text read) into a HeLab layer, a plot's
+       own choice is cached under its own view, and the next load is served from the layers;
+    3. Live's autosaves append a segment each and compact;
+    4. Clear all takes layers and raw pulses;
+    5. Make room's order: rebuildable HeLab layers, then seen MATLAB layers;
+    6. store-v3's files are unchanged and only LegacyStore opens it;
+    7. a cache move verifies both stores, and the moved store's TXY layer exports."""
+    from helab.io_ops import infra
+    from helab.io_ops.convert import convert_folder
+    from helab.io_ops.save_held import save_held
+    from helab.utils.cache_store import COMPACT_SEGMENTS
+    options = store_options()
+    assert options["directory"] == os.path.join(private_store, "store-v4") and options["policy"] == "raw+used"
+    caches = Path(private_store)
+    v3_with_state(caches)
+    v3 = caches / "store-v3"
+    before = files(v3)
+    v3_opens: list[str] = []
+    connect = sqlite3.connect
+
+    def watched(database: Any, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if "store-v3" in str(database) and not any(frame.filename.endswith("legacy_store.py")
+                                                   for frame in traceback.extract_stack()):
+            v3_opens.append(str(database))
+        connection: sqlite3.Connection = connect(database, *args, **kwargs)
+        return connection
+    monkeypatch.setattr(sqlite3, "connect", watched)
+    data = tmp_path / "data"
+    helab = "helab:" + MATLAB_2019.content_hash()
+
+    def convert(source: Path) -> None:
+        request: dict[str, Any] = {"path": str(source), "profile": MATLAB_2019.to_dict(),
+                                   "temps": str(tmp_path / "temps"), "seen": None, "destination": "cache",
+                                   "workers": 1, "cache": options}
+        convert_folder(str(source), request, lambda event: None)  # type: ignore[arg-type]
+
+    tab_txy = {"source": "helab-priority", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+               "cache_base": private_store, "temps": str(tmp_path / "temps")}
+
+    def run(source: Path, txy: dict[str, Any] | None = None, **kwargs: Any) -> list[dict[str, Any]]:
+        output = tmp_path / f"artifacts-{time.monotonic_ns()}"
+        output.mkdir()
+        sent: list[dict[str, Any]] = []
+        load(str(source), str(output), sent.append, {**options, **kwargs.pop("cache", {})},  # type: ignore[arg-type]
+             txy=dict(txy or tab_txy), **kwargs)
+        return sent
+
+    def loaded_of(sent: list[dict[str, Any]]) -> dict[str, Any]:
+        return next(event for event in sent if event["kind"] == "loaded")
+
+    # 1-2. A conversion, then the tab's load from the raw layer, a plot's choice, and a load from the layers.
+    x = folder(data, "x", {1: CASE, 2: CASE})
+    convert(x)
+    read = infra._read_txy_file
+
+    def refuse_helab(filename: str, reason: str) -> Any:
+        assert "d_txy_helab_" not in os.path.basename(filename), filename
+        return read(filename, reason)
+    monkeypatch.setattr(infra, "_read_txy_file", refuse_helab)
+    first_load = loaded_of(run(x))
+    assert first_load["txy"]["origins"] and first_load["problematic"] == []
+    with opened(options, x) as store:
+        layer = (store.txy_layers(str(x)).value or {})[helab]
+        assert {entry.kind for entry in layer.entries.values()} == {"raw"} and store.read_dataset_row(str(x)).missing
+    monkeypatch.setattr(infra, "_read_txy_file", read)
+    y = folder(data, "y", {1: CASE, 2: CASE}, txy=True)
+    run(y, {"source": "matlab-only", "tab": False}, no_cache=True)  # (A plot's own choice: cached quietly.)
+    with opened(options, y) as store:
+        assert store.read_view(str(y), "matlab-only", "").found and "matlab" in (store.txy_layers(str(y)).value or {})
+    again = loaded_of(run(x))
+    assert again["cached"] and again["source"] == "disk"
+
+    # 3. Live: one segment per autosave of the new shot, compacted when they pile up.
+    live = folder(data, "live", {1: CASE}, txy=True)
+    held = [list(entry) for entry in loaded_of(run(live, {"source": "matlab-only"}))["fingerprint"]]
+    held_dir = tmp_path / "held"
+    held_dir.mkdir()
+    np.save(held_dir / "1.npy", np.zeros((2, 3)), allow_pickle=False)
+    for shot in range(2, COMPACT_SEGMENTS + 3):
+        folder(data, f"live-{shot}", {shot: CASE}, txy=True)  # (A finished shot: moved in as Live finds it.)
+        for name in (f"d{shot}.txt", f"d_txy_forc{shot}.txt"):
+            os.replace(data / f"live-{shot}" / name, live / name)
+        np.save(held_dir / f"{shot}.npy", np.full((2, 3), float(shot)), allow_pickle=False)
+        info = (live / f"d_txy_forc{shot}.txt").stat()
+        held.append([shot, info.st_size, info.st_mtime_ns])
+        sent: list[dict[str, Any]] = []
+        save_held(str(live), sent.append, options, held, [], str(held_dir),  # type: ignore[arg-type]
+                  txy={"source": "matlab-only"})
+        assert any(event["kind"] == "cache_saved" for event in sent)
+    with opened(options, live) as store:
+        key = store._path_key(str(live))
+        assert store._conn.execute("SELECT COUNT(*) FROM txy_segments WHERE path = ?", (key,)).fetchone()[0] <= 2
+        assert len(store.read_txy_shots(str(live), "matlab").value or {}) == COMPACT_SEGMENTS + 2
+
+    # 4. Clear all: datasets, records, raw pulses and TXY layers.
+    cleared: list[Any] = []
+    cache_admin(options, "clear", cleared.append)
+    assert {kind for event in cleared if event["kind"] == "removed" for kind in event["kinds"]} >= {"raw", "txy"}
+    with opened(options, x, y, live) as store:
+        assert store.inventory()["txy"]["layers"] == 0 and store.inventory()["raw"]["count"] == 0
+
+    # 5. Make room's order: X's HeLab layer (made again from its raw layer here), then Y's MATLAB layer.
+    convert(x)  # (Its HeLab TXY are still current: nothing converts again, so no raw rows from it.)
+    run(x)
+    raw_fill(str(x), options, lambda event: None)  # (As the app queues after that load's save.)
+    run(y, {"source": "matlab-only"})
+    with opened(options, x, y) as store:
+        with store.transaction():
+            store._conn.execute("UPDATE txy_layers SET last_used = 1 WHERE path = ?", (store._path_key(str(y)),))
+    z = folder(data, "z", {1: CASE, 2: CASE}, txy=True)
+    held_unit = next(event for event in run(z, {"source": "matlab-only"}, cache={"budget": 1,
+                                                                               "budget_set_at": time.time()})
+                     if event["kind"] == "cache_full")
+    with opened(options, x, y, z) as store:
+        low, high = 1, store.usage() + held_unit["bytes"]
+        while low < high:
+            middle = (low + high) // 2
+            low, high = ((low, middle) if store.room_plan(held_unit["pending_id"], middle).possible
+                         else (middle + 1, high))
+        items = store.room_plan(held_unit["pending_id"], low).items
+        x_item, y_item = txy_item("txy:", str(x), helab), txy_item("txy-seen:", str(y), "matlab")
+        assert x_item in items and y_item in items and items.index(x_item) < items.index(y_item)
+
+    # 6. store-v3 as it was, and opened by nothing but LegacyStore.
+    assert files(v3) == before and v3_opens == []
+
+    # 7. A cache move with both stores, each verified (segments included), store-v3 carried as it was.
+    app, target = tmp_path / "app", tmp_path / "moved" / "caches"
+    record = cache_move.start(str(caches), str(target), str(app), COPY)
+    record = cache_move.move(record, str(app), lambda done, total: None, lambda: False)
+    assert cache_move.verify(str(target), record["store_id"], record["store_ids"]) == ""
+    assert files(target / "store-v3") == before and v3_opens == []
+    out = tmp_path / "exported"
+    assert cache_cli.main(["export", "--folder", str(x), "--kind", "txy", "--cache", str(target), "--out", str(out),
+                           "--layer", "m19v1"]) == 0
+    assert sorted(os.listdir(out)) == ["d_txy1.npz", "d_txy2.npz"]

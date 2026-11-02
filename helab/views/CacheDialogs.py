@@ -24,16 +24,19 @@ def _name(path: str) -> str:
     return os.path.basename(path.rstrip(os.sep)) or path
 
 
-def room_text(room: dict[str, Any] | None) -> str:
-    """What Make room removes, from the helper's room plan: other folders' cached data, then (store-v4,
-    D8) raw pulses whose raw files are still in their folders, then raw pulses that are the only copy,
-    each of those folders named."""
+def room_text(room: dict[str, Any] | None, verb: str = "Make room") -> str:
+    """What Make room (or lowering the budget: ``verb``) removes, from the helper's room plan, in its order (Q45.6):
+    other folders' cached data, then (store-v4) TXY data rebuilt here from raw pulses, TXY data whose files are
+    still in their folders, raw pulses whose raw files are, and last the only copies, each of those folders
+    named."""
     if not room:
-        return "Make room removes the least recently used cached data of other folders until this fits."
+        return f"{verb} removes the least recently used cached data of other folders until this fits."
     count = len(room.get("paths") or ())
     raw, only = list(room.get("raw_paths") or ()), list(room.get("only_copy_paths") or ())
-    if not count and not raw and not only:
-        return "There is room now: Make room saves it without removing anything."
+    rebuilt, seen = list(room.get("txy_layers") or ()), list(room.get("txy_seen") or ())
+    txy_only = list(room.get("txy_only") or ())
+    if not count and not raw and not only and not rebuilt and not seen and not txy_only:
+        return f"There is room now: {verb} saves it without removing anything."
     parts: list[str] = []
     if count:
         since = room.get("newest_last_used")
@@ -41,25 +44,56 @@ def room_text(room: dict[str, Any] | None) -> str:
         if isinstance(since, (int, float)):
             day = datetime.fromtimestamp(since)
             when = f" not used since {day.day} {day:%b}"
-        parts.append(f"Make room removes cached data for {count} folder{'' if count == 1 else 's'} "
+        parts.append(f"{verb} removes cached data for {count} folder{'' if count == 1 else 's'} "
                      f"({byte_size(int(room.get('bytes', 0)), 'disk')}){when}, least recently used first.")
+
+    def lead() -> str:
+        return "Then it" if parts else verb
+
+    if rebuilt:
+        parts.append(f"{lead()} removes the cached TXY data of {_folders(rebuilt)} that HeLab makes again from their "
+                     "cached raw pulses.")
+    if seen:
+        parts.append(f"{lead()} removes the cached TXY data of {_folders(seen)} (read again from their TXY files "
+                     "when needed).")
     if raw:
-        parts.append(f"{'Then it' if count else 'Make room'} removes the cached raw pulses of "
+        parts.append(f"{lead()} removes the cached raw pulses of "
                      f"{len(raw)} folder{'' if len(raw) == 1 else 's'} (read again from their raw files when needed).")
+    if txy_only:
+        names = _names([pair[0] for pair in txy_only])
+        parts.append(f"It also removes cached TXY data that is the only copy: its TXY files are gone from {names}.")
     if only:
-        names = ", ".join(_name(path) for path in only[:5]) + (" …" if len(only) > 5 else "")
+        names = _names(only)
         parts.append(f"It also removes cached raw pulses that are the only copy: their raw files are gone from "
                      f"{names}.")
+    if rebuilt or seen or txy_only:
+        parts[-1] += f" ({byte_size(int(room.get('txy_bytes', 0)), 'disk')} of TXY data in all.)"
     if raw or only:
         parts[-1] += f" ({byte_size(int(room.get('raw_bytes', 0)), 'disk')} of raw pulses in all.)"
     return " ".join(parts)
 
 
+def _folders(pairs: list[Any]) -> str:
+    count = len({str(pair[0]) for pair in pairs})
+    return f"{count} folder{'' if count == 1 else 's'}"
+
+
+def _names(paths: list[Any]) -> str:
+    unique = list(dict.fromkeys(str(path) for path in paths))
+    return ", ".join(_name(path) for path in unique[:5]) + (" …" if len(unique) > 5 else "")
+
+
 def room_items(room: dict[str, Any]) -> list[str]:
-    """What the user was told Make room removes, as ``adopt``'s ``room_paths`` names it."""
-    return ([str(path) for path in room.get("paths") or ()]
-            + [f"raw:{path}" for path in room.get("raw_paths") or ()]
-            + [f"raw-only:{path}" for path in room.get("only_copy_paths") or ()])
+    """What the user was told Make room (or lowering the budget) removes, as ``adopt``'s ``room_paths`` and
+    ``trim``'s ``plan`` name it (``cache_store.room_items``: the store compares exactly these)."""
+    from helab.utils.cache_store import room_items as items
+
+    def pairs(name: str) -> list[tuple[str, str]]:
+        return [(str(pair[0]), str(pair[1])) for pair in room.get(name) or ()]
+    return list(items([str(path) for path in room.get("paths") or ()],
+                      [str(path) for path in room.get("raw_paths") or ()],
+                      [str(path) for path in room.get("only_copy_paths") or ()],
+                      pairs("txy_layers"), pairs("txy_seen"), pairs("txy_only")))
 
 
 def legacy_text(legacy: dict[str, Any] | None) -> str:

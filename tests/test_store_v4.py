@@ -124,9 +124,12 @@ def test_a_new_store_v4_has_every_store_v3_table_and_its_own(tmp_path: Path) -> 
     with CacheStore(str(tmp_path / "store-v3")) as v3, CacheStore(str(tmp_path / "store-v4")) as v4:
         tables = {name for (name,) in rows(v3, "SELECT name FROM sqlite_master WHERE type = 'table'")}
         tables4 = {name for (name,) in rows(v4, "SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert tables4 == tables | {"makers", "raw_layers"} and "datasets" in tables4  # (T~3: datasets carried.)
+        assert tables4 == tables | {"makers", "raw_layers", "txy_layers", "txy_segments", "txy_views", "cache_policy",
+                                    "txy_source_prefs"} and "datasets" in tables4  # (T~3: datasets carried.)
         meta = v4._meta()
         assert meta["layout_version"] == 4 and meta["format"] == store_v4.FORMAT == 1 and meta["gen_raw"] == 0
+        assert meta["gen_txy"] == 0 and "parts" in {row[1] for row in rows(v4, "PRAGMA table_info(pending_saves)")}
+        assert "parts" not in {row[1] for row in rows(v3, "PRAGMA table_info(pending_saves)")}
         assert v3._meta()["layout_version"] == 3 and "format" not in v3._meta()
         assert v3.store_id != v4.store_id and v4.layout == 4 and v3.layout == 3
         for table in ("datasets", "results"):
@@ -619,3 +622,31 @@ def test_a_clear_folder_preferences_before_a_retried_import_isnt_undone(tmp_path
         assert (flagged.get("no_cache"), flagged.get("no_auto_load")) == (False, False)
         assert not (v4.read_convert_prefs([FLAGGED])[FLAGGED].value or {}).get("write_beside")
         assert v4.read_prefs([OTHER])[OTHER].value == {"no_cache": False, "no_auto_load": True, "set_at": 500.0}
+
+
+@pytest.mark.no_auto_data_root
+def test_a_store_v3_result_is_copied_into_store_v4_when_returned(tmp_path: Path) -> None:
+    """A42.1: a result read through from store-v3 (Keep) is copied into store-v4 as it is returned, its new
+    result_id in the event; never over a result store-v4 saved since; store-v3 left as it was."""
+    from helab.io_ops.results import result_find
+    caches = tmp_path / "caches"
+    v3_with_state(caches)
+    before = files(caches / "store-v3")
+    options: dict[str, Any] = {"directory": str(caches / "store-v4"), "budget": 8 << 30, "budget_set_at": 1.0}
+    output = tmp_path / "out"
+    output.mkdir()
+    sent: list[Any] = []
+    result_find(RUN, str(output), options, "k1", "f1", sent.append)
+    [found] = [event for event in sent if event["kind"] == "result_found"]
+    with CacheStore(options["directory"]) as v4:
+        mine = v4.find_result(RUN, "k1", "f1").value
+        assert mine is not None and not mine.legacy and mine.data == b"result k1"
+        assert found["result_id"] == mine.row["result_id"]
+        guard = v4.start_result_job(RUN)
+        newer = v4.write_result_file(b"newer")
+        v4.save_result(RUN, "old", "f1", {"r": "mine"}, newer, guard, analysis_id="a", action="Plot", computed_at=9.0)
+        copy = v4.write_result_file(b"stale v3 copy")
+        refused = v4.save_result(RUN, "old", "f1", {"r": "v3"}, copy, v4.start_result_job(RUN), analysis_id="a",
+                                 action="Plot", computed_at=0.5, only_new=True)
+        assert refused.reason == "exists" and (v4.find_result(RUN, "old", "f1").value or pytest.fail()).data == b"newer"
+    assert files(caches / "store-v3") == before

@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 
 from helab.analysis.constant_layers import clean_layer, folder_layer
 from helab.utils.ram_buffers import Buffers, dataset_buffers
-from helab.utils import app_log, file_kinds, large_folder, txy_sources
+from helab.utils import app_log, file_kinds, large_folder, store_v4, txy_sources
 from helab.utils.cache_store import APPROVAL_SHARE, KINDS, store_root
 from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.constants import (
@@ -156,6 +156,25 @@ def set_disk_budget(budget: int) -> None:
     _disk_budget, _disk_budget_set_at = int(budget), time.time()
 
 
+# Caching v2's global cache policy (store-v4, Q45.1): read from its setting on first use, set by Settings ›
+# Cache; sent with every store-v4 request ("policy"), a folder's own choice winning in the store.
+_cache_policy: str | None = None
+
+
+def cache_policy() -> str:
+    global _cache_policy
+    if _cache_policy is None:
+        from helab.utils.settings_defaults import CACHE_POLICY_SETTING, read_setting
+        from helab.utils.settings_store import app_settings
+        _cache_policy = str(read_setting(app_settings(), CACHE_POLICY_SETTING, typed=True) or "")
+    return _cache_policy if _cache_policy in store_v4.POLICIES else store_v4.DEFAULT_POLICY
+
+
+def set_cache_policy(policy: str) -> None:
+    global _cache_policy
+    _cache_policy = policy
+
+
 # Work Offline (cache-only browsing, ``FolderCache.set_offline``): sent with every request's cache
 # options, so helpers key a folder on an unmounted share or volume through its mount hint.
 _offline = False
@@ -170,8 +189,10 @@ def store_options() -> dict[str, Any]:
     cache is off for this session. The GUI process never opens the store."""
     if not (DISK_CACHE_ENABLED and cache_dir_enabled()):
         return {}
-    return {"directory": store_root(cache_dir()), "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
-            **({"offline": True} if _offline else {})}
+    root = store_root(cache_dir())
+    return {"directory": root, "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
+            **({"offline": True} if _offline else {}),
+            **({"policy": cache_policy()} if os.path.basename(root) == STORE_V4_DIRNAME else {})}
 
 
 class FolderCache(QObject):
@@ -302,6 +323,9 @@ class FolderCache(QObject):
         # Each folder's converter flags as the store last said ({"write_beside", "set_at"}; TXY
         # converter stage 4): only folders asked about (``read_convert_prefs``) or set this session.
         self.convert_prefs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # Each folder's stage 2 choices as the store last said (store-v4: ``folder_choices``, Q45.1, Q45.2):
+        # {"policy", "source", "tag", …}; the source and tag override the tab's for that folder.
+        self.folder_choices: dict[str, dict[str, Any]] = {}
         # Live auto-convert (TXY converter stage 4): the folders whose Live converts new raw shots
         # this session (Q9.6: reset each session, except the folders set to start at launch), and
         # each folder's last conversion's lists (``convert_summary``), sent back with the next one
@@ -959,6 +983,9 @@ class FolderCache(QObject):
         root = self.root_of(path)
         # Asked for no choice: the tab's (its dataset is the tab's, ``is_tab_dataset``).
         txy.setdefault("tab", not txy.get("source") and not txy.get("profile_hash"))
+        if txy["tab"] and (choices := self.folder_choices.get(path)):
+            # The folder's own TXY source and tag (store-v4, Q45.2) for the tab's loads, Live and cached reads.
+            txy = txy_sources.with_choices(txy, choices, self._profile_for_tag)
         if not txy.get("profile_hash"):
             profile = self.convert_profile()
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
@@ -982,6 +1009,44 @@ class FolderCache(QObject):
             if isinstance(metadata, Mapping) and metadata.get("key"):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
+
+    def remember_choices(self, path: str, choices: object) -> None:
+        """Keep a folder's stage 2 choices (``folder_choices``, store-v4); a later one (``source_set_at``) wins."""
+        if not isinstance(choices, dict):
+            return
+        saved = self.folder_choices.get(path)
+        if saved is None or float(saved.get("source_set_at", 0)) <= float(choices.get("source_set_at", 0)):
+            self.folder_choices[path] = dict(choices)
+            self.folderPrefsChanged.emit(path)
+
+    def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
+                          tag: str | None = None) -> str:
+        """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
+        one): kept now (the tab's next load and Live follow it), then saved; the store's answer
+        (``folder_choices``) wins. The job's owner, "" if it couldn't be queued."""
+        set_at = time.time()
+        choices: dict[str, Any] = dict(self.folder_choices.get(path) or {"policy": "", "source": "", "tag": ""})
+        if policy is not None:
+            choices.update(policy=policy, policy_set_at=set_at)
+        if source is not None:
+            choices.update(source=source, tag=(tag or "") if source else "", source_set_at=set_at)
+        self.folder_choices[path] = choices
+        self.folderPrefsChanged.emit(path)
+        params: dict[str, Any] = {"path": path, "set_at": set_at}
+        if policy is not None:
+            params["policy"] = policy
+        if source is not None:
+            params.update(source=source, tag=tag or "")
+        return self.cache_admin("folder_choice", **params)
+
+    def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
+        """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                        "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+        return None
 
     def payload_source(self, payload: Mapping[str, Any]) -> str:
         txy = payload.get(txy_sources.TXY_FIELD)
@@ -2271,7 +2336,8 @@ class FolderCache(QObject):
         payload = payload or {}
         if self.quitting and not (operation == "load" and payload.get("save")):
             return False
-        if operation == "load":
+        if operation in ("load", "cached"):
+            # (A cached read too: in store-v4 it reads the view of the tab's TXY source, stage 2.)
             payload = self.with_txy(path, payload)
             if payload.get("live") and "helab_since" not in payload:
                 # HeLab's folders as the last Live check found them: unchanged, nothing was converted since.
@@ -3621,6 +3687,9 @@ class FolderCache(QObject):
         if kind == "folder_prefs":
             self.remember_prefs(event["path"], event["prefs"])
             return
+        if kind == "folder_choices":
+            self.remember_choices(event["path"], event["choices"])
+            return
         if kind == "convert_prefs":
             self._remember_convert_prefs(event["path"], event["prefs"])
             return
@@ -4077,6 +4146,9 @@ class FolderCache(QObject):
                 return
             if kind == "folder_prefs":
                 self.remember_prefs(event["path"], event["prefs"], known=False)
+                return
+            if kind == "folder_choices":
+                self.remember_choices(event["path"], event["choices"])
                 return
             if kind == "folder_constants":
                 self._remember_constant_folders(event.get("folders"), known=False)

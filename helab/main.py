@@ -55,7 +55,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from helab.resources.icons import IconsInitUtil
 from helab.utils import app_log
 from helab.utils.constants import (
-    APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, start_cache_dir)
+    APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, record_cache_folder, start_cache_dir)
 from helab.utils.settings_store import app_settings
 from helab.views import quit_watch
 from helab.views.HelabMainWindow import HelabMainWindow
@@ -101,6 +101,7 @@ def _start_cache() -> str:
         reason = ("The disk cache is off for this session: an interrupted cache move couldn't be finished. "
                   "HeLab tries again at the next start.")
         start_cache_dir(settings, usable=usable, reason=reason)
+        record_cache_folder()  # (A44.2: for ``helab cache``; logged and ignored if it can't be written.)
         return message
     message, instance = startup(app_folder(), recover, wait)
     for box in waiting:

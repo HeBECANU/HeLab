@@ -169,6 +169,9 @@ def raw_fill(path: str, cache_options: Mapping[str, Any], send: Emit = emit, *,
         if prefs.value and prefs.value.get("no_cache"):
             _done(path, send, reason="no_cache")
             return
+        if store.policy_of(path, str(cache_options.get("policy") or "")) == "txy":
+            _done(path, send, reason="policy")  # (TXY only: no raw pulses, Q45.1.)
+            return
         guard = store.start_raw_job(path)
         listed_at = time.time()
         listed: list[_Listed] = []

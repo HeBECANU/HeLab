@@ -294,11 +294,22 @@ def _raw_removed_event(paths: Any, rows: int, size: int) -> RemovedEvent:
             "bytes": size}
 
 
+def _txy_removed_event(paths: Any, layers: Any, size: int) -> RemovedEvent:
+    """A removal of store-v4's TXY layers (kind ``txy``): its folders (None: every one), the layers
+    ([folder, layer] each; [] for a removal of every one) and bytes."""
+    pairs = [[str(path), str(layer)] for path, layer in layers]
+    return {"kind": "removed", "kinds": ["txy"], "paths": None if paths is None else list(paths), "txy": len(pairs),
+            "layers": pairs, "bytes": size}
+
+
 def _removal_events(removal: Any) -> list[RemovedEvent]:
-    """The ``removed`` events of one removal: its kinds', and (store-v4: Make room, a root's Clear) its
-    raw layers' when it took any."""
+    """The ``removed`` events of one removal: its kinds', and (store-v4: Make room, ``trim``, a root's Clear,
+    Don't cache) its raw layers' and its TXY layers' when it took any."""
     events = [_removed_event(removal)]
     raw = [*getattr(removal, "raw_paths", ()), *getattr(removal, "only_copy_paths", ())]
     if getattr(removal, "raw_rows", 0) or raw:
         events.append(_raw_removed_event(raw, removal.raw_rows, removal.raw_bytes))
+    layers = [*getattr(removal, "txy_layers", ()), *getattr(removal, "txy_seen", ()), *getattr(removal, "txy_only", ())]
+    if layers:
+        events.append(_txy_removed_event(sorted({path for path, _ in layers}), layers, removal.txy_bytes))
     return events

@@ -405,6 +405,26 @@ class FolderDetailsPanel(QScrollArea):
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
 
     @staticmethod
+    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any]) -> tuple[str, str]:
+        """The TXY line with the folder's own choices (store-v4, Q45.1, Q45.2), when it has any: its TXY source
+        and tag, and its cache policy unless it follows Settings › Cache's."""
+        from helab.views.CacheTab import POLICY_LABELS
+        text, tip = row
+        parts, lines = [], []
+        source = str(choices.get("source") or "")
+        if source in txy_sources.LABELS:
+            tag = str(choices.get("tag") or "")
+            parts.append(f"this folder: {txy_sources.LABELS[source]}" + (f" ({tag})" if tag else ""))
+            lines.append("This folder's own TXY source (right-click › TXY for this folder…), instead of Settings'.")
+        policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
+        if policy:
+            parts.append(f"cache: {policy}")
+            lines.append("What this folder's saves keep (right-click › Cache policy for this folder…).")
+        if not parts:
+            return row
+        return " · ".join(filter(None, (text, *parts))), "\n".join(filter(None, (tip, *lines)))
+
+    @staticmethod
     def _data_rows(explorer: FolderExplorer, meta: Mapping[str, Any], rows: dict[str, tuple[str, str]],
                    loading: bool, opened: bool, *, unchecked: bool = False) -> None:
         """The shown dataset: counts, size, when it was loaded, where from and its problem shots. Shown
@@ -423,7 +443,9 @@ class FolderDetailsPanel(QScrollArea):
                 f"{found:,} TXY found · {loaded:,} loaded", f"{failed:,} unreadable" if failed else "",
                 f"{unsettled:,} still being written" if unsettled else "")))
             rows["files"] = (files, "Counts from when this data was loaded")
-            rows["txy"] = FolderDetailsPanel._txy_row(meta)
+            rows["txy"] = FolderDetailsPanel._with_choices(
+                FolderDetailsPanel._txy_row(meta),
+                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {})
         rows["data"] = (f"{plural(number('rows'), 'data row')} · {fnum(number('bytes')).strip()}B in RAM",
                         "Rows (t, x, y) across the loaded TXY files, and the memory their arrays use")
         loaded_at = meta.get("loaded_at")

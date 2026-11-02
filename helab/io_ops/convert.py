@@ -849,8 +849,8 @@ class _RawRows:
             return None
         try:
             with stores._cache_store(cache["directory"], [path]) as store:
-                if store.read_only:
-                    return None
+                if store.read_only or store.policy_of(path, str(cache.get("policy") or "")) == "txy":
+                    return None  # (Policy txy: no raw pulses, Q45.1.)
                 return cls(path, cache, store.start_raw_job(path), send)
         except (StoreError, OSError, ValueError) as exc:
             send({"kind": "cache_warning", "message": f"Raw pulses of {path} aren't cached this time: {exc}"})

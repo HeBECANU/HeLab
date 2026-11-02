@@ -536,3 +536,427 @@ came after it. The switch stays off, so none of this is user-visible yet.
   the next check, and their tooltip ends 'A waiting file is checked again only when it changes', which is
   wrong for `cleared`: the next check converts them. Transient (one check interval). Fix: leave `cleared` out
   of `stuck()` (Assay's correction; not in `CONVERT_SETTLING`)."
+
+## Stage 2: open questions with proposed answers (no code; after checkpoint 3 landed, `c2d0ece`)
+
+Stage 2 waits for Tony's go. These are the readiness note's D7 and gap 10, plus what building stage 1 showed.
+Sources: the readiness note §1 and §3, the store-v4 design note §1–§6, the plan's "TXY layers and the policy",
+and the decided Q18.2, Q19.3, Q22.1–Q22.11 and Q42.x. Numbered provisionally after Q~1 and Q~2 above (`Q~3`…),
+to be merged by CoCo.
+
+**Q~3 (readiness D7): the default policy.**
+- *The conflict.* Q19.3 says every TXY source a plot uses is cached as its own layer. The design's `raw`
+  policy writes no HeLab layer, and the plan calls raw + tag "the default once the converter is robust".
+  Q22.11 (decided) settles most of it: "cache the raw layer and the selected TXY versions at the same
+  time; a global default caches raw files; a per-folder override picks the source priority".
+- *Proposed:* the default is **raw + used**. Raw rows where there are raw files, plus every TXY layer a
+  load composes: the `matlab` layer for MATLAB shots, and the HeLab layer of the tag the load used,
+  including a plot's other tag (Q19.3, "should be rare").
+  - **raw** (convert on load: no HeLab layer; the `matlab` layer still, since it can't be derived) and
+    **txy** (no raw rows: archives, or raw not wanted) are explicit choices, global or per folder.
+  - "raw + tag" stops being a separate policy: the selected tag is the tag the load uses (Q~4).
+  - As decided, a policy only decides what new saves write. Every layer is read, switching migrates
+    nothing and removes nothing.
+
+**Q~4 (gap 10b): one setting or two for "which TXY".**
+- *The question.* Q22.11's per-folder "source priority" overlaps two things: Q18.2's source mode plus
+  profile tag (global for tabs and Live; plots pick their own), and the design's `cache_policy.tag`.
+- *Proposed:* one choice. **What a load reads** is Q18.2's source mode and tag, with a per-folder override
+  (a row like `convert_prefs`: `source`, `tag`, `set_at`). **What is cached** is `cache_policy`
+  (`path`, `policy` ∈ raw+used / raw / txy, `set_at`), with no `tag` column. So "cache this folder's
+  p22v1" means "this folder loads p22v1", and Q~3's default caches what is loaded.
+  - The override is the user's own state, imported like `convert_prefs`.
+  - Clear all never removes it; Clear folder preferences does.
+
+**Q~5 (gap 10a): a HeLab layer read from beside TXY, keyed per shot or per layer.**
+- *The question.* Under `txy` (or with no raw file), a HeLab shot read from a beside `d_txy_helab_<tag>_<N>.txt`
+  has no raw fingerprint. The design puts `by_txy` "in `info`", but one `(path, layer)` row can mix shots
+  converted from raw with shots read from text.
+- *Proposed:* **per shot.** Each fingerprint entry gains its kind, `[shot, size, mtime_ns, "raw"|"txy"]`, and
+  `by_txy` goes. The loading order prefers raw: once the raw layer holds the shot, a TXY-keyed entry is
+  replaced by the raw-keyed one at the layer's next save, so it is converted once.
+  - Saved results made on a TXY-keyed shot then show as outdated once; that is the same rule as v3's
+    HeLab shots, §4.
+  - Make room counts a TXY-keyed shot whose text is gone as an only copy (not rebuildable).
+
+**Q~6: store-v4's `datasets` table once `txy_layers` exist.** Q42.3 carried `datasets` through stage 1. Only
+switch-on users (testers) have v4 rows.
+- *Proposed:* stage 2 never writes `datasets`. It reads them like Keep reads store-v3: a dataset whose
+  shots' fingerprints still match fills the `matlab` or `helab:<hash>` layer at the load's save. Make room
+  and Clear remove `datasets` rows as today.
+- No conversion code, and nothing removed without asking. A later layout (`_migrate`) may drop the empty
+  table.
+
+**Q~7: store-v3's MATLAB shots under Keep (the "v3 seed").**
+- *Proposed:* **copy on use.** A load that finds a v3 dataset shot with the current fingerprint adds it to
+  the `matlab` layer's save: it is read already, with no extra I/O, and v3 stays read only.
+- Saved results stay read-through (A42.1 decides their copy separately).
+
+**Q~8 (D8, stage 2's part): Make room's order with TXY layers.**
+- *Proposed order:*
+  1. HeLab layers whose raw layer is held (rebuildable locally);
+  2. other folders' `matlab` layers and TXY-keyed HeLab shots whose source file the last listing saw;
+  3. raw layers seen;
+  4. only copies of any kind (raw layers whose raw file is gone, `matlab` and TXY-keyed shots whose file
+     is gone), named.
+- `trim` (A42.2) follows the same order.
+- As in stage 1: exactly the named items, or nothing.
+
+**Q~9: Live's segments (F8) and the budget.**
+- *Proposed:* a save appends one segment of the new and changed shots, with one fit check for that
+  segment.
+- Compaction (over 8 segments, or over half superseded) runs in the same helper job only when the
+  rewritten copy fits beside the old one. Otherwise it waits for the next save, and it is never a reason
+  to ask Make room.
+- The old segments are retired, then swept as today, so there is no new removal rule.
+
+**Q~10: `pending_saves` with several units per folder (readiness gap 2).** Stage 1 never makes a pending raw
+unit (Q42.1: over the budget it is not saved and never asks), so `UNIQUE (path)` held.
+- *Proposed for stage 2:* keep one pending unit per folder. A TXY-layer save that doesn't fit merges its
+  parts into that folder's pending row (`parts`, as the design says), so one question names everything it
+  would save. Raw stays never-pending.
+
+**Q~11: RAM while converting from the raw layer.**
+- *Proposed:* no change to the RAM budget. A decoded raw layer lives only in the helper during a load's
+  conversion. Its peak is bounded by the worker count times a shot, since each shot decodes, converts and
+  is dropped. The GUI's RAM budget keeps counting the datasets it holds (`ram_buffers`) as today.
+
+**Q~12 (readiness gap 11): identity across computers.** A raw fingerprint is `(size, mtime_ns)`, and SMB
+clients on macOS and Windows may report different mtime resolution.
+- *Proposed:* stage 2 keeps `(size, mtime_ns)` as the key on each computer. The stored `sha256` decides a
+  match only for data made elsewhere (Q27.x's versioning, a later stage). There is no cross-computer
+  matching in stage 2.
+
+**Q~13: when the `store_v4` switch turns on (Q28.3).**
+- *Proposed:*
+  - not before stage 2 has landed and Tony has used it with the switch on, on his Mac and one lab PC
+    (M~2, M42.1's codec timing);
+  - then on by default in the release that ships stage 2, with store-v3 under Keep until the user answers;
+  - the switch row stays for one release, so a lab PC can go back to store-v3 while v4 settles.
+
+*Also for stage 2, no question:* `helab cache export` of TXY layers (A~5); `pack_dataset`'s 2.1 GB limit ends
+with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
+
+# Stage 2 (Tony's go, 2026-11-02; brief-stage2.md)
+
+## Step 1: the design addendum (`1eddfaf`)
+
+[design-stage2.md](design-stage2.md). CoCo's answers:
+- **S~1:** the files outside the owned paths, yes.
+- **S~2:** raw-keyed wherever a raw file is listed, yes (CoCo tells Tony as an FYI).
+- **S~3:** (b), with three conditions:
+  - the file is written atomically, by the GUI only;
+  - `helab cache` falls back to QtCore when it is missing, or names a folder that isn't there;
+  - it is not part of housekeeping.
+- **S~4:** share one view, yes.
+- **S~5:** whole rows, yes.
+- **S~6:** goes to Tony; build with the proposed labels.
+- A40.2 and A44.2 joined stage 2 (CoCo).
+- A44.2's two call lines (`helab/main.py`, `helab/views/CacheMover.py`) approved, with a test that
+  `helab convert` doesn't write the file.
+
+## Step 2: the store side, inert (`b691d26`, `a70d261`)
+
+- **`b691d26`:**
+  - store-v4's stage 2 tables (migrated into stage 1's stores) and `helab/convert/txy_layer.py` (PURE);
+  - `CacheStore`'s TXY layers: save units, per-shot job order, views, `confirm_view` (A40.3), pending parts
+    merged per folder (Q45.8), compaction only when it fits (Q45.7), `mark_txy_seen`;
+  - one planner for Make room and `trim` (Q45.6, A42.2);
+  - Clear `txy` everywhere it joins; the sweep, `_live`, inventory and cache move over `txy/`;
+  - **S2-0:** `rekey_subtree` moves `raw_layers` and the TXY tables;
+  - admin `clear_txy` and `folder_choice`.
+
+  Tests: `tests/test_txy_layers_store.py` (19). Mutations of S2-0, the migration, the waiting parts' files
+  and the policy each fail a test.
+- **`a70d261`:**
+  - A44.1: `helab cache export --folder F --kind txy [--layer]`, and a segment file;
+  - A44.2: `cache-folder.json`, written by the GUI at startup and after a move, read by `helab cache` with
+    CoCo's fallbacks.
+
+  Tests: `test_cache_cli.py` (13), `test_cache_folder_record.py` (convert writes none; the GUI writes it).
+- **Departures from the addendum, to note:**
+  - **`save_dataset` is still allowed in store-v4.** The addendum's refusal moves to step 3, with the loads
+    that replace it. Refusing it now would stop switch-on loads from caching anything until step 3.
+  - **A merged waiting unit keeps the later job's view only.** One pending row per folder (Q45.8) can hold
+    one view. Parts of every layer are kept; another source mode's view is made again at its next load.
+  - **The GUI's Make room items** (`CacheDialogs.room_items` builds them from the room dict's keys) don't
+    yet know `txy_*`. Step 5 adds them, after merging `dev/v0.0.8` (Rivet's strings in that file). Until
+    then a switch-on Make room that names TXY layers finds its plan changed and removes nothing: safe.
+  - **`gone_at` on a layer** is set and cleared by the latest listing (`mark_txy_seen`). Unlike raw rows'
+    C2-10 ordering, a late older listing can flip it. Step 3's loads call it with the listing they took;
+    say so if it needs raw's ordering.
+- **Docs proposal:** `docs/hlb-format.md` gets a "TXY layers" section (§3's arrays and meta, the precision
+  rule) and `helab cache export --kind txy`. AGENTS.md's code map row for `cache_cli.py` adds "TXY layers".
+- **CI 41375836115** (`84ccaeb`, checkpoint 1): green on all three OSes. I read every Tests and Converter job's
+  log (9 jobs). Windows Tests 2/2 (job 125055805809) had **2 RERUNs**, both known Windows flakes, both
+  passed on retry:
+  - `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`:
+    `waitUntil timed out in 3000 milliseconds` at line 292, the known entry's line (listed as `[2]`);
+  - `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: the known pathlib
+    `lstat` collection error.
+
+  No other RERUN. Windows Tests 1/2 took 19.1 min (2/2: 13.7). The new store tests take under a second.
+  **known-issues proposal:** add "Again: `agent/caching-v2` CI 41375836115 (Windows Tests 2/2, job
+  125055805809)" to both entries, and "`[1]` too" to the first.
+- **Windows Tests 1/2 timing** (CoCo asked; 17.4 min of pytest, 19.1 min job, against 11.1 and 13.4 in CI
+  41188263711). Measured from the log's per-worker PASSED timestamps (CI prints no durations):
+  - the stage 2 tests cost little: `test_txy_layers_store.py` 7–8 s of worker time, `test_cache_cli.py`
+    3–4 s, `test_cache_folder_record.py` 0.9 s, `test_caching_v2_session.py` 5 s;
+  - the growth (36.6 → 63.7 worker-min) is in files this floor didn't change: `test_convert_fastio.py`
+    131 → 484 s, `test_convert_raw.py` 217 → 567 s, `test_store_identity.py` 227 → 380 s,
+    `test_cache_move.py` 13 → 84 s;
+  - group 1 ran about the same number of tests (4419 against 4409), and fastio's CPU-bound parsing was
+    3.7× slower, so a slower runner this time, not new tests.
+
+  Under the ~25 min stop line; watched at every run from here on.
+
+### Checkpoint 1 review fixes (Assay, `review-s2-checkpoint1.md`, `7d5c567`)
+
+| Finding | Commit | Fix | Test (fails before the fix) |
+|---|---|---|---|
+| S2-1 Medium | `6b0f998` | `trim` stops before only copies (`_free_space(only_copies=False)`) unless given the named plan (`expected`), which it removes exactly or not at all; `trim_plan(budget)` and the admin's `trim` with `plan_only`/`plan` give step 5's question what goes; `trim_estimate` is store-v3's | `test_trim_keeps_only_copies_unless_its_plan_names_them` |
+| S2-2 Low | `6b0f998` | A layer keeps `seen_at` (`STAGE2_SCHEMA`, and a `migrate` addition for a store migrated before it); `mark_txy_seen` follows C2-10's rule | `test_an_older_listing_landing_late_undoes_no_mark`; the migration test, extended to a store without `seen_at` |
+
+- **CI 41379212072** (`6b0f998`): green on all three OSes. I read every Tests and Converter job's log (9).
+  Windows Tests 2/2 (job 125066159186) had **1 RERUN**, of
+  `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: the known pathlib
+  `lstat` collection error, which passed on retry. **known-issues proposal:** add this run to that entry. No other
+  RERUN. Windows Tests 1/2 took 9.1 min, 2/2 took 11.6.
+- The step 3 work in progress was kept out of `6b0f998`: set aside as a patch, then reapplied after it.
+- Assay's notes for later: `start_txy_job`'s guard also holds `gen_datasets` and the folder's epoch when step
+  3d seeds layers from v4 `datasets` rows; Settings › Cache's Clear all sends `txy` (step 5).
+
+## Step 3: loading (store-v4; the switch stays off, store-v3 unchanged)
+
+| Commit | What |
+|---|---|
+| `7d185eb` | 3a: `helab/io_ops/txy_cache.py` `Access`: `_load` and `save_held` make the same calls (`row`, `full` with a loader, `touch`, `confirm`, `write`). In store-v3 these are the dataset methods; in store-v4 views and layers. Loads and Live's saves write append-only units, never a dataset. A40.3: a signature-only change only rewrites the view's info. A held shot already kept isn't read again for a save. `mark_txy_seen` at every v4 listing. Each job takes a TXY guard |
+| `d8b6bae` | 3a: a cached read carries the tab's TXY source (FolderCache's `with_txy` for `cached`, and the `io_helper.py` line CoCo approved); an older request reads the folder's last used view |
+| `3366640` | 3b (Q19.3): a plot's own TXY choice (a `no_cache` request) is cached under its own view in store-v4, quietly (no cache events, never waiting); Don't cache still keeps it RAM only |
+| `d96c65f` | S2-3 (Assay re-check): a new layer is first seen at its job's listing time (`save_txy(seen_at=…)`, kept on waiting parts). Assay's note: the TXY guard also holds `gen_datasets` and the folder's epoch |
+| `2f6c1f3` | 3c (Q45.2): the folder's own source and tag. A v4 load sends `folder_choices` and follows it for the tab. FolderCache remembers it and `with_txy` applies it to the tab's loads, Live and cached reads. `txy_sources.with_choices`; tags are resolved to the conversion profile or a built-in |
+| `08895bc` | 3d: no view yet, so store-v4's own `datasets` row (Q45.4), else store-v3's under Keep (Q45.5, `LegacyStore.dataset_row`, `CacheStore.legacy_dataset`, never one store-v4 removed), seeds the layers on use. A42.1: a store-v3 result is copied into store-v4 as `result_find` returns it (`save_result(only_new=True)`) |
+| `6f57918` | 3e: a HeLab shot from the raw layer (the loading order's second step), equal to its text, for built-in profiles |
+
+- **Departures:**
+  - `save_dataset` isn't made to raise in store-v4 (stage 1's tests and Q45.4's rows use it). Loads never call
+    it there, and a test checks it.
+  - Live checks don't open the store, so the folder's source reaches them through FolderCache, which learns it
+    from a load's or the admin's `folder_choices`. A Live started with no load of that folder this session
+    follows the global source until one runs.
+  - 3e converts only for built-in profiles (the helper has no user profile library); others read the text.
+- **Observed, not a failure or a RERUN:** one full local run printed `ERROR:root:GUI stalled for 62.74s; capturing
+  thread stacks`. It comes from `gui_watchdog.py`, the main window's watchdog thread. Likely cause: a test leaves
+  a main window's watchdog running after its event loop is gone. This floor's code touches neither. I saw it
+  once, and it isn't in known-issues. **known-issues proposal:** "a main-window test may leave its `GUIWatchdog`
+  running (a 'GUI stalled' log in a later test's worker)".
+- Tests: `tests/test_txy_loading.py` (17), and additions to `test_txy_layers_store.py` (23), `test_store_v4.py`,
+  `test_helper_dispatch.py`, `test_caching_v2_session.py`.
+- Local full suite at `6f57918`: 8909 passed, 672 skipped, no RERUN. mypy --strict (helab, tests, win32) and
+  pyright (also Windows) are clean.
+- **CI 41383644340** (`e985e12`, step 3 with checkpoint 1's fixes): green on all three OSes. I read every Tests and
+  Converter job's log (9): **no RERUN**. Windows Tests 1/2 took 14.2 min, 2/2 took 14.9 (pytest 12.4 and 13.0).
+
+### Step 3 review fixes (Assay, `review-s2-step3.md`, `ad67f58`)
+
+| Finding | Commit | Fix | Test (fails before the fix) |
+|---|---|---|---|
+| S3-1 Medium | `df17761` | `CacheStore.clear_folder_data`: a folder's Clear data cache (`invalidate`) takes in store-v4 its TXY layers, views and seen raw layers too, only copies kept (C2-9). `purge_datasets` takes layers and seen raw layers not used since the cutoff, only copies kept (Assay's call per Q22.6 and C2-9, **for Tony to confirm**). `_removal_events` sent | `tests/test_txy_fixes.py`: the Clear through the real `invalidate` request; the purge |
+| S3-2 Low | `df17761` | The conversion from the raw layer runs before any `file_started`, under the converter's `_Ticker` (`compute_budget` of the raw size), in the load's read and the save's re-read | `tests/test_txy_fixes.py`: a slow decode keeps heartbeats going, with no `file_started` for the shot |
+
+- **The handoff note Assay asked for:** while the HeLab text is on the share (stage 2's boundary), the raw step costs
+  more CPU than parsing text on a local disk (0.48 s against 0.004 s for a 3.25 MB shot on an M4). Its gain is
+  for slow shares, and offline.
+- **CI 41386150963** (`df17761`): green on all three OSes. I read every Tests and Converter job's log (9). Ubuntu Tests
+  2/2 (job 125087377900) had **1 RERUN**: `test_root_gui.py::test_the_gui_never_writes_the_saved_file_itself`,
+  "worker 'gw3' crashed while running" it. It passed on retry. That is known-issues' entry for the same test
+  ("xdist worker gw0 crashed"). **known-issues proposal:** add this run. No other RERUN. Windows Tests took 12.7
+  and 10.8 min.
+- The step 4 work in progress was kept out of `df17761` (a patch, reapplied after it). Step 4 is `8be1be6`, local.
+
+### The "GUI stalled" log (CoCo asked for the test)
+
+A full local run with its output kept (`.ai/temp/full-run.txt`) caught the faulthandler dump. The worker's main
+thread was idle in execnet, waiting for more tests at the end of its run, while a `GUIWatchdog` thread
+(`gui_watchdog.py:40`) was still alive.
+
+`HelabMainWindow.closeEvent` stops the watchdog only on its full path. It returns early, leaving the watchdog
+running, when a close waits for saves (`_wait_for_saves` opens `QuitSaveDialog`) or a quit dialog is open.
+`qtbot.addWidget`'s close at teardown then doesn't stop it either. The likely tests are those whose window close
+waits for saves: `tests/test_quit_confirms.py` and `tests/test_txy_last_used_quit.py`. Running each alone, then
+a slow file in the same process, didn't reproduce it, so the exact test isn't pinned. Harmless: a log line, never
+a failure.
+
+**known-issues proposal:** "A main-window test whose close waits for saves (`QuitSaveDialog`) leaves its
+`GUIWatchdog` running past the test; the worker, idle at the end of a run, then logs 'GUI stalled for ~63s'
+(likely `test_quit_confirms.py` or `test_txy_last_used_quit.py`). Fix: the tests finish or cancel the dialog,
+or the watchdog stops when the window is destroyed."
+
+## Step 4: Live's segments and compaction (`8be1be6`)
+
+Each Live autosave already writes one segment of what its layers lack (3a). Since `8be1be6`, after any unit is saved,
+each layer it wrote that is due is compacted in the same job (`Access.compact` → `CacheStore.compact_txy`). A layer
+is due at more than 8 segments, or with more than half its bytes superseded. The rewrite runs only if it fits beside
+the old segments, else waits for a later save, never asking (Q45.7). It runs under the converter's ticker. Test:
+nine autosaves give segments 2..8, the ninth compacts to one, and the next appends.
+
+## Step 5: the UI (after merging `dev/v0.0.8` at `6679245`)
+
+| Commit | What |
+|---|---|
+| `102c027` | Settings › Cache (store-v4 only): a TXY data row (shots, folders, size, tags, only copies; Clear… → `clear_txy`); Clear all sends and names `txy`; the global cache policy (a combo in S~6's proposed words, the `cache_policy` settings row, `FolderCache.cache_policy`, sent as `policy` with store-v4 requests only); policy `txy` keeps no raw pulses (`raw_fill` reason `policy`, conversions' raw rows skipped, `CacheStore.policy_of`); lowering the budget asks from `trim`'s plan (`plan_only`) and sends exactly its items (S2-1's step 5). Make room's `room_text` names TXY layers by group, and `room_items` is `cache_store.room_items` |
+| `d849372` | The folder's own choices: right-click "TXY for this folder…" and "Cache policy for this folder…" (QInputDialog lists; "As Settings (every folder)"; disabled without a data root); `FolderCache.set_folder_choice` (kept now, then saved); Folder details' TXY line names them |
+
+- **S~6** labels are as proposed, still waiting on Tony's answer (CoCo relays). In `CacheTab.POLICY_LABELS` and
+  `FolderExplorer.FOLDER_CHOICE_GLOBAL`.
+- The two menu dialogs are `QInputDialog.getItem`. Like the explorer's existing Custom depth… (`getInt`), they
+  aren't named widgets; the menu actions are.
+
+## Step 6: the integration check (`a39a94d`)
+
+`test_caching_v2_session.py::test_a_stage_2_session_with_layers_leaves_store_v3_as_it_was`, with the switch on,
+beside an older HeLab's store-v3:
+1. a conversion saves raw layers;
+2. the tab's load from the raw layer (no HeLab text read), then a plot's choice cached quietly, then the next load
+   from the layers;
+3. ten Live autosaves compacting;
+4. Clear all;
+5. Make room's order, through a real `cache_full`;
+6. store-v3 hashed unchanged and opened only by `LegacyStore`;
+7. a cache move, both stores verified, and `helab cache export --kind txy` on the moved store.
+
+**Checkpoint 2** (stage 2 complete, switch still off): local full suite at `a39a94d` gives 8925 passed, 672 skipped,
+no RERUN. mypy --strict (helab, tests, win32) and pyright (also Windows) are clean.
+
+## Step 7: doc proposals for stage 2 (for the Coordinator)
+
+- **AGENTS.md** (wording only):
+  - The code map row for `helab/io_ops/` adds `txy_cache` ("a load's disk cache: store-v3's dataset, or store-v4's
+    views and TXY layers").
+  - The row for `helab/convert/` adds `txy_layer` ("TXY segments, `.hlb` kind `txy`").
+  - The disk-cache bullets: no rule change. Compaction retires superseded segments, which the existing "the sweep
+    deletes retired dataset and layer files…" line covers. Clear data cache and purges are the user's choices,
+    as before.
+  - The settings bullet's "The `store_v4` row stays off until caching v2's stage 2 and Tony's go" becomes "…until
+    Tony has used stage 2 (Q45.11)".
+- **cache-store.md**, a "TXY layers (stage 2)" part of the store-v4 section:
+  - **The tables:** `txy_layers` (per-shot entries `[shot, size, mtime_ns, kind, seq, rows, problematic, job_seq]`,
+    kinds per Q45.3, `gone_at` and `seen_at` per C2-10, S2-2/S2-3), `txy_segments` (append only), `txy_views`
+    (source identity × profile asked for), `cache_policy`, `txy_source_prefs`, and `pending_saves.parts`.
+  - **Save units** (`save_txy`): one fit check; the policy; `hold`; `seen_at`.
+  - **One waiting unit per folder**, with parts merged (Q45.8).
+  - **Compaction only when it fits** (Q45.7).
+  - **The TXY guard:** `gen_txy`, `gen_datasets`, the `txy:` epoch, the folder's and the root's.
+  - **Make room's and `trim`'s order:** five groups (Q45.6); `trim` keeps only copies unless given `trim_plan`'s
+    items (S2-1).
+  - **Clear:** `remove_txy`; `clear_folder_data` and `purge_datasets` take layers but keep only copies (S3-1,
+    the purge for Tony to confirm).
+  - **Seeds:** store-v4's `datasets` and store-v3's under Keep seed layers on use (Q45.4, Q45.5).
+  - **A42.1:** `save_result(only_new=True)`.
+  - **S2-0:** `rekey_subtree` moves raw and TXY layers.
+  - **The sweep and moves:** they cover `txy/`.
+- **io-and-browsing.md**, loads:
+  - `txy_cache.Access` (the same calls for both layouts); the loading order (layer, then raw layer, then seeds,
+    then the share; the raw step converts before any `file_started`, under the ticker, S3-2);
+  - A40.3's confirm;
+  - cached reads carry `txy`;
+  - a plot's own choice is cached quietly (Q19.3);
+  - the `folder_choices` event.
+- **live.md:**
+  - Live's saves append a segment and compact (Q45.7).
+  - Live follows a folder's own source through FolderCache (`with_txy`), once a load or the admin told it.
+- **converter.md:**
+  - `txy_layer`;
+  - a load converts a HeLab shot from the raw layer for built-in profiles, equal to its text;
+  - policy `txy` keeps no raw rows from conversions.
+- **app-runtime-and-ui.md:**
+  - Settings › Cache's TXY data row and cache policy, and the lower-budget question from the plan;
+  - Make room naming layers;
+  - the folder menu's two items;
+  - Folder details' TXY line.
+- **settings.md:** the `cache_policy` row.
+- **testing.md:** `tests/test_txy_layers_store.py`, `test_txy_loading.py`, `test_txy_fixes.py`, `test_txy_ui.py`, and
+  the stage 2 session in `test_caching_v2_session.py`.
+- **docs/hlb-format.md:** a "TXY layers" section, with `kind` `txy`, arrays `shots`, `offsets`, `hits` and
+  `problematic`, the meta, `g8`/`f64`, and no shuffle; and `helab cache export --folder F --kind txy [--layer]`.
+- **The plan** (`roadmaps/caching-v2.md`): stage 2's items ticked; "the switch stays off until Tony has used it
+  (Q45.11)".
+- **known-issues:**
+  - the GUI-watchdog proposal above;
+  - the RERUN sightings in the CI notes above (`test_gui_responsiveness` `[1]`, `test_test_isolation` twice,
+    `test_root_gui`).
+
+### New items (provisional)
+
+- **Q~14 The purge by age in store-v4** takes TXY layers, views and seen raw layers not used since the cutoff,
+  keeping only copies (S3-1: Assay's call per Q22.6 and C2-9). Proposed: as built. The alternative is that the
+  purge row says "datasets only" and layers age out only through Make room.
+- **Q~15 A Live started on a folder before any load of it this session** follows the global TXY source until a
+  load or the admin tells FolderCache the folder's own (Live checks don't open the store). Proposed: accept for
+  now, with A~8 as the fix.
+- **A~7** Conversion from the raw layer (3e) for user profiles: the helper would need the app's profile library.
+  Today only built-ins convert; others read their text.
+- **A~8** FolderCache learns a folder's choices with its listing (`folder_choices` beside `folder_prefs` in
+  `io_ops/metadata.py`), so Live and the first load follow it at once.
+- **A~9** The GUI-watchdog test leak: finish or cancel the `QuitSaveDialog` in the quit tests, or stop the watchdog
+  when the window is destroyed.
+- **M~4** On screen, with the switch on in test settings and temp folders only:
+  - Settings › Cache's TXY data row and cache policy, and the lower-budget question;
+  - Make room naming layers;
+  - the two folder menu items and Folder details' line.
+- **M~5** On the lab share, a large shot's load from the raw layer against reading its HeLab text (S3-2's cost
+  note: the raw step is slower than local text, faster than a slow share).
+
+### Checkpoint 2's CI (41389534725, `93a938b`)
+
+Green on all three OSes. I read every Tests and Converter job's log (9). One job had RERUNs: **macOS Tests 1/2 (job
+125097691928), 7 RERUNs**, all worker deaths, every test passing on a rerun. The job took 14.9 min against its usual
+3–7: a slow runner.
+- **6 were pytest-timeout kills** at `--timeout=120 --timeout-method=thread` ("node down: Not properly terminated",
+  after faulthandler's stack dump):
+  - `test_typing.py::test_pyright_helab` 5 times. That test took 87 s and 70 s on macOS in this branch's two
+    previous runs, so it already sits near the limit. Locally `pyright helab` takes 10.3 s here against 10.1 s on
+    Ground's `dev/v0.0.8`, so stage 2's code adds about 2%; the runner is the cause.
+  - `test_accessible_names.py::test_every_script_and_each_library` once ("Timeout (0:01:40)!", killed at 120 s).
+- **1 was the known QtWebEngine abort:** `test_plot_backends.py::test_2d_plots_draw_with_every_library
+  [values2-Plotly-TxyHistograms]` ("Fatal Python error: Aborted"), known-issues' "QtWebEngine crashes xdist
+  workers".
+- **Proposals:**
+  - known-issues: "`test_pyright_helab` (and `test_accessible_names`) can pass pytest-timeout's 120 s on a slow
+    macOS runner (CI 41389534725: 5 and 1 worker kills, passed on retry); its normal 70–87 s is close to the limit."
+  - **A~10:** give the typing tests their own longer timeout (`@pytest.mark.timeout(300)` on `test_typing.py`'s
+    subprocess tests), or run them in a job of their own.
+  - The QtWebEngine entry gets this sighting.
+- Windows Tests took 12.6 and 16.2 min (pytest 10.7 and 14.6).
+
+### Checkpoint 2 review fixes (Assay, `review-s2-checkpoint2.md`, `28d5844`)
+
+Every fix is in Settings › Cache's store-v4 questions, and each has a test that fails at `c627027`.
+- **C2S2-1:** Clear all now names the only copies that `remove_txy(None)` and `remove_raw(None)` take, in one
+  sentence: "Some of it is the only copy (TXY data of N folders and raw pulses of M shots): their files are gone
+  from their folders, so it can't be read again." The inventory's `txy` gains `only_copy_folders`.
+- **C2S2-2:** the store-v4 purge's question and estimate now count TXY and raw layers as well.
+  - **The data:** the inventory's `ages` gain `txy` and `raw`, rows of `[last_used, bytes, path]` without only
+    copies (the purge's own `last_used < cutoff AND gone_at IS NULL`). `purge_estimate(datasets=True)` adds
+    `txy_folders`, `txy_bytes`, `raw_folders` and `raw_bytes`, and `bytes` then covers all of them.
+  - **The question:** it names each part ("TXY data for 1 folder, raw pulses for 2 folders (…)") and adds "Only
+    copies stay (Make room names them)."
+  - **The row:** the estimate label counts the most folders of any part, and its tooltip names the parts.
+  - **Remove…** is enabled when only layers are old.
+  - **Approach:** I built an estimate from the inventory, not a helper plan; Assay allowed either. The purge test
+    in `test_txy_fixes.py` checks the estimate against the store's layer bytes and only-copy folders.
+- **C2S2-3:** TXY data's Clear now counts only-copy folders, not layers, and its singular reads "TXY data of 1
+  folder".
+- **Checked:**
+  - Local suite (`-n 4`): 8927 passed, 672 skipped, no RERUN. An earlier run had 15 RERUNs, all three typing tests
+    five times each on my own test's type error, which was fixed before the commit.
+  - mypy strict (helab, tests, win32) and pyright (also Windows): clean.
+- **Doc proposal:** app-runtime-and-ui.md's Settings › Cache part says the store-v4 Clear all, TXY Clear and purge
+  questions name TXY data and raw pulses, with only copies named where they go.
+- **CI 41393351958 (`28d5844`):** green on all three OSes. I read all 9 Tests and Converter logs, fetched whole
+  through the API: **no RERUN in any job**. The only "rerun" matches are the plugin list and the test parameter
+  `[after the Live rerun]`.
+  - Times: Windows Tests 1/2 took pytest 10.7 min, 2/2 9.0 min; macOS 6.3 and 3.7; Ubuntu 3.4 and 5.7.
+    Converter: Windows 2.0 min, Ubuntu 28 s, macOS 20 s.
+  - The known "GUI stalled" watchdog log appears 4 times, with no failure: Windows 2/2 once, Windows 1/2 twice,
+    Ubuntu 2/2 once (A~9).

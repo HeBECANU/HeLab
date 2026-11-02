@@ -20,7 +20,8 @@ from helab.models.StatusReport import StatusReport
 from helab.resources.icons import CHECK_COLOR, LOAD_COLOR, StatusIcons
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.io_service import IORequest
-from helab.utils import large_folder
+from helab.utils import large_folder, txy_sources
+from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.colours import AMBER as AMBER  # Shared; the views import it from here too.
 from helab.utils import folder_cache
 from helab.utils.folder_cache import (NEEDS_ROOT_TOOLTIP, OFFLINE_TOOLTIP, PENDING_ROOT_TOOLTIP, PENDING_SUMMARY,
@@ -60,6 +61,8 @@ LARGE_TOOLTIP = ("Automatic loads skip folders larger than the RAM budget or 10%
 REFUSED_TOOLTIP = "Folders larger than 30% of RAM are never loaded."
 # The user's choice for a folder (S10): selecting it loads nothing.
 AUTO_LOAD_OFF = "Auto-load off for this folder"
+# A folder's own TXY source or cache policy (caching v2 stage 2): following the global one.
+FOLDER_CHOICE_GLOBAL = "As Settings (every folder)"
 AUTO_LOAD_OFF_TOOLTIP = ("Load this folder now. You chose not to load it automatically "
                          "(right-click › Don't auto-load this folder).")
 MISMATCH_RETRY_TOOLTIP = ("Check this folder again. If the wrong drive was mounted, mount the right one first: "
@@ -250,6 +253,8 @@ class FolderExplorer(QWidget):
         # would keep this widget's wrapper alive after Qt deletes it.)
         self.confirm_large: Callable[[str, int], bool] | None = None
         self.ask_remove_cached: Callable[[str, int | None], bool] | None = None
+        # (Tests: answers QInputDialog.getItem for a folder's own TXY source and cache policy.)
+        self.ask_item: Callable[..., tuple[str, bool]] | None = None
         self.report_flag_failure: Callable[[str, str], None] | None = None
         self._auto_load_off_paths: set[str] = set()
         self._loading_data: dict[int, npt.NDArray[np.float64]] = {}
@@ -2251,6 +2256,17 @@ class FolderExplorer(QWidget):
         if constants:
             constants.setToolTip("Fall distance, fall time and trap frequencies for this folder and its "
                                  "subfolders" + (" (RAM only: this session)" if ram_only else ""))
+        if os.path.basename(str(folder_cache.store_options().get("directory") or "")) == STORE_V4_DIRNAME:
+            # Caching v2 stage 2 (store-v4): this folder's own TXY source and what its saves keep (Q45.1, Q45.2).
+            for label, slot, tip in (
+                    ("TXY for this folder…", self.choose_folder_txy,
+                     "Which TXY this folder's tab and Live load, instead of Settings › TXY converter's"),
+                    ("Cache policy for this folder…", self.choose_folder_policy,
+                     "What this folder's saves keep in the disk cache, instead of Settings › Cache's")):
+                action = menu.addAction(label, lambda s=slot: s(path))
+                if action:
+                    action.setToolTip(NEEDS_ROOT_TOOLTIP if ram_only else tip)
+                    action.setEnabled(not ram_only)
         clear = menu.addAction("Clear loaded data cache", lambda: self.clear_data_cache(path))
         if clear and ram_only:
             clear.setEnabled(False)
@@ -2338,6 +2354,43 @@ class FolderExplorer(QWidget):
         """The user chose not to auto-load this folder, and its data isn't open here."""
         return bool(path) and self.model.cache.folder_prefs(str(path))["no_auto_load"] and (
             self.folder_opened_path != path)
+
+    def choose_folder_txy(self, path: str) -> None:
+        """Right-click › TXY for this folder… (store-v4, Q45.2): its own source and, for HeLab's, the profile tag
+        (the conversion profile's or a built-in's); "As Settings" follows the global one."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        cache = self.model.cache
+        current = cache.folder_choices.get(path) or {}
+        names = [FOLDER_CHOICE_GLOBAL] + [txy_sources.LABELS[name] for name in txy_sources.SOURCES]
+        index = 1 + txy_sources.SOURCES.index(current["source"]) if current.get("source") in txy_sources.SOURCES else 0
+        chosen, accepted = (self.ask_item or QInputDialog.getItem)(
+            self, "TXY for this folder", "This folder's tab and Live load:", names, index, False)
+        if not accepted:
+            return
+        source = "" if chosen == FOLDER_CHOICE_GLOBAL else txy_sources.SOURCES[names.index(chosen) - 1]
+        tag = ""
+        if source and txy_sources.wants_helab(source):
+            tags = list(dict.fromkeys([cache.convert_profile_tag(), *(file_tag(item) for item in BUILTIN_PROFILES.values())]))
+            at = tags.index(current["tag"]) if current.get("tag") in tags else 0
+            tag, accepted = (self.ask_item or QInputDialog.getItem)(
+                self, "TXY for this folder", "HeLab's TXY of the profile tagged:", tags, at, False)
+            if not accepted:
+                return
+        cache.set_folder_choice(path, source=source, tag=tag)
+
+    def choose_folder_policy(self, path: str) -> None:
+        """Right-click › Cache policy for this folder… (store-v4, Q45.1): what its saves keep; "As Settings"
+        follows Settings › Cache's. Changing it removes nothing."""
+        from helab.views.CacheTab import POLICY_LABELS
+        cache = self.model.cache
+        current = str((cache.folder_choices.get(path) or {}).get("policy") or "")
+        names = [FOLDER_CHOICE_GLOBAL] + [text for _, text in POLICY_LABELS]
+        index = 1 + [data for data, _ in POLICY_LABELS].index(current) if current in dict(POLICY_LABELS) else 0
+        chosen, accepted = (self.ask_item or QInputDialog.getItem)(
+            self, "Cache policy for this folder", "This folder's saves keep:", names, index, False)
+        if accepted:
+            policy = "" if chosen == FOLDER_CHOICE_GLOBAL else POLICY_LABELS[names.index(chosen) - 1][0]
+            cache.set_folder_choice(path, policy=policy)
 
     def set_folder_flag(self, path: str, key: str, on: bool) -> None:
         """Right-click › Don't cache / Don't auto-load this folder (this folder only). Ticking

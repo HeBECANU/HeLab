@@ -186,3 +186,86 @@ def test_a_store_that_cant_be_opened_is_an_error_not_a_traceback(tmp_path: Path,
     monkeypatch.setattr(sqlite3, "connect", refused)
     assert cache_cli.main(["export", "--folder", str(source), "--cache", str(tmp_path / "caches")]) == 2
     assert "can't be opened read only (unable to open database file)" in capsys.readouterr().err
+
+
+# Stage 2: TXY layers (A44.1) and a Qt-free cache folder (A44.2)
+
+def txy_store(tmp_path: Path, source: Path) -> Path:
+    """A store-v4 holding a MATLAB layer and an m19v1 layer of ``source`` (keyed as the app keys it)."""
+    from helab.convert import txy_layer
+    from helab.utils.cache_store import CacheStore, TxyPart, TxyShot
+    caches = tmp_path / "caches"
+    key = cache_cli.folder_key(str(source))
+    with CacheStore(str(caches / "store-v4")) as store:
+        for layer, tags in (("matlab", ()), (txy_layer.helab_layer("abc"), ("m19v1",))):
+            shots = {1: np.arange(30, dtype=float).reshape(10, 3), 2: np.ones((4, 3)) * (2 if tags else 3)}
+            file = store.write_txy_file(txy_layer.pack_segment(shots, layer=layer, tags=tags))
+            store.save_txy(key, "", "", [TxyPart(layer, file, tuple(TxyShot(shot, 1, 1, "txy", len(hits))
+                                                                     for shot, hits in shots.items()), tags)],
+                           None, store.start_txy_job(key))
+    return caches
+
+
+def test_a_folders_txy_layer_exports_by_layer_or_tag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = tmp_path / "data" / "run"
+    source.mkdir(parents=True)
+    caches = txy_store(tmp_path, source)
+    before = files(caches / "store-v4")
+    out = tmp_path / "out"
+    base = ["export", "--folder", str(source), "--kind", "txy", "--cache", str(caches), "--out", str(out)]
+    assert cache_cli.main(base) == 2 and "name one layer with --layer" in capsys.readouterr().err
+    assert cache_cli.main([*base, "--layer", "m19v1"]) == 0
+    with np.load(out / "d_txy2.npz") as found:
+        assert list(found["t_s"]) == [2.0] * 4 and json.loads(str(found["header"]))["kind"] == "txy"
+    assert cache_cli.main([*base, "--layer", "matlab", "--to", "csv", "--force"]) == 0
+    with open(out / "d_txy1.csv", newline="", encoding="ascii") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ["t_s", "x_m", "y_m"] and [float(value) for value in rows[1]] == [0.0, 1.0, 2.0]
+    assert files(caches / "store-v4") == before  # (Read only.)
+    empty = tmp_path / "data" / "empty"
+    empty.mkdir()
+    assert cache_cli.main(["export", "--folder", str(empty), "--kind", "txy", "--cache", str(caches)]) == 1
+
+
+def test_a_txy_segment_file_exports_with_its_shots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helab.convert import txy_layer
+    segment = tmp_path / "segment.hlb"
+    segment.write_bytes(txy_layer.pack_segment({4: np.zeros((2, 3)), 7: np.ones((1, 3))}, layer="matlab"))
+    monkeypatch.chdir(tmp_path)
+    assert cache_cli.main(["export", str(segment), "--to", "csv"]) == 0
+    with open(tmp_path / "segment.csv", newline="", encoding="ascii") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ["shot", "t_s", "x_m", "y_m"] and [row[0] for row in rows[1:]] == ["4", "4", "7"]
+    assert cache_cli.main(["dump", str(segment)]) == 0
+
+
+def test_helab_cache_finds_the_cache_folder_the_app_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                             private_store: str,
+                                                             caplog: pytest.LogCaptureFixture) -> None:
+    """A44.2: the GUI records its cache folder (atomically); ``helab cache`` reads it with no Qt, and falls back
+    to the app's setting (QtCore) when the file is missing or names a folder that isn't there."""
+    from helab.utils import constants
+    monkeypatch.setenv("HELAB_APP_DIR_OVERRIDE", str(tmp_path / "app"))  # (This test's own app folder.)
+    assert cache_cli._app_folder() == Path(constants.app_folder()) == tmp_path / "app"
+    with monkeypatch.context() as patch:  # (Without the override too, both name the same folder.)
+        patch.delenv("HELAB_APP_DIR_OVERRIDE", raising=False)
+        assert cache_cli._app_folder() == Path(os.path.dirname(constants.default_app_dir("caches")))
+    monkeypatch.delenv("HELAB_DIR_CACHES_OVERRIDE")
+    recorded = Path(constants.app_folder()) / constants.CACHE_FOLDER_FILE
+    assert not recorded.exists()
+    with monkeypatch.context() as patch:
+        patch.setattr(constants, "cache_dir", lambda: "/the/setting")
+        assert cache_cli.cache_folder() == Path("/the/setting")  # (Missing: the setting.)
+    constants.record_cache_folder()
+    assert json.loads(recorded.read_text(encoding="utf-8"))["cache_folder"] == private_store
+    assert [name for name in os.listdir(recorded.parent) if name.endswith(".tmp")] == []
+    assert cache_cli.cache_folder() == Path(private_store)
+    recorded.write_text(json.dumps({"cache_folder": str(tmp_path / "gone")}), encoding="utf-8")
+    monkeypatch.setattr(constants, "cache_dir", lambda: "/the/setting")
+    assert cache_cli.cache_folder() == Path("/the/setting")  # (A folder that isn't there: the setting.)
+    monkeypatch.setenv("HELAB_APP_DIR_OVERRIDE", str(tmp_path / "a-file"))
+    (tmp_path / "a-file").write_text("not a folder")
+    with caplog.at_level("WARNING"):
+        constants.record_cache_folder()  # (Can't be written: logged, nothing raised.)
+    assert "Couldn't record the cache folder" in caplog.text
+
