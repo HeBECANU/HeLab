@@ -467,3 +467,18 @@ CI: `.github/workflows/ci-test.yml`.
 - **Each commit:** full suite (9157–9159 passed, no RERUN) and the five type checks before it.
 - **Test files and CI touched:** `tests/test_release_recovery.py`, `tests/test_test_groups.py`,
   `tests/test_convert_helab.py`, `.github/workflows/ci-test.yml`.
+
+### Run 41488725971 (`745bb46`: (b), A~4, A~5, the writers' retry): success, all 16 job logs read
+
+- **A~4 works:** every test job's header says "session timeout: 1200.0s" (Windows) or "720.0s" (macOS,
+  Ubuntu).
+- **A~5 works:** nine artifacts `junit-<os>-py313-group-index-{0,1,2}`, 56–65 kB each.
+- **Times.**
+  - Windows pytest per group: 8.7, 9.0, 11.4 min.
+  - macOS: 2.5, 5.1, 1.8. Ubuntu: 3.8, 5.2, 2.9.
+- **All green; one RERUN:** `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-TxyHistograms]`,
+  macOS 2/3. Its worker died ("worker crashed or was killed").
+  - That's the known Plotly/QtWebEngine abort class (known-issues lines 139, 162).
+  - Its fourth sighting today: 41481668334 macOS 2/3; 41484513530 Ubuntu 2/3 and macOS 2/3; this run.
+  - **Proposed:** a priority to hunt it. The worker dies in the Plotly case each time, now on Ubuntu too.
+- `test_two_writers_side_by_side_lose_nothing`, both cases, and the detached-stamp test passed on every OS.
