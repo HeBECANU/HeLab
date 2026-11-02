@@ -960,3 +960,52 @@ Every fix is in Settings › Cache's store-v4 questions, and each has a test tha
     Converter: Windows 2.0 min, Ubuntu 28 s, macOS 20 s.
   - The known "GUI stalled" watchdog log appears 4 times, with no failure: Windows 2/2 once, Windows 1/2 twice,
     Ubuntu 2/2 once (A~9).
+
+## Stages 3 and 4 (Tony's go, 2026-11-02, via CoCo)
+
+Tony's answers:
+- **Stage 3 and stage 4 proposals:** S3~1–S3~6 and S4~2–S4~4 as proposed.
+- **S4~1:** as proposed, with CoCo's wording: "Also remove HeLab's cached copy of this folder's raw pulses (N MB)?
+  Your d files aren't touched." Every question that clears raw pulses calls them "HeLab's cached raw pulses".
+- **Purge split:** P~1 and P~2 as proposed.
+- **Q~15:** OK, with A47.2 done before the switch goes on.
+- **Q19.1:** HeLab TXY text keeps going to temp or the cache as today.
+- **V~3:** store-v3 is read only through v0.0.8. Keep's read-through ends when v0.0.9 starts, and from then on only
+  "Clear old stores…" removes it, asked first. Nothing to build now. **For the roadmap** (caching-v2.md and
+  cache-store.md): "store-v3 read-through (Keep) ends with v0.0.9's start; then only Clear old stores… (asked)."
+
+Order: A47.4, then A47.2, A47.6, stage 3 with A40.2, then stage 4. The switch stays off.
+
+### A47.4: purge by age per kind, plus Remove everything old (`5cbf1d4`)
+
+Design: `design-purge.md` (`dcac76d`), with CoCo's notes: the Everything question names every part and its size,
+counts scan failures only when the box is ticked, and calls cached analysis the user's results.
+- **Store:**
+  - `purge_cached(cutoff, kinds)` over `PURGE_KINDS` (`datasets`, `txy`, `raw`), in one transaction, taking only
+    layers with `gone_at IS NULL`.
+  - `purge_datasets` now takes datasets only.
+  - `purge_estimate(..., kinds=)` takes the same kinds.
+- **Helper:**
+  - `purge` takes `what` from `PURGES` (`datasets`, `txy`, `raw`, `records`, `results`, `all`).
+  - `all` takes every cached kind the store has, plus folder records (scan failures only when asked) and cached
+    analysis.
+  - The result's `bytes` now counts layers too.
+  - An empty removal sends no event.
+- **Settings › Cache:**
+  - store-v4 adds a TXY data row and a "HeLab's cached raw pulses" row.
+  - A new last row, "Everything not used, checked or shown in the last N days", is shown in both layouts. With
+    store-v3 it holds cached data, folder records and cached analysis.
+  - IDs: `purge_txy`, `purge_raw`, `purge_all`, and the `_days` box of each.
+- **Wording:** Clear, Clear all, the purges and Make room call raw pulses "HeLab's cached raw pulses" and say the d
+  files aren't touched.
+- **Tests:**
+  - `test_txy_fixes.py`: each kind's purge takes only its kind, keeps only copies, and frees exactly its estimate;
+    `all` takes everything; unknown purges are refused.
+  - `test_txy_ui.py`: the per-kind rows and questions, and Everything's question with and without the box.
+  - `test_store_v3_question.py`: its wording assertions follow the new text.
+- **Checked:** suite `-n 4` 8933 passed, 672 skipped, no RERUN. An earlier run had 5 RERUNs, all one old wording
+  assertion, now updated. Types clean.
+- **Doc proposals:**
+  - cache-store.md: `purge_cached` and `PURGE_KINDS`.
+  - app-runtime-and-ui.md: Settings › Cache's purge rows and the raw pulses wording.
+  - testing.md: the two tests above.
