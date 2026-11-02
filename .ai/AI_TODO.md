@@ -386,13 +386,17 @@ From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.
 - **A43.2 "Another HeLab may have changed them"** before `read_presets()` (`PresetsInspector.py:207`,
   `views/plots/presets.py:267`, `:613`): with one app per computer (Q39.1) and `helab convert` writing no
   presets, keep the cheap re-reads and drop that reason from the comments.
-- **A43.3 Reset all settings while Work Offline is on** (Q43.1, Tony 2026-10-31; app-1; numbered at block
+- [x] **A43.3 Reset all settings while Work Offline is on** (done in `c9e64e6`) (Q43.1, Tony 2026-10-31; app-1; numbered at block
   44's docs pass): only while Work Offline is on, the Reset confirmation asks whether to keep Work Offline
   (the default button, as the cache folder's location is kept) or go online now. Rivet's, on Ground
   (Quick Fixes 8; in progress at numbering).
-- **A43.4 The cache move's refusal while a converter runs** (Q43.4, Tony 2026-10-31): `cache_locks.lock_for_move`'s
+- [x] **A43.4 The cache move's refusal while a converter runs** (done in `4940a81`) (Q43.4, Tony 2026-10-31): `cache_locks.lock_for_move`'s
   "Another HeLab is running (N windows)." becomes "A HeLab converter (helab convert) is running (N). Stop it
   before moving the cache." (only `helab convert` can hold it now, Q39.1). Rivet's, on Ground (Quick Fixes 8).
+- **A43.5 The two other "Another HeLab is running" texts** (Q43.5, Tony 2026-11-01): `CacheTab.py:605`
+  becomes "A HeLab converter (helab convert) is running. Stop it before clearing the older cache." and
+  `CacheDialogs.py:106` "A HeLab converter (helab convert) is running. Stop it before clearing old stores."
+  (Quick Fixes 9.)
 
 ## Caching v2 checkpoint 3 (block 44)
 
