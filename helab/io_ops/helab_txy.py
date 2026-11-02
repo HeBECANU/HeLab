@@ -255,6 +255,29 @@ def mark_used(marks: list[list[Any]]) -> list[list[Any]]:
     return unwritten
 
 
+def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot], only: set[int] | None,
+            options: Mapping[str, Any]) -> dict[int, HelabShot]:
+    """Caching v2 stage 3 (store-v4): the shots a load converts on read, by shot: each raw file without a
+    current HeLab TXY of the profile asked for (``helab``), among those the source could take (``only``), named
+    by its raw file with the raw file's size and mtime (so the settle time and the layer's key are the raw
+    file's). A raw file that can't be stat'ed is left out."""
+    wanted = str(options.get("profile_hash") or "")
+    if not wanted:
+        return {}
+    profile = options.get("profile")
+    info = dict(profile) if isinstance(profile, Mapping) else {}
+    found: dict[int, HelabShot] = {}
+    for shot, entry in raw.items():
+        if shot in helab or only is not None and shot not in only:
+            continue
+        try:
+            stat = _entry_stat(entry, "helab txy: raw")
+        except OSError:
+            continue
+        found[shot] = HelabShot(shot, entry.path, stat.st_size, stat.st_mtime_ns, wanted, info, 0.0)
+    return found
+
+
 def could_take(source: str, raw: Mapping[int, Any], matlab: Mapping[int, Any],
                held: Mapping[int, str] | None = None) -> set[int] | None:
     """The shots ``source`` could take from HeLab's TXY, for ``find``'s ``only``: with MATLAB priority those

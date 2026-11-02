@@ -403,18 +403,26 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     helab_key = helab_txy.store_key(store, path) or str(txy.get("key") or "")
     helab_state: list[list[Any]] = []
     helab_found: dict[int, helab_txy.HelabShot] = {}
+    # Caching v2 stage 3 (store-v4 only, R~1): raw files without a current HeLab TXY, converted on read.
+    on_read: dict[int, helab_txy.HelabShot] = {}
     if txy_sources.wants_helab(txy_source):
         helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), listed_at)
         trusted = {int(shot): (int(size), int(modified), held_origins[int(shot)])
                    for shot, size, modified in memory or () if int(shot) in held_origins}
-        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted,
-                                     helab_txy.could_take(txy_source, raw_entries, matlab))
-    chosen = helab_txy.compose(txy_source, matlab, helab_found)
+        could = helab_txy.could_take(txy_source, raw_entries, matlab)
+        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
+        if (access is not None and access.layered and not no_cache
+                and access.profile_for(txy_sources.helab_origin(str(txy.get("profile_hash") or ""))) is not None):
+            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy)
+    chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found})
+    # (Those a conversion now serves: the rest of on_read lost to MATLAB's TXY by the source's rule.)
+    on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}
     origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
     for shot, (filename, origin) in chosen.items():
         files.append((shot, filename))
-        listed_stats[shot] = (matlab_stats[shot] if not origin
-                              else (helab_found[shot].size, helab_found[shot].mtime_ns))
+        helab_shot = helab_found.get(shot) or on_read.get(shot)
+        listed_stats[shot] = (matlab_stats[shot] if not origin or helab_shot is None
+                              else (helab_shot.size, helab_shot.mtime_ns))
     def matlab_dir(shot: int) -> str:
         """A file of the source folder's listing, as its entries name it (beside TXY are among them)."""
         entry = beside_entries.get(shot)
@@ -631,7 +639,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                    # The folder's TXY by kind, as this load found them: MATLAB's, and HeLab's current ones of
                    # the profile conversions use (looked for only when the source reads HeLab's).
                    "txy_matlab": len(matlab),
-                   **({"txy_helab": len(helab_found)} if txy_sources.wants_helab(txy_source) else {})}
+                   **({"txy_helab": len(helab_found)} if txy_sources.wants_helab(txy_source) else {}),
+                   # Stage 3: the shots HeLab's TXY of which this load makes from raw files, and those it did.
+                   **({"helab_on_read": len(on_read), "converted": 0} if on_read else {})}
     read = 0 if cached else len(files) - len(in_memory | reused)
     if in_memory or (from_disk and not cached):
         parts = [f"{len(in_memory)} shots from {held_from}"] if in_memory else []
@@ -678,6 +688,41 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
             data[shot] = converted
         return converted
 
+    def convert_on_read(shot: int, index: int, filename: str) -> Any:
+        """Stage 3 (store-v4): a HeLab shot made from its raw file (none current in the raw layer, no text), as
+        the converter would make it, before any file is announced and under the converter's ticker (S3-2); no
+        text is written (Q19.1) and no raw row (R~2: ``raw_fill``'s). None when it can't be: a file changed
+        while read, or unfinished, is late (the next load tries again; damaged once unmodified for a minute,
+        as ``helab convert --once`` judges it); a failed conversion is problematic."""
+        from helab.convert.pipeline import convert_shot
+        from helab.convert.raw import not_done
+        from helab.io_ops.convert import DAMAGED_SECONDS, ONCE_SETTLE_SECONDS, _read_raw, _Shot, _Ticker, compute_budget
+        assert access is not None
+        profile = access.profile_for(origins[shot])
+        size, mtime_ns = fingerprint[index][1:]
+        if profile is None:
+            problematic.append(shot)
+            return None
+        with _Ticker(send, "converting", compute_budget(size)):
+            raw_data = _read_raw(_Shot(shot, os.path.basename(filename), filename, size, mtime_ns),
+                                 Heartbeat(send, "converting"))
+            problem = None if isinstance(raw_data, str) else not_done(raw_data, profile.channel_trigger)
+            if isinstance(raw_data, str) or problem is not None:
+                if problem is not None and time.time() - mtime_ns / 1e9 >= max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS):
+                    problematic.append(shot)  # (Damaged: unreadable until it changes.)
+                else:
+                    late.add(shot)
+                return None
+            try:
+                text = convert_shot(raw_data, profile, access.backend_for(profile)).txy
+            except Exception:  # (No rows, or a backend that can't: unreadable, as a failed read is.)
+                problematic.append(shot)
+                return None
+        array = txy_cache.txy_array(text)
+        load_counts["converted"] += 1
+        data[shot] = array
+        return array
+
     def read_txy(shot: int, filename: str, reason: str = "load: read") -> Any:
         if shot in origins and listed_stats[shot][0] == 0:
             # HeLab's TXY of a shot with no hits (Q10.3): converted, empty.
@@ -697,7 +742,12 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         # shot counts in the progress events alone.
         reading = shot not in in_memory and shot not in reused and not cached
         converted = from_raw(shot) if reading else None
-        reading = reading and converted is None  # (Converted from the raw layer: no file read.)
+        on_read_failed = False
+        if reading and converted is None and shot in on_read:
+            converted = convert_on_read(shot, i, filename)
+            on_read_failed = converted is None
+        # (Converted from the raw layer or the raw file: no TXY file read.)
+        reading = reading and converted is None and not on_read_failed
         if reading:
             send({"kind": "file_started", "filename": filename})
         try:
@@ -705,6 +755,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
             if converted is not None:
                 load_counts["read"] += 1
                 array = converted
+            elif on_read_failed:
+                pass  # (Late or problematic, as ``convert_on_read`` said.)
             elif shot in in_memory:
                 # Unchanged and already in the caller's RAM: nothing to read or send. Its time is the
                 # caller's or the cache's; one still missing (its raw file was still being written

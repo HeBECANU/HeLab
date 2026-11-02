@@ -993,6 +993,10 @@ class FolderCache(QObject):
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
                         "profile": {"name": profile.name, "version": profile.version,
                                     "calibrated": profile.calibrated}})
+        if "profile_def" not in txy and (profile := self.convert_profile()).content_hash() == str(txy["profile_hash"]):
+            # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
+            # built-ins the helper knows itself; another user profile's TXY is read from its text).
+            txy["profile_def"] = profile.to_dict()
         if "backend" not in txy:
             # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
             from helab.utils import constants

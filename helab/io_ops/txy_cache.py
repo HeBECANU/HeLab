@@ -45,6 +45,18 @@ def view_key(txy_source: str, txy: Mapping[str, Any]) -> tuple[str, str]:
     return txy_sources.identity_source(txy_source), str(txy.get("profile_hash") or txy.get("profile_tag") or "")
 
 
+def txy_array(text: bytes) -> Any:
+    """HeLab's TXY text as a load's array, parsed as a TXY file is, so a shot converted in memory equals its
+    text exactly."""
+    import io
+    import numpy as np
+    import pandas as pd
+    if not text:
+        return np.empty((0, 3), dtype=np.float64)
+    frame = pd.read_csv(io.BytesIO(text), sep=",", names=["t", "x", "y"], dtype=np.float64)
+    return np.asarray(frame.dropna(), dtype=np.float64)
+
+
 def layer_of(origin: str) -> str:
     """The layer a shot of this origin (``""``: MATLAB's; ``helab:<hash>``) is kept in."""
     from helab.convert import txy_layer
@@ -87,6 +99,10 @@ class Access:
         self.key = view_key(txy_source, txy)
         # The converter backend a shot made from the raw layer runs on: Settings' (FolderCache sends it, A47.6).
         self.backend = str(txy.get("backend") or "")
+        # The profile asked for, whole (FolderCache sends the conversion profile's, A47.1): a user profile then
+        # converts from raw too, not only the built-ins.
+        definition = txy.get("profile_def")
+        self.profile_def: Mapping[str, Any] | None = definition if isinstance(definition, Mapping) else None
         self.layers: dict[int, str] = {}  # (The last view read: each shot's layer.)
         self.info: dict[str, Any] = {}
         # Where the row came from when the folder has no view yet (store-v4): "datasets" (its own, from stage
@@ -190,20 +206,15 @@ class Access:
     def from_raw(self, path: str, shot: int, key: tuple[int, int, str] | None, origin: str) -> Any | None:
         """The loading order's second step (design addendum §4): a HeLab shot from the raw layer instead of
         its TXY text, when the raw layer holds the raw file's current fingerprint with the current parser and
-        the shot's profile is a built-in (its hash). Converted and formatted as the converter writes it, then
+        the shot's profile is known (``profile_for``: the one sent, or a built-in). Converted and formatted as the converter writes it, then
         parsed as a TXY file is (``infra._read_txy_file``), so the data is the text's exactly. None when it
         can't be (the text is read)."""
         if not self.layered or key is None or key[2] != "raw" or not origin:
             return None
-        import io
-        import numpy as np
-        import pandas as pd
         from helab.convert import raw_layer
-        from helab.convert.profile import BUILTIN_PROFILES
         from helab.convert.reconstruct import reconstruct
         from helab.convert.txy import format_txy
-        wanted = origin.split(":", 1)[1]
-        profile = next((item for item in BUILTIN_PROFILES.values() if item.content_hash() == wanted), None)
+        profile = self.profile_for(origin)
         if profile is None:
             return None
         read = self.store.read_raw(path, shot)
@@ -217,10 +228,23 @@ class Access:
             text = format_txy(reconstruct(raw_layer.decode(layer), profile, self.backend_for(profile)))
         except Exception:  # (A layer or backend that can't: the text is read.)
             return None
-        if not text:
-            return np.empty((0, 3), dtype=np.float64)
-        frame = pd.read_csv(io.BytesIO(text), sep=",", names=["t", "x", "y"], dtype=np.float64)
-        return np.asarray(frame.dropna(), dtype=np.float64)
+        return txy_array(text)
+
+    def profile_for(self, origin: str) -> Any | None:
+        """The profile of a HeLab origin (``helab:<hash>``): the one sent whole when it is that one (A47.1), else
+        a built-in's; None for another (its text is read; no conversion on read)."""
+        from helab.convert.profile import BUILTIN_PROFILES, DetectorProfile
+        wanted = origin.split(":", 1)[1] if ":" in origin else ""
+        if not wanted:
+            return None
+        if self.profile_def is not None:
+            try:
+                given = DetectorProfile.from_dict(dict(self.profile_def))
+            except Exception:  # (A damaged definition: the built-ins only.)
+                given = None
+            if given is not None and given.content_hash() == wanted:
+                return given
+        return next((item for item in BUILTIN_PROFILES.values() if item.content_hash() == wanted), None)
 
     def backend_for(self, profile: Any) -> str:
         """The backend ``from_raw`` runs (A47.6): Settings' choice when it can run here, else the app's (numpy);
