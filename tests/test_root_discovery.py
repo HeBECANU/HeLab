@@ -25,6 +25,7 @@ from helab.utils.cache_paths import Mount
 from helab.utils.cache_store import CacheStore, DatasetRecord
 from helab.utils.folder_cache import FolderCache
 from helab.utils.io_service import IORequest, IOService
+from conftest import this_tests
 
 pytestmark = pytest.mark.no_auto_data_root
 
@@ -345,7 +346,7 @@ def test_volume_check_alone_refreshes_hints_without_visiting_markers(
     run, mount, cache = usb_root(tmp_path, monkeypatch)
     monkeypatch.setattr(infra, "_volume_id_cache", {})
     monkeypatch.setattr(data_roots, "_volume_id", lambda _: "disk-b")
-    monkeypatch.setattr(os, "lstat", lambda *_: pytest.fail("visited a source folder"))
+    monkeypatch.setattr(os, "lstat", this_tests(lambda *_: pytest.fail("visited a source folder"), os.lstat))
     monkeypatch.setattr(data_roots, "read_marker", lambda _: pytest.fail("read a marker"))
     events: list[Any] = []
     verify_volumes(cache, events.append)

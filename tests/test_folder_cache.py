@@ -31,6 +31,7 @@ from helab.io_ops.loading import load
 from helab.io_ops.scanning import scan
 from helab.utils.cache_store import CacheStore, DatasetRow, unpack_dataset
 from helab.resources.icons import IconsInitUtil, StatusIcons
+from conftest import this_tests
 
 
 def saved_dataset(options: dict[str, Any], path: str) -> tuple[DatasetRow, dict[int, Any]] | None:
@@ -1150,7 +1151,7 @@ def test_scan_reports_cached_children_without_loading_or_probing_them(
     def forbid_decompression(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("Checking cache badges decompressed a dataset")
 
-    monkeypatch.setattr("os.scandir", record_scandir)
+    monkeypatch.setattr("os.scandir", this_tests(record_scandir, original_scandir))
     monkeypatch.setattr(blosc, "decompress", forbid_decompression)
     events: list[Any] = []
     scan(str(root), events.append, options)

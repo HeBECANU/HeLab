@@ -27,6 +27,7 @@ from helab.views.HelabMainWindow import HelabMainWindow
 from helab.views.plots.workspace import PlotWorkspace
 from helab.resources.icons import IconsInitUtil, StatusIcons
 from helab.utils.cache_freshness import CacheFreshness
+from conftest import this_tests
 
 
 @pytest.fixture
@@ -399,8 +400,8 @@ def test_subfolder_scope_and_retained_plot_source(
     def forbidden(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("Rendering must not query source folders")
     with monkeypatch.context() as blocked:
-        blocked.setattr("os.scandir", forbidden)
-        blocked.setattr("os.stat", forbidden)
+        blocked.setattr("os.scandir", this_tests(forbidden, os.scandir))
+        blocked.setattr("os.stat", this_tests(forbidden, os.stat))
         browser._update_activity()
         PlotWorkspace._update_plot_source_label(dock, browser)
 
@@ -571,8 +572,8 @@ def test_cache_age_advances_without_filesystem_reads_or_new_save(
 
     with monkeypatch.context() as blocked:
         blocked.setattr("time.time", lambda: saved_at + 61)
-        blocked.setattr("os.scandir", forbidden)
-        blocked.setattr("os.stat", forbidden)
+        blocked.setattr("os.scandir", this_tests(forbidden, os.scandir))
+        blocked.setattr("os.stat", this_tests(forbidden, os.stat))
         browser._animate()  # The existing GUI timer performs this update.
     assert browser.folder_cache_label.text() == "Cache created 1m ago · May be outdated"
     assert browser.folder_cache_label.toolTip() == original_tooltip
@@ -1138,8 +1139,8 @@ def test_data_and_status_cache_freshness_indicators_are_independent(
 
     # Reading labels, badges and tooltips must consume memory only.
     with monkeypatch.context() as blocked:
-        blocked.setattr("os.stat", no_io)
-        blocked.setattr("os.scandir", no_io)
+        blocked.setattr("os.stat", this_tests(no_io, os.stat))
+        blocked.setattr("os.scandir", this_tests(no_io, os.scandir))
         blocked.setattr(browser.model.service, "submit", no_io)
         browser._update_activity()
         index = browser.model.path_index(path, browser.model.COLUMN_STATUS_ICON)

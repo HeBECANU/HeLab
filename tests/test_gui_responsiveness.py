@@ -21,6 +21,7 @@ from helab.io_ops.scanning import scan
 from helab.models.SnapshotFileSystemModel import SnapshotFileSystemModel
 from helab.utils.io_service import IORequest, IOService
 from helab.views.FolderExplorer import FolderExplorer
+from conftest import this_tests
 
 
 def frozen_service(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> IOService:
@@ -134,12 +135,12 @@ def test_rendering_never_reads_filesystem_or_disk_cache(
     def forbidden(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("GUI rendering performed I/O")
 
-    monkeypatch.setattr(os, "scandir", forbidden)
-    monkeypatch.setattr(os, "stat", forbidden)
+    monkeypatch.setattr(os, "scandir", this_tests(forbidden, os.scandir))
+    monkeypatch.setattr(os, "stat", this_tests(forbidden, os.stat))
     from helab.utils.cache_store import CacheStore
     import sqlite3
-    monkeypatch.setattr(CacheStore, "__init__", forbidden)
-    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(CacheStore, "__init__", this_tests(forbidden, CacheStore.__init__))
+    monkeypatch.setattr(sqlite3, "connect", this_tests(forbidden, sqlite3.connect))
     for role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.DecorationRole,
                  Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.ForegroundRole,
                  model.STATUS_EXTRA_ICONS_ROLE):
@@ -208,7 +209,7 @@ def test_stalled_process_keeps_heartbeat_and_shutdown_responsive(
     def stalled(command: Any, **kwargs: Any) -> subprocess.Popen[str]:
         return original([sys.executable, "-c", "import time; time.sleep(60)"], **kwargs)
 
-    monkeypatch.setattr(subprocess, "Popen", stalled)
+    monkeypatch.setattr(subprocess, "Popen", this_tests(stalled, original))
     service = IOService()
     events: list[dict[str, Any]] = []
     service.resultReady.connect(lambda request, event: events.append(event))
@@ -262,7 +263,7 @@ def test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocke
         return process
 
     monkeypatch.setattr(np, "load", blocked_read)
-    monkeypatch.setattr(subprocess, "Popen", helper)
+    monkeypatch.setattr(subprocess, "Popen", this_tests(helper, original_process))
     service = IOService()
     started: list[IORequest] = []
     service.resultReady.connect(lambda r, e: started.append(r) if e["kind"] == "started" else None)
@@ -313,7 +314,7 @@ def test_output_close_failure_cannot_leave_dead_helper_in_active_queue(
         processes.append(process)
         return process
 
-    monkeypatch.setattr(subprocess, "Popen", helper)
+    monkeypatch.setattr(subprocess, "Popen", this_tests(helper, original_process))
     service = IOService()
     done: list[str] = []
     service.resultReady.connect(lambda r, e: done.append(r.path) if e["kind"] == "done" else None)
