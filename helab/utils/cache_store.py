@@ -1489,19 +1489,10 @@ class CacheStore:
                 self._conn.execute("INSERT OR REPLACE INTO folder_prefs (path, no_cache, no_auto_load, set_at) "
                                    "VALUES (?, ?, ?, ?)", (path, int(no_cache), int(no_auto_load), set_at))
                 removal = self.remove(("datasets",), [path], _stored_keys=True) if remove_cached and no_cache else None
-                if removal is not None and self.layout >= store_v4.LAYOUT:
-                    # store-v4: its raw layers whose files were seen go too; an only copy stays, since nothing
-                    # named it to the user (C2-9, Q22.6; step 6's dialog may name and offer them).
-                    keys, count, size = self._remove_raw_rows(" WHERE path = ? AND gone_at IS NULL", (path,),
-                                                              time.time())
-                    # Its TXY layers too, but not an only copy (a source gone at the last look), as for raw.
-                    pairs, txy_bytes = self._remove_txy_rows(" WHERE path = ? AND gone_at IS NULL", (path,),
-                                                             time.time())
-                    self._conn.execute("DELETE FROM txy_views WHERE path = ?", (path,))
-                    removal = dataclasses.replace(removal, raw_paths=tuple(self._source_path(key) for key in keys),
-                                                  raw_rows=count, raw_bytes=size,
-                                                  txy_seen=tuple((self._source_path(key), layer) for key, layer in pairs),
-                                                  txy_bytes=txy_bytes)
+                if removal is not None:
+                    # store-v4: its raw and TXY layers whose sources were seen go too; an only copy stays, since
+                    # nothing named it to the user (C2-9, Q22.6).
+                    removal = self._with_layers_removed(removal, " WHERE path = ? AND gone_at IS NULL", (path,), [path])
                 return {"no_cache": no_cache, "no_auto_load": no_auto_load, "set_at": set_at}, removal
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
@@ -4083,14 +4074,45 @@ class CacheStore:
                         removal.txy_only, removal.txy_bytes)
 
     def purge_datasets(self, cutoff: float) -> Removal:
-        """Remove cached data not used since ``cutoff`` (a timestamp)."""
+        """Remove cached data not used since ``cutoff`` (a timestamp): datasets, and in store-v4 TXY layers (with
+        their folders' views) and raw layers not used since, whose sources were seen; only copies stay, named
+        only in Make room (S3-1, Q22.6, C2-9; CoCo's call, for Tony to confirm)."""
         try:
             with self.transaction():
                 paths = [path for (path,) in self._conn.execute(
                     "SELECT path FROM datasets WHERE last_used < ?", (cutoff,))]
-                return self.remove(("datasets",), paths, _stored_keys=True)
+                removal = self.remove(("datasets",), paths, _stored_keys=True)
+                return self._with_layers_removed(removal, " WHERE last_used < ? AND gone_at IS NULL", (cutoff,), [])
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def clear_folder_data(self, path: str) -> Removal:
+        """A folder's Clear data cache (``invalidate``): its dataset, and in store-v4 its TXY layers and views and
+        its raw layers whose sources were seen; an only copy stays unless a question names it (S3-1, C2-9).
+        Bumps the folder's epoch, so a load already running (its dataset or TXY guard) can't save it back."""
+        key = self._path_key(path)
+        try:
+            with self.transaction():
+                removal = self.remove(("datasets",), [key], _stored_keys=True)
+                return self._with_layers_removed(removal, " WHERE path = ? AND gone_at IS NULL", (key,), [key])
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def _with_layers_removed(self, removal: Removal, where: str, args: Sequence[Any],
+                             folders: Sequence[str]) -> Removal:
+        """In store-v4 (inside a transaction), also remove the raw and TXY layers ``where`` selects (with the
+        TXY layers' folders' views) and every view of ``folders``; ``removal`` with them (unchanged in store-v3)."""
+        if self.layout < store_v4.LAYOUT:
+            return removal
+        now = time.time()
+        keys, count, size = self._remove_raw_rows(where, args, now)
+        pairs, txy_bytes = self._remove_txy_rows(where, args, now)
+        for key in folders:
+            self._conn.execute("DELETE FROM txy_views WHERE path = ?", (key,))
+        return dataclasses.replace(removal, raw_paths=tuple(self._source_path(key) for key in keys), raw_rows=count,
+                                   raw_bytes=size,
+                                   txy_seen=tuple((self._source_path(key), layer) for key, layer in pairs),
+                                   txy_bytes=txy_bytes)
 
     def purge_records(self, cutoff: float, include_failures: bool = False) -> list[Removal]:
         """Remove folder records not checked (saved) since ``cutoff``: summaries, subfolder

@@ -229,9 +229,9 @@ def test_invalidate_removes_the_folders_datasets_on_the_local_lane(
         def __exit__(self, *_: object) -> None:
             pass
 
-        def remove(self, kinds: tuple[str, ...], paths: list[str]) -> SimpleNamespace:
-            opened.append(("remove", (kinds, paths), {}))
-            return SimpleNamespace(kinds=kinds, paths=paths, datasets=1, dataset_bytes=2048)
+        def clear_folder_data(self, path: str) -> SimpleNamespace:  # (In store-v4 its layers too, S3-1.)
+            opened.append(("clear_folder_data", (path,), {}))
+            return SimpleNamespace(kinds=("datasets",), paths=[path], datasets=1, dataset_bytes=2048)
 
         def next_deadline(self) -> float:
             return 1234.5
@@ -246,7 +246,7 @@ def test_invalidate_removes_the_folders_datasets_on_the_local_lane(
     monkeypatch.setattr(stores, "_cache_store", open_store)
     events = send(monkeypatch, capsys, {"operation": "invalidate", "path": PATH, "cache": CACHE})
     assert opened == [("open", (CACHE["directory"], [PATH]), {"local_lane": True, "offline": False}),
-                      ("remove", (("datasets",), [PATH]), {})]
+                      ("clear_folder_data", (PATH,), {})]
     assert events == [
         {"kind": "removed", "kinds": ["datasets"], "paths": [PATH], "datasets": 1, "bytes": 2048},
         {"kind": "admin_result", "action": "invalidate", "next_deadline": 1234.5, "usage": 4096,

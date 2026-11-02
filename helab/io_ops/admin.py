@@ -126,7 +126,8 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             else:
                 raise ValueError(f"Unknown purge: {params['what']}")
             for removal in removals:
-                send(_removed_event(removal))
+                for event in _removal_events(removal):  # (store-v4: the layers a purge of cached data took, S3-1.)
+                    send(event)
             if removals:
                 result["removed"] = {kind: len(removal.paths or ()) for removal in removals for kind in removal.kinds}
                 result["bytes"] = sum(removal.dataset_bytes for removal in removals)

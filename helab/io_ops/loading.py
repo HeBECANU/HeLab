@@ -664,17 +664,25 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     # store-v4: each shot's layer key (MATLAB's by its TXY file, HeLab's by its raw file where listed, Q45.3).
     keys = txy_cache.entry_keys(fingerprint, origins, raw_entries) if access is not None and access.layered else {}
 
+    def from_raw(shot: int) -> Any:
+        """store-v4: a HeLab shot from the raw layer when it holds this raw file (design addendum §4, step 2),
+        before any file is announced (so a file's per-file timeout never covers it) and under the converter's
+        ticker for its raw size (S3-2); None when it can't (the text is read)."""
+        if access is None or not access.layered or shot not in origins or listed_stats[shot][0] == 0:
+            return None
+        from helab.io_ops.convert import _Ticker, compute_budget
+        key = keys.get(shot)
+        with _Ticker(send, "converting", compute_budget(key[0] if key else 0)):
+            converted = access.from_raw(path, shot, key, origins[shot])
+        if converted is not None:
+            data[shot] = converted
+        return converted
+
     def read_txy(shot: int, filename: str, reason: str = "load: read") -> Any:
         if shot in origins and listed_stats[shot][0] == 0:
             # HeLab's TXY of a shot with no hits (Q10.3): converted, empty.
             data[shot] = np.empty((0, 3), dtype=np.float64)
             return data[shot]
-        if access is not None and access.layered and shot in origins:
-            # (store-v4: from the raw layer when it holds this raw file, design addendum §4, step 2.)
-            converted = access.from_raw(path, shot, keys.get(shot), origins[shot])
-            if converted is not None:
-                data[shot] = converted
-                return converted
         _read_gate(filename)
         frame = infra._read_txy_file(filename, reason)
         if frame.isna().any().any():
@@ -688,11 +696,16 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         # Only a file read is announced (the file being read, its per-file timeouts); a reused
         # shot counts in the progress events alone.
         reading = shot not in in_memory and shot not in reused and not cached
+        converted = from_raw(shot) if reading else None
+        reading = reading and converted is None  # (Converted from the raw layer: no file read.)
         if reading:
             send({"kind": "file_started", "filename": filename})
         try:
             array = None
-            if shot in in_memory:
+            if converted is not None:
+                load_counts["read"] += 1
+                array = converted
+            elif shot in in_memory:
                 # Unchanged and already in the caller's RAM: nothing to read or send. Its time is the
                 # caller's or the cache's; one still missing (its raw file was still being written
                 # when it was read, or a cache saved before shot times) the listing can give, and
@@ -802,6 +815,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
         for shot, filename in files:
             if shot in lacking:
                 Pause.checkpoint(send)
+                if from_raw(shot) is not None:
+                    raw_time(shot)
+                    continue  # (From the raw layer, before any file is announced: S3-2.)
                 send({"kind": "file_started", "filename": filename})
                 reread = True
                 try:

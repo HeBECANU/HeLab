@@ -28,7 +28,7 @@ from helab.io_ops.markers import (create_root, reassign_root, remove_root, save_
 from helab.io_ops.raw_fill import raw_fill
 from helab.io_ops.save_held import save_held
 from helab.io_ops.scanning import save_scan_history, save_subtrees, scan
-from helab.io_ops.stores import _deadline, _removed_event, _usage
+from helab.io_ops.stores import _deadline, _removal_events, _usage
 from helab.io_ops.trace_check import trace_check
 
 
@@ -144,8 +144,10 @@ def main() -> None:
         elif operation == "invalidate":
             with stores._cache_store(request["cache"]["directory"], [request["path"]], local_lane=True,
                                      offline=bool(request["cache"].get("offline"))) as store:
-                # Bumps the folder's epoch: a load started before cannot save it back.
-                emit(_removed_event(store.remove(("datasets",), [request["path"]])))
+                # Bumps the folder's epoch: a load started before cannot save it back. In store-v4 its TXY layers,
+                # views and seen raw layers go too (S3-1).
+                for event in _removal_events(store.clear_folder_data(request["path"])):
+                    emit(event)
                 emit({"kind": "admin_result", "action": "invalidate", "next_deadline": _deadline(store),
                       **_usage(store)})
         elif operation == "cache_move":
