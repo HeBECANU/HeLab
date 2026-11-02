@@ -675,21 +675,24 @@ def test_a_new_store_opened_by_two_helpers_at_once_is_made_once(tmp_path: Path, 
     with cache_store.CacheStore(root) as second:
         assert second.store_id == store_id
     monkeypatch.setattr(cache_store, "_layout_version", real)
-    fresh = str(tmp_path / "fresh" / name)
-    ids: list[str] = []
-    errors: list[BaseException] = []
-    start = threading.Barrier(6)
+    # Several rounds of six helpers opening a fresh store at once (SR-1: the switch to WAL, which SQLite doesn't
+    # wait for, is tried again; the schema is made once).
+    for round_ in range(8):
+        fresh = str(tmp_path / f"fresh-{round_}" / name)
+        ids: list[str] = []
+        errors: list[BaseException] = []
+        start = threading.Barrier(6)
 
-    def open_it() -> None:
-        try:
-            start.wait()
-            with cache_store.CacheStore(fresh) as store:
-                ids.append(store.store_id)
-        except BaseException as exc:  # (Reported below.)
-            errors.append(exc)
-    threads = [threading.Thread(target=open_it) for _ in range(6)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(30)
-    assert errors == [] and len(ids) == 6 and len(set(ids)) == 1
+        def open_it() -> None:
+            try:
+                start.wait()
+                with cache_store.CacheStore(fresh) as store:
+                    ids.append(store.store_id)
+            except BaseException as exc:  # (Reported below.)
+                errors.append(exc)
+        threads = [threading.Thread(target=open_it) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        assert errors == [] and len(ids) == 6 and len(set(ids)) == 1, round_

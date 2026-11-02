@@ -952,7 +952,7 @@ class CacheStore:
         conn = self._connect(busy_timeout, read_only=False)
         try:
             if _layout_version(conn) is None:
-                conn.execute("PRAGMA journal_mode = WAL")
+                _wal(conn, busy_timeout)
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     # Checked again under the write lock: another helper opening the same new store may have
@@ -4568,6 +4568,25 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
+def _wal(conn: sqlite3.Connection, busy_timeout: float) -> None:
+    """A new store's switch to WAL. SQLite doesn't wait ``busy_timeout`` for it: another helper making the same
+    new store holds it, and the switch says "database is locked" at once (SR-1). Skipped when it is WAL already
+    (that helper made it); else tried again until ``busy_timeout``."""
+    deadline = time.monotonic() + busy_timeout
+    while True:
+        try:
+            if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            busy = (code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) if isinstance(code, int)
+                    else "locked" in str(exc) or "busy" in str(exc))
+            if not busy or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.005)
 
 
 def _transient_io_error(exc: sqlite3.Error) -> bool:
