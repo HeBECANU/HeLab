@@ -1557,3 +1557,59 @@ Tests and Converter logs.
   sighting.
 - The disk-badge test that failed in 41484277419 passed with no RERUN.
 - The known "GUI stalled" log appears 5 times.
+
+## Doc proposals: stage 4's fixes and the switch-on (for the Coordinator's docs pass)
+
+Stage 4's own proposals are under "Stage 4: the policy UI" above. These cover what came after, through the landings
+`8071c04` and `9f92daf` and the branch `agent/v4-switch-on`.
+
+- **cache-store.md:**
+  - **Store creation:** a new store's layout is checked again under `BEGIN IMMEDIATE` (`CacheStore._create`), and
+    the switch to WAL is retried on BUSY or LOCKED until the busy timeout (`_wal`). Several helpers open a new
+    store at once on a first start.
+  - **Listings and scans in store-v4:**
+    - `read_dataset_infos` answers from the folder's view (`_view_infos`: the `wanted` view, else the most recently
+      used; that view's info and the bytes of the layers it names). A damaged view is an error for its folder only.
+    - `cached_matlab_shots` serves a scan's mismatch rule.
+  - **Settings' TXY only:** the inventory's `raw.following` is counted with `remove_raw_following`'s own condition
+    (`_FOLLOWING`).
+  - **V~3:** `legacy_read_through` and `LEGACY_READ_UNTIL` (0.0.9). Keep reads and counts store-v3 through v0.0.8
+    only.
+- **io-and-browsing.md:**
+  - A load's `disk_cached` holds when the folder has any view (`65ee050`).
+  - The listing records' `choices` (A47.2).
+- **converter.md and live.md:**
+  - `txy_sources.converts_over_matlab` and `CONVERT_OVER_MATLAB` (Q50.1 (a)): under HeLab priority, convert on
+    read only what MATLAB's TXY lacks.
+  - `helab_txy.on_read` spares shots held from HeLab (SQ-1).
+  - Live's `held_failed`, sent back with `known` (A40.2).
+- **app-runtime-and-ui.md:**
+  - Settings' TXY only offer: sized as its removal; asked after the event handler returns; when it can't be
+    offered, the status bar's in-app notice (`events.notify(..., status=True)`, `RAW_KEPT`).
+  - "Converted when loaded" follows Q50.1 (raw files without a TXY).
+- **settings.md:**
+  - On the switch-on branch, the `store_v4` row defaults True, a hidden fallback for one release (V~2).
+  - AGENTS.md's settings bullet ("The `store_v4` row stays off until …") becomes "The `store_v4` row is on from
+    v0.0.8; off is a hidden fallback to store-v3 for one release (V~2)", at the PR.
+- **testing.md:**
+  - The `store_v3` marker (conftest's `store_layout`: the row off in the test's own settings). With the switch on,
+    the suite runs on store-v4; the marker is for tests about store-v3 itself.
+  - `test_v4_listings.py`; `offline_restart` runs on both stores; the store-creation race test (8 rounds of six
+    threads).
+- **release-and-ci.md:** the release-note lines in `release-notes-v0.0.8-caching.md` on the switch-on branch (V~5).
+- **The plan** (`roadmaps/caching-v2.md`):
+  - stages 3 and 4 ticked; the switch-on on `agent/v4-switch-on` for the v0.0.8 PR;
+  - store-v3 read through v0.0.8 only (V~3);
+  - stage 5 waits for MATLAB's retirement;
+  - Q50.1 open with (b).
+- **known-issues** (the proposals above, one line each):
+  - `test_io_trace`'s `wait_idle` 20 s;
+  - the `test_convert_watch` hang;
+  - `test_left_widgets`' third teardown error;
+  - the QtWebEngine-family Live plots SIGSEGV, with the macOS crash report's mechanism;
+  - `test_a_conversion_refused_offline…`'s race;
+  - the converted-TXY index lock wait in the replay test;
+  - the share question's 5 s wait;
+  - the presets "can't be read" modal hang (Lumen is on it);
+  - new sightings for `test_timeout_retry…[1]`, `test_every_script_and_each_library`'s QTabBar and
+    `test_test_isolation`'s `lstat`.
