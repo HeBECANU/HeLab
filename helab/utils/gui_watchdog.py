@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 
+from PyQt6 import sip
 from PyQt6.QtCore import QObject, QTimer
 
 
@@ -32,6 +33,11 @@ class GUIWatchdog(QObject):
     def _watch(self) -> None:
         last_dump = 0.0
         while not self.stopped.wait(0.5):
+            if sip.isdeleted(self):
+                # Deleted with its window, unstopped (a close left waiting for saves, then the window deleted:
+                # quit tests, A47.3): its heartbeat is gone too, so it would only log stalls from now on.
+                self.stopped.set()
+                return
             now = time.monotonic()
             if now - self.last_beat > 2.0 and now - last_dump > 30.0:
                 logging.error("GUI stalled for %.2fs; capturing thread stacks", now - self.last_beat)
