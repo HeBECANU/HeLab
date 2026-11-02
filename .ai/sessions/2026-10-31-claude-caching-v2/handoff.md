@@ -756,3 +756,38 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
   pyright (also Windows) are clean.
 - **CI 41383644340** (`e985e12`, step 3 with checkpoint 1's fixes): green on all three OSes. I read every Tests and
   Converter job's log (9): **no RERUN**. Windows Tests 1/2 took 14.2 min, 2/2 took 14.9 (pytest 12.4 and 13.0).
+
+### Step 3 review fixes (Assay, `review-s2-step3.md`, `ad67f58`)
+
+| Finding | Commit | Fix | Test (fails before the fix) |
+|---|---|---|---|
+| S3-1 Medium | `df17761` | `CacheStore.clear_folder_data`: a folder's Clear data cache (`invalidate`) takes in store-v4 its TXY layers, views and seen raw layers too, only copies kept (C2-9). `purge_datasets` takes layers and seen raw layers not used since the cutoff, only copies kept (Assay's call per Q22.6 and C2-9, **for Tony to confirm**). `_removal_events` sent | `tests/test_txy_fixes.py`: the Clear through the real `invalidate` request; the purge |
+| S3-2 Low | `df17761` | The conversion from the raw layer runs before any `file_started`, under the converter's `_Ticker` (`compute_budget` of the raw size), in the load's read and the save's re-read | `tests/test_txy_fixes.py`: a slow decode keeps heartbeats going, with no `file_started` for the shot |
+
+- **The handoff note Assay asked for:** while the HeLab text is on the share (stage 2's boundary), the raw step costs
+  more CPU than parsing text on a local disk (0.48 s against 0.004 s for a 3.25 MB shot on an M4). Its gain is
+  for slow shares, and offline.
+- **CI 41386150963** (`df17761`): green on all three OSes. I read every Tests and Converter job's log (9). Ubuntu Tests
+  2/2 (job 125087377900) had **1 RERUN**: `test_root_gui.py::test_the_gui_never_writes_the_saved_file_itself`,
+  "worker 'gw3' crashed while running" it. It passed on retry. That is known-issues' entry for the same test
+  ("xdist worker gw0 crashed"). **known-issues proposal:** add this run. No other RERUN. Windows Tests took 12.7
+  and 10.8 min.
+- The step 4 work in progress was kept out of `df17761` (a patch, reapplied after it). Step 4 is `8be1be6`, local.
+
+### The "GUI stalled" log (CoCo asked for the test)
+
+A full local run with its output kept (`.ai/temp/full-run.txt`) caught the faulthandler dump. The worker's main
+thread was idle in execnet, waiting for more tests at the end of its run, while a `GUIWatchdog` thread
+(`gui_watchdog.py:40`) was still alive.
+
+`HelabMainWindow.closeEvent` stops the watchdog only on its full path. It returns early, leaving the watchdog
+running, when a close waits for saves (`_wait_for_saves` opens `QuitSaveDialog`) or a quit dialog is open.
+`qtbot.addWidget`'s close at teardown then doesn't stop it either. The likely tests are those whose window close
+waits for saves: `tests/test_quit_confirms.py` and `tests/test_txy_last_used_quit.py`. Running each alone, then
+a slow file in the same process, didn't reproduce it, so the exact test isn't pinned. Harmless: a log line, never
+a failure.
+
+**known-issues proposal:** "A main-window test whose close waits for saves (`QuitSaveDialog`) leaves its
+`GUIWatchdog` running past the test; the worker, idle at the end of a run, then logs 'GUI stalled for ~63s'
+(likely `test_quit_confirms.py` or `test_txy_last_used_quit.py`). Fix: the tests finish or cancel the dialog,
+or the watchdog stops when the window is destroyed."
