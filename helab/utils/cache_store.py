@@ -2185,6 +2185,55 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return True
 
+    def _view_infos(self, keys: Sequence[str],
+                    wanted: tuple[str, str] | None) -> dict[str, tuple[int, int, str, float, int]]:
+        """store-v4 (inside a transaction): each folder's view as ``read_dataset_infos`` reads a dataset (bytes,
+        RAM bytes, info, last used, its TXY files' bytes): the ``wanted`` view, else the most recently used."""
+        marks = ",".join("?" * len(keys))
+        chosen: dict[str, tuple[str, str, str, float]] = {}
+        for path, source, tag, fingerprint, info, last_used in self._conn.execute(
+                f"SELECT path, source, tag, fingerprint, info, last_used FROM txy_views WHERE path IN ({marks}) "
+                "ORDER BY last_used", tuple(keys)):
+            key = str(path)
+            if key in chosen and wanted is not None and chosen[key][0] == "wanted":
+                continue
+            chosen[key] = ("wanted" if wanted is not None and (source, tag) == wanted else "", str(fingerprint),
+                           str(info), float(last_used))
+        layers: dict[tuple[str, str], tuple[int, int, int]] = {
+            (str(path), str(layer)): (int(size), int(count), int(rows_)) for path, layer, size, count, rows_ in
+            self._conn.execute(f"SELECT path, layer, bytes, shots, rows FROM txy_layers WHERE path IN ({marks})",
+                               tuple(keys))}
+        found: dict[str, tuple[int, int, str, float, int]] = {}
+        for key, (_, fingerprint, info, last_used) in chosen.items():
+            entries = json.loads(fingerprint)
+            named: dict[str, int] = {}
+            for entry in entries:
+                named[str(entry[4])] = named.get(str(entry[4]), 0) + 1
+            size = sum(layers[(key, layer)][0] for layer in named if (key, layer) in layers)
+            # (A layer's rows by the share of its shots the view names: listings read no entries.)
+            rows = sum(layers[(key, layer)][2] * count // max(1, layers[(key, layer)][1])
+                       for layer, count in named.items() if (key, layer) in layers)
+            found[key] = (size, rows * TXY_ROW_BYTES, info, last_used, sum(int(entry[1]) for entry in entries))
+        return found
+
+    def cached_matlab_shots(self, path: str) -> Read[set[int]]:
+        """The shots cached from the folder's MATLAB TXY, for a scan's mismatch rule (TXY files are written once):
+        its dataset's (store-v3), or its most recently used view's MATLAB layer shots (store-v4); missing when
+        nothing is cached."""
+        if self.layout < store_v4.LAYOUT:
+            row = self.read_dataset_row(path)
+            if row.value is None:
+                return _error(row.error) if row.failed else _missing()
+            return _found({int(entry[0]) for entry in row.value["fingerprint"] if isinstance(entry, (list, tuple))
+                           and entry})
+        views = sorted(self.folder_views(path), key=lambda view: view[2])
+        if not views:
+            return _missing()
+        view = self.read_view(path, views[-1][0], views[-1][1])
+        if view.value is None:
+            return _error(view.error) if view.failed else _missing()
+        return _found({int(entry[0]) for entry in view.value.fingerprint if str(entry[4]) == _MATLAB_LAYER})
+
     def read_dataset_row(self, path: str) -> Read[DatasetRow]:
         """The dataset's record without its data, e.g. for the one-stat check."""
         key = self._path_key(path)
@@ -2207,8 +2256,12 @@ class CacheStore:
         except ValueError as exc:
             return _error(f"Saved dataset record is unreadable: {exc}")
 
-    def read_dataset_infos(self, paths: Sequence[str]) -> dict[str, Read[DatasetInfo]]:
-        """Each folder's dataset sizes and ``info``, without its fingerprint: for listings."""
+    def read_dataset_infos(self, paths: Sequence[str],
+                           wanted: tuple[str, str] | None = None) -> dict[str, Read[DatasetInfo]]:
+        """Each folder's dataset sizes and ``info``, without its fingerprint: for listings. In store-v4 a folder's
+        cached data is its views and TXY layers: found when it has a view (that of ``wanted``, a (source, tag)
+        view key, when it has one, else its most recently used), with that view's info and the bytes of the
+        layers it names; a folder with only stage 1's dataset (a seed) answers from that."""
         unique = list(dict.fromkeys(paths))
         keys = list(dict.fromkeys(self._path_key(path) for path in unique))
         rows: dict[str, tuple[int, int, str, float, int]] = {}
@@ -2221,6 +2274,8 @@ class CacheStore:
                             f"json_extract(f.value, '$[1]')), 0) FROM json_each(fingerprint) f) FROM datasets "
                             f"WHERE path IN ({','.join('?' * len(chunk))})", chunk):
                         rows[path] = (size, ram_bytes, info, last_used, source)
+                    if self.layout >= store_v4.LAYOUT:
+                        rows.update(self._view_infos(chunk, wanted))
         except (sqlite3.Error, StoreError) as exc:
             failure = _error(f"Disk cache could not be read: {exc}")
             return {path: failure for path in unique}
