@@ -306,6 +306,11 @@ class SourceCalls:
         return call
 
 
+# How long this test waits for its helpers (listing, expanding, the load, then idle): 9-18.5 s for the whole test on
+# Windows CI (3.4 s here), and a wait for idle hit 20 s there (caching-v2 CI 41456480233, job 125314458602).
+HELPERS_MS = 60_000
+
+
 def test_the_gui_process_never_touches_source_folders(
     qtbot: QtBot, tmp_path: Path, trace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,17 +327,17 @@ def test_the_gui_process_never_touches_source_folders(
     explorer.resize(600, 400)
     explorer.show()
     model = explorer.model
-    qtbot.waitUntil(lambda: str(share / "more") in model.nodes, timeout=20000)
+    qtbot.waitUntil(lambda: str(share / "more") in model.nodes, timeout=HELPERS_MS)
     explorer.tree.expand(model.path_index(str(share / "more")))
-    qtbot.waitUntil(lambda: str(share / "more" / "run b") in model.nodes, timeout=20000)
+    qtbot.waitUntil(lambda: str(share / "more" / "run b") in model.nodes, timeout=HELPERS_MS)
     run = str(share / "run a")
     explorer.tree.setCurrentIndex(model.path_index(run))
     explorer.load_to_ram_cache(run, dwell=False, explicit=True)
     qtbot.waitUntil(lambda: explorer.folder_opened_path == run and explorer.folder_opened_data is not None,
-                    timeout=20000)
-    wait_idle(qtbot, service)
+                    timeout=HELPERS_MS)
+    wait_idle(qtbot, service, HELPERS_MS)
     explorer.refresh()
-    wait_idle(qtbot, service)
+    wait_idle(qtbot, service, HELPERS_MS)
     assert gui.calls == []
     helpers = [record for record in lines(trace) if record["pid"] != os.getpid()]
     assert {(record["request"], record["op"]) for record in helpers} >= {
