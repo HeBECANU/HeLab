@@ -126,8 +126,9 @@ cleanup with `WinError 5` on `pytest-current`, give each concurrent run its own
 - **Done means:** the touched tests and the type checks pass for a small change; the full
   parallel suite plus the three type checks pass before a handoff, a landing or a push, with
   any RERUN reported.
-- CI runs the suite on each OS as two jobs, "Tests (1/2)" and "Tests (2/2)" (`--test-group`),
-  beside a "Converter backends" job (the converter tests with cython built); read every job.
+- CI runs the suite on each OS as three jobs, "Tests (1/3)", "Tests (2/3)" and "Tests (3/3)"
+  (`--test-group`), beside a "Converter backends" job (the converter tests with cython built); read
+  every job.
 - Seams, fixtures and harness details (read gates, I/O traces, `store_free`, `no_source_io`,
   offline tests, CI timeouts): [testing](.ai/architecture/testing.md).
 

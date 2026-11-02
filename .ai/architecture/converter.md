@@ -283,7 +283,10 @@ module functions since Live opens no store) converts it as the converter does: `
 heartbeat, outside the ticker, so a read that stalls times out (S3R-1); then `not_done` and the conversion, under
 `_Ticker` with `compute_budget`, before any `file_started`. Late, damaged (unmodified for a minute) and failed
 are judged as `helab convert --once` judges them. No TXY text and no raw row is written (Q19.1, Q50.3; `raw_fill`
-keeps filling the raw layer). The array equals the text's (`txy_cache.txy_array`).
+keeps filling the raw layer). The array equals the text's (`txy_cache.txy_array`). Which shots are candidates
+under each source is `txy_sources.converts_over_matlab` (Q50.1, open; option (a) built, `ced04aa`): under HeLab
+priority only shots MATLAB's TXY lacks, so a raw file that can't be converted yet never costs a shot its MATLAB
+TXY; HeLab only converts every raw shot without HeLab text.
 
 #### Events (`helab/io_ops/events.py`)
 

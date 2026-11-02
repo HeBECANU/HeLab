@@ -239,19 +239,37 @@ anywhere, we could easily rebuild in minutes", so V-2–V-5 need no extra rollba
 - **Overnight landings** when the landing rules hold (Converter UX, caching v2's A47 checkpoint and stage 3,
   Live Scripts landed that night).
 
+## Caching v2 stage 4 and the switch-on (block 51)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 4" to "For Tony's
+morning summary", Vault; landed `8071c04` and `9f92daf`, the switch off; the switch-on on `agent/v4-switch-on`).
+
+- **Q51.1** **With store-v4 on, every load lists the folder once more.** Each load's valid save is followed by
+  `raw_fill`, which lists the folder again in the background (pausable, behind loads and listings) to cache its
+  raw pulses: stage 1's design, raw pulses kept wherever HeLab caches. On a share that is one more
+  directory listing per folder load. **Options:** (a) as built; (b) no `raw_fill` on a share unless the folder has a
+  policy of its own that keeps raw (a conversion there still saves raw rows); (c) later work: the load hands `raw_fill` its own
+  listing, so `raw_fill` only reads the files. **Proposed:** (a) for v0.0.8, and (c) as a follow-up if M47.2 (the
+  lab PC, on the share) finds the extra listing slow.
+
 ## Caching v2 stage 3 (block 50)
 
 From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 3", Vault;
 landed `d4f28f3`, the switch off). For Tony's morning.
 
-- **Q50.1** (Q~16) **HeLab priority converts every raw shot without HeLab text.** Under the default source
-  ("HeLab priority"), store-v4 now converts on read every shot that has a raw file and no current HeLab text,
-  in place of reading MATLAB's TXY, as the stage 3 design said and CoCo accepted. Users will see it: a first
-  load is slower (each shot converted once, then served from its layer), and the data is HeLab's, not
-  MATLAB's. "Converted when loaded" counts follow the same rule (S3R-2). **Proposed:** as built, since that is
-  what HeLab priority means once loads convert on read. **Alternative:** convert on read only shots without
-  MATLAB's TXY, so HeLab priority prefers HeLab text where there is one but never converts over MATLAB's (the
-  load and the count would change together).
+- **Q50.1** (Q~16) **HeLab priority and MATLAB's TXY: which shots convert on read.** Under the default source
+  ("HeLab priority"), stage 3 built store-v4 to convert on read every shot that has a raw file and no current
+  HeLab text, in place of reading MATLAB's TXY. **What changed (2026-11-03):** the switch-on run showed that a raw
+  file that couldn't be converted yet (still settling, or damaged) then cost the shot its MATLAB TXY, so CoCo had
+  **option (a) built** as the safe default, behind the switch: under HeLab priority, convert on read only the
+  shots MATLAB's TXY lacks (`ced04aa`; `txy_sources.converts_over_matlab`), with Live keeping a shot it converted
+  as HeLab's when MATLAB's TXY appears (SQ-1, `9be3e12`). HeLab only still converts every raw shot; "N converted
+  when loaded" counts follow the same rule (S3R-2). This also settles the "(B)" wording question (a folder MATLAB
+  converted whole said "N converted when loaded" under HeLab priority): under (a) it says none. **Options:**
+  (a) as built now; (b) later, if wanted: HeLab's conversion over MATLAB's TXY, with a fallback to MATLAB's TXY
+  when the conversion can't be done now (`CONVERT_OVER_MATLAB = True` gives the first half today, without the
+  fallback); (c) the stage 3 behaviour (convert over MATLAB's, no fallback). **Proposed:** (a), with (b) as a
+  later item if Tony wants HeLab's conversion preferred over MATLAB's.
 - **Q50.2** (the S3-4 label) **Auto-convert keeps its label.** S3-4 said the toggle's label and tooltip say
   "Also write TXY files"; the button has a fixed width, so the label stays "Auto-convert" and only its
   store-v4 tooltip says it ("Live converts new shots when it reads them; this also writes HeLab's TXY text to

@@ -124,7 +124,11 @@ How to use it:
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
-  2026-10-30). Likely the QtWebEngine crash below.
+  2026-10-30). Likely the QtWebEngine crash below. Again: gw2 on `agent/plot-library-crash` CI 41483861898
+  (`34e6452`, Windows Tests 1/2, job 125409160738; no faulthandler output, a native crash), passed on retry.
+  Possibly the empty-argument `QApplication` of the Plotly deaths (Fixed below, `b0eb914`; its 3D scatter is a
+  Plotly web view); unchecked: if it recurs on a branch with `b0eb914`, it isn't, and its worker's file order
+  is the next thing to read (Quick Fixes 9).
 - [ ] **QtWebEngine crashes xdist workers** (the Plotly and Scatter3D entries here):
   `test_accessible_names.py::test_every_script_and_each_library` crashed its worker once in a local
   full run (2026-10-30, `agent/smoke-ready`), passed on rerun; macOS's crash report gives the
@@ -132,19 +136,24 @@ How to use it:
   Chromium check failing, frames all in QtWebEngineCore under an NSRunLoop source), not Python or
   HeLab's code. That test now closes each web-view plot once walked (at most one renderer open).
   A second mechanism, now fixed (below): a SIGSEGV on the main thread when a Plotly plot's dock was
-  deleted; some of these worker crashes may have been it. Watch whether they recur after `c104502`.
+  deleted; some of these worker crashes may have been it. A third, fixed too (below, `b0eb914`): a
+  `QApplication` made with no program name, which made QtWebEngine end the process at the first web view.
+  Watch whether they recur after `c104502`.
   They do: `test_accessible_names.py` crashed its worker on Ground CI 41100591971 (Windows Tests 1/2, job
   124217404251, gw0, `371751d`), PR CI 41095142656 attempt 1 (macOS Tests 1/2, `8ccc0be`) and PR CI
-  41104589243 (macOS Tests 1/2, job 124231159424, `92c532b`); each passed on rerun (2026-10-31).
-  `test_plot_backends.py::test_2d_plots_draw_with_every_library[values2-Plotly-TxyHistograms]` aborted its
-  worker ("Fatal Python error: Aborted") on `agent/caching-v2` CI 41389534725 (macOS Tests 1/2, job
-  125097691928, `93a938b`); passed on rerun. (That job's `test_accessible_names` worker death was the 120 s
-  timeout, Fixed below.)
+  41104589243 (macOS Tests 1/2, job 124231159424, `92c532b`); each passed on rerun (2026-10-31). Those
+  `test_accessible_names` deaths are not the empty-argument cause: no such fixture ran on those workers before
+  them (Quick Fixes 9), so the SIGTRAP stays open. (The `[values2-Plotly-TxyHistograms]` abort once listed here
+  was that cause: Fixed below.)
 - [ ] `test_accessible_names.py::test_every_script_and_each_library`: "Controls without an accessible
   name: Basic plots v1 › Plot T, X, Y histograms: QTabBar < QMainWindow < QSplitter < HelabMainWindow: no
   ID", Windows CI 41086378298 (Tests 1/2, job 124168617741, gw0, `dev/v0.0.7` `9de3e19`, 2026-10-31);
   passed on rerun. Not a worker crash: likely a dock tab bar Qt makes when docks tabify, walked before
-  `identify` names it. Cause not found.
+  `identify` names it. Again: `agent/caching-v2` CI 41465454700 (`ee4df2b`, Windows Tests 1/2, job
+  125345114056), passed on retry. **Cause** (Vault, 2026-11-03, from that log): a plot dock area's tab bar gets
+  its ID in `PlotWorkspace.fit` (`dock.py`, `identify_tabs`), which a debounced timer (`_fit_soon`) runs, and the
+  walk ran before the timer fired ("GUI stalled for 2.30s" in that test the same second). `dock.py` is
+  unchanged since 0.0.7a1. Fix: name the tab bar when docks tabify, or let the walk run pending fits first.
 - [ ] `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[2]`:
   `waitUntil timed out in 3000 milliseconds` at line 292 (the `finally`'s wait for the killed fake
   helpers to exit after `service.shutdown()`), on Windows CI run 40803552596 (`agent/txy-ship`) and
@@ -158,14 +167,11 @@ How to use it:
   41459782803 (`fa7884f`, Windows Tests 1/2, job 125325725282). A candidate: 3 s under load. Quick Fixes 9's
   guess (not checked): an earlier test's helper start entering this test's process-wide `Popen` fake, which
   A46.1 (`6fa8cd9`, `this_tests`) would stop; all three sightings above ran without A46.1, so keep it open
-  until CI runs with it say.
-- [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-CountsPerShot]`: an
-  xdist worker crashed on Windows CI run 40803552596; passed on retry (no traceback; look for a
-  faulthandler dump). Again: the Plotly case on `agent/byte-units` CI 40865344851 (job 123418722344,
-  gw3), and `[values1-Matplotlib-CountsPerShot]` on `agent/txy-index` CI 40883472651 (job
-  123480992297, gw1). The Plotly case again on Windows Tests 2/2: Ground CI 41084197666 (job
-  124161029996, `dd540cd`) and PR CI 41095142656 (`8ccc0be`); `agent/plot-identity` CI 41158691080
-  (Windows Tests 2/2, job 124411181934, gw1).
+  until CI runs with it say. None in Quick Fixes 9's Ground runs since A46.1 (CI 41455114540 to 41493818761, all
+  job logs read).
+- [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values1-Matplotlib-CountsPerShot]`: worker
+  gw1 crashed on `agent/txy-index` CI 40883472651 (job 123480992297); passed on retry. Split from the Plotly
+  cases' entry (Fixed below): no web view here, so not their cause. Cause not found.
 - [ ] `test_root_discovery.py::test_volume_check_alone_refreshes_hints_without_visiting_markers`:
   xdist worker gw2 crashed on macOS CI 40866574094 attempt 1 (job 123422851726, `agent/txy-index`
   `9691873`; `INTERNALERROR> AssertionError: (…, <WorkerController gw2>)`, exit code 3, no RERUN);
@@ -203,7 +209,8 @@ How to use it:
   passed on retry. Again on Windows Tests (2/2): `agent/byte-units` CI 40989130996 (job
   123847075029) and `agent/smoke-ready` CI 40990082872 (job 123850152612), both passed on retry; Ground
   CI 41072414259 (job 124119750861, `2960680`); `agent/caching-v2` CI 41375836115 (`84ccaeb`, job
-  125055805809) and CI 41379212072 (`6b0f998`, job 125066159186).
+  125055805809) and CI 41379212072 (`6b0f998`, job 125066159186); `agent/v4-switch-on` CI 41490797588
+  (`d3b4931`, 2026-11-03).
 - [ ] `test_gui_responsiveness.py::test_stalled_process_keeps_heartbeat_and_shutdown_responsive`:
   `assert 0.2199… < 0.2` (line 228) on macOS CI (run 40764414177), passed on retry.
 - [ ] Tests that `chdir` while helpers can start: a helper inherits the working folder, which its
@@ -272,6 +279,30 @@ How to use it:
   picks a port and the server binds it later, so another process can take it in between and the server falls
   back to the next free port (earlier sessions saw it too: 2026-10-20, -21, -22). Fix: bind and hand the open
   socket over, or retry with a new port when `start()` returns another (Live Scripts' A~6).
+- [ ] **Ubuntu CI 41468043383 attempt 1** (`agent/live-scripts` `74b79b3`, Tests 1/2, job 125354149828, cancelled at
+  its 20-min limit, 2026-11-03): `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard`
+  failed 6 times on gw0 from 15:08:18 (about 5 s an attempt, 0.4 s normally), then gw1 from 15:08:52 failed every
+  test left to it 6 times at about 35 s an attempt, each its `WAIT = 30_000` for a save that never completed
+  (`test_result_cache_badge`'s save test; `test_result_cache_plots`' outdated `[script]`/`[data]`,
+  `ends_unshown[cancelled]`, `live_reruns_are_never_saved`), until the cancel: 43 RERUN lines, no reason, no
+  summary. Attempt 2 green; the guard test alone 15 of 15, and both workers' orders replayed in one process pass;
+  no disk, memory or file-limit message. It looks like that runner's helper subprocesses getting nothing done
+  from 15:08; not proven (Lumen's A~7, Quick Fixes 9's hunt). A run cut short now keeps its reasons: live
+  `RERUN REASON` lines (`1ca5baa`), `--session-timeout` (`457debc`) and the junit.xml artifact (`5324a7f`).
+- [ ] `test_cache_first.py::test_a_server_clock_ahead_of_ours_keeps_the_quick_check[cached]`: the test's in-process
+  load sat in SQLite's `COMMIT` (`cache_store.transaction`, under `start_dataset_job`, `loading.py:289`) for over
+  100 s, faulthandler's dump at 100 s, then the worker killed at `--timeout=120` (reported "(???)", a dead worker),
+  on Ground CI 41476107464 (`f534ede`, Windows Tests 1/2, job 125382190106); passed on retry. The store is the
+  test's own and SQLite's busy timeout is 30 s, so a file-system stall on the runner or a long wait behind another
+  process is likely; not reproduced (Quick Fixes 9).
+- [ ] `test_live_testdata.py::test_a_run_replayed_into_live_is_converted_once_per_shot_as_matlab_did`:
+  pytest-timeout's "Timeout (0:01:40)", then "node down", on `agent/caching-v2` CI 41476804254 (`6b00cb0`, Windows
+  Tests 2/2, job 125384496288); passed on retry. The dump: the test's own `run_convert` → `convert_folder` →
+  `finish` → `write_atomic` → `pin` → `provenance.record` → `_write` → `_patient` → `_transaction`, waiting at
+  `BEGIN IMMEDIATE` (`provenance.py:346`) on the converted-TXY index's lock. Each `_patient` waits at most
+  `BUSY_SECONDS` (10 s), so another connection to that test's own index held it for most of 100 s. The switch was
+  off and neither `provenance.py` nor `io_ops/convert.py` had changed on that branch; not pinned (Vault's handoff,
+  2026-11-03).
 - [ ] `test_live_io.py::test_a_live_check_pauses_background_work_only_while_it_reads`: `waitUntil` timed out
   (10 s) at line 136, once in a local full run under a load average of ~37 (Ground, Quick Fixes 9, 2026-11-02,
   before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into.
@@ -306,6 +337,84 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
+
+- [x] **Plotly worker deaths** in `test_plot_backends.py::test_2d_plots_draw_with_every_library`'s Plotly cases
+  (`[values0-Plotly-CountsPerShot]`, `[values0-Plotly-TxyHistograms]`, `[values1-…]`, `[values2-…]`): an xdist worker
+  crashed or aborted ("Fatal Python error: Aborted"), each passing on retry. Seen on Windows CI 40803552596;
+  `agent/byte-units` CI 40865344851 (job 123418722344, gw3); Ground CI 41084197666 (job 124161029996, `dd540cd`) and
+  PR CI 41095142656 (`8ccc0be`); `agent/plot-identity` CI 41158691080 (job 124411181934, gw1); `agent/caching-v2` CI
+  41389534725 (macOS, job 125097691928, gw8); and, once three test groups put the crash order on gw1 of group 2/3,
+  CI 41481668334 (macOS 2/3), 41484513530 (Ubuntu 2/3 and macOS 2/3), 41488725971 (macOS 2/3), 41489860538
+  (Ubuntu 2/3) and 41490372206 (Windows 1/3). **Cause** (Quick Fixes 9): four test files made the worker's
+  `QApplication` with an empty argument list (`test_memroyUsageWindow.py`'s session fixture, `test_icons_pt.py`'s
+  autouse fixture, `test_icons_ut.py` and `test_main_ut.py`'s `setUpClass`); when one ran as the worker's first Qt
+  test, QtWebEngine's first web view ended the process (a qFatal, "Argument list is empty, the program name is not
+  passed to QCoreApplication", SIGABRT under `WebContentsAdapter` from `PlotlyPane.__init__`). A replay of gw1's
+  order aborted 5 of 5; a bisect by file left `test_memroyUsageWindow.py` then the Plotly case. **Fixed**
+  (`b0eb914`): those fixtures take `qapp` or `conftest.qt_application()`, a subprocess script passes
+  `sys.argv[:1]`; `tests/test_qt_application.py` guards it (no `Q*Application()` or `([])` in `helab/` or
+  `tests/`) and replays the crash order. CI 41493818761: no RERUN, and gw1 survived the old order. Not this cause:
+  the SIGTRAP and the Matplotlib case (open above).
+- [x] `test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot`: worker gw2 died ("Fatal
+  Python error: Segmentation fault") on `agent/caching-v2` CI 41471378031 (`76e0f91`, Ubuntu Tests 2/2, job
+  125365677960, `[PyQtGraph]`), and locally on macOS (`[Matplotlib]`, 2026-11-03); each passed on retry. **Cause**
+  (Lumen, `823589a`): the tests make a Scripts panel with no Qt parent, which becomes cyclic garbage once `plot()`
+  returns; Live Scripts' amber start note was a style sheet, so polishing the panel ran Python
+  (`ElidedLabel.changeEvent`), and a garbage collection there freed the half-polished panel (SIGSEGV in
+  `QWidgetPrivate::updateIsOpaque`). Not the library switch (the crash came before it), and users can't hit it (the
+  app's panel is Qt-owned; a replaced plot widget stays Qt's until its `deleteLater`). **Fixed** (`823589a`): the
+  note is amber by its palette; a nested pytest forcing collections in the polish (SIGSEGV before), a
+  no-Python-in-polish test and a library-switch guard test. The test rule: [testing](../.ai/architecture/testing.md)
+  (A52.1 for the other test sites).
+- [x] `test_presets_plots.py::test_an_arrangement_preset_round_trips_every_bundled_script` hung on a modal "Preset
+  can't be read" until killed at 100 s, on `agent/v4-switch-on` CI 41484277419 (Ubuntu Tests 2/3, job
+  125410633098). **Cause** (Lumen): a preset saved while an identity probe is out is held as owed and written when
+  the probe answers; the test's simulated restart shut the helpers down before that write, so the re-read lacked
+  the preset. A real quit waits for it. **Fixed** (`566eed6`): the restart waits for an owed write
+  (`restart_presets` asserts `not presets_saving()`); `presets.warning_box` is a seam, and conftest's autouse
+  `no_modal_warnings` fails any test that would wait on that modal instead of hanging (Prismo's L1).
+- [x] `test_explorer_convert.py::test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off[off]`: the share
+  question didn't appear within 5 s (line 114), on `agent/v4-switch-on` CI 41482722171 (macOS Tests 1/2, job
+  125405134241) and once in the plot-library-crash floor's local full run (its A~1); passed on rerun. **Cause**
+  (Ember): on a slow runner Live's next tick queued a conversion (beside False, the flag not yet known) before the
+  test set the folder's beside flag, and nothing ran it, so auto-convert stayed "requested"; the same race gave
+  `…asks_retry_or_hellabs_folders[retry]` a stale payload. The app is right both ways. **Fixed** in the tests
+  (`beside_flag_in_live`, merged `f1194df`): the old tests failed 4 of 13 loaded rounds, the new ones 1,200 of 1,200
+  passed.
+- [x] `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing`: `IndexUnavailable … database is locked …
+  SQLITE_BUSY` on Windows, Ground CI 41476107464 (Tests 2/2, job 125382190899, twice), then `[a writer missing its
+  window]` at shot 0 after 0.04 s on CI 41483647539 (Tests 3/3), and failing after 5 reruns in Converter backends on
+  `agent/converter-ux` CI 41489860538 and `agent/preset-modal-hang` CI 41500431969 attempt 1 (branches without the
+  second fix). **Cause:** the test's writer processes open the index per shot, and on a slow runner one missed its
+  window past `BUSY_SECONDS`, which the app takes as harmless (the conversion is tried again later). **Fixed** in
+  the test (Quick Fixes 9): writers try such a shot again (`324ad79`, 4 times), then until `RETRY_SECONDS` (30 s),
+  as a conversion is retried for as long as it takes (`28d8973`); a 1 ms repro case kept (the old writer fails it 7
+  of 10).
+- [x] `test_release_recovery.py::test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing_commit`:
+  `assert 'unknown' == 'detached'` at :337 on Windows CI 41481668334 (Tests 3/3) and 41490372206 (Tests 3/3).
+  **Cause:** `build_info._git` gives each git call 2 s, and `git status --porcelain` on the test's fresh
+  `--no-checkout` clone (it refreshes the whole index) took longer on a slow runner, so `checkout_build_info`
+  returned an all-"unknown" stamp. **Fixed** in the test (`a599ac6`, Quick Fixes 9's option (b)): one untimed `git
+  status` first; the app keeps 2 s per git call. Option (a), a longer timeout where it can't slow the app's start
+  (the build's stamp), only if a real build ever stamps "unknown".
+- [x] `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so`: "Live stopped:
+  Cancelled" where "auto-convert stopped: not while working offline" was expected (line 575), `agent/caching-v2` CI
+  41472779247 (`1cffaba`, macOS Tests 2/2, job 125370535914); passed on retry. **Cause:** Live checks every 20 ms
+  there; a check its tick asked for while the test was offline was refused, and its "cancelled" halted Live
+  first. **Fixed** in the test (`d03c0c6`, Quick Fixes 9): Live's next check is queued before going offline
+  (`next_request`); the repro case kept.
+- [x] `test_live_scripts.py::test_a_reload_waits_for_a_run_of_its_scripts_on_the_worker_thread`: `in_flight()`
+  empty at :206, Ground CI 41463943327 (Ubuntu Tests 1/2, job 125340069131); passed on retry. **Cause:** the test
+  waited for `runner.in_flight()`, which counts a job from when it is queued; on a busy runner the reload cancelled
+  the still-queued job, which then ended uncomputed. The app is right (a cancelled run that never started
+  shouldn't hold a reload). **Fixed** in the tests (merged `f534ede`): it and
+  `test_removing_the_folder_a_reload_waits_for_ends_the_wait` wait for the script's `STARTED` event; 200 runs under
+  load with no RERUN.
+- [x] **Windows test jobs near their limit:** Ground CI 41460607344's Windows Tests 2/2 took 24 min 40 s (usually
+  10–13; no single test, the longest gap 18 s: a slow runner), and Ground CI 41476107464's Windows groups 20.3 and
+  21.1 min of pytest, against a stop line of about 25 and the job's 30. **Fixed** (Quick Fixes 9): three test
+  groups per OS (`9787e35`; Windows about 9–11 min a group since), with `--session-timeout` (`457debc`) and the
+  junit.xml artifact (`5324a7f`) so a job cut short keeps its reasons.
 
 - [x] **A quit test leaves its `GUIWatchdog` running** (a log line, never a failure): `HelabMainWindow.closeEvent`
   stops the watchdog only on its full path; it returns early when a close waits for saves (`_wait_for_saves`

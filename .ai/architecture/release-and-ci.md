@@ -46,18 +46,24 @@ with soft failures. `ci-test.yml` has two independent jobs per OS and Python (co
 `test_convert_split.py`, `test_convert_testdata.py`, and since caching v2's checkpoint 2 `test_raw_layer.py`,
 the raw layer's layer-equals-file proof, so cython is proved there only; a new test that runs every
 available backend joins the list); "Tests" runs the
-whole suite in two groups, each a job of its own ("Tests (1/2)", "Tests (2/2)", Q16.2, A17.2):
-`pytest --test-group N/2` (see [testing](testing.md)); the caller's result, which the release gate
-needs, fails if either group does, and each macOS group uploads coverage for Codecov to merge. The
+whole suite in three groups for the required 3.13 jobs, each a job of its own ("Tests (1/3)", "Tests
+(2/3)", "Tests (3/3)"; Quick Fixes 9, `9787e35`; two groups before, Q16.2, A17.2, and still for PRs'
+compatibility jobs): `pytest --test-group N/3` (see [testing](testing.md)); the caller's result, which the
+release gate needs, fails if any group does, and each macOS group uploads coverage for Codecov to merge.
+A Tests job's limit is 30 min on Windows and 20 elsewhere, and pytest runs with `--session-timeout`
+1200 s and 720 s (`457debc`), so it stops itself between tests, with its summary, rerun reasons and
+junit.xml, before the runner would cancel the job. The
 Tests jobs install the lock without Cython, nothing built (a `pip list` guard fails the job if a
 backend package is present). The build job builds them (`build.py --ci`) before PyInstaller and checks the
 app after (`check_build.py --frozen`); its timeout is 25 min. `HELAB_REQUIRE_BACKENDS` reaches later
 steps through `$GITHUB_ENV`, so in the build job it also applies to "Test the older tagged commit
 before rebuilding recovery assets" (skipped, and the variable unset, for a tag from before
 `native/build.py`). Runners need a C compiler (MSVC on `windows-latest`). Group times on the first
-run (40803552596, pytest step): Windows 11:02 and 10:02, macOS 4:09 and 4:52, Ubuntu 2:56 and 5:09. Shared steps live in `ci-test.yml` and `ci-build.yml`, with
-Codecov uploads. Runs keep no artifacts: builds are uploaded (`upload`) only in a
-run that releases, for the release job; test results go to Codecov only. Compatibility matrices expand on pushes, but pass `enabled: false`
+run (40803552596, pytest step): Windows 11:02 and 10:02, macOS 4:09 and 4:52, Ubuntu 2:56 and 5:09; with
+three groups (41481668334): Windows 8.9, 10.0 and 9.8 min, macOS 1.6, 6.1 and 4.7, Ubuntu 3.0, 3.5 and 3.4. Shared steps live in `ci-test.yml` and `ci-build.yml`, with
+Codecov uploads. Builds are uploaded (`upload`) only in a run that releases, for the release job; test
+results go to Codecov, and each Tests job keeps its `junit.xml` as an artifact for 7 days whatever its
+outcome (`5324a7f`, `if: always()`; `junit-<os>-py3<minor>-group-index-<N>`, index 0 being group 1). Compatibility matrices expand on pushes, but pass `enabled: false`
 to the called jobs, recording individual skips without starting runners. All
 matrices disable fail-fast; required failures do not cancel
 other OS tests/builds. All four matrices depend on branch/version selection;

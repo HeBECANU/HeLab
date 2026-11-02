@@ -405,6 +405,13 @@ From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.
 - [x] **A46.1 Process-wide fakes in tests** (done in `6fa8cd9`, Quick Fixes 9: `conftest.this_tests(fake, real)`; fakes acting only on the test's own paths left as they were) (Quick Fixes 9's A~1): sweep the tests that patch `os.stat`,
   `os.scandir` or `subprocess.Popen` for the whole process and make each fake act only on the test's own
   thread, the pattern behind both Windows flakes fixed in `3bafef1` and `eccb23c`.
+- **A46.2 A runtime check for a nameless `QApplication`** (Quick Fixes 9's A~6, optional; after the Plotly worker
+  deaths, `b0eb914`): a conftest check that fails a test whose worker's `QApplication` was made with an empty
+  argument list (`QCoreApplication.arguments()` empty at the first `qapp`), for code `tests/test_qt_application.py`'s
+  AST guard can't see. The guard covers the code today.
+
+Done without IDs (2026-11-03): Quick Fixes 9's A~4, `--session-timeout` in CI (`457debc`), and A~5, every test job's
+junit.xml kept (`5324a7f`).
 
 ## Caching v2 checkpoint 3 (block 44)
 
@@ -493,6 +500,41 @@ Vault; Assay's [A47 review](sessions/2026-10-31-claude-caching-v2/review-a47.md)
 [stage 3 review](sessions/2026-10-31-claude-caching-v2/review-s3.md); landed `1d91897` and `d4f28f3`, the switch
 off). Done: A40.2, A47.1, A47.2, A47.4, A47.6 (above); A47-1 fixed on the floor. No new item; Tony's answers are
 Q50.3–Q50.18, the open ones Q50.1 and Q50.2.
+
+## Caching v2 stage 4 and the switch-on (block 51)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 4" on, Vault;
+Assay's [review](sessions/2026-10-31-claude-caching-v2/review-s4.md); landed `8071c04` and `9f92daf`, the switch
+off). No new item: stage 4, the switch-on run's fixes and Q50.1's option (a) are done; Q51.1 is for Tony; the
+switch-on (V-2, V-3, V-5) waits on `agent/v4-switch-on` for the v0.0.8 PR.
+
+## Live Scripts' follow-ups (block 52)
+
+From the follow-up sessions on the Live Scripts floor (Lumen; Prismo's reviews): the reload-wait race (the Live
+Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f534ede`), the
+[plot crash](sessions/2026-11-03-claude-plot-library-crash/handoff.md) (landed `823589a`) and the
+[preset hang](sessions/2026-11-03-claude-preset-modal-hang/handoff.md) (landed `566eed6`). All test-side.
+
+- **A52.1 Test-made Scripts panels get a Qt parent** (the plot crash's A~2, Prismo's
+  [assessment](sessions/2026-11-03-claude-plot-library-crash/review-crash.md)): about 45 test sites make
+  `TreePanelWidget(...)` without one (17 in `test_analysis_gui`, 16 in `test_live_scripts`, 4 in
+  `test_constant_layers`, the rest in 6 files); give them `TreePanelWidget(window.plots, window)`, the `plot()`
+  helpers that drop the panel first. None crashes under forced collections today ([testing](architecture/testing.md)'s
+  rule).
+- **A52.2 The plot crash's two optional notes** (Prismo's N1, N2): say in the guard test's docstring and at
+  `workspace.py`'s two `setParent(None)` sites that the replaced widget is Python's until the `deleteLater()`
+  right after hands it back to Qt, and optionally guard `replace_plot_content` too (the RAM budget's release
+  picture); make `test_a_dropped_scripts_panel_survives_a_collection_in_its_first_polish` assert its inner run's
+  "3 passed", not only exit 0.
+- **A52.3 A shared "wait for owed writes, then restart" test helper** (the preset hang's A~1, Prismo's N3):
+  other tests that simulate a restart (shut the helpers down) should wait for owed preset writes as
+  `test_presets_plots.stored()` now does. Its private reads (`_presets_again`, `_probe_owner`) could later become a
+  public `FolderCache.presets_idle()` (an app change).
+- **A52.4 Guard the presets' other modals** (the preset hang's A~2): `presets.ask_name` (`QInputDialog`),
+  `presets.replace_or_add` and `presets.confirm` (`QMessageBox`, `exec`) open real dialogs unless a test stubs them
+  (per instance today, `presets_for`). Make them fail in conftest as `warning_box` does, after checking every test
+  that reaches them stubs them; or, broader, a conftest guard on `QMessageBox.exec` / `QDialog.exec` that fails
+  unless a test allows it.
 
 ## Not AI work (stays in MANUAL_TODO)
 
