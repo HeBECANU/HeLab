@@ -1098,3 +1098,78 @@ This fixes Assay's A47 review (`a0d04bd`, 1 Low).
     is HeLab's, not MATLAB's. **Proposed:** as built, since that's what HeLab priority means once loads convert
     on read. **Alternative:** convert on read only for shots without MATLAB's TXY, so HeLab priority prefers
     HeLab text where there is one but never converts over MATLAB's.
+
+### 3b: Live converts on read, and A40.2 (`4e86094`)
+
+- **S3~4, Live:** `with_txy` sets `on_read` on store-v4 loads and Live checks. `live_check` then takes on-read
+  candidates as a load does, and converts them with `txy_cache.convert_raw_file` (shared with loads).
+  - A held on-read shot is not read again when a text of its profile appears, such as Auto-convert's: the data is
+    the same by contract.
+- **The Auto-convert button:** its tooltip in store-v4 says Live converts on read and Auto-convert also writes the
+  text. **For Tony:** the label stays "Auto-convert", not S3~4's "Also write TXY files", because the button has a
+  fixed width. CoCo agreed (2026-11-03).
+- **A40.2:** a held HeLab shot whose new TXY is unreadable keeps its held data. The file goes back to the app as
+  `live_failed`; `LiveSession.held_failed` sends it with `known`, so it isn't read again while unchanged. A
+  readable TXY then replaces the held data.
+- **Refactor:** `profile_for`, `backend_for` and `convert_raw_file` are now module functions in `txy_cache`, for
+  Live, which opens no store.
+- **Tests:** five in `test_convert_on_read.py`; the three Live ones fail with `live.py` at `912f928`.
+- **Checked:** suite 8951 passed, no RERUN.
+
+### 3c: what users see (`0cd133f`)
+
+- **S3~5, counts:** `FolderCache.converts_on_read(path)` holds in store-v4, with a source that reads HeLab's and
+  the folder cached. `on_read_shots` gives raw files minus TXY files, from memory only.
+  - These read it: the row tooltip's "Here" line, the explorer's count line, Folder details (state and files),
+    the status bar's "not loaded" message, auto-load (`_has_data`) and Live launch's first load
+    (`FolderExplorer.on_read_count`).
+  - The wording: "N converted when loaded", or "N raw found · converted when loaded" when there's no TXY.
+  - No new badge.
+- **S3~6, the TXY line:** the dataset's `txy` record names `on_read` shots (Live includes its held ones).
+  `DatasetView.on_read` keeps them through revisions.
+  - `describe` says "…, converted from raw", or "… for 2 of 3 shots (1 converted from raw), MATLAB's for the rest".
+  - Folder details' TXY line adds "N <tag> converted from raw", with a tooltip.
+- **Tests:** three new ones, failing without the change.
+- **Checked:** suite 8954 passed, no RERUN. An earlier run had 15 RERUNs, all the typing tests on my own misplaced
+  `type: ignore`, which I fixed.
+
+### 3d: the integration check (`4e14535`)
+
+`test_caching_v2_session.py`'s stage 3 session runs with the switch on, beside store-v3:
+- a load converts on read;
+- a user profile converts from the raw layer without reading a raw file;
+- Live converts a new shot while an unfinished one waits;
+- Clear all;
+- store-v3 stays unchanged and is opened only by LegacyStore.
+
+Checked: suite 8955 passed, no RERUN.
+
+### Stage 3: doc proposals (for the Coordinator)
+
+- **AGENTS.md:** no rule change. The code map's `helab/io_ops/` row could add that `txy_cache` converts on read in
+  store-v4.
+- **io-and-browsing.md**, loads:
+  - Stage 3's step in the loading order: an on-read candidate (a raw file without a current HeLab text) is served
+    by its layer, then the raw layer, then `convert_raw_file`.
+  - Late, damaged and failed are judged as `helab convert --once` judges them.
+  - Loads write no text and no raw row (R~1, R~2).
+  - `load_counts` gains `helab_on_read` and `converted`; the record gains `on_read`.
+- **live.md:**
+  - Live converts on read in store-v4 (S3~4); a held on-read shot isn't read again when its text appears.
+  - A40.2's `live_failed`.
+- **converter.md:**
+  - Conversion on read reuses the converter's read and checks (`_read_raw`, `not_done`).
+  - It runs Settings' backend (A47.6) and takes the profile sent whole (A47.1).
+- **app-runtime-and-ui.md:**
+  - S3~5's "converted when loaded" in the row tooltip, count line, Folder details and status bar, with no badge.
+  - S3~6's "converted from raw".
+  - Auto-convert's store-v4 tooltip.
+- **plots-and-scripts.md:** `DatasetView.on_read` and `describe`'s wording.
+- **testing.md:** `tests/test_convert_on_read.py`, and the stage 3 session.
+- **The plan:** stage 3 ticked, the switch still off; Q~16 for Tony.
+
+### For Tony's morning summary (stage 3)
+
+- **Q~16:** see 3a above. Built as proposed: under the default "HeLab priority", store-v4 converts every raw shot
+  that has no HeLab text, in place of reading MATLAB's TXY.
+- **The S3~4 label:** see 3b above.
