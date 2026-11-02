@@ -131,7 +131,9 @@ last summary's `files`, no shown data with shots), not converted by Live, shows 
 `No TXY · on a share · Convert…` (clickable; the tooltip has the share's warning). Clicking it asks
 (non-modal; `convert_offer_cache` / `_temp` / `_beside` / `_cancel`): **Convert to HeLab's cache
 (recommended)** (default), **Convert to HeLab's temp folder**, **Convert beside on the share…** (then the
-beside confirmation above; yes turns the folder's flag on), Cancel. The text says the converter should run on
+beside confirmation above; yes saves the folder's flag, and the conversion starts once the store says it is
+on, asking for beside explicitly; disabled with the reason where the Live menu's beside setting is:
+`beside_unavailable`, the disk cache off, no `.helab-root`, a root pending; review fix 1), Cancel. The text says the converter should run on
 the computer that owns the data (the acquisition PC). `ExplorerConverter` (owner `<tab>:convert`, the
 background lane) runs `FolderCache.convert(destination=…, beside=False)`: the first pass only records (as
 every conversion's first), then passes a check interval apart while files settle (at most `MAX_PASSES` = 6;
@@ -146,8 +148,9 @@ refuses a beside write for want of a hard link and a no-replace rename (`convert
 txy's "Not written: …"; a cache-folder refusal or any other error isn't one), then the run fails as before.
 - **App** (Live's auto-convert and Folder details' conversion): a non-modal question (`beside_refused_retry`
   / `_cache` / `_temp` / `_later`): Retry, Write to HeLab's cache folder instead (default), Write to HeLab's
-  temp folder instead (this session; the folder's flag stays), Not now (stopped; Live's Retry stays, and the
-  tooltip adds that turning the beside setting off converts into HeLab's folder).
+  temp folder instead (the folder's for the session, `explorer_convert.instead`: Live's auto-convert and
+  Folder details both follow it, review fix 3; the folder's flag stays), Not now (stopped; Live's Retry stays,
+  and the tooltip adds that turning the beside setting off converts into HeLab's folder).
 - **`helab convert`**: on a terminal `[r]etry, write to HeLab's [c]ache or [t]emp folder instead, or [q]uit?
   [r/c/t/Q]` (cache/temp for the rest of the run); without a terminal the refusal stands (`--once` exits 1)
   with a line naming `--output cache` and `--output temp`. Never a silent refusal or fallback.
@@ -167,22 +170,55 @@ txy's "Not written: …"; a cache-folder refusal or any other error isn't one), 
   terminal (Q38.1, `agent/converter-ux`)"; the `helab convert` section: `--yes` and the share question;
   a new subsection "Shares (A39.5)" with the definition above, the three warnings, Folder details' offer.
 - **`live.md`**: auto-convert's line names a read stopped early (one by name, several counted, amber) and
-  the share question and Q38.1's question (non-modal, nothing converts while asked); `AutoConvert.destination`.
+  the share question and Q38.1's question (non-modal, nothing converts while asked, closed with auto-convert);
+  the folder's choice instead of beside, for the session (`explorer_convert.instead`).
 - **`data-roots.md`**: one line pointing at `cache_location.share_of` (shares for the converter, lexical +
   the mount table; distinct from the store's location keys, which `cache_paths` makes).
 - **`app-runtime-and-ui.md`**: Folder details' Convert row (`details_offer`, clickable) and that converter
   questions are non-modal (`open`) with IDs `<prefix>_<choice>`.
 - **`docs/hlb-format.md`**: the raw layer's facts gain `stop_line` (int ≥ 1 or null; absent in layers from
   before A37.1).
+- **`io-and-browsing.md`** (Strata's findings 4 and 5): add `cache_location.share_of` (patched by the app's and
+  `helab convert`'s tests; `tests/test_share_detection.py` checks no module of `helab/` imports it or
+  `mount_table` by value) and `explorer_convert.confirm_beside_on_share` (patched in
+  `test_explorer_convert.py`; `explorer_live` calls it as `explorer_convert.confirm_beside_on_share`, and
+  `ExplorerConverter` bare, in its own module) to the list of names tests patch. And after "Source folders are never queried by the
+  GUI model": "The GUI may read the OS mount table (`cache_location.mount_table`, cached 10 s: psutil's
+  `getfsstat` without waiting on macOS, `/proc` on Linux, `GetDriveTypeW`/`WNetGetConnectionW` on Windows)
+  to tell whether a folder is on a share (`share_of`, lexical: no stat or realpath), and nothing below a
+  mount point."
 - **`testing.md`**: `test_live.replay` runs a load without its `txy` field, so a test of HeLab TXY loads runs
   the load itself (`test_explorer_convert.load_as_the_helper_does`), see A~1.
+
+## Review fixes (Strata, `be40694`; fixed in `bc73f0c`)
+
+All six findings, each with a test that failed before its fix (seen failing, then passing):
+
+| # | Finding | Fix | Test |
+|---|---|---|---|
+| 1 (medium) | Folder details' beside wasn't gated and started before the folder's flag was known | `beside_unavailable` shared with the Live menu; the button disabled with the reason; the conversion waits for `folderPrefsChanged`, asks `beside=True` (`FolderCache.convert`'s override passes True through, the helper still checks the store); a flag that can't be queued or saved stops it, said in the row | `test_the_offers_beside_is_gated_like_the_live_menu`, `test_the_offers_beside_waits_for_the_folders_flag_then_converts_beside` (`payload["beside"] is True`), `test_a_beside_flag_that_cant_be_saved_stops_the_offers_conversion` |
+| 2 (low) | Live's question outlived Live, holding a later auto-convert | closed and cleared in `_convert_off` (so in `stop_live` too) | `test_lives_question_goes_with_auto_convert_and_a_later_one_converts`, `test_lives_question_goes_when_live_stops` |
+| 3 (low) | Q38.1's "for this session" held only in Live | `explorer_convert.instead`, the folder's for the session, read by both | `test_the_choice_after_a_refusal_holds_for_the_folder_in_live_and_folder_details` |
+| 4 (low) | `share_of` imported by value in `helab convert` | called as `cache_location.share_of` | `test_share_of_is_called_through_its_module` (AST over `helab/`) |
+| 5 (low, docs) | the GUI's mount-table read and the patched names undocumented | proposed below (`io-and-browsing.md`) | — |
+| 6 (nit) | the detail's "rows before that line" | "what was read before it" | `test_the_read_says_where_it_stopped` |
+
+Also found while fixing: two older tests (`…asks_once_and_cache_instead…`, `…once_confirmed_or_turned_off[beside]`)
+clicked Live's question within the 20 ms check interval of `cycle`'s conversion, so the tick the answer runs
+could wait for a Live check the test never answers (one local failure, never in CI; the app is unaffected:
+Live keeps ticking). They now set `ended_at` back first, as the Q38.1 test did; the file then passed 21 runs
+in a row.
+
+Checks at `bc73f0c`: the full suite (`-n 4 --reruns 5 --reruns-delay 1`) **9043 passed, 673 skipped, 2 warnings
+(the known pyqtgraph one) in 170.64s; no RERUN**; the five type checks clean. CI: see the summary sent to CoCo.
 
 ## Questions for Tony (provisional)
 
 - **Q~1** The wording: Live line and Folder details `d3.txt read stopped at line 1010` (one) / `3 reads
   stopped early` (several), amber; the tooltip and `helab convert`: `read stopped at line 1010, at
   "not,a,number", which isn't a number: as MATLAB's converter reads the file, its TXY holds only the hits of
-  the rows before that line (34,336 bytes not read)`. Line numbers ungrouped (1010, as editors show them).
+  what was read before it (34,336 bytes not read)` (review nit 6: the values before the token on its line are
+  read). Line numbers ungrouped (1010, as editors show them).
   Proposed: as built.
 - **Q~2** Should a read stopped early also send a system notification, like a damaged file (once per
   file)? Built: a log warning and amber text only. Proposed: notify once per file (it means lost hits).
@@ -192,8 +228,10 @@ txy's "Not written: …"; a cache-folder refusal or any other error isn't one), 
 - **Q~4** The share confirmation is per folder per session (the beside flag persists). Keep it, or save it
   with the folder's flag (store `convert_prefs`, a new column)? Proposed: session only.
 - **Q~5** Live's share question: default Convert to HeLab's cache instead; closing turns auto-convert off.
-  Q38.1's question: default HeLab's cache folder; closing is Not now. Choices apply for the session, the
-  folder's beside flag unchanged. Proposed: as built.
+  Q38.1's question: default HeLab's cache folder; closing is Not now. A choice of HeLab's cache or temp folder
+  instead (either question, Live or Folder details) is the folder's for the session, followed by both, the
+  folder's beside flag unchanged; choosing beside again in Folder details clears it (Strata's finding 3).
+  Alternatives: per conversion only; or saved with the folder. Proposed: as built.
 - **Q~6** The offer's wording: row `No TXY · on a share · Convert…`; buttons "Convert to HeLab's cache
   (recommended)", "Convert to HeLab's temp folder", "Convert beside on the share…". Proposed: as built.
 
