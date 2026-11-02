@@ -754,3 +754,5 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
   `test_helper_dispatch.py`, `test_caching_v2_session.py`.
 - Local full suite at `6f57918`: 8909 passed, 672 skipped, no RERUN. mypy --strict (helab, tests, win32) and
   pyright (also Windows) are clean.
+- **CI 41383644340** (`e985e12`, step 3 with checkpoint 1's fixes): green on all three OSes. I read every Tests and
+  Converter job's log (9): **no RERUN**. Windows Tests 1/2 took 14.2 min, 2/2 took 14.9 (pytest 12.4 and 13.0).
