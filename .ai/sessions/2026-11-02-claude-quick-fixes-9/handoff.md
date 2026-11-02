@@ -215,3 +215,13 @@ The run's results follow, every Tests and Converter backends job's log read for 
     the next CI sighting names the leak.
   - Or: conftest fails a test that leaves a `HelabMainWindow` alive, as it does for web views
     (`delete_left_widgets`).
+
+### A~3 done: the stall line names its window and tests (CoCo's yes)
+
+- **The line now reads:** `GUI stalled for Xs (<window class> ['<objectName>']; made in <test>; now in
+  <test>); capturing thread stacks`.
+- **Where the names come from:** the window is read on the GUI thread, at construction and each beat;
+  the tests come from `PYTEST_CURRENT_TEST`.
+- **Test:** `test_a_stall_line_names_its_window_and_the_tests` fails on the old line.
+- **Full suite:** 8934 passed, no RERUN; the five type checks pass.
+- What the next Windows run's lines name follows.
