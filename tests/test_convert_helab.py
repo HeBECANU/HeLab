@@ -1939,6 +1939,9 @@ WRITER = """
 import sys, time
 from helab.convert import provenance
 root, name, count, start, pause = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+if len(sys.argv) > 6:
+    provenance.BUSY_SECONDS = float(sys.argv[6])  # (A writer that waits less: the test's repro of a slow runner.)
+TRIES = 4  # A conversion whose index is busy fails and is tried again later (IndexUnavailable): so is a shot here.
 while time.time() < start:
     time.sleep(0.001)
 for shot in range(count):
@@ -1948,16 +1951,21 @@ for shot in range(count):
         output="temp", txy_name=provenance.txy_name("m19v1", shot), txy_size=shot, txy_mtime_ns=shot,
         txy_sha256="", hits=1, converted_at=time.time(), helab_version="0", read_seconds=0.0, parse_seconds=0.0,
         reconstruct_seconds=0.0, format_seconds=0.0, write_seconds=0.0)
-    began = time.monotonic()
-    try:
-        with provenance.open_index(root, write=True) as index:
-            index.record(name, "", "/data/" + name, record, time.time())
-    except Exception as error:  # (Said in one line, so the test's message shows it whole.)
-        cause = error.__cause__ or error.__context__
-        print(f"shot {shot}: {type(error).__name__}: {error} (cause {type(cause).__name__}: {cause}; "
-              f"code {getattr(cause, 'sqlite_errorname', None)}) after {time.monotonic() - began:.2f} s",
-              file=sys.stderr)
-        raise
+    for attempt in range(TRIES):
+        began = time.monotonic()
+        try:
+            with provenance.open_index(root, write=True) as index:
+                index.record(name, "", "/data/" + name, record, time.time())
+            break
+        except Exception as error:  # (Said in one line, so the test's message shows it whole.)
+            if isinstance(error, provenance.IndexUnavailable) and attempt + 1 < TRIES:
+                time.sleep(0.2)
+                continue
+            cause = error.__cause__ or error.__context__
+            print(f"shot {shot}: {type(error).__name__}: {error} (cause {type(cause).__name__}: {cause}; "
+                  f"code {getattr(cause, 'sqlite_errorname', None)}) after {time.monotonic() - began:.2f} s, "
+                  f"attempt {attempt + 1}", file=sys.stderr)
+            raise
     # A conversion reads, converts and writes a TXY between two rows (tens of milliseconds or more), so
     # two converters leave each other gaps. Back to back, with no pause, the test measured SQLite's
     # write lock, which isn't fair: on Windows one writer could miss every gap for BUSY_SECONDS (CI
@@ -1967,12 +1975,18 @@ for shot in range(count):
 PAUSE = 0.005
 
 
-def test_two_writers_side_by_side_lose_nothing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("busy", ["", "0.001"], ids=["as configured", "a writer missing its window"])
+def test_two_writers_side_by_side_lose_nothing(tmp_path: Path, busy: str) -> None:
     """The app's helper and ``helab convert`` (two processes) writing one index at once: every row lands,
-    and the file stays sound. Each opens it per shot, harder than a conversion (one connection per run)."""
+    and the file stays sound. Each opens it per shot, harder than a conversion (one connection per run).
+
+    A shot whose index stays busy past ``BUSY_SECONDS`` is tried again, as a conversion is (IndexUnavailable):
+    on Windows CI 41476107464 one writer's open took 26-27 s and failed the test, though nothing was lost.
+    ``busy``: the writers wait only that long (a slow runner's case, made on any machine)."""
     root = str(tmp_path / "converted-txy")
     start = time.time() + 1.0
-    writers = [subprocess.Popen([sys.executable, "-c", WRITER, root, name, "150", str(start), str(PAUSE)],
+    writers = [subprocess.Popen([sys.executable, "-c", WRITER, root, name, "150", str(start), str(PAUSE),
+                                 *([busy] if busy else [])],
                                 stderr=subprocess.PIPE, text=True) for name in ("helper", "command line")]
     for writer in writers:
         _, errors = writer.communicate(timeout=120)
