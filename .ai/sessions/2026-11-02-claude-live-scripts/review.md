@@ -211,3 +211,47 @@ through Load Scripts…, which the user has no reason to guess. A marker that ca
 - `add_folder` saves the list before loading.
 
 Add a test for the unlisted-folder case.
+
+## Re-check 2: R1 and R2 (2026-11-03)
+
+I re-checked only the fix diff, `git diff f66a946..909c66d -- helab tests` (code commit `c79f210`).
+
+**Verdict: R1 and R2 are closed, and no finding is open. Nothing here blocks landing.**
+
+**Checks:**
+
+- The touched tests pass: `test_live_scripts`, `test_scripts_reload`, `test_plot_txy_saved`,
+  `test_accessible_names` and `test_destroyed_connections`, run with `-n 4 --reruns 5 --reruns-delay 1
+  --basetemp=.ai/temp/pytest-prismo`: **81 passed, no RERUN**.
+- The five type checks are clean.
+
+**R1 (a stale loading marker) is closed.** A marker can no longer stick, in any of the cases:
+
+- **At start, an unreadable marker:** that start still skips the folders, then the marker is dropped.
+- **At start, a marker that names no remembered folder:** the marker is dropped and the folders load.
+- **A deliberate load clears a marker it didn't make.** This covers Reload, a folder's Reload in the menu,
+  Load Scripts… of a new folder, and Load Scripts… of a known folder (through `reload_scripts`).
+- **Auto-reload leaves the marker alone** (`deliberate=False`).
+- A marker that names a remembered folder still makes the next start skip the folders, as designed.
+
+**R2 (Lumen found it) is closed.** `clicked` passed its `checked` bool as `folders`, so the Reload button raised
+in its slot and never reloaded. It is now connected through the `_reload_clicked` slot, and the test clicks the
+real button.
+
+**Mutation check.** I reverted each fix in turn on a copy of the tree. Each of these makes a new test fail:
+
+- the slot for the button (R2);
+- dropping an unreadable marker;
+- dropping a marker that names no remembered folder;
+- clearing the marker in `add_folder`;
+- clearing the marker on a deliberate reload.
+
+**Two optional notes, not findings:**
+
+1. **`deliberate=False` in `_check_changes` isn't tested end to end.** That is the one mutant that survived: the
+   test calls `reload_scripts(..., deliberate=False)` directly. If it is ever lost, an auto-reload also clears a
+   marker, which only removes the one-start safety skip.
+2. **`_pending_deliberate` can outlive its reload.** Suppose a deliberate reload is waiting and its folder is then
+   removed. `_pending_deliberate` stays True, so the next auto-reload counts as deliberate and clears a marker.
+   The effect is the same harmless one. Resetting the flag in `_stop_waiting` when nothing is pending would tidy
+   it.
