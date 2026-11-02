@@ -152,7 +152,9 @@ def live_reason(report: pytest.TestReport) -> str | None:
     outcome = str(report.outcome)  # ("rerun" is pytest-rerunfailures'.)
     if outcome not in ("rerun", "failed"):
         return None
-    return f"{outcome.upper()} REASON {report.nodeid} ({report.when}):\n{failure_reason(report)}"
+    # (xdist's report for a worker that died, killed at --timeout or crashed, has the phase "???".)
+    phase = report.when if report.when in ("setup", "call", "teardown") else "worker crashed or was killed"
+    return f"{outcome.upper()} REASON {report.nodeid} ({phase}):\n{failure_reason(report)}"
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:

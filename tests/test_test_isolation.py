@@ -133,3 +133,6 @@ def test_a_failure_or_rerun_is_said_as_it_happens() -> None:
                                             "E       assert 1 == 2\ntests/test_x.py:3: AssertionError")
     assert (live_reason(report("failed", "teardown")) or "").startswith("FAILED REASON tests/test_x.py::test_x (teardown):")
     assert live_reason(report("passed")) is None and live_reason(report("skipped")) is None
+    # xdist's report of a worker that died (here: killed at CI's --timeout after a hang) has the phase "???".
+    assert (live_reason(report("failed", "???")) or "").startswith(
+        "FAILED REASON tests/test_x.py::test_x (worker crashed or was killed):")
