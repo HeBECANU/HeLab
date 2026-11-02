@@ -337,6 +337,8 @@ class FolderCache(QObject):
         self.convert_reasons: OrderedDict[str, dict[str, str]] = OrderedDict()
         # Flag saves in flight: job owner → (path, the choice's set_at, who set it).
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
+        # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
+        self._choice_writes: dict[str, str] = {}
         # Constants (F0b): the lab's (Settings → Lab parameters, set by the main window), and each
         # folder's own, as the store or this session last said: {"values": {key: float}, "set_at"}.
         # Folders with no disk cache keep theirs for the session only (``constants_session_only``).
@@ -1048,7 +1050,10 @@ class FolderCache(QObject):
             params["policy"] = policy
         if source is not None:
             params.update(source=source, tag=tag or "")
-        return self.cache_admin("folder_choice", **params)
+        job = self.cache_admin("folder_choice", **params)
+        if job:
+            self._choice_writes[job] = path
+        return job
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
         """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
@@ -1651,9 +1656,10 @@ class FolderCache(QObject):
 
     def _root_prefs_gone(self, path: str) -> None:
         """Beside :meth:`_root_constants_gone` (cache-1): the old root's folder flags (Don't cache, Don't
-        auto-load) and converter flags (``write_beside``) no longer apply to the folders it held (not those
-        inside a nested root below), so the next listing's answer under the new identity stands; a flag
-        write still running (this session's choice) keeps its folder's."""
+        auto-load), converter flags (``write_beside``) and store-v4 folder choices (cache policy, TXY source:
+        A47-1) no longer apply to the folders it held (not those inside a nested root below), so the next
+        listing's answer under the new identity stands; a flag or choice write still running (this session's
+        choice) keeps its folder's."""
         writing = {write[0] for write in self._pref_writes.values()}
         changed: set[str] = set()
         for folder in [folder for folder in self.prefs if self._root_holds(path, folder) and folder not in writing]:
@@ -1666,6 +1672,11 @@ class FolderCache(QObject):
             if self.write_beside(folder):
                 changed.add(folder)
             del self.convert_prefs[folder]
+        choosing = set(self._choice_writes.values())
+        for folder in [folder for folder in self.folder_choices
+                       if self._root_holds(path, folder) and folder not in choosing]:
+            del self.folder_choices[folder]
+            changed.add(folder)
         for folder in sorted(changed):
             self.folderPrefsChanged.emit(folder)
 
@@ -3842,6 +3853,7 @@ class FolderCache(QObject):
         if kind in ("done", "error", "cancelled"):
             self._admin.pop(producer.owner, None)
             self._started.pop(producer.owner, None)
+            self._choice_writes.pop(producer.owner, None)
             write = self._pref_writes.pop(producer.owner, None)
             if write is not None and kind != "done":
                 self._prefs_not_saved(write[0], write[1], str(event.get("message") or "the save was cancelled"),
