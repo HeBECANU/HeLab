@@ -1463,3 +1463,28 @@ Green on all three OSes. I read all 9 Tests and Converter logs.
 
 Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled" log
 appears 4 times. Windows Tests 1/2 took pytest 10.6 min and 2/2 11.0 min.
+
+## For Tony's morning summary (caching v2, 2026-11-03)
+
+- **Q50.1 (= Q~16), HeLab priority and MATLAB's TXY:**
+  - **Built now:** under HeLab priority, store-v4 converts on read only the shots MATLAB's TXY lacks (`ced04aa`,
+    `9be3e12`). CoCo chose this as the safe default after the switch-on run showed a problem: when HeLab's
+    conversion beat MATLAB's TXY, a raw file that couldn't be converted yet (still settling, or damaged) cost the
+    shot its MATLAB TXY.
+  - **(b), later if you want it:** HeLab's conversion over MATLAB's TXY, with a fallback to MATLAB's when the
+    conversion can't be done now. `txy_sources.CONVERT_OVER_MATLAB = True` gives the first half today, without the
+    fallback.
+  - HeLab only always converts.
+- **One more listing per load, with store-v4 on:** each load is followed by `raw_fill`, which lists the folder again
+  in the background to cache its raw pulses. That is stage 1's design, raw pulses kept wherever HeLab caches. On a
+  share, that's one more directory listing per folder load.
+- **The Auto-convert button** keeps its "Auto-convert" label (S3~4's "Also write TXY files" doesn't fit its fixed
+  width). In store-v4 its tooltip says Live converts on read and Auto-convert also writes the text.
+- **The switch-on** is on its own branch, `agent/v4-switch-on` (`ca9c869`), for the v0.0.8 PR after your check.
+  - store_v4 is on by default; the row is a hidden fallback for one release (V~2).
+  - Keep reads store-v3 through v0.0.8 only (V~3).
+  - Release-note lines: `release-notes-v0.0.8-caching.md` in this folder (V~5).
+- **Store-v4 bugs the switch-on run found, all fixed on `agent/caching-v2`:**
+  - a first-start race between helpers opening the new store (`c06f342`, `768ac40`);
+  - cached folders looking uncached after a restart, because listings, scans and adopt read only store-v3's table
+    (`4afa96a`, `48e3656`).
