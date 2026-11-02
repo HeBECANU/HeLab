@@ -114,3 +114,39 @@ So each test proves its change: the probe test fails exactly as CI did, and the 
 - **CI 41490372206:** not reread. The handoff reports two Windows RERUNs:
   - the detached-stamp test (QF9's open proposal);
   - the Plotly worker crash, which `dev/v0.0.8`'s `b0eb914` fixes.
+
+## Re-check: L1 (`git diff 498c584..767418c -- helab tests`)
+
+Prismo, 2026-11-03. **L1 is closed. No finding is open.**
+
+- **The fix.** `no_modal_warnings` moved from `test_presets_plots.py` to `tests/conftest.py`, autouse for every test.
+  - It imports `helab.views.plots.presets` inside the fixture, at test time, after conftest has loaded, so the
+    "never import helab before conftest" rule holds.
+  - It patches the module attribute that `_warn` looks up when called (the seam as reviewed above), so
+    `test_presets_window.py` and `test_preset_folder_live.py` are covered now, and so is every other file.
+  - A test that expects a warning still sets `presets.warn` (`test_presets_plots.py`), and nothing in the suite
+    patches `warning_box` itself.
+  - The importing doesn't hurt the import-purity tests: `tests/test_headless_imports.py` checks in subprocesses, and
+    it passed in the full suite.
+- **The new test** is `test_presets_window.py::test_applying_a_missing_preset_in_the_window_fails_fast_instead_of_waiting`.
+  It applies a preset that was never saved through a real `HelabMainWindow`'s `arrangement_presets`.
+  - With the fix (the copy of `69add78`) it passes in 1.2 s.
+  - With `498c584`'s conftest (the fixture lived only in `test_presets_plots.py`) it **hangs**. The dump at 1:40 shows
+    `presets.py`'s `warning_box` (line 461), `_warn` (609) and `apply` (707). I killed it.
+  - So it proves the move.
+  - Its `waitUntil(presets_read and not _preset_jobs)` doesn't wait for owed writes (the `stored()` of the main fix).
+    That doesn't matter here: no preset is saved, and the test wants "isn't saved".
+- **The old seam test** still passes, now with conftest's fixture: `test_presets_plots.py::…fails_the_test_instead_of_waiting`.
+- **Checks:**
+  - **Full suite** on an isolated copy of `69add78`, `pytest -n 4 --reruns 5 --reruns-delay 1`: 3 failed, 9156 passed,
+    674 skipped, 15 rerun.
+    - All 3 failures and all 15 RERUNs are the three git-provenance tests (no `.git` in the copy), as in the first
+      round. All three pass in the floor's checkout, which is clean at `69add78`.
+    - No test hit "a modal warning would wait here", and there was no other RERUN.
+  - **Type checks:** `mypy tests --strict`, `pyright tests` and `pyright --pythonplatform Windows tests` are clean.
+    `helab/` is unchanged by this diff.
+- **CI's two-writers failure.** CoCo says it is `dev/v0.0.8`'s, fixed in `28d8973` ("test_convert_helab: a writer
+  tries a busy-index shot again until it lands"). I checked that `28d8973` is on `dev/v0.0.8` and not on this branch,
+  so a merge with dev brings it in. I didn't read that CI run's logs.
+- **The optional notes stand as they were.** N1, the seam doc line: `testing.md` could now name conftest's
+  `no_modal_warnings`.
