@@ -302,3 +302,41 @@ WAL pragma. It makes the new 6-thread test fail about 1 run in 4.
     **123 passed, no RERUN in that run.** The repeated runs above did RERUN (SR-1).
   - `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
   - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+## Re-check of SR-1 (`872b679..768ac40`)
+
+**Open findings: none.** SR-1 is fixed, and the test doesn't flake.
+
+- **The fix.** `_wal(conn, busy_timeout)` replaces the bare pragma on a store with no layout.
+  - It reads `PRAGMA journal_mode` and switches only when the mode isn't `wal`. When another helper made the store,
+    it is WAL already, so there is nothing to switch.
+  - Otherwise it retries on `SQLITE_BUSY` or `SQLITE_LOCKED` (by code, else by text) every 5 ms until
+    `busy_timeout`, then raises. Other errors raise at once.
+  - It runs only in the processes that open the store (helpers, `helab convert`, `helab cache`), never on the GUI
+    thread.
+  - It also covers store-v3's creation, which had the same WAL race. Without the fix the test's store-v3 case
+    failed too, and nothing else changes for store-v3.
+- **Observation, not a finding:** the pragma's answer isn't checked. SQLite returns the old mode, without an error,
+  when it can't switch for reasons other than a lock, such as inside a transaction, which can't happen here. The old
+  code didn't check it either.
+- **The test** now runs 8 rounds of 6 threads, each on a fresh store, for store-v4 and store-v3.
+- **Fails without the fix.** On an export of `768ac40`, with `cache_store.py` as it was at `872b679`, in 20 runs:
+  - 9 failed: 5 with both cases failing, 4 with one;
+  - 11 passed.
+
+  The test catches the race about half the time, where it used to catch it about a quarter of the time. It can't
+  be deterministic, since the race is SQLite's. The fix, which is the part that matters, never failed in what
+  follows.
+- **Doesn't flake with the fix.** Restored and compared with git:
+  - **100 of 100** sequential runs passed;
+  - another **100 of 100** passed as 4 loops of 25 at once, under load;
+  - my scratch test (`.ai/temp/assay/test_zz_race.py`, 40 rounds of 6 fresh opens) had **0 of 240** opens fail,
+    against 4 before.
+- **Checks.** On the export, whose `helab/` and `tests/` equal the floor's `HEAD`:
+  - `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` on `test_store_v4`,
+    `test_cache_store`, `test_cache_store_open`, `test_result_cache_store` and `test_caching_v2_session`:
+    **123 passed, no RERUN.**
+  - `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
+  - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Stage 4, its race fix included, has no open review findings.
