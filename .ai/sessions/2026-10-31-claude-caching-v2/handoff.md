@@ -1413,3 +1413,26 @@ CoCo's call (2026-11-03), behind the switch.
 - **The fix:** each folder's view is parsed in its own try. A damaged view is an error for that folder only.
 - **Test:** `test_v4_listings.py`, damaging a view three ways. It fails without the fix.
 - **Checked:** suite 9150 passed, no RERUN.
+
+### SQ-1: a shot Live converted on read stays HeLab's (`9be3e12`)
+
+- **The bug:** Assay's review of (a) (`5477538`). The filter left out shots Live held from on-read conversions, so
+  when MATLAB's TXY of a shot appeared, Live read it again and switched it to MATLAB's.
+- **Fix:** `on_read` takes `held` and spares shots held from HeLab, as `could_take` does. Live passes its held
+  origins.
+- **Test:** a Live test with the flag off and on. The flag-off case fails at `ced04aa`.
+- **Checked:** suite 9152 passed, 673 skipped.
+- **One local RERUN,** not this change:
+  `test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot[Matplotlib]`, "worker 'gw2'
+  crashed".
+  - **The mechanism, from macOS's crash report** (`~/Library/Logs/DiagnosticReports/python3.13-2026-11-03-030617.ips`):
+    SIGSEGV (KERN_INVALID_ADDRESS) on the main thread. A posted event in `qtbot.waitUntil`'s event loop reached a
+    `QLabel`, ran `QWidget::ensurePolished`, then `setPalette` and `QWidgetPrivate::updateIsOpaque`, on a
+    label whose widget tree was partly deleted.
+  - Same test as CI 41471378031's Ubuntu crash ([PyQtGraph] there).
+  - **Likely cause:** the test switches the plot's library, which replaces its drawing widget, and a widget of the
+    replaced one gets its polish event after the replacement.
+  - **known-issues proposal**, a new entry, or a mechanism for the QtWebEngine-crash family: "Live plots'
+    library switch: a main-thread SIGSEGV polishing a QLabel of a replaced plot widget
+    (`test_transfer_fractions_highlight_follows_lives_newest_shot`, CI 41471378031 Ubuntu, and locally
+    2026-11-03); plot code, not pinned."
