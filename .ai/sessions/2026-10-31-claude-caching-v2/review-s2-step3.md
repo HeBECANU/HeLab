@@ -148,3 +148,49 @@ On an export of `e985e12`:
 - Scratch checks, not committed: S3-1 (`.ai/temp/assay/test_zz_s3.py`), S3-2's timing (an inline script).
 
 On fix diffs I re-check only the fixes, their tests and the touched files' type checks.
+
+## Re-check of the fixes (`ad67f58..df17761`; `8be1be6`, step 4, not included)
+
+**Open findings: none.** S3-1 and S3-2 are fixed.
+
+| Findings | Commit | Without the fix | With it |
+|---|---|---|---|
+| S3-1, S3-2 | `df17761` (`io_helper.py`, `admin.py`, `loading.py`, `cache_store.py`) | 3 failed | 3 passed |
+
+(On an export of `df17761`, with those four files as they were at `df17761^` (= `ad67f58`), I ran
+`tests/test_txy_fixes.py`'s three tests, then restored the files and compared them with git.)
+
+- **S3-1: fixed.**
+  - `invalidate` now calls `CacheStore.clear_folder_data`: the folder's dataset (bumping its epoch, which the TXY
+    guard now holds, so a running load can't save back), and in store-v4 its TXY layers and raw layers whose
+    sources were seen (`gone_at IS NULL`) and every view of the folder. Only copies stay. `_removal_events` reports
+    them.
+  - `purge_datasets` in store-v4 also takes layers and seen raw layers not used since the cutoff (their folders'
+    views go with them), keeping only copies: CoCo's call, for Tony to confirm.
+  - Don't cache's removal shares the helper (`_with_layers_removed`), behaving as before.
+  - store-v3 is unchanged: `_with_layers_removed` returns early.
+- **S3-2: fixed.**
+  - The raw-layer step runs before the shot's `file_started` (in the load loop, and in the save's re-read loop),
+    under `_Ticker(send, "converting", compute_budget(raw size))`. IOService's file window and its 15/20/30 s
+    limits never cover it, and heartbeats count as progress there.
+  - A converted shot sends no file events and is counted as read.
+  - `_Ticker` joins its thread on exit, so no heartbeat overlaps the load's own sends.
+- **Step 5 note (not a finding):** the purge question is built from `purge_estimate`
+  (`CacheTab.py:638`, `:681`), which counts datasets only. In store-v4 the purge now also takes TXY and raw layers
+  (never only copies). Build the question from a plan, as noted for `trim`.
+
+### Checks (re-check)
+
+On an export of `df17761`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` (the full suite, `test_txy_fixes.py`
+  and `test_helper_dispatch.py` included): **8908 passed, 673 skipped, 2 warnings, 3 failed, 15 rerun in
+  153.79 s.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests (the export has no `.git`; 5 reruns each).
+    They passed in the floor checkout with no RERUN at this review, and neither they nor `build_info.py` changed
+    since.
+  - No other RERUN.
+  - The 2 warnings are the known pyqtgraph ones.
+- `mypy helab/ --strict` (203 files), `mypy tests --strict` (190), `--platform win32`: no issues.
+- `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Step 3 has no open review findings.
