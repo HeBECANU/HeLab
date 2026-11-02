@@ -1288,7 +1288,21 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
     debounced timer (`_fit_soon`) runs. The test's walk ran before that timer fired: the log shows "GUI stalled for
     2.30s" in that test in the same second.
   - `dock.py` hasn't changed since 0.0.7a1, and stage 4 doesn't touch plots.
-  - **known-issues proposal:** "`test_every_script_and_each_library`: a plot dock area's QTabBar walked before
-    `_fit_soon` named it ('no ID'), on a stalled Windows runner (CI 41465454700, job 125345114056); passed on
-    retry. Fix: the walk waits for the workspace's pending fit, or `fit()` runs before it."
+  - known-issues already has this entry (Quick Fixes 7, CoCo): add this run as a sighting (CI 41465454700, job
+    125345114056).
 - The known "GUI stalled" log appears 7 times (A47.3).
+
+### A new store opened by two helpers at once (`c06f342`)
+
+- **Found by:** running the suite with store-v4 as the default, on the switch-on branch: "Disk cache could not be
+  opened: duplicate column name: maker".
+- **The race:** two helpers open a store that doesn't exist yet. Both see no layout before the write lock, and the
+  second then runs the schema again.
+  - store-v4's `ALTER TABLE … ADD COLUMN maker` can't run twice.
+  - store-v3's schema is all `IF NOT EXISTS`, so it never showed there.
+  - With store-v4 on, a first launch opens the new store from several helpers at once.
+- **Fix:** the layout is checked again under `BEGIN IMMEDIATE` (`CacheStore._create`).
+- **Test:** in `test_store_v4.py`, a deterministic race plus six threads opening a fresh store. It fails without
+  the fix with exactly that error.
+- **Checked:** suite 9135 passed, no RERUN.
+- CoCo: stage 4 lands including it; Assay reviews `eb38718..c06f342`.
