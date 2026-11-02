@@ -307,3 +307,39 @@ The run's results follow, every Tests and Converter backends job's log read for 
   - The longest test was 94 s (`test_analysis_gui`'s other-library one), then the type checks (43–71 s).
   - The longest gap between two results was 18 s.
   - So it was a slow runner, not a hang.
+
+## The cancelled Ubuntu job (CI 41468043383 attempt 1, agent/live-scripts 74b79b3): hunted, not pinned
+
+- **What happened** (job 125354149828, `Tests (1/2)`, cancelled at 20 min):
+  - **gw0:** `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard` failed 6
+    times, from 15:08:18 to 15:08:45, about 5 s an attempt and the last 0.2 s. In the green attempt 2 it
+    took 0.4 s. gw0 then passed 457 tests normally.
+  - **gw1, from 15:08:52:** every remaining test failed 6 times at about 35 s an attempt, with teardown
+    ERRORs too. Those tests were `test_result_cache_badge`'s save test and `test_result_cache_plots`'
+    outdated `[script]`/`[data]`, `ends_unshown[cancelled]` and `live_reruns_are_never_saved`.
+    - Each attempt is their `WAIT = 30_000` for a save that never completed. In attempt 2 each takes
+      0.3–1.4 s.
+    - gw2 and gw3 had finished by about 15:10, so gw1's tail ran the job into its limit.
+  - **43 RERUN lines and no reason.** The summary (`rerun reasons`), tracebacks and junit.xml come only
+    when pytest ends.
+- **Tried:**
+  - the guard test alone, 15 of 15 passed;
+  - gw0's exact order (110 tests) and gw1's (915 tests, from the log, mapped to Ground's IDs), replayed in
+    one process with `pytest.main` and no xdist: both pass;
+  - the log searched for disk-full, memory, OOM and file-limit messages: none.
+- **What it looks like:** helper subprocesses on that runner getting nothing done from about 15:08. Both
+  workers turned within 34 s; gw0's one test recovered, while every test left on gw1 needed a helper's
+  save. Not proven: the run kept no reason.
+- **Diagnostic so the next one names itself (`1ca5baa`).** conftest writes `RERUN REASON <test>
+  (<phase>):` or `FAILED REASON …` live, on the controller's terminal, with the same lines as the
+  summary. A cancelled job now keeps them.
+- **Known-issues proposal (open):** "Ubuntu CI 41468043383 attempt 1: from 15:08, helper-dependent tests
+  timed out on gw0 (`test_failed_listing_history_write_keeps_the_listing_guard`, ×6, ~5 s each) and gw1
+  (`test_result_cache_*` saves, 30 s waits, ×6 each) until the job's 20-min cancel. No reason kept;
+  neither worker's order reproduces it. Live reasons since `1ca5baa`."
+- **A~ proposals.**
+  - **A~4: `--session-timeout` in CI.** pytest-timeout 2.4 has it. Set it a little under each job's limit
+    (e.g. 17 min for a 20-min job) so pytest ends itself and still prints its summary and writes
+    junit.xml, instead of being killed.
+  - **A~5: upload junit.xml `if: always()`.** Only useful with A~4: on a killed job the file doesn't exist,
+    since pytest writes it at the end.
