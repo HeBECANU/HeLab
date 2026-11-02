@@ -54,7 +54,23 @@ job only after the cancel, the old test fails every time (`assert 'Reload' == 'R
 sleeps 0.2 s after each cancel), three times; the three live-scripts test files six times in a row with
 `-n 4` and no reruns (51 passed each; no reruns on purpose, to see a flake, against AGENTS.md's rule for
 `-n`); merged `dev/v0.0.8` (`8861de9`): full suite 9131 passed, 673 skipped, **no RERUN**; the five type
-checks clean. CI: CI4_PLACEHOLDER
+checks clean. CI: run 41468043383 on `74b79b3`. **Attempt 1 was cancelled**: "ubuntu + py3.13 / Tests (1/2)"
+(job 125354149828) hit the job's 20-minute limit with 43 RERUN lines, in tests this change doesn't touch.
+`test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard` failed for good after 5
+reruns (gw0, from 15:08:23). From 15:08:52 worker gw1 took about 35 s per attempt and failed everything it
+ran next: `test_result_cache_badge.py::test_a_plots_save_shows_the_badge_without_listing_and_a_clear_hides_it`,
+then `test_result_cache_plots.py`'s `…outdated_until_the_run_ends[script]` and `[data]` (FAILED and ERROR),
+`…ends_unshown_says_it_no_longer_reruns[cancelled]` and `test_live_reruns_are_never_saved`, until the cancel.
+The live-scripts tests had all passed before then. The summary was never printed and the run keeps no
+artifacts, so I have no tracebacks. `dev/v0.0.8` at `8861de9` (CI 41467764837, green) has the same code but
+this test change. Those three files passed 4 times in a row locally (`-n 4 --reruns 5`, 73 each). The other
+eight jobs of attempt 1 were green with 0 RERUN. **Attempt 2** (the failed job re-run; the others copied
+from attempt 1, with new IDs): success, all nine Tests and Converter backends logs read, **0 RERUN**
+(Ubuntu Tests (1/2) 4559 passed, job 125367740134). Proposed known-issues entry (A~7): "[ ] Ubuntu CI,
+`agent/live-scripts` run 41468043383 attempt 1: `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard`
+failed after 5 reruns, and a worker then took about 35 s per attempt on every result-cache test (badge,
+`test_result_cache_plots.py`) until the job's 20-minute limit; no traceback (cancelled before the summary).
+Green on re-run and locally. Upload the junit XML even when a job is cancelled, to see it next time."
 
 ## Re-check fix (Prismo, `f66a946`: R1)
 
