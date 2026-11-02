@@ -1306,3 +1306,19 @@ Green on all three OSes. I read all 9 Tests and Converter logs, fetched whole.
   the fix with exactly that error.
 - **Checked:** suite 9135 passed, no RERUN.
 - CoCo: stage 4 lands including it; Assay reviews `eb38718..c06f342`.
+
+### CI 41467778422 (`eb38718`, S4R-1)
+
+Green on all three OSes. I read all 9 Tests and Converter logs: **no RERUN in any job**. The known "GUI stalled"
+log appears 7 times.
+
+### SR-1: a new store's switch to WAL waits (`768ac40`)
+
+- **The review:** Assay's review of the race fix (`872b679`): `PRAGMA journal_mode = WAL` on a fresh store fails
+  at once with "database is locked", because SQLite doesn't wait `busy_timeout` for it.
+- **Fix:** `_wal` skips the switch when the store is in WAL already, and otherwise retries on BUSY or LOCKED until
+  `busy_timeout`.
+- **Test:** 8 rounds of six threads.
+  - 50 of 50 runs pass.
+  - Without the fix, 5 of 10 runs fail.
+- **Checked:** suite 9135 passed, no RERUN.
