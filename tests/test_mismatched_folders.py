@@ -298,6 +298,9 @@ def test_window_lists_folders_newest_first_and_answers_them(
     assert not service.mismatch_hold and not window.banner.isVisible()
     assert (window.load_button.toolTip(), window.skip_button.toolTip(), window.cancel_button.toolTip(),
             window.skip_all_button.toolTip()) == (LOAD_TIP, SKIP_TIP, CANCEL_TIP, SKIP_ALL_TIP)
+    # Tony's wording (Q40.1): saves and Live checks go on (io-1).
+    assert CANCEL_TIP == ("Cancel every load and scan, running, paused or queued. Browsing, cached data, saves and "
+                          "Live go on; loads already saving their cached data finish.")
     service.shutdown()
 
 

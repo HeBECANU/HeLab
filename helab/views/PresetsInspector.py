@@ -204,7 +204,9 @@ class PresetsInspector(QDialog):
         self._said = ""
         self.cache.presetsChanged.connect(self.refresh)
         self.refresh()
-        self.cache.read_presets()  # Another HeLab may have changed them; listed again when it answers.
+        # Read again, cheaply: the last read may have failed, or the cache folder moved since. Listed again when
+        # it answers.
+        self.cache.read_presets()
 
     # Listing
 

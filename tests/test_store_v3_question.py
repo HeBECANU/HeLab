@@ -136,7 +136,8 @@ def test_clear_old_stores_asks_first_and_never_while_another_helab_runs(
     monkeypatch.setattr(QMessageBox, "information", lambda *args: told.append(str(args[2])))
     try:
         assert module.ask_clear_old_stores(parent, cache, confirm=lambda *args: True, others=lambda: [123]) == ""
-        assert told and "Another HeLab is running" in told[0]
+        # (Only helab convert can be the other now: one HeLab app per computer; Tony's wording, Q43.5.)
+        assert told == ["A HeLab converter (helab convert) is running. Stop it before clearing old stores."]
         def decline(title: str, text: str, verb: str) -> bool:
             asked.append(text)
             return False
@@ -230,7 +231,8 @@ def test_the_tab_wont_clear_the_older_store_while_another_helab_runs(
         tab.inventory = v4_inventory()
         tab._update()
         tab.clear_legacy()
-        assert asked == [] and "Another HeLab is running" in tab.message
+        assert asked == [] and tab.message == ("A HeLab converter (helab convert) is running. Stop it before "
+                                               "clearing the older cache.")
         assert not any(r.payload.get("action") == "clear_legacy" for r in service.pending)
     finally:
         service.shutdown()

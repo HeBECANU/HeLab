@@ -109,6 +109,10 @@ Tony in Chat, 2026-10-31 evening, on Quick Fixes 8 and Caching v2 checkpoint 3 (
 - **Q43.4** the cache move's refusal while a converter runs: "A HeLab converter (helab convert) is running
   (N). Stop it before moving the cache."
 - **Q42.6** AGENTS.md's store-v4 wording kept as applied.
+- **Q43.5** (Tony, 2026-11-01: "wording sounds okay"; via Side) the two other "Another HeLab is running"
+  texts are worded like Q43.4: Settings › Cache (`CacheTab.py:605`) "A HeLab converter (helab convert) is
+  running. Stop it before clearing the older cache."; its dialog (`CacheDialogs.py:106`) "A HeLab converter
+  (helab convert) is running. Stop it before clearing old stores." (A43.5).
 - **Q44.1** (checkpoint 3's Q~1) the store-v3 question's and Settings › Cache's wording as built ("An older
   disk cache"; Keep using it / Ignore it / Clear it, asked first; rows "Raw pulses", "Older cache
   (store-v3)"). **Q44.2** (Q~2) the `.hlb` format page is [`docs/hlb-format.md`](../docs/hlb-format.md),

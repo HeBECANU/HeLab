@@ -264,7 +264,7 @@ class PresetBar(QWidget):
         self.refresh()
         store = preset_store()
         store.presetsChanged.connect(self._changed)
-        store.read_presets()  # Another HeLab may have changed them since.
+        store.read_presets()  # (Cheap: the last read may have failed, or the cache folder moved since.)
         if plot.parameter_root is not None:
             plot.parameter_root.sigTreeStateChanged.connect(self._tree_changed)
 
@@ -610,7 +610,9 @@ class ArrangementPresets(QObject):
         self._menu = menu
         store = preset_store()
         if read:
-            store.read_presets()  # Another HeLab may have changed them; listed again when it answers.
+            # Read again, cheaply: the last read may have failed, or the cache folder moved since. Listed again
+            # when it answers.
+            store.read_presets()
         menu.clear()
         save = QAction("Save Folder and Plots as Preset…", menu)
         save.setToolTip("Save the current tab's folder, whether Live watches it, and its open plots with their "

@@ -140,7 +140,8 @@ How to use it:
   once locally on macOS; passed on retry. Again on Windows: Ground CI 40861772277 (`9f0b21f`) and
   `agent/txy-index` CI 40874212130; Ground CI 40988453930 (`c492242`, Windows Tests 1/2) and 41000437956 (`43cb202`);
   the `[1]` case on Windows, `agent/ui-polish` CI 41005221588 (same line); `[2]` on Ground CI 41164525298
-  (`82c9db3`, Windows Tests 1/2, job 124429158185). A candidate: 3 s under load.
+  (`82c9db3`, Windows Tests 1/2, job 124429158185); `[1]` on Ground CI 41374704252 (`0406a1d`, Windows
+  Tests 2/2, job 125052359778). A candidate: 3 s under load.
 - [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-CountsPerShot]`: an
   xdist worker crashed on Windows CI run 40803552596; passed on retry (no traceback; look for a
   faulthandler dump). Again: the Plotly case on `agent/byte-units` CI 40865344851 (job 123418722344,
@@ -148,15 +149,6 @@ How to use it:
   123480992297, gw1). The Plotly case again on Windows Tests 2/2: Ground CI 41084197666 (job
   124161029996, `dd540cd`) and PR CI 41095142656 (`8ccc0be`); `agent/plot-identity` CI 41158691080
   (Windows Tests 2/2, job 124411181934, gw1).
-- [ ] `test_io_service_run.py::test_writing_held_data_out_counts_as_progress`: `assert (2 == 1)` at
-  line 40 (two progress marks, 0.7 ms and 1.4 ms, where one is expected), Windows CI 40863356565
-  (job 123411955603, `agent/txy-index`); passed on retry. Again: `agent/runner-tools` CI 40989399407
-  (Windows); Ground CI 41084197666 (Windows Tests 2/2, job 124161029996, two marks 0.96 ms and 1.5 ms);
-  Ground CI 41158349537 (Quick Fixes 8, Windows Tests 2/2, job 124410096333, twice); `agent/caching-v2`
-  CI 41164715526 (Windows Tests 2/2, job 124429733436, marks 1.4 ms and 5.2 ms); Ground CI 41182171527
-  (`23ab189`, Windows Tests 2/2, job 124481666642); `agent/caching-v2` CI 41186805673 (`9abdb58`, Windows
-  Tests 2/2, job 124495315262, twice, marks 0.72/1.36 ms and 0.73/1.36 ms). A Windows timing flake;
-  IOService untouched by those branches. Tony, 2026-10-31: a Quick Fixer hunts its cause.
 - [ ] `test_root_discovery.py::test_volume_check_alone_refreshes_hints_without_visiting_markers`:
   xdist worker gw2 crashed on macOS CI 40866574094 attempt 1 (job 123422851726, `agent/txy-index`
   `9691873`; `INTERNALERROR> AssertionError: (…, <WorkerController gw2>)`, exit code 3, no RERUN);
@@ -172,12 +164,6 @@ How to use it:
   caught `IOService.release`'s `shutil.rmtree` on the "HeLab-artifact-cleanup" daemon thread
   (`io_service.py:963`), the same trap as the fixed `test_folder_summary` entry below. Fix: record
   only the test thread's calls (`threading.get_ident()`) or paths under `tmp_path`.
-- [ ] `test_folder_icons.py::test_native_icon_delivery_is_shared_and_rendering_stays_memory_only`:
-  "Painting an icon performed I/O or submitted work" raised on another thread (pytestqt "Failed to
-  process thread exception"), Ground CI 41164525298 (Windows Tests 1/2, job 124429158185, gw0,
-  `82c9db3`); passed on rerun. It patches `os.stat` and `os.scandir` for the whole process, so likely
-  another thread in the worker stat'ed meanwhile (the trap above). Fix: check only the GUI thread's calls
-  (Quick Fixes 8, 2026-10-31).
 - [ ] `test_folder_summary.py::test_cached_scan_age_and_failed_refresh_retain_counts` fails across
   midnight UTC: 3 RERUNs on Windows CI 40975825607 (job 123803535756, `agent/txy-index` `c6277f0`):
   `assert '2026-10-29' in 'Last successful status scan: 2026-10-30 00:00:19 …'` at line 286. It takes
@@ -250,7 +236,8 @@ How to use it:
   matplotlib's font cache is likely.
 - [ ] `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
-  ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28).
+  ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
+  run on Ground (Quick Fixes 8, 2026-11-01, Rivet's handoff).
 - [ ] `test_analysis_gui.py::test_scatter_from_the_panel` (a Dash/web-view plot) reran in local
   full runs on 2026-10-20 (`dld-d7` and `refactor-prep` handoffs); it passed on retry and alone.
   Cause unknown (audit #16, 2026-10-28).
@@ -276,6 +263,26 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
 
+- [x] `test_folder_icons.py::test_native_icon_delivery_is_shared_and_rendering_stays_memory_only`:
+  "Painting an icon performed I/O or submitted work" raised on another thread (pytestqt "Failed to
+  process thread exception"), Ground CI 41164525298 (Windows Tests 1/2, job 124429158185, gw0,
+  `82c9db3`); passed on rerun. It patches `os.stat` and `os.scandir` for the whole process, so likely
+  another thread in the worker stat'ed meanwhile (the trap above). Fix: check only the GUI thread's calls
+  (Quick Fixes 8, 2026-10-31).
+  **Fixed** (`eccb23c`, Quick Fixes 9): the I/O fakes raise only on the GUI thread; the repro case kept.
+- [x] `test_io_service_run.py::test_writing_held_data_out_counts_as_progress`: `assert (2 == 1)` at
+  line 40 (two progress marks, 0.7 ms and 1.4 ms, where one is expected), Windows CI 40863356565
+  (job 123411955603, `agent/txy-index`); passed on retry. Again: `agent/runner-tools` CI 40989399407
+  (Windows); Ground CI 41084197666 (Windows Tests 2/2, job 124161029996, two marks 0.96 ms and 1.5 ms);
+  Ground CI 41158349537 (Quick Fixes 8, Windows Tests 2/2, job 124410096333, twice); `agent/caching-v2`
+  CI 41164715526 (Windows Tests 2/2, job 124429733436, marks 1.4 ms and 5.2 ms); Ground CI 41182171527
+  (`23ab189`, Windows Tests 2/2, job 124481666642); `agent/caching-v2` CI 41186805673 (`9abdb58`, Windows
+  Tests 2/2, job 124495315262, twice, marks 0.72/1.36 ms and 0.73/1.36 ms). A Windows timing flake;
+  IOService untouched by those branches. Tony, 2026-10-31: a Quick Fixer hunts its cause.
+  **Fixed** (`3bafef1`, Quick Fixes 8): not two progress marks. The test's fake replaced `subprocess.Popen`
+  for the whole process, so another thread's helper start (left over from an earlier test) was counted;
+  the test now counts only its own thread's calls (the repro kept as a second case). `IOService._run`
+  unchanged. Ground CI 41202772809 (`110033d`): no RERUN.
 - [x] **0.0.7a1 got no tag and no draft** (2026-10-31): `main`'s "Tag tested main commit and create draft
   release" (run 41110274554, job 124257980580) stopped in `release_draft --validate-only` with a
   `JSONDecodeError`. Every entry ending in `/helab/_build_info.json` was read as JSON, and in the macOS

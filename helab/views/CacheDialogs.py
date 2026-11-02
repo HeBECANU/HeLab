@@ -103,8 +103,8 @@ def ask_clear_old_stores(parent: QWidget, cache: FolderCache, confirm: Callable[
         return ""
     running = (others or (lambda: other_instances(app_folder())))()
     if running:
-        QMessageBox.information(parent, "Clear old stores", "Another HeLab is running. Quit it first: it may still use "
-                                "the older disk cache.")
+        QMessageBox.information(parent, "Clear old stores",
+                                "A HeLab converter (helab convert) is running. Stop it before clearing old stores.")
         return ""
     text = legacy_clear_text(legacy)
     asked = (confirm("Clear old stores", text, "Remove") if confirm is not None

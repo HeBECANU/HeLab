@@ -33,8 +33,9 @@ LOAD_TIP = ("Read the selected folders' TXY files as they are now, and replace t
 SKIP_TIP = ("Load nothing from the selected folders for now. They stay listed, and their old cached data "
             "stays on disk, unused this session. Retry or Load data checks a folder again.")
 RESUME_TIP = "Let the paused loads and scans go on. Mismatched folders found later are added here."
-CANCEL_TIP = ("Cancel every load and scan, running, paused or queued. Browsing and cached data stay "
-              "available; loads already saving their cached data finish.")
+# Q40.1 (Tony): saves and Live checks are spared since io-1.
+CANCEL_TIP = ("Cancel every load and scan, running, paused or queued. Browsing, cached data, saves and Live go on; "
+              "loads already saving their cached data finish.")
 SKIP_ALL_TIP = ("For the rest of this session, list mismatched folders here without opening this window or "
                 "pausing loads and scans again. Their data is still not loaded; the status bar shows how many.")
 ANSWERS = {"": "Not answered", "dont_load": "Not loaded", "load": "Loading as it is now"}
