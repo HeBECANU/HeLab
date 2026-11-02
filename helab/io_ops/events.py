@@ -989,10 +989,21 @@ class ConvertPlanEvent(TypedDict):
     todo: int  # of those, to convert now
 
 
+class ReadStopField(TypedDict):
+    """Where a raw file's read stopped before its end (``helab.convert.raw.ReadStop``, A37.1): the
+    first token MATLAB's textscan can't read ends it, and the TXY holds the hits of the rows before it.
+    ``line`` from 1, as the read counts lines; ``offset`` the token's byte; ``text`` its start, escaped;
+    ``unread`` the bytes from there to the end."""
+    line: int
+    offset: int
+    text: str
+    unread: int
+
+
 class ShotConvertedEvent(TypedDict):
     """A shot converted: its TXY (``txy``, 0 bytes when ``hits`` is 0: "converted, empty", Q10.3) and
     provenance row written first in the base's index (``provenance``: that index's path). A low-count shot is the app's to judge
-    from ``hits``."""
+    from ``hits``. ``read_stop``: the raw file's read stopped early (A37.1), None when it read to the end."""
     kind: Literal["shot_converted"]
     path: str
     shot: int
@@ -1009,6 +1020,7 @@ class ShotConvertedEvent(TypedDict):
     profile: ConvertProfile
     backend: str
     seconds: ConvertSeconds
+    read_stop: ReadStopField | None
 
 
 class ShotWaitingEvent(TypedDict):
@@ -1099,6 +1111,19 @@ class PartialRemovedEvent(TypedDict):
     age: float  # seconds since it was last modified
 
 
+class BesideRefusedEvent(TypedDict):
+    """A beside write refused because the source folder's file system can't add a file without risking
+    replacing one (no hard links and no rename that refuses an existing name: ``txy._rename_exclusive``,
+    Q38.1): sent before the conversion fails with that reason (its ``error``), so the app and
+    ``helab convert`` can offer Retry or HeLab's cache or temp folder instead, never falling back silently.
+    ``txy`` the file not written; ``message`` the refusal."""
+    kind: Literal["beside_refused"]
+    path: str
+    shot: int
+    txy: str
+    message: str
+
+
 HelperEvent = Union[
     DoneEvent, ErrorEvent, PausedEvent, ResumedEvent, HeartbeatEvent, DrivesEvent, ResolvedEvent,
     CacheWarningEvent, CacheSkippedEvent,
@@ -1120,6 +1145,7 @@ HelperEvent = Union[
     ResultFoundEvent, ResultMissingEvent, ResultSavedEvent, ResultNotSavedEvent, ResultPendingEvent,
     ConvertPrefsEvent, ConvertPlanEvent, ShotConvertedEvent, ShotWaitingEvent, ShotUnconvertibleEvent, ShotKeptEvent,
     ConvertProgressEvent, ConvertSummaryEvent, PartialRemovedEvent, RawOverwrittenEvent, RawFillDoneEvent,
+    BesideRefusedEvent,
 ]
 
 # Every kind a helper sends.
@@ -1140,6 +1166,6 @@ KINDS = frozenset({
     "roots_verified", "result_found", "result_missing", "result_saved", "result_not_saved",
     "result_pending",
     "convert_prefs", "convert_plan", "shot_converted", "shot_waiting", "shot_unconvertible", "shot_kept",
-    "convert_progress", "convert_summary", "partial_removed",
+    "convert_progress", "convert_summary", "partial_removed", "beside_refused",
     "raw_overwritten", "raw_fill_done",
 })

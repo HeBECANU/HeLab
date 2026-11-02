@@ -26,6 +26,7 @@ from helab.utils.folder_cache import FolderCache, get_folder_cache
 from helab.utils.io_service import IORequest, IOService
 from helab.utils.scan_history import apply_outcome, empty_history
 from helab.views.FolderExplorer import FolderExplorer
+from conftest import this_tests
 
 
 def frozen_service(monkeypatch: pytest.MonkeyPatch) -> IOService:
@@ -111,8 +112,8 @@ def test_listing_reads_names_only_and_writes_only_its_listing(tmp_path: Path, mo
     scandir = os.scandir
     with monkeypatch.context() as no_stat:
         # Without the optional cache, which stats its own files when it opens.
-        no_stat.setattr("os.scandir", lambda p: _NoStatListing(p, scandir))
-        no_stat.setattr("os.stat", lambda *a, **k: pytest.fail("Listing called os.stat"))
+        no_stat.setattr("os.scandir", this_tests(lambda p: _NoStatListing(p, scandir), scandir))
+        no_stat.setattr("os.stat", this_tests(lambda *a, **k: pytest.fail("Listing called os.stat"), os.stat))
         list_folder(path, lambda event: None)
     events: list[Any] = []
     list_folder(path, events.append, options)

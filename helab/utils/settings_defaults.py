@@ -64,6 +64,10 @@ TXY_SOURCE_SETTING = "txy_source"
 # The plots that reopen at start (helab/views/plots/arrangement.py; presets are in the disk cache store).
 REOPEN_PLOTS_SETTING = "reopen_plots_at_start"
 OPEN_PLOTS_SETTING = "open_plots"
+# Live scripts: the user's script folders (Load Scripts…), restored at start, and reloading them when
+# a script is saved (helab/views/plots/script_tree.py).
+SCRIPT_FOLDERS_SETTING = "script_folders"
+SCRIPT_AUTO_RELOAD_SETTING = "script_auto_reload"
 # The main window's folder and settings panels' widths, the plots taking the rest (Q33.2).
 MAIN_SPLIT_SETTING = "main_window_split"
 # Caching v2's store (Q28.3): developers only, off until stage 2 and Tony's go; no Settings control.
@@ -156,6 +160,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(OPEN_PLOTS_SETTING, str, "",
             "The plots open when HeLab last quit (or last opened or closed a plot), with their settings and "
             "places: an arrangement record (helab.analysis.presets, JSON). Unset: none."),
+    Setting(SCRIPT_FOLDERS_SETTING, str, "",
+            "The script folders added with Load Scripts… (the Scripts panel), as a JSON list of paths, loaded again "
+            "at start; removed only with Remove from the list in Load Scripts…'s menu. A folder that isn't there "
+            "stays listed with \"folder not found\". Unset: none."),
+    Setting(SCRIPT_AUTO_RELOAD_SETTING, bool, False,
+            "Reload a script folder when one of its scripts or helper modules is saved (Load Scripts…'s menu, "
+            "\"Reload when a script is saved\"); off: only the Reload button does. Watches the script folders only, "
+            "and only while on."),
     Setting(MAIN_SPLIT_SETTING, str, "380,320",
             "The main window's folder panel and plot settings panel widths in logical pixels, \"<folders>,<settings>\", "
             "saved as HeLab quits; the plots take the rest of the window. Folders 80 to 4000, settings 250 to 4000; "

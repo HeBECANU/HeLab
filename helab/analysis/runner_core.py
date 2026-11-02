@@ -59,6 +59,7 @@ class AnalysisQueue:
         self.results = results if results is not None else RamResults()
         self._queue: queue.Queue[_Job | None] = queue.Queue()
         self._contexts: dict[str, AnalysisContext] = {}
+        self._scripts: dict[str, DatasetAnalysis] = {}  # Each queued or running job's script
         self._lock = threading.Lock()
         # The worker stays registered until it has exited, so there is never a second one.
         self._thread: threading.Thread | None = None
@@ -121,6 +122,7 @@ class AnalysisQueue:
             if self._stopping:
                 raise RuntimeError("The analysis runner is stopping")
             self._contexts[context.job_id] = context
+            self._scripts[context.job_id] = script
             if self._thread is None:
                 # The worker holds the callbacks (and so their owner) while it runs.
                 callbacks = (self._on_started.get(), self._on_finished.get())
@@ -139,6 +141,12 @@ class AnalysisQueue:
     def running(self) -> int:
         with self._lock:
             return len(self._contexts)
+
+    def in_flight(self) -> tuple[DatasetAnalysis, ...]:
+        """The scripts of the jobs queued or computing now, a cancelled one included until its
+        ``compute`` has returned (a reload of a script's folder waits for these: live scripts)."""
+        with self._lock:
+            return tuple(self._scripts.values())
 
     def stop(self, timeout: float = 5.0) -> bool:
         """Cancel every job and end the worker; True once it has exited. A computation that
@@ -221,6 +229,7 @@ class AnalysisQueue:
             result = self._packed(script, result)
         with self._lock:
             self._contexts.pop(context.job_id, None)
+            self._scripts.pop(context.job_id, None)
         if result.state == "completed":
             self.results.add(replace(result, packed=None) if result.packed is not None else result)
         if on_finished is not None:

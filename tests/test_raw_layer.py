@@ -227,6 +227,24 @@ def test_facts_round_trip_and_bad_ones_are_refused() -> None:
             raw_layer.Facts.from_json(bad)
 
 
+def test_the_stop_line_is_an_additive_fact() -> None:
+    """Where the read stopped (A37.1) is kept in the facts with no parser bump: a layer from before reads
+    as not saying, and bad values are refused."""
+    stopped = raw_layer.encode(b"5,10\r\n0,20\r\nnot,a,number\r\n1,30\r\n")
+    assert stopped.encoding == raw_layer.FLOAT and stopped.facts.stop_line == 3 and stopped.facts.rows == 2
+    assert raw_layer.Facts.from_json(stopped.facts.to_json()) == stopped.facts
+    layer, header = raw_layer.from_hlb(raw_layer.to_hlb(stopped))
+    assert layer.facts.stop_line == 3 and header["meta"]["parser"] == raw_layer.RAW_PARSER_VERSION == 1
+    whole = raw_layer.encode(lines([(5, 10), (1, 20)]))
+    assert whole.encoding == raw_layer.COMPACT and whole.facts.stop_line is None
+    older = {key: value for key, value in stopped.facts.to_json().items() if key != "stop_line"}
+    assert raw_layer.Facts.from_json(older).stop_line is None
+    bad: Any
+    for bad in (0, -1, True, "3", 2.5):
+        with pytest.raises(hlb.HlbError):
+            raw_layer.Facts.from_json({**stopped.facts.to_json(), "stop_line": bad})
+
+
 def test_a_layer_whose_arrays_dont_match_is_an_error() -> None:
     packed = raw_layer.to_hlb(raw_layer.encode(lines([(5, 10), (1, 20)])))
     layer, _ = raw_layer.from_hlb(packed)

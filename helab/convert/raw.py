@@ -23,6 +23,12 @@ MATLAB reads with ``textscan(fid, '%f64%f64', 'Delimiter', ',', 'MultipleDelimsA
   give 1, NaN; ``1,3`` of ``1,300`` gives 1, 3);
 - an empty file gives no rows. The file is read as bytes: a UTF-8 BOM stops the read at once.
 
+Where a read stopped early is HeLab's addition (A37.1, Q37.1): ``RawPulses.stop`` (``ReadStop``) names
+the line, counted as the read counts lines (each ending of the file's mode, ``\\r\\n`` as one, from 1),
+the byte offset and the start of the unreadable text; None when the read reached the end of the file
+(a file that ends mid-line included: everything in it was read). The fast path reads only files with
+nothing unreadable in them, so its pulses never have a stop.
+
 Raw files as the TDC writes them (``\\d+,\\d+\\r\\n`` lines, or all ``\\n``: ``_STRICT_CRLF`` and
 ``_STRICT_LF``) take a fast path with the same result (``fastio.parse_strict``, NumPy); any other
 file, a mix of line endings for one, takes the general reader.
@@ -38,6 +44,7 @@ Qt-free; standard library and NumPy only.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 import math
 import os
 import re
@@ -61,12 +68,45 @@ _LINE_END = re.compile(rb"\r+\n?|\n")
 _COLUMNS = 2
 
 
+_STOP_TEXT = 24  # bytes of the unreadable text kept for the message
+
+
+@dataclass(frozen=True)
+class ReadStop:
+    """Where textscan's read of a raw file stopped before its end: at the first token it couldn't read.
+    ``line`` from 1, as the read counts lines; ``offset`` the token's first byte; ``text`` up to
+    ``_STOP_TEXT`` bytes from there to the line's end, control and non-ASCII bytes escaped (``\\r``,
+    ``\\xef``); ``unread`` the bytes from there to the end of the file, which no TXY row comes from."""
+    line: int
+    offset: int
+    text: str
+    unread: int
+
+    @classmethod
+    def of(cls, value: Mapping[str, Any]) -> ReadStop:
+        """The stop an event carries (``io_ops.events.ReadStopField``: these four fields)."""
+        return cls(line=int(value["line"]), offset=int(value["offset"]), text=str(value["text"]),
+                   unread=int(value["unread"]))
+
+    def summary(self) -> str:
+        """The few words the Live line, Folder details and ``helab convert`` show (Q~1 of A37.1)."""
+        return f"read stopped at line {self.line}"
+
+    def detail(self) -> str:
+        """The longer sentence for tooltips and the log."""
+        return (f"read stopped at line {self.line}, at \"{self.text}\", which isn't a number: as MATLAB's "
+                f"converter reads the file, its TXY holds only the hits of what was read before it "
+                f"({self.unread:,} bytes not read)")
+
+
 @dataclass(frozen=True)
 class RawPulses:
     """The rows of a raw file in file order: ``channels[i]`` and ``times[i]`` (TDC bins), both
-    float64 as MATLAB holds them, NaN where textscan filled a field."""
+    float64 as MATLAB holds them, NaN where textscan filled a field. ``stop``: where the read
+    stopped before the end of the file (None: it read to the end)."""
     channels: Floats
     times: Floats
+    stop: ReadStop | None = None
 
     def __post_init__(self) -> None:
         if self.channels.shape != self.times.shape or self.channels.ndim != 1:
@@ -94,6 +134,8 @@ def _parse_textscan(data: bytes) -> RawPulses:
     # The mode: the first \r/\n run after any \n at the very start of the file (only \n are
     # skipped there). Reading starts at byte 0 in that mode (Lens's R2-1, MATLAB R2025b).
     pos, end = 0, len(data)
+    line = 1  # (Each ending of the mode counts one, \r\n as one.)
+    stop: ReadStop | None = None
     first = _LINE_END.search(data, len(data) - len(data.lstrip(b"\n")))
     eol = _EOL if first is None or first.group().endswith(b"\r\n") else first.group()[:1]
 
@@ -111,6 +153,7 @@ def _parse_textscan(data: bytes) -> RawPulses:
         char = data[pos]
         if char in eol:
             pos += 2 if eol == _EOL and data[pos:pos + 2] == b"\r\n" else 1
+            line += 1
             if row:
                 finish()
             continue
@@ -122,6 +165,7 @@ def _parse_textscan(data: bytes) -> RawPulses:
             if match is None:
                 if row:
                     finish()
+                stop = _stop(data, pos, line, eol)
                 break
             row.append(_number(match.group()))
             pos = match.end()
@@ -131,15 +175,26 @@ def _parse_textscan(data: bytes) -> RawPulses:
                 pos += 1
         if len(row) == _COLUMNS:
             finish()
-    return _pulses(np.array(rows, dtype=np.float64).reshape(-1, _COLUMNS))
+    return _pulses(np.array(rows, dtype=np.float64).reshape(-1, _COLUMNS), stop)
+
+
+def _stop(data: bytes, pos: int, line: int, eol: bytes) -> ReadStop:
+    """The stop at ``data[pos]``: its text runs to the line's end (an ending of the read's mode), at
+    most ``_STOP_TEXT`` bytes."""
+    stretch = data[pos:pos + _STOP_TEXT]
+    ends = [at for at in (stretch.find(bytes([char])) for char in eol) if at >= 0]
+    text = stretch[:min(ends)] if ends else stretch
+    return ReadStop(line=line, offset=pos, text=text.decode("latin-1").encode("unicode_escape").decode("ascii"),
+                    unread=len(data) - pos)
 
 
 def _number(text: bytes) -> float:
     return float(text.replace(b"d", b"e").replace(b"D", b"e"))
 
 
-def _pulses(values: Floats) -> RawPulses:
-    return RawPulses(channels=np.ascontiguousarray(values[:, 0]), times=np.ascontiguousarray(values[:, 1]))
+def _pulses(values: Floats, stop: ReadStop | None = None) -> RawPulses:
+    return RawPulses(channels=np.ascontiguousarray(values[:, 0]), times=np.ascontiguousarray(values[:, 1]),
+                     stop=stop)
 
 
 # The done-writing checks (stage 4; not part of MATLAB's read). Evidence: 2019-halos d3667, which

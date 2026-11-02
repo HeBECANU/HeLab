@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import threading
 import json
 import re
 import traceback
@@ -9,7 +10,7 @@ import uuid
 import zlib
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generator, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Generator, Iterator
 
 # Run Qt headless (offscreen) by default so tests don't pop up windows.
 # Set HELAB_SHOW_GUI=1 to force a real, visible display (e.g. when a test
@@ -265,6 +266,21 @@ def delete_left_widgets(test: str, *, fail: bool = True) -> None:
         if fail:
             pytest.fail(f"{test} left {len(alive)} web view(s) alive: close or delete its plots",
                         pytrace=False)
+
+
+def this_tests(fake: Callable[..., Any], real: Callable[..., Any]) -> Callable[..., Any]:
+    """``fake`` for this test's own threads, ``real`` for the others (A46.1). A test that patches ``os.stat``,
+    ``os.scandir`` or ``subprocess.Popen`` patches them for the whole process: threads earlier tests left in the
+    worker (a helper's reader, a log tidy, a helper still starting) call them meanwhile, and a fake that
+    counted, refused or answered those was Windows CI's flakes (``3bafef1``, ``eccb23c``). Its own are the test's
+    thread and every thread started after this call (an IOService's helpers); threads alive before it get
+    ``real``. Call it when patching: ``monkeypatch.setattr(os, "stat", this_tests(stat, os.stat))``."""
+    ours = threading.current_thread()
+    earlier = {thread for thread in threading.enumerate() if thread is not ours}
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        return (real if threading.current_thread() in earlier else fake)(*args, **kwargs)
+    return call
 
 
 def store_free(*services: "IOService") -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from helab.utils.scan_history import (
     history_tooltip, read_history, write_outcome,
 )
 from helab.views.FolderExplorer import FolderExplorer
+from conftest import this_tests
 
 
 def options_for(tmp_path: Path) -> dict[str, Any]:
@@ -319,8 +321,8 @@ def test_visible_folder_restores_failure_before_selection_load_and_manual_recove
     assert datetime_date(cache.scan_history(path)["failures"][0]["failed_at"]) in explorer.folder_freshness_label.toolTip()
     # Badges/tooltips and relative ages never read the disk cache or source FS.
     with monkeypatch.context() as render:
-        render.setattr("os.stat", lambda *a, **k: pytest.fail("Rendering called stat"))
-        render.setattr("os.scandir", lambda *a, **k: pytest.fail("Rendering called scandir"))
+        render.setattr("os.stat", this_tests(lambda *a, **k: pytest.fail("Rendering called stat"), os.stat))
+        render.setattr("os.scandir", this_tests(lambda *a, **k: pytest.fail("Rendering called scandir"), os.scandir))
         render.setattr(service, "submit", lambda *a, **k: pytest.fail("Rendering submitted I/O"))
         index = explorer.model.path_index(path)
         extras = explorer.model.data(index, explorer.model.STATUS_EXTRA_ICONS_ROLE)

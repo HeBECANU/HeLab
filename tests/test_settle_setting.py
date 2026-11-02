@@ -25,6 +25,7 @@ from helab.utils.settings_defaults import SETTLE_SECONDS_SETTING, setting_defaul
 from helab.views.HelabMainWindow import HelabMainWindow
 from helab.views.SettingsDialog import SettingsDialog, read_settle_seconds
 from test_helper_dispatch import HANDLERS, ROUTES, helper_state, send  # noqa: F401  (a fixture)
+from conftest import this_tests
 
 
 @pytest.fixture
@@ -109,7 +110,7 @@ def test_the_service_sends_its_settle_time_with_every_request(
     def echoing(command: list[str], **kwargs: Any) -> subprocess.Popen[str]:
         return started([sys.executable, "-c", echo], **kwargs)
 
-    monkeypatch.setattr("helab.utils.io_service.subprocess.Popen", echoing)
+    monkeypatch.setattr("helab.utils.io_service.subprocess.Popen", this_tests(echoing, started))
     sent: list[object] = []
     try:
         for value in (None, 9.5):

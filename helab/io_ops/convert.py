@@ -136,6 +136,13 @@ WINDOWS_MAX_PATH = 260
 PLATFORM = sys.platform
 
 
+def unsafe_rename(exc: BaseException) -> bool:
+    """Whether a write was refused because the folder's file system can't add a file without risking
+    replacing one (``txy._cannot_refuse``: ENOTSUP, "Not written: …"; Q38.1)."""
+    return (isinstance(exc, OSError) and exc.errno == errno.ENOTSUP
+            and str(exc.strerror or "").startswith("Not written: "))
+
+
 def path_too_long(exc: BaseException, path: str, platform: str | None = None,
                   folder_exists: Callable[[str], bool] | None = None) -> str | None:
     """What to tell the user when the OS refused ``path`` (or the name in ``exc``, e.g. the TXY's
@@ -739,6 +746,10 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                     refuse(shot, "failed", too_long)  # (Not converted again while unchanged: Q23.6.)
                     progress()
                     return
+                if beside and unsafe_rename(exc):
+                    # (Q38.1: the user chooses Retry or HeLab's cache or temp folder; the run fails as before.)
+                    send({"kind": "beside_refused", "path": path, "shot": shot.shot, "txy": target,
+                          "message": str(exc.strerror if isinstance(exc, OSError) else exc)})
                 if not (beside and isinstance(exc, FileExistsError)):
                     raise
                 # (Another conversion wrote it since the listing; it stays.)
@@ -752,6 +763,7 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                 _trace("write", target, "convert: TXY beside", bytes=len(result.txy))
             seconds["write"] = time.perf_counter() - write_started
             converted += 1
+            stop = result.read_stop  # (Where textscan's read stopped early: A37.1.)
             current.append(shot.entry)
             if raw_rows is not None:
                 raw_rows.add(shot.shot, shot.name, shot.size, shot.mtime_ns, data, read_at.get(shot.shot, time.time()))
@@ -759,7 +771,8 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                   "raw_size": shot.size, "raw_mtime_ns": shot.mtime_ns, "raw_sha256": record.raw_sha256,
                   "output": places["output"], "txy": target, "txy_size": len(result.txy), "provenance": index_path,
                   "hits": result.hits, "replaced": shot.replaced, "profile": profile_info, "backend": backend,
-                  "seconds": seconds})
+                  "seconds": seconds, "read_stop": None if stop is None else {
+                      "line": stop.line, "offset": stop.offset, "text": stop.text, "unread": stop.unread}})
         progress()
 
     read_at: dict[int, float] = {}

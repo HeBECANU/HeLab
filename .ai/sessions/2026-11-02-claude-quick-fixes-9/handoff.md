@@ -136,3 +136,162 @@ The run's results follow, every Tests and Converter backends job's log read for 
   - Tests: windows 1/2 4414, 2/2 4416; macos 4431, 4435; ubuntu 4427, 4435.
   - Converter backends: 847 / 849 / 849.
   - A39.1 passed on all three builds.
+
+## Tonight: A47.3 and A46.1 (QF9 continued)
+
+### A47.3: the GUI watchdog left running (36b2224)
+
+- **Fix, in `helab/utils/gui_watchdog.py`, not the two quit tests.** `_watch` ends once its QObject is
+  deleted (`sip.isdeleted`, checked each 0.5 s; a flag read, safe from its thread), so any window deleted
+  without its full close takes the thread with it.
+  - Before: `closeEvent` returns early while the quit window waits for saves. A test ending there had the
+    window deleted at teardown, and the thread logged "GUI stalled… capturing thread stacks" every 30 s
+    for the rest of the worker.
+  - Not a Python callable on `destroyed` (AGENTS.md rules it out), and `weakref.finalize` can't run while
+    the thread holds the wrapper.
+- **The quit test isn't pinned.** `test_quit_confirms.py` and `test_txy_last_used_quit.py` leave no
+  watchdog alone, even on the old code, as known-issues says.
+- **Tests:** the new `tests/test_gui_watchdog.py`.
+  - Cases: deleted unstopped (it ends), `stop()` (it ends), and a real `HelabMainWindow` whose close waits
+    for saves, then deleted (its watchdog ends).
+  - The two deleted cases fail on the old code: the thread is still alive after 3 s.
+- **Suite:** 8932 passed, no RERUN, and no "GUI stalled" in its log; the five type checks pass.
+- **Known-issues proposal:** move "A quit test leaves its `GUIWatchdog` running" to Fixed (36b2224).
+
+### A46.1: process-wide fakes in tests (6fa8cd9)
+
+- **The helper:** `conftest.this_tests(fake, real)`.
+  - "This test's" threads are the test's own thread plus every thread started after the patch. Its
+    IOService's `_run` threads start helpers, so the test thread alone wouldn't do.
+  - Threads alive before the patch get the real function. It compares thread objects, since idents are
+    reused.
+- **Used where a fake refuses or records every call, or replaces `Popen`:**
+  - `test_folder_cache`, `test_folder_summary` (3 blocks);
+  - `test_gui_responsiveness` (the rendering block, including `CacheStore` and `sqlite3.connect`; 3 Popen
+    fakes);
+  - `test_settle_setting`, `test_root_discovery` (an lstat refusing all), `test_scan_history`,
+    `test_two_step_browse`, `test_live_check` (2).
+- **Left as they are:**
+  - fakes that act only on the test's own paths (`test_cache_first`, `test_offline_browsing`,
+    `test_io_trace`, three in `test_root_discovery`, one in `test_two_step_browse`);
+  - `test_folder_summary`'s two already thread-aware ones.
+- **Test:** `test_a_process_wide_fake_acts_on_this_tests_threads_only` in `test_test_isolation.py`. It
+  fails with the plain fake the sites used.
+- **Suite:** 8933 passed, no RERUN; the five type checks pass.
+- **A guess, not checked:**
+  `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked`'s
+  known flake (line 137: a killed fake helper's `poll()` still None at :292) may be this pattern. An
+  earlier test's thread starting a helper hit its Popen fake and added a stray process to `processes`. If
+  so, it stops; keep the entry until CI says.
+
+### Test files touched tonight (all outside the floors' app code)
+
+`tests/test_gui_watchdog.py` (new), `tests/conftest.py`, `tests/test_test_isolation.py`,
+`tests/test_folder_cache.py`, `tests/test_folder_summary.py`, `tests/test_gui_responsiveness.py`,
+`tests/test_settle_setting.py`, `tests/test_root_discovery.py`, `tests/test_scan_history.py`,
+`tests/test_two_step_browse.py`, `tests/test_live_check.py`. App code: `helab/utils/gui_watchdog.py` only.
+
+### Run 41446664564 (`910e59f`: A47.3, A46.1): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4441, 2/2 4456; macos 4458, 4475; ubuntu 4454, 4475.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **"GUI stalled" lines remain on Windows only:** 3 in Tests 1/2, 2 in Tests 2/2.
+  - Every Windows run I have shows 1–3, before and after tonight: QF8's 41165963510 had 3+1, QF9's runs
+    3+3, 1+3 and 3+1.
+  - **Not what A47.3 fixed.** That was a deleted window's watchdog running on (now it ends). These come
+    from a watchdog whose window is still alive.
+    - One (2.18 s, Windows 2/2) is a test busy on the main thread with its window open (a plot hook in
+      `test_constant_layers`), which is the watchdog working as meant.
+    - The others (2.30 s, 2.18 s and 28 s, Windows 1/2) fire during converter tests that open no window,
+      so an earlier test's window is still alive in that worker.
+  - The stack dumps go to the worker's raw stderr, which xdist doesn't put in CI's log, so the window
+    can't be named from this run.
+- **Proposed:**
+  - Keep the known-issues entry open, retitled "a test leaves a window (and its GUIWatchdog) alive".
+  - **A~3, a diagnostic:** under pytest, the stall line also names the running test
+    (`PYTEST_CURRENT_TEST`) and the watchdog's window (`parent().objectName()` or its creation test), so
+    the next CI sighting names the leak.
+  - Or: conftest fails a test that leaves a `HelabMainWindow` alive, as it does for web views
+    (`delete_left_widgets`).
+
+### A~3 done: the stall line names its window and tests (CoCo's yes)
+
+- **The line now reads:** `GUI stalled for Xs (<window class> ['<objectName>']; made in <test>; now in
+  <test>); capturing thread stacks`.
+- **Where the names come from:** the window is read on the GUI thread, at construction and each beat;
+  the tests come from `PYTEST_CURRENT_TEST`.
+- **Test:** `test_a_stall_line_names_its_window_and_the_tests` fails on the old line.
+- **Full suite:** 8934 passed, no RERUN; the five type checks pass.
+- What the next Windows run's lines name follows.
+
+### Run 41449699791 (`a00e3f6`, A~3): success, all 12 job logs read; what the stall lines name
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4441, 2/2 4457; macos 4458, 4476; ubuntu 4455, 4476.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **The stall lines, Windows only, each naming the test that made its window and the test running now:**
+  - Windows 1/2: three, all `HelabMainWindow` made in and still in
+    `test_accessible_names.py::test_every_script_and_each_library` (2.24 s, 2.28 s, **27.77 s**).
+  - Windows 2/2: `HelabMainWindow` made in and still in
+    `test_debug_runner_menu.py::test_dump_state_saves_what_the_window_shows_from_memory` (2.22 s) and
+    `::test_the_screenshot_target_is_the_window_in_front_as_the_menu_opens` (2.42 s). Plus my own test's
+    deliberate stall (`QObject 'plots_window'`, 10.50 s).
+- **Conclusion: no window outlives its test.**
+  - Every line's window was made in the test running then, so these are tests keeping the GUI thread busy
+    with their own window: real stalls of a test, not a leak.
+  - **This corrects my earlier reading.** The lines that sat among converter-test lines were another
+    worker's output interleaved in the log, not a leftover window in that worker.
+  - The longest is the scripts-and-libraries walk on Windows: 27.8 s without the event loop running, on a
+    test that takes 94–99 s there (its own 300 s timeout since 5f52068).
+- **Proposed:**
+  - Close the known-issues entry: A47.3 (36b2224) fixed the leak it described, and what remains is
+    in-test stalls.
+  - A line for testing.md: a "GUI stalled" line in a CI log whose "made in" and "now in" are the same test
+    is that test blocking the GUI thread, not a leftover window.
+  - My own test's deliberate stall line shows in CI's log too. It could be filtered (a logger level) if
+    it misleads; left as it is.
+
+## A40.1's guard test RERUN (caching-v2 CI 41451159277; Vault's reading): fixed
+
+- **The RERUN.** `test_io_service_run.py::test_a_helper_still_starting_when_helab_quits_is_stopped`,
+  `TimeoutExpired` after 10 s at :162.
+- **Cause.** Its `Popen` fake took any `HeLab-*` thread, so another IOService's helper start meanwhile
+  entered it too and could be `started[0]`, which this test never kills.
+  - `this_tests` wouldn't help: that helper's thread starts after the patch.
+- **Fix.** The fake takes only this request's start, known by its stderr file in the request's folder; the
+  request is known through `IOService.before_start`.
+- **Repro case kept:** another service's helper starts meanwhile. With the old check it enters the fake
+  too (`assert (2 == 1)`, 3 of 3).
+- **Checks.** Full suite 8935 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "A40.1's guard test took another IOService's helper start
+  as its own (caching-v2 CI 41451159277); fixed by matching its request's stderr path."
+
+### Run 41455114540 (`b0da084`): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4443, 2/2 4456; macos 4460, 4475; ubuntu 4456, 4476.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **The guard test passed on every OS, in both cases.**
+- **Stall lines, Windows only, again each made in and still in the running test** (no leaked window):
+  - `test_accessible_names::test_every_script_and_each_library` ×2;
+  - `test_preset_folder_live::test_live_waits_for_the_folders_first_load_to_show`;
+  - `test_debug_runner_menu::test_the_screenshot_target_is_the_window_in_front_as_the_menu_opens`;
+  - `test_helabMainWindow::test_file_menu_places_a_root_in_the_current_tabs_selected_folder`;
+  - plus my own test's deliberate stall.
+
+## test_io_trace's GUI-never-touches-source test: its waits (caching-v2 CI 41456480233)
+
+- **The RERUN.** `waitUntil timed out in 20000 milliseconds` at :259, inside `wait_idle`, not the invariant
+  assertion. The test takes 9–18.5 s on Windows CI, 3.4 s here.
+- **Fix.** Its five waits on helpers share `HELPERS_MS = 60_000`: the listing, the expand, the load, and
+  both waits for idle. CI only shows `wait_idle`'s own frame, so it can't say which of the two failed.
+  - The assertions are unchanged.
+  - CI's per-test 120 s still bounds the whole test.
+  - Other tests' `wait_idle` keep 20 s.
+- **Checks.** Full suite 8946 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
+  a 20 s wait for idle helpers on Windows CI (41456480233, Tests 2/2); its helper waits are 60 s now."

@@ -18,6 +18,7 @@ import pytest
 from helab.io_ops import fingerprints, infra
 from helab.io_ops.live import live_check
 from helab.io_ops.loading import load
+from conftest import this_tests
 
 
 def write_shot(folder: Path, shot: int, *, age: float = 60.0) -> Path:
@@ -81,7 +82,7 @@ def test_an_unchanged_folder_is_one_stat(monkeypatch: pytest.MonkeyPatch, folder
 
     def no_listing(path: Any = ".") -> Any:
         raise AssertionError("listed the folder")
-    monkeypatch.setattr(os, "scandir", no_listing)
+    monkeypatch.setattr(os, "scandir", this_tests(no_listing, os.scandir))
     again = last(check(folder, tmp_path, memory, since=first["live_since"]), "live_unchanged")
     assert not again["live_listed"] and again["live_since"] == first["live_since"]
 
@@ -131,7 +132,7 @@ def test_a_listing_samples_held_shots_and_trusts_the_rest(
     def stat(path: Any, *args: Any, **kwargs: Any) -> Any:
         stats.append(os.path.basename(str(path)))
         return real_stat(path, *args, **kwargs)
-    monkeypatch.setattr(os, "stat", stat)
+    monkeypatch.setattr(os, "stat", this_tests(stat, real_stat))
     result = last(check(folder, tmp_path, memory), "live_unchanged")
     monkeypatch.undo()
     held_stats = [name for name in stats if name.startswith("d_txy_forc")]

@@ -67,6 +67,10 @@ class AnalysisRunner(QObject):
     def running(self) -> int:
         return self.core.running()
 
+    def in_flight(self) -> tuple[DatasetAnalysis, ...]:
+        """The scripts of the jobs queued or computing now (``AnalysisQueue.in_flight``)."""
+        return self.core.in_flight()
+
     def stop(self, timeout: float = 5.0) -> bool:
         """Cancel every job and end the worker; True once it has exited (``AnalysisQueue.stop``)."""
         return self.core.stop(timeout)

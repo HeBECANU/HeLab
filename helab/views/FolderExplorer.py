@@ -34,6 +34,7 @@ from helab.utils.time_format import byte_rate, clock as stopwatch, duration, rel
 from helab.utils.cache_freshness import CacheFreshness, data_as_of, freshness_tooltip, metadata_date
 from helab.utils.scan_history import history_tooltip
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views.explorer_convert import ExplorerConverter
 from helab.views.explorer_live import LiveController, LiveSession
 from helab.views.explorer_text import large_text, plural
 
@@ -296,6 +297,8 @@ class FolderExplorer(QWidget):
         self.live_save_owner = f"{self.model.owner}:live-save"
         # Live's sessions, its timer (a child of this tab) and its checks and saves.
         self.live_control = LiveController(self)
+        # Conversions asked for in Folder details (A39.5; owner ``<tab>:convert``) and the converter's questions.
+        self.converter = ExplorerConverter(self)
         if not self.model.cache.foreground_owners:
             # The first tab; FolderTabWidget hands the foreground to the current tab.
             self.claim_foreground()
@@ -1339,6 +1342,9 @@ class FolderExplorer(QWidget):
             return
         if not self.closed and request.owner == self.bg_owner:
             self._background_event(request, event)
+            return
+        if not self.closed and request.owner == self.converter.owner:
+            self.converter.event(request, event)
             return
         if self.closed or request.owner != self.model.owner or request.generation != self.model.generation:
             return
@@ -2665,6 +2671,7 @@ class FolderExplorer(QWidget):
         # Closing a tab stops Live; its new shots are saved in the background all the same.
         self.stop_live()
         self.live_control._live_timer.stop()
+        self.converter.close()
         if self.is_foreground:
             self.model.cache.set_foreground(set())
         self._cancel_background()
