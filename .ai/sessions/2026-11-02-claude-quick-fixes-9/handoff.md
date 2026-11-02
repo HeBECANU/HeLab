@@ -268,3 +268,17 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Checks.** Full suite 8935 passed, no RERUN; the five type checks pass.
 - **Known-issues proposal:** add it as Fixed. "A40.1's guard test took another IOService's helper start
   as its own (caching-v2 CI 41451159277); fixed by matching its request's stderr path."
+
+### Run 41455114540 (`b0da084`): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4443, 2/2 4456; macos 4460, 4475; ubuntu 4456, 4476.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **The guard test passed on every OS, in both cases.**
+- **Stall lines, Windows only, again each made in and still in the running test** (no leaked window):
+  - `test_accessible_names::test_every_script_and_each_library` ×2;
+  - `test_preset_folder_live::test_live_waits_for_the_folders_first_load_to_show`;
+  - `test_debug_runner_menu::test_the_screenshot_target_is_the_window_in_front_as_the_menu_opens`;
+  - `test_helabMainWindow::test_file_menu_places_a_root_in_the_current_tabs_selected_folder`;
+  - plus my own test's deliberate stall.
