@@ -181,31 +181,150 @@ Tony in Chat, 2026-11-02 later (via Side), on what comes next (block 47):
 - **Q38.1** Beside conversion on a file system with neither hard links nor a no-replace rename (today
   `txy.write_atomic` refuses and the run stops with the reason, `c194f37`): show a **warning that lets the
   user choose Retry or write to HeLab's local cache or temp folder instead**, neither a silent refusal nor a
-  silent fallback. Built on the Converter UX floor (`agent/converter-ux`, with A39.5 and A37.1).
+  silent fallback. Built on the Converter UX floor (`agent/converter-ux`, with A39.5 and A37.1; landed
+  `ed7bcf9`).
 - **Live scripts in v0.0.8** (Tony: "yes I need live scripts build in v0.0.8"): a Reload button and optional
   auto-reload on save, open plots rerun on the new code keeping their settings, remembered script folders,
   load errors in the Scripts panel, helper modules re-imported; one floor, Live Scripts
   ([overview](../roadmaps/_readme.md)).
+
+Tony in Chat, 2026-11-02 night (via CoCo; "S4-1, helab should never remove d raw files; anything else looks
+fine", then "S4-1 ok", "V-3 yes" and "2. ok"), on caching v2's stages 3 and 4, the purge, the switch-on and
+the converter's open questions (block 50). On the switch-on's risk: "it's fine, there's not much cached data
+anywhere, we could easily rebuild in minutes", so V-2–V-5 need no extra rollback care.
+
+- **Q50.3** (S3-1) a HeLab source converts in the helper and saves only a TXY layer; text is written exactly
+  as today (temp or cache, beside per folder; Q19.1), and a load alone never writes text. Built (stage 3,
+  landed `d4f28f3`).
+- **Q50.4** (S3-2) every profile converts on read, the user's too; the profile is sent with the request
+  (A47.1, built).
+- **Q50.5** (S3-3) a shot's order: its TXY layer, then the raw layer, then the current HeLab text, then
+  converting the raw file; a damaged or still-changing text is never used.
+- **Q50.6** (S3-4) Live with a HeLab source converts new shots on read whatever Auto-convert says; the
+  toggle then means "also write TXY text", which its tooltip says (the label: Q50.2, open).
+- **Q50.7** (S3-5) a folder with raw files and no TXY counts its shots as loadable when its source allows
+  HeLab's; the tooltip and Folder details say "converted when loaded"; no new badge.
+- **Q50.8** (S3-6) a plot's TXY row and Folder details name an on-read shot "HeLab <tag>, converted from
+  raw" instead of a file name.
+- **Q50.9** (S4-1) switching a folder or Settings to "TXY only" never removes raw pulses by itself: HeLab
+  offers "Also remove HeLab's cached copy of this folder's raw pulses (N MB)? Your d files aren't touched.",
+  naming only copies, and every question that clears raw pulses calls them "HeLab's cached raw pulses". (HeLab
+  never modifies or removes raw `d*.txt` files, AGENTS.md; Tony's "helab should never remove d raw files" is
+  that rule.) Built in stage 4's first commit (`1ad31a9`, merged with stage 3).
+- **Q50.10** (S4-2) switching to "Raw only, convert on load" keeps the existing TXY layers; they go only by
+  Make room, a purge or Clear.
+- **Q50.11** (S4-3) a folder's own policy and TXY source apply to that folder only, not its subfolders (like
+  Don't cache).
+- **Q47.3** (S4-4) the cache policy's and the per-folder choices' wording as built: "Raw + what you load
+  (default)" / "Raw only, convert on load" / "TXY only (no raw)", and the right-click items as listed at
+  block 47.
+- **Q50.12** (P-1, the purge note's P~1) "Everything not used, checked or shown in the last N days" also takes
+  folder records and cached analysis, keeping only copies (built, A47.4).
+- **Q50.13** (P-2) one days box per row, Everything with its own (built).
+- **Q50.14** (V-2) after the switch-on, the `store_v4` row stays one release as a hidden fallback to
+  store-v3, then goes (as Q45.11).
+- **Q50.15** (V-3, shortened) store-v3 is read (Keep) through v0.0.8 only: Keep's read-through ends when
+  v0.0.9 starts, and from then on only "Clear old stores…" removes it, asked first. Nothing to build now.
+- **Q50.16** (V-4) no bulk import of store-v3 at the first start; folders seed when used, so no long
+  migration.
+- **Q50.17** (V-5) the release notes say that going back to v0.0.7 won't see what store-v4 cached.
+- **Q50.18** what Tony checks before store-v4 is switched on in the v0.0.8 PR (Q47.4), about 15 minutes: M44.1
+  and M47.1 on screen, and M47.2 and M42.1 on a lab PC with the switch on.
+- **Q38.1** built as decided (Retry, or HeLab's cache or temp folder instead): Converter UX, landed `ed7bcf9`.
+- **Q15.3** keep: `convert_low_hits` 100 hits, 0 off, once per shot.
+- **Q23.2, Q23.3, Q23.5** keep as built: Live collapses the whole left panel; no rows waits 20 s before it is
+  damaged; the Live line turns amber for no-hit shots.
+- **Q14.4** deferred until after caching v2's stage 3, since it changes with S3-5; stage 3 has landed, so it
+  stays open to be asked again (below).
+- **Overnight landings** when the landing rules hold (Converter UX, caching v2's A47 checkpoint and stage 3,
+  Live Scripts landed that night).
+
+## Caching v2 stage 3 (block 50)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 3", Vault;
+landed `d4f28f3`, the switch off). For Tony's morning.
+
+- **Q50.1** (Q~16) **HeLab priority converts every raw shot without HeLab text.** Under the default source
+  ("HeLab priority"), store-v4 now converts on read every shot that has a raw file and no current HeLab text,
+  in place of reading MATLAB's TXY, as the stage 3 design said and CoCo accepted. Users will see it: a first
+  load is slower (each shot converted once, then served from its layer), and the data is HeLab's, not
+  MATLAB's. "Converted when loaded" counts follow the same rule (S3R-2). **Proposed:** as built, since that is
+  what HeLab priority means once loads convert on read. **Alternative:** convert on read only shots without
+  MATLAB's TXY, so HeLab priority prefers HeLab text where there is one but never converts over MATLAB's (the
+  load and the count would change together).
+- **Q50.2** (the S3-4 label) **Auto-convert keeps its label.** S3-4 said the toggle's label and tooltip say
+  "Also write TXY files"; the button has a fixed width, so the label stays "Auto-convert" and only its
+  store-v4 tooltip says it ("Live converts new shots when it reads them; this also writes HeLab's TXY text to
+  <destination>"; CoCo agreed, 2026-11-03). **Proposed:** keep the label, the tooltip explains.
+
+## Live Scripts (block 49)
+
+From the Live Scripts floor's [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md) (Lumen; landed
+`971f4af`).
+
+- **Q49.1** (Q~1, the design's D6) **The wording**: "Reload" (while waiting "Reload (waiting)"); "Load
+  Scripts…" with its menu "Script folders" / "Reload" / "Remove from the list" / "Reload when a script is
+  saved"; "⚠ N script files didn't load"; "⚠ Script didn't reload (…): still running the code loaded at
+  HH:MM"; "Reloaded · ⚠ N settings at the script's defaults: …"; the TXY row's box **"Keep"** (accessible name
+  and tooltip "Keep this plot's TXY choice"), since the full text would widen the Settings panel (Q33.2).
+  **Proposed:** as built.
+- **Q49.2** (Q~2) A TXY choice not applied on reopen is said as "⚠ 1 setting at the script's defaults: TXY
+  profile", where "at the script's defaults" means "as the folder's tab". **Proposed:** fine as is; else a
+  TXY-specific wording.
+- **Q49.3** (Q~3, the rest of Prismo's M3) **Script imports stay on the GUI thread.** Remembered local script
+  folders import after the window shows; a script that blocks at import (`input()`, a network call) still
+  freezes that session once, as Load Scripts… always could, and the loading marker
+  (`<app folder>/scripts-loading.json`) makes the next start skip the folders, so HeLab always gets a start
+  that works. Shares are never loaded at start; a slow cloud folder the mount table calls local (iCloud,
+  Dropbox, OneDrive placeholders) is. Importing off the GUI thread isn't safe (scripts define Qt and
+  PyQtGraph classes at import; the import lock against the GUI thread's own imports). **Proposed:** keep it as
+  built, the marker as the way out; add cloud-folder kinds to "not at start" only if Tony sees it happen.
+
+## Converter UX (block 48)
+
+From the Converter UX floor's [handoff](sessions/2026-11-02-claude-converter-ux/handoff.md) (Ember; landed
+`ed7bcf9`).
+
+- **Q48.1** (Q~1) **A read stopped early, the wording**: the Live line and Folder details say `d3.txt read
+  stopped at line 1010` (one) or `3 reads stopped early` (several), amber; the tooltip and `helab convert`:
+  `read stopped at line 1010, at "not,a,number", which isn't a number: as MATLAB's converter reads the file,
+  its TXY holds only the hits of what was read before it (34,336 bytes not read)`. Line numbers ungrouped (as
+  editors show them). **Proposed:** as built.
+- **Q48.2** (Q~2) Should a read stopped early also send a system notification, once per file, like a damaged
+  file? Built: a log warning and amber text only. **Proposed:** notify once per file (it means lost hits).
+- **Q48.3** (Q~3) `helab convert --output beside` on a share without a terminal and without `--yes`: built as
+  Q30.2 (converts to HeLab's folder; a warning names `--yes`). Alternative: refuse (exit 2) so a script
+  expecting TXY beside notices. **Proposed:** as built.
+- **Q48.4** (Q~4) **"Once per folder"**: the share's confirmation lasts the session per folder
+  (`explorer_convert.beside_confirmed`), the folder's beside flag being the lasting record. Alternative: save
+  it with the folder's flag (store `convert_prefs`, a new column). **Proposed:** session only.
+- **Q48.5** (Q~5) The questions' defaults and how long a choice holds: Live's share question defaults to
+  Convert to HeLab's cache instead, and closing it turns auto-convert off; Q38.1's question defaults to
+  HeLab's cache folder, and closing it is Not now. A choice of HeLab's cache or temp folder instead (either
+  question, Live or Folder details) is the folder's for the session, followed by both, the beside flag
+  unchanged; choosing beside again in Folder details clears it (Strata's finding 3). Alternatives: per
+  conversion only, or saved with the folder. **Proposed:** as built.
+- **Q48.6** (Q~6) Folder details' offer: the row `No TXY · on a share · Convert…`; the buttons "Convert to
+  HeLab's cache (recommended)", "Convert to HeLab's temp folder", "Convert beside on the share…".
+  **Proposed:** as built.
 
 ## Caching v2 stage 2 (block 47)
 
 From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Step 7", Vault;
 stage 2 landed `1cd586c`, the switch off).
 
-- **Q47.3** (the design addendum's S~6) **The cache policy's and the per-folder choices' wording**, built as
-  proposed (store-v4 only): Settings › Cache's "Cache policy" combo (`CacheTab.POLICY_LABELS`): "Raw + what
-  you load (default)" / "Raw only, convert on load" / "TXY only (no raw)"; right-click "TXY for this
-  folder…" ("This folder's tab and Live load:"; then "HeLab's TXY of the profile tagged:") and "Cache policy
-  for this folder…" ("This folder's saves keep:"), each with "As Settings (every folder)"
-  (`FolderExplorer.FOLDER_CHOICE_GLOBAL`) first; Folder details' TXY line adds "this folder: <source>
-  (<tag>)" and "cache: <policy>". **Proposed:** keep as built.
+Q47.3 (the design addendum's S~6: Settings › Cache's "Cache policy" combo, right-click "TXY for this
+folder…" ("This folder's tab and Live load:"; then "HeLab's TXY of the profile tagged:") and "Cache policy
+for this folder…" ("This folder's saves keep:"), each with "As Settings (every folder)" first; Folder
+details' "this folder: <source> (<tag>)" and "cache: <policy>") is decided as built (S4-4, Recently decided,
+block 50).
 
 ## Quick Fixes 7 (block 38)
 
 From Quick Fixes 7's [handoff](sessions/2026-10-31-claude-quick-fixes-7/handoff.md) (Rivet on Ground,
 Codex's review of PR #10, six rounds; detail in its `notes.md`).
 
-Q38.1 is decided (Recently decided, 2026-11-02).
+Q38.1 is decided (Recently decided, 2026-11-02) and built (Converter UX, `ed7bcf9`).
 
 ## UI polish (block 36)
 
@@ -229,10 +348,12 @@ From the `agent/txy-ui` and `agent/txy-live` handoffs (`sessions/2026-10-29-clau
 - **Q14.4 Count HeLab's TXY in a folder's status?** Today status and counts come from MATLAB's TXY
   alone; proposed: count current HeLab TXY of the tab's tag once scans can see HeLab's folders
   cheaply (A23.1 waits for this). Caching v2's stage 5 would make raw files drive status.
-- **Q15.3 The low-count threshold** `convert_low_hits`: default 100 hits, 0 off, once per shot.
-  Alternatives: a rate like MATLAB's 700 Hz (needs `t_max` in `shot_converted`); per-folder
-  thresholds. A low shot can notify twice (Shot trends' Notify during Live is a separate rule).
-  Tony, 2026-10-29: later.
+  Tony, 2026-11-02: after caching v2's stage 3, since it changes with S3-5 (Q50.7). Stage 3 has landed
+  (`d4f28f3`): in store-v4, a folder whose source allows HeLab's counts its raw shots as "converted when
+  loaded", from memory, but status and badges still come from MATLAB's TXY. **To ask again** now stage 3 is
+  in: the proposal above stands (S3-5's count is its store-v4 form), or status waits for stage 5.
+
+Q15.3 (the low-count threshold) is decided: keep (Recently decided, block 50).
 
 ## Caching after the converter (block 19; [audit](sessions/2026-10-29-claude-caching-audit/audit.md))
 
@@ -249,13 +370,8 @@ From the `agent/txy-followups` handoff (`sessions/2026-10-29-claude-txy-followup
 landed `c718c71`. Q15.2 is superseded by Q18.3 (built), Q14.3 settled by Q18.2 (a profile by its tag),
 Q12.7 confirmed as Q18.6 (the patterns now tagged).
 
-- **Q23.2 "File explorer panel" = the whole left panel** (tabs, summary, Live line, Folder details),
-  collapsed while Live watches. Alternative: collapse only the folder tree, keeping the Live line and
-  Folder details visible. Proposed: as built.
-- **Q23.3 No rows waits 20 s** before it is damaged (was: unconvertible once settled, Q10.2).
-  Proposed: keep (one rule for all three checks).
-- **Q23.5 The Live line turns amber for no-hit shots** (the whole line, which otherwise means
-  "stopped"). Alternative: amber only in Folder details. Proposed: as built.
+Q23.2 (the whole left panel collapses while Live watches), Q23.3 (no rows waits 20 s before it is damaged)
+and Q23.5 (the Live line amber for no-hit shots) are decided: keep as built (Recently decided, block 50).
 
 ## Versions across machines (block 27)
 

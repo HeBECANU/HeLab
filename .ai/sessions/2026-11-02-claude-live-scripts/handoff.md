@@ -37,6 +37,41 @@ How "fails before" was checked: the new test files were copied into a worktree o
 the three new names `script_tree` exports): 12 failed, 34 passed. M2 and L1 were checked by putting Prismo's
 mutations back: each test then fails.
 
+## Follow-up after landing (CoCo, 2026-11-03: the Ground CI rerun)
+
+Ground CI 41463943327, job 125340069131 (ubuntu + py3.13 / Tests (1/2)) reran
+`tests/test_live_scripts.py::test_a_reload_waits_for_a_run_of_its_scripts_on_the_worker_thread`
+(`assert (0 == 1)`, `in_flight()` empty, line 206), passed on retry. **Cause, in the test:** it waited for
+`runner.in_flight()`, which counts a job from when it is queued (right, for a reload: a queued run of the
+old code must hold it too), not from when its `compute` starts. On a busy runner the job was still queued
+when `reload_scripts` held the plot and cancelled it; the worker then ended it at once without computing,
+so `in_flight()` was empty by the test's next checks. The code is right: a cancelled run that never started
+shouldn't hold a reload. **Repro**: `repro_reload_wait_race.py` in this folder: with the worker reaching the
+job only after the cancel, the old test fails every time (`assert 'Reload' == 'Reload (waiting)'`).
+**Fix** (test only): the script's helper has a `STARTED` event its compute sets; this test and
+`test_removing_the_folder_a_reload_waits_for_ends_the_wait` (the same pattern) wait for it instead of
+`in_flight()`. Checked: both pass under the repro's stress (each job starts 0.3 s late, the GUI thread
+sleeps 0.2 s after each cancel), three times; the three live-scripts test files six times in a row with
+`-n 4` and no reruns (51 passed each; no reruns on purpose, to see a flake, against AGENTS.md's rule for
+`-n`); merged `dev/v0.0.8` (`8861de9`): full suite 9131 passed, 673 skipped, **no RERUN**; the five type
+checks clean. CI: run 41468043383 on `74b79b3`. **Attempt 1 was cancelled**: "ubuntu + py3.13 / Tests (1/2)"
+(job 125354149828) hit the job's 20-minute limit with 43 RERUN lines, in tests this change doesn't touch.
+`test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard` failed for good after 5
+reruns (gw0, from 15:08:23). From 15:08:52 worker gw1 took about 35 s per attempt and failed everything it
+ran next: `test_result_cache_badge.py::test_a_plots_save_shows_the_badge_without_listing_and_a_clear_hides_it`,
+then `test_result_cache_plots.py`'s `…outdated_until_the_run_ends[script]` and `[data]` (FAILED and ERROR),
+`…ends_unshown_says_it_no_longer_reruns[cancelled]` and `test_live_reruns_are_never_saved`, until the cancel.
+The live-scripts tests had all passed before then. The summary was never printed and the run keeps no
+artifacts, so I have no tracebacks. `dev/v0.0.8` at `8861de9` (CI 41467764837, green) has the same code but
+this test change. Those three files passed 4 times in a row locally (`-n 4 --reruns 5`, 73 each). The other
+eight jobs of attempt 1 were green with 0 RERUN. **Attempt 2** (the failed job re-run; the others copied
+from attempt 1, with new IDs): success, all nine Tests and Converter backends logs read, **0 RERUN**
+(Ubuntu Tests (1/2) 4559 passed, job 125367740134). Proposed known-issues entry (A~7): "[ ] Ubuntu CI,
+`agent/live-scripts` run 41468043383 attempt 1: `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard`
+failed after 5 reruns, and a worker then took about 35 s per attempt on every result-cache test (badge,
+`test_result_cache_plots.py`) until the job's 20-minute limit; no traceback (cancelled before the summary).
+Green on re-run and locally. Upload the junit XML even when a job is cancelled, to see it next time."
+
 ## Re-check fix (Prismo, `f66a946`: R1)
 
 Commit `c79f210`. **R1** a loading marker could stick (HeLab stopped while Load Scripts… loaded a new folder,

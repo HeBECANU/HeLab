@@ -295,3 +295,152 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Checks.** Full suite 8946 passed, no RERUN; the five type checks pass.
 - **Known-issues proposal:** add it as Fixed. "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
   a 20 s wait for idle helpers on Windows CI (41456480233, Tests 2/2); its helper waits are 60 s now."
+
+### Run 41460607344 (`daed254`): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4448, 2/2 4462; macos 4465, 4481; ubuntu 4461, 4482.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **`test_the_gui_process_never_touches_source_folders` took 12 s on Windows 2/2.**
+- **That job took 24 min 40 s (usually 10–13).** No single test explains it.
+  - The longest test was 94 s (`test_analysis_gui`'s other-library one), then the type checks (43–71 s).
+  - The longest gap between two results was 18 s.
+  - So it was a slow runner, not a hang.
+
+## The cancelled Ubuntu job (CI 41468043383 attempt 1, agent/live-scripts 74b79b3): hunted, not pinned
+
+- **What happened** (job 125354149828, `Tests (1/2)`, cancelled at 20 min):
+  - **gw0:** `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard` failed 6
+    times, from 15:08:18 to 15:08:45, about 5 s an attempt and the last 0.2 s. In the green attempt 2 it
+    took 0.4 s. gw0 then passed 457 tests normally.
+  - **gw1, from 15:08:52:** every remaining test failed 6 times at about 35 s an attempt, with teardown
+    ERRORs too. Those tests were `test_result_cache_badge`'s save test and `test_result_cache_plots`'
+    outdated `[script]`/`[data]`, `ends_unshown[cancelled]` and `live_reruns_are_never_saved`.
+    - Each attempt is their `WAIT = 30_000` for a save that never completed. In attempt 2 each takes
+      0.3–1.4 s.
+    - gw2 and gw3 had finished by about 15:10, so gw1's tail ran the job into its limit.
+  - **43 RERUN lines and no reason.** The summary (`rerun reasons`), tracebacks and junit.xml come only
+    when pytest ends.
+- **Tried:**
+  - the guard test alone, 15 of 15 passed;
+  - gw0's exact order (110 tests) and gw1's (915 tests, from the log, mapped to Ground's IDs), replayed in
+    one process with `pytest.main` and no xdist: both pass;
+  - the log searched for disk-full, memory, OOM and file-limit messages: none.
+- **What it looks like:** helper subprocesses on that runner getting nothing done from about 15:08. Both
+  workers turned within 34 s; gw0's one test recovered, while every test left on gw1 needed a helper's
+  save. Not proven: the run kept no reason.
+- **Diagnostic so the next one names itself (`1ca5baa`).** conftest writes `RERUN REASON <test>
+  (<phase>):` or `FAILED REASON …` live, on the controller's terminal, with the same lines as the
+  summary. A cancelled job now keeps them.
+- **Known-issues proposal (open):** "Ubuntu CI 41468043383 attempt 1: from 15:08, helper-dependent tests
+  timed out on gw0 (`test_failed_listing_history_write_keeps_the_listing_guard`, ×6, ~5 s each) and gw1
+  (`test_result_cache_*` saves, 30 s waits, ×6 each) until the job's 20-min cancel. No reason kept;
+  neither worker's order reproduces it. Live reasons since `1ca5baa`."
+- **A~ proposals.**
+  - **A~4: `--session-timeout` in CI.** pytest-timeout 2.4 has it. Set it a little under each job's limit
+    (e.g. 17 min for a 20-min job) so pytest ends itself and still prints its summary and writes
+    junit.xml, instead of being killed.
+  - **A~5: upload junit.xml `if: always()`.** Only useful with A~4: on a killed job the file doesn't exist,
+    since pytest writes it at the end.
+
+## test_live_convert's offline test: fixed (d03c0c6; Vault's reading)
+
+- **The RERUN** (caching-v2 CI 41472779247, macOS Tests 2/2):
+  `test_a_conversion_refused_offline_stops_auto_convert_and_says_so`, "assert 'auto-convert stopped: not
+  while working offline' in 'Live stopped: Cancelled'" at :575.
+- **Cause.** Live checks every 20 ms here. With no check in flight, its tick submits one; while the test
+  is offline that check is refused, and its "cancelled" halts Live first.
+- **Fix, in the test.** Live's next check is queued before going offline (`next_request`). With dispatch
+  frozen it stays in flight, so Live asks for none while offline.
+- **Repro case kept** ("a Live check comes due while offline": Live's tick runs while offline). With the old
+  flow it fails with CI's exact message; now it passes.
+- **Checks.** Full suite 9133 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "A Live check asked for while the test was offline was
+  refused and halted Live (CI 41472779247); the test queues Live's next check before going offline
+  (d03c0c6)."
+- **Test file touched:** `tests/test_live_convert.py`.
+
+## CoCo's three Windows items (Ground CI 41476107464), priority (3) first
+
+### (3) Three test groups (9787e35)
+
+- **Change.** `ci-test.yml`'s matrix is three groups ("Tests (1/3)", "(2/3)", "(3/3)") for the required 3.13
+  jobs on every OS.
+  - One expression, the same job names everywhere, so "read every job" stays one pattern.
+  - The compatibility jobs (PRs only, non-blocking) keep two, so a PR's run gains three jobs, not twelve.
+  - conftest's `--test-group` already took N/M; its comments say three now.
+- **Tests:** `test_test_groups` checks the even split for 2 and 3 groups (on the full suite) and reads the
+  workflow's matrix; it fails on the old workflow.
+- **Times from the first run, 41481668334** (all green; pytest time per group, from each job's summary
+  line; job wall time in brackets):
+
+  | OS | 1/3 | 2/3 | 3/3 |
+  |---|---|---|---|
+  | Windows | 8.9 min (10.9) | 10.0 (12.0) | 9.8 (13.2) |
+  | macOS | 1.6 (4.2) | 6.1 (7.9) | 4.7 (6.2) |
+  | Ubuntu | 3.0 (4.6) | 3.5 (4.9) | 3.4 (4.5) |
+
+  - With two groups, Windows took 12.6/12.3 min (41478538998), and 20.3/21.1 on a slow runner
+    (41476107464). Now about 10 min, against the stop line of ~25 and the job limit of 30.
+  - The macOS jobs started 2–6 min after the others (macOS runner concurrency), so the run's end is set
+    by macOS (16:42), not Windows (16:41).
+- **That run's RERUNs:**
+  - **Windows 3/3:** `test_release_recovery.py::test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing_commit`,
+    `assert 'unknown' == 'detached'` at :337. New; see "Filed" below.
+  - **macOS 2/3:** `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-TxyHistograms]`.
+    Its worker died ("node down"; the live line says "(worker crashed or was killed)" since 57761e2). It's
+    the known Plotly/QtWebEngine abort class (known-issues lines 139 and 162); another sighting.
+
+### (1) test_cache_first's "(???)" (filed; the phase fixed in 57761e2)
+
+- **The `(???)`.** It is xdist's phase for a dead worker's report. The live line now says "(worker
+  crashed or was killed)".
+- **The RERUN** `test_cache_first.py::test_a_server_clock_ahead_of_ours_keeps_the_quick_check[cached]`
+  (Windows Tests 1/2, job 125382190106) was a hang, not a crash.
+  - faulthandler's dump at 100 s ("Timeout (0:01:40)!") shows the main thread in `cache_store.transaction`'s
+    `COMMIT`, under `start_dataset_job` (`loading.py:289`, the test's in-process `load` via
+    `first_load`/`run_load`).
+  - Then CI's `--timeout=120` killed the worker.
+  - Not reproduced. The store is the test's own, and SQLite's busy timeout is 30 s, so a `COMMIT` held over
+    100 s suggests a file-system stall on the runner, or a long wait behind another process.
+  - **Known-issues proposal (open):** "`test_cache_first.py::test_a_server_clock_ahead_of_ours_keeps_the_quick_check[cached]`:
+    the test's in-process load sat in SQLite's COMMIT (`start_dataset_job`) for over 100 s on Windows CI
+    41476107464, Tests 1/2. The worker was killed at --timeout=120 and xdist reported it as crashed. Once;
+    cause not found."
+
+### (2) test_two_writers_side_by_side_lose_nothing (fixed, 324ad79)
+
+- **The RERUN** (×2, Windows Tests 2/2, job 125382190899): `IndexUnavailable … database is locked … SQLITE_BUSY`
+  after 27.30 s and 26.33 s.
+- **Cause.** The test's two writer processes open the index per shot, and on a slow runner one missed its
+  window past `BUSY_SECONDS`. The app takes that as harmless: the conversion fails and is tried again
+  later.
+- **Fix.** The writers try such a shot again, up to 4 times. The test still checks every row landed and
+  the file is sound.
+- **Repro case kept:** writers waiting only 1 ms. The old writer fails it 7 of 10 runs, the new one 0 of
+  10.
+- **Known-issues proposal:** add it as Fixed.
+
+### Filed: test_release_recovery's detached stamp (new, from the three-group run)
+
+- **The RERUN:** `assert 'unknown' == 'detached'` at :337, the test's first assertion,
+  `checkout_build_info(checkout).branch` on a fresh `--no-checkout` clone just checked out.
+- **Cause.** `build_info._git` gives each git call 2 s (`timeout=2`). On a slow Windows runner, `git status
+  --porcelain` on that fresh checkout (it refreshes the whole index) can take longer, and
+  `checkout_build_info` then returns an all-"unknown" `BuildInfo`.
+- **App code** in the release area (`helab/build_info.py`), so not changed here.
+- **Options** (Q~ for CoCo/Tony):
+  - (a) a longer timeout where it can't slow the app's start (the build's stamp in `HeLab.spec`, and the
+    tests), keeping 2 s at the app's start;
+  - (b) the test runs `git status` once on its clone before asking (the index refreshed), which fixes the
+    test only.
+  - Proposed: (b) now, (a) if a real build ever stamps "unknown".
+- **Known-issues proposal (open):** "`test_release_recovery.py::test_detached_pr_stamp_…`: 'unknown' ==
+  'detached' on Windows CI 41481668334, because `build_info._git`'s 2 s timeout ran out for `git status` on a
+  fresh checkout."
+
+### Test files touched for these
+
+`tests/conftest.py`, `tests/test_test_groups.py`, `tests/test_convert_helab.py`, `tests/test_test_isolation.py`;
+CI: `.github/workflows/ci-test.yml`.

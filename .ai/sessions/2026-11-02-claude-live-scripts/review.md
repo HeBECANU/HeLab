@@ -255,3 +255,58 @@ real button.
    removed. `_pending_deliberate` stays True, so the next auto-reload counts as deliberate and clears a marker.
    The effect is the same harmless one. Resetting the flag in `_stop_waiting` when nothing is pending would tidy
    it.
+
+## Follow-up: the reload-wait test race (2026-11-03)
+
+This covers the test-only diff `git diff 8861de9..74b79b3 -- tests` and the repro
+`repro_reload_wait_race.py`.
+
+**Verdict: the fix is correct and the cause is right. No finding is open.**
+
+**The cause is confirmed.** The Ground CI rerun (run 41463943327, job 125340069131) failed at
+`tests/test_live_scripts.py:206`, `assert (0 == 1)`, which is `len(instance.runner.in_flight()) == 1`. The old
+test waited for `in_flight()`, which counts a job from when it is queued. The failing sequence was:
+
+1. The job was still queued when `reload_scripts()` cancelled it (`hold_for_reload`).
+2. `_busy` still saw the queued job, so the button read "Reload (waiting)" and that assertion passed.
+3. The worker then picked the job up and ended it as cancelled without computing, so `in_flight()` was empty at
+   line 206.
+
+That is correct product behaviour: no `compute` ran, so there was nothing to wait for. The flaw was in the test.
+
+**The repro reproduces it.** I ran the repro in a copy of each tree:
+
+- with the old tests (`8861de9`), `test_a_reload_waits…` fails with the same `assert (0 == 1)`;
+- with the new tests (`74b79b3`), the module passes (22 passed).
+
+Under the repro, the old L2 test (`test_removing_the_folder_a_reload_waits_for_ends_the_wait`) still passes,
+because it has no `in_flight` count assertion. Its change is preventive, and right.
+
+One small inaccuracy in the repro: its docstring names `'Reload' == 'Reload (waiting)'` as the failure, but the
+failure observed both in CI and locally is line 206.
+
+**The tests still prove that a reload waits for a running compute.** They now wait for the compute's own
+`STARTED` event, so the compute is on the worker and blocked on `GATE`, ignoring cancellation, before
+`reload_scripts()`. Rewriting the helper for the new code creates fresh events, but the running compute keeps the
+old module's `GATE`, which the test holds.
+
+I mutated the code and ran the two tests against each change:
+
+| Mutation | Result |
+|---|---|
+| `_busy` returns 0 | caught by both tests |
+| `in_flight` never records the job's script | caught by both tests |
+| `in_flight` drops a job once its compute starts | caught by both tests |
+| the hold removed | caught by the first test |
+
+The third mutation is the case the old wait didn't distinguish, and the new tests catch it.
+
+**Under load,** with 16 busy-loop processes (load average about 100) and `-n 12 --reruns 5 --reruns-delay 1`, I
+ran each of the two tests 40 times:
+
+| Tests | Result |
+|---|---|
+| New (`74b79b3`), two runs | 200 passed, **no RERUN** |
+| Old (`8861de9`), the same harness | **1 RERUN** in one run |
+
+So the old tests' flake reproduces under load, and the new tests don't flake.

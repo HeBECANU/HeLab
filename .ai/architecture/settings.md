@@ -18,7 +18,17 @@ on Ground, update it in the same commit as the code; on a floor, propose the cha
 
 `store_v4` (bool, default off, no control; `STORE_V4_SETTING`) picks the store layout once per process
 ([cache-store](cache-store.md#store-v4-caching-v2-behind-the-switch)); it stays off until Tony's check, then
-turns on in the v0.0.8 PR (Q28.3, Q47.4). `cache_policy` (`CACHE_POLICY_SETTING`, default `raw+used`; stage 2, landed
+turns on in the v0.0.8 PR (Q28.3, Q47.4), and is kept one release after that as a hidden fallback to store-v3,
+then goes (Q50.14). `cache_policy` (`CACHE_POLICY_SETTING`, default `raw+used`; stage 2, landed
 `1cd586c`) is the global cache policy (Q45.1), edited by Settings › Cache's Cache policy combo (store-v4
 only) and read lazily by `FolderCache.cache_policy`; it is sent as `policy` with store-v4 requests only. A
 folder's own policy and TXY source are store rows (`cache_policy`, `txy_source_prefs`), not settings.
+
+## Script rows
+
+**Script rows** (Live scripts, landed `971f4af`): `script_folders` (`SCRIPT_FOLDERS_SETTING`, a JSON list of the
+folders added with Load Scripts…, loaded at start after the window shows; removed only by Remove from the list;
+a folder skipped at start stays listed) and `script_auto_reload` (`SCRIPT_AUTO_RELOAD_SETTING`, bool, default
+off: Reload when a script is saved, in Load Scripts…'s menu)
+([plots-and-scripts](plots-and-scripts.md#script-system)). The loading marker `<app folder>/scripts-loading.json`
+is a file, not a setting.
