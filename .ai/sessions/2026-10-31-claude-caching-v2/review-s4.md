@@ -226,3 +226,79 @@ On an export of `3085e53`, whose `helab/` and `tests/` equal the floor's `HEAD` 
   - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 
 Stage 4 has no open review findings.
+
+## The fresh-store race (`eb38718..c06f342`: `cache_store.py`, `test_store_v4.py`)
+
+**Verdict: 1 open finding: 0 High, 1 Medium.** The fix for "duplicate column name: maker" is right, and every other
+step of the schema that can't run twice is guarded the same way. But a second race on the same path is left: the
+WAL pragma. It makes the new 6-thread test fail about 1 run in 4.
+
+### SR-1 · Medium · Helpers opening a new store at once still fail: `PRAGMA journal_mode = WAL` says "database is locked" at once
+
+- `helab/utils/cache_store.py:955` (`_open`: `conn.execute("PRAGMA journal_mode = WAL")`, before `BEGIN
+  IMMEDIATE`, for a store with no layout yet).
+- `:4573-4578` (`_transient_io_error`: only `SQLITE_IOERR` is retried, not `SQLITE_BUSY`).
+- **Scenario.** Several helpers open a store-v4 that doesn't exist yet. This happens after the switch goes on, or
+  after a cache-folder move.
+  - Each one finds no layout and switches the new file to WAL.
+  - Changing the journal mode needs the database to itself. While another connection is changing it, or holds the
+    write lock, SQLite returns "database is locked" **at once**, without waiting out the 30 s `busy_timeout`. My
+    40 rounds of 6 opens took 1.1 s in all.
+  - The open is not retried, so the helper's request fails with "Disk cache could not be opened: database is
+    locked".
+  - It is the same "new store opened by helpers at once" case that `c06f342` fixes for the schema. The line is
+    older than this commit, but the commit's own test hits it.
+- **The new test is flaky because of it.** `test_a_new_store_opened_by_two_helpers_at_once_is_made_once[store-v4]`
+  fails in its 6-thread part with `StoreError('Disk cache could not be opened: database is locked')`:
+  - alone, without reruns: **4 of 15 runs failed**;
+  - with `--reruns 5 --reruns-delay 1`: **4 of 12 runs needed a RERUN**.
+
+  Under AGENTS.md this would be a RERUN in CI that blocks landing until it is explained.
+- **Fix.** Make the switch to WAL wait like any other lock, for example:
+  - read `PRAGMA journal_mode` and skip the switch when it is already `wal` (WAL persists in the file);
+  - otherwise retry the pragma on `SQLITE_BUSY` (`sqlite_errorcode & 0xFF == SQLITE_BUSY`, or the "database is
+    locked" text) until `busy_timeout` has passed;
+  - or create the store under `BEGIN IMMEDIATE` in the default journal mode, then switch to WAL once, with that
+    retry.
+
+  Then run the 6-thread part over several rounds (my scratch uses 40 rounds of 6 opens), so it fails reliably
+  without the fix rather than about one run in four.
+- **How verified.**
+  - Scratch test `.ai/temp/assay/test_zz_race.py`, on an export of `c06f342`: 40 rounds of 6 threads opening a
+    fresh `store-v4`; **4 of 240 opens failed**.
+  - The cause's traceback: `cache_store.py`, line 955, in `_open`: `conn.execute("PRAGMA journal_mode = WAL")`,
+    `sqlite3.OperationalError: database is locked`.
+  - The rerun counts above are from repeated runs of the commit's test.
+
+### Checked, no finding
+
+- **The fix.**
+  - `_open` checks `_layout_version` again after `BEGIN IMMEDIATE`. Creation and its meta rows are one
+    transaction, so a second helper sees either no `meta` table or a whole store.
+  - When the store is there, the second helper commits without running the schema.
+  - Either way it goes on to the usual layout check, `_migrate`, `store_v4.migrate` and `import_legacy`.
+  - `_create` is the old body unchanged, moved.
+- **Every other step that can't run twice is checked again under the write lock.**
+  - `_migrate`: `missing()` again after `BEGIN IMMEDIATE`; its one `ALTER` (`datasets.raw_times`) runs only when
+    still missing; meta rows go in with `INSERT OR IGNORE`.
+  - `store_v4.migrate`: `no_layers()` and `no_seen_at()` again under the lock, for `STAGE2_SCHEMA`'s
+    `ALTER pending_saves ADD parts` and the `txy_layers.seen_at` `ALTER`.
+  - `import_legacy`: `_imported()` again under the lock; rows go in with `INSERT OR IGNORE`; `imported_v3` with
+    `INSERT OR REPLACE`, written once.
+  - `SCHEMA`, `ROOT_SCHEMA` and `store_v4.SCHEMA`'s tables and indexes are `IF NOT EXISTS`. `ALTER` appears nowhere
+    else in `helab/`.
+- **Store-v3 unchanged.**
+  - The layout comes from the folder's name (`layout_of(root)`).
+  - For store-v3 the only change is that a helper finding the store already made skips idempotent statements it
+    used to repeat.
+  - Store-v3's case of the deterministic test fails without the fix only through the test's stub, which hides the
+    layout from the final check. It guards store-v3 against the change; it doesn't show a store-v3 bug.
+- **Fails without it.** On an export of `c06f342`, with `cache_store.py` as it was at `eb38718`: the test fails
+  for store-v4 with "duplicate column name: maker" (8 of 8 runs). With the fix, the deterministic part always
+  passes.
+- **Checks.** On that export, whose `helab/` and `tests/` equal the floor's `HEAD`:
+  - `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` on `test_store_v4`,
+    `test_cache_store`, `test_cache_store_open`, `test_result_cache_store` and `test_caching_v2_session`:
+    **123 passed, no RERUN in that run.** The repeated runs above did RERUN (SR-1).
+  - `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
+  - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
