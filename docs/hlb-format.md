@@ -74,7 +74,9 @@ Times are TDC bins. HeLab's profiles use **25 ps** (`bin_time` 25e-12 s), so sec
 
 `meta.facts` holds what HeLab's done-writing checks read from the text: `rows`, `t_zero` (as text; `"nan"` for an
 empty file), `first_channel`, `blank`, `final_newline`, `line_endings` (`crlf`, `lf`, `cr`, `mixed`, `none`) and
-`reader` (`strict` or `general`). `meta.parser` is HeLab's parser version (1).
+`reader` (`strict` or `general`), and `stop_line`: the line where the general reader stopped at a token it couldn't
+read, as MATLAB's converter stops (an integer from 1), or `null` when the file was read to its end; layers written
+before HeLab learnt it (A37.1) have no `stop_line`. `meta.parser` is HeLab's parser version (1).
 
 ## TXY layers (`kind` `txy`)
 

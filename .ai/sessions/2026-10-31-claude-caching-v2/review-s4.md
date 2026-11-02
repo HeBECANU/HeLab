@@ -513,3 +513,31 @@ On an export of `48e3656`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
 - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 - Scratch, not committed: SQ-1 (`.ai/temp/assay/test_zz_q50.py`).
+
+## Re-check of SQ-1 (`9be3e12`)
+
+**Open findings: none.** SQ-1 is fixed.
+
+- **The fix.**
+  - `helab_txy.on_read` takes `held` (shot → origin), and leaves out a shot MATLAB's TXY has only when it isn't
+    held from HeLab's: a non-empty origin. Live holds MATLAB's shots with origin `""`, so those keep (a)'s rule.
+  - Live passes `held_origins`, the same mapping it gives `could_take` and `compose`.
+  - Loads pass nothing held, so (a) stands for loads.
+  - A shot held from another HeLab profile is spared too, then converted with the current one. That is the
+    as-built behaviour.
+- **Its test**, `test_a_shot_live_converted_on_read_stays_helabs_when_matlabs_txy_of_it_appears`, is parametrized
+  over the flag. With `helab_txy.py` and `live.py` as they were at `9be3e12^` (that is, `ced04aa`'s rule):
+  - **flag off: failed**;
+  - **flag on: passed**.
+
+  Restored (compared with git): **2 passed**.
+- My SQ-1 scratch (`.ai/temp/assay/test_zz_q50.py`) now reads nothing again, sends no `file_started`, and the
+  shot stays held, as at `ced04aa^`.
+- **Checks.** On an export of `9be3e12`, whose `helab/` and `tests/` equal the floor's `HEAD` `cca4691`:
+  - `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay` on `test_convert_on_read`,
+    `test_txy_loading`, `test_txy_sources`, `test_live_convert`, `test_live_check`, `test_live`, `test_live_io`,
+    `test_live_testdata` and `test_caching_v2_session`: **193 passed, no RERUN.**
+  - `mypy helab/ --strict` (204 files), `mypy tests --strict` (200), `--platform win32`: no issues.
+  - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Stage 4, through `9be3e12`, has no open review findings.

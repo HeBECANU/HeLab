@@ -191,8 +191,9 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   [notes](sessions/2026-10-31-claude-quick-fixes-7/notes.md) §1 (`python3 -I probe.py <scratch folder>`).
   It reports whether `os.link` works and whether `renamex_np(RENAME_EXCL)` refuses an existing name and
   renames onto a new one, then leaves files `a`, `b`, `c` to delete. If neither works, beside conversion
-  on the share from macOS shows Q38.1's warning (decided 2026-11-02: Retry, or write to HeLab's local cache
-  or temp folder; the Converter UX floor) rather than failing with the reason (`c194f37`).
+  on the share from macOS shows Q38.1's warning (decided 2026-11-02; built on the Converter UX floor, landed
+  `ed7bcf9`: Retry, or write to HeLab's cache or temp folder instead) rather than failing with the reason
+  (`c194f37`); M48.2 checks that question.
   Windows PCs are unaffected (`os.rename` refuses an existing name itself).
 
 ## I/O fixes, Plot identity, Caching v2, Quick Fixes 8 (added 2026-10-31, blocks 40–43)
@@ -235,10 +236,36 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   the Cache policy combo, Clear all and the purge naming TXY data and raw pulses, and lowering the budget
   below usage asking from its plan; Make room naming TXY layers by group; right-click "TXY for this folder…"
   and "Cache policy for this folder…" (disabled without a data root), and Folder details' TXY line naming
-  them. Wording for Q47.3.
+  them (Q47.3: wording kept as built). Since block 50 also: the purge rows per kind (TXY data, HeLab's cached
+  raw pulses) and "Everything not used, checked or shown in the last N days" with its question (A47.4);
+  setting a folder to "TXY only" offering to remove HeLab's cached raw pulses, "Your d files aren't touched"
+  (Q50.9); "N converted when loaded" in the row tooltip and Folder details, and "converted from raw" in a
+  plot's TXY line (Q50.7, Q50.8).
 - [ ] **M47.2 A load from the raw layer on the lab share** (S3-2's cost note): time a large shot's load from
   the raw layer against reading its HeLab TXY text over the share. Locally the raw step costs more (0.48 s
   against 0.004 s for a 3.25 MB shot on an M4); its gain should be on a slow share and offline.
+
+**Before store-v4 is switched on in the v0.0.8 PR** (Q50.18, Tony 2026-11-02, about 15 minutes): M44.1 and
+M47.1 on screen, then M47.2 and M42.1 on a lab PC with the switch on (one Live session).
+
+## Converter UX (added 2026-11-03, block 48)
+
+- [ ] **M48.1 TXY and shares on the lab share** (with M38.1): turn on beside for a folder there (the share's
+  warning), Live with auto-convert (the question once), `helab convert --output beside` (the prompt), and
+  Folder details' offer on a share folder without TXY (convert to HeLab's cache; the folder then loads).
+- [ ] **M48.2 Q38.1's question** on a share without hard links (a FAT USB stick shared, or the lab's SMB if
+  M38.1 says so): in Live and in `helab convert`, each choice (Retry, cache, temp, Not now / quit).
+- [ ] **M48.3 A raw file with a garbage line during Live**: the Live line, Folder details and the tooltip
+  name the read stopped early (Q48.1's wording).
+
+## Live Scripts (added 2026-11-03, block 49)
+
+- [ ] **M49.1 Auto-reload with real editors** (VS Code, PyCharm, vim's rename-on-save) on macOS and Windows:
+  one reload per save, plots rerun, nothing reloads while auto-reload is off. On Windows, check that a
+  watched script folder can still be renamed or deleted in Explorer while auto-reload is on
+  (`QFileSystemWatcher` may hold directory handles).
+- [ ] **M49.2 A lab session**: a Live plot of a user script, edited mid-run with a typo, then fixed: the plot
+  keeps following on the old code with the amber line, then takes the fixed code.
 
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 

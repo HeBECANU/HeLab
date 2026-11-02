@@ -26,10 +26,13 @@ How to use it:
   `20260722-tight-trap-1000Hzsampling`, shot 183) lost bytes too (line 465 holds 4 values; 7 hits are
   missing): `tests/test_convert_testdata.py` lists it in `FAULTS` as an archive fault, which must still
   differ (Side's `ffe346c`). A fault in MATLAB's archive, not HeLab.
-- [ ] Beside conversion fails on a file system with neither hard links nor a no-replace rename:
-  `txy.write_atomic` refuses rather than risk replacing a file, and the run stops with the reason (Quick
-  Fixes 7, `c194f37`; Q38.1; M38.1 for the lab share). Q38.1 decided (Tony, 2026-11-02): a warning that
-  offers Retry or writing to HeLab's local cache or temp folder instead; on the Converter UX floor.
+- [ ] **A user script that blocks at import freezes HeLab once** (`input()`, a network call, a long loop at
+  module level): script folders import on the GUI thread, as Load Scripts… always did, and since Live scripts
+  the remembered folders load at every start, after the window shows. A share is never loaded at start, and the
+  loading marker (`<app folder>/scripts-loading.json`) makes the next start skip the folders with an amber line
+  and Reload, so a start that works always follows; a slow cloud folder the mount table calls local (iCloud,
+  Dropbox or OneDrive placeholders) is still loaded. Importing off the GUI thread isn't thought safe (Q49.3,
+  open; Prismo's M3, Live Scripts, 2026-11-03).
 
 - [ ] **A cached dataset over ~2.1 GB can't be saved.** `pack_dataset` (`helab/utils/cache_store.py:459`)
   compresses a whole folder in one Blosc call, and python-blosc 1.11.4 caps a call at 2,147,483,631
@@ -150,7 +153,12 @@ How to use it:
   the `[1]` case on Windows, `agent/ui-polish` CI 41005221588 (same line); `[2]` on Ground CI 41164525298
   (`82c9db3`, Windows Tests 1/2, job 124429158185); `[1]` on Ground CI 41374704252 (`0406a1d`, Windows
   Tests 2/2, job 125052359778); `[1]` on `agent/caching-v2` CI 41375836115 (`84ccaeb`, Windows Tests 2/2,
-  job 125055805809). A candidate: 3 s under load.
+  job 125055805809); `[1]` on Ground CI 41443833629 (`a0bc26d`, Windows Tests 2/2, job 125272121356);
+  `[1]` on `agent/caching-v2` CI 41446828628 (`4c7199d`, Windows Tests 2/2, job 125282060253) and CI
+  41459782803 (`fa7884f`, Windows Tests 1/2, job 125325725282). A candidate: 3 s under load. Quick Fixes 9's
+  guess (not checked): an earlier test's helper start entering this test's process-wide `Popen` fake, which
+  A46.1 (`6fa8cd9`, `this_tests`) would stop; all three sightings above ran without A46.1, so keep it open
+  until CI runs with it say.
 - [ ] `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-CountsPerShot]`: an
   xdist worker crashed on Windows CI run 40803552596; passed on retry (no traceback; look for a
   faulthandler dump). Again: the Plotly case on `agent/byte-units` CI 40865344851 (job 123418722344,
@@ -245,16 +253,25 @@ How to use it:
   their own job, after which macOS tests took 4–11 min again. The other three: cause not found.
   For `test_another_library…`, also in the 2026-10-28 run below, a slow runner building
   matplotlib's font cache is likely.
-- [ ] **A quit test leaves its `GUIWatchdog` running** (a log line, never a failure): `HelabMainWindow.closeEvent`
-  stops the watchdog only on its full path; it returns early when a close waits for saves (`_wait_for_saves`
-  opens `QuitSaveDialog`) or a quit dialog is open, and `qtbot.addWidget`'s close at teardown doesn't stop it
-  either. The worker, idle at the end of its run, then logs `ERROR:root:GUI stalled for 62.74s; capturing
-  thread stacks` (`gui_watchdog.py:40`). Seen in a local full run on `agent/caching-v2` (2026-11-02; the
-  faulthandler dump showed the main thread idle in execnet beside a live `GUIWatchdog` thread) and 4 times on
-  `agent/caching-v2` CI 41393351958 (`28d5844`: Windows Tests 1/2 twice, Windows 2/2 and Ubuntu 2/2 once).
-  Likely `tests/test_quit_confirms.py` or `tests/test_txy_last_used_quit.py` (not pinned: neither reproduces
-  alone). Fix: A47.3 (finish or cancel the dialog in those tests, or stop the watchdog when the window is
-  destroyed). Vault's handoff, step 3.
+- [ ] `test_live_testdata.py::test_convert_watch_converts_a_run_as_it_arrives`: the watcher stopped converting,
+  pytest-timeout's "Timeout (0:01:40)" dump showing the test in `wait_for` (line 240) waiting for `helab convert
+  --watch` to convert a shot, then the worker died ("node down: Not properly terminated"), on Windows CI
+  41459782803 (`agent/caching-v2` `fa7884f`, Tests 1/2, job 125325725282); passed on retry. It takes 6–10 s in
+  every other run read that night (15 runs on three OSes); caching v2's stage 3 can't reach it (the watcher runs
+  `convert_cli` and `io_ops/convert.py` in store-v3, which import nothing stage 3 changed). Cause not found: the
+  watcher's log isn't kept when the worker is killed. Next step: fail `wait_for` with the watcher's log before
+  pytest-timeout (Vault's handoff, 2026-11-03).
+- [ ] `test_left_widgets.py::test_a_teardown_that_raises_still_deletes_the_web_views`: line 80's `assert "3
+  passed, 2 errors"` failed because the inner run printed `.E.E.E` (its third test, `test_after_it`, also errored
+  at teardown), on Ubuntu CI 41459782803 (`agent/caching-v2` `fa7884f`, Tests 2/2, job 125325725389); passed on
+  retry; the rerun reasons cut the rest of its output. The inner run is PyQt6 QtWebEngine views and the test
+  conftest only, no HeLab I/O. Likely the QtWebEngine teardown flakiness of the "QtWebEngine crashes xdist
+  workers" entry; not pinned (Vault's handoff, 2026-11-03).
+- [ ] `test_dash_server.py::test_stop_frees_the_port`: `assert 56278 == 56276`, once in a local full run on the
+  Live Scripts floor (2026-11-03, other floors' suites running on the same Mac); passed on rerun. `free_port()`
+  picks a port and the server binds it later, so another process can take it in between and the server falls
+  back to the next free port (earlier sessions saw it too: 2026-10-20, -21, -22). Fix: bind and hand the open
+  socket over, or retry with a new port when `start()` returns another (Live Scripts' A~6).
 - [ ] `test_live_io.py::test_a_live_check_pauses_background_work_only_while_it_reads`: `waitUntil` timed out
   (10 s) at line 136, once in a local full run under a load average of ~37 (Ground, Quick Fixes 9, 2026-11-02,
   before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into.
@@ -289,6 +306,42 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
+
+- [x] **A quit test leaves its `GUIWatchdog` running** (a log line, never a failure): `HelabMainWindow.closeEvent`
+  stops the watchdog only on its full path; it returns early when a close waits for saves (`_wait_for_saves`
+  opens `QuitSaveDialog`) or a quit dialog is open, and `qtbot.addWidget`'s close at teardown doesn't stop it
+  either. The worker, idle at the end of its run, then logs `ERROR:root:GUI stalled for 62.74s; capturing
+  thread stacks` (`gui_watchdog.py:40`). Seen in a local full run on `agent/caching-v2` (2026-11-02; the
+  faulthandler dump showed the main thread idle in execnet beside a live `GUIWatchdog` thread) and 4 times on
+  `agent/caching-v2` CI 41393351958 (`28d5844`: Windows Tests 1/2 twice, Windows 2/2 and Ubuntu 2/2 once).
+  Likely `tests/test_quit_confirms.py` or `tests/test_txy_last_used_quit.py` (not pinned: neither reproduces
+  alone). Fix: A47.3 (finish or cancel the dialog in those tests, or stop the watchdog when the window is
+  destroyed). Vault's handoff, step 3.
+  **Fixed** (`36b2224`, A47.3, Quick Fixes 9): `_watch` ends once its QObject is deleted, so a window deleted
+  without its full close takes the thread with it (`tests/test_gui_watchdog.py`). The "GUI stalled" lines still
+  seen on Windows CI were then named (`1bc8020`: the line names its window and, under pytest, the test that made
+  it and the test running now): in CI 41449699791 and 41455114540 every line's window was made in the test running
+  then (the accessible-names walk, up to 27.8 s; the Debug runner's tests; a preset Live test), so these are tests
+  blocking the GUI thread with their own window, not a leak; lines that seemed to fire during converter tests were
+  another worker's output interleaved in the log ([testing](../.ai/architecture/testing.md)).
+- [x] `test_io_service_run.py::test_a_helper_still_starting_when_helab_quits_is_stopped` (A40.1's guard test):
+  `TimeoutExpired` after 10 s at :162, `agent/caching-v2` CI 41451159277 (Windows Tests 2/2, job 125296521261);
+  passed on rerun. Its `Popen` fake took any `HeLab-*` thread, so another IOService's helper start meanwhile
+  entered it and could be `started[0]`, which the test never kills (`this_tests` wouldn't help: that thread starts
+  after the patch). **Fixed** (`d480a82`, Quick Fixes 9): the fake takes only this request's start, known by its
+  stderr file in the request's folder (`IOService.before_start`); the repro case kept. CI 41455114540: no RERUN.
+- [x] `test_io_trace.py::test_the_gui_process_never_touches_source_folders`: `waitUntil timed out in 20000
+  milliseconds` at :259, inside `wait_idle` (not the invariant's assertion, which comes after), on Windows CI
+  41456480233 (`agent/caching-v2` `2247b69`, Tests 2/2, job 125314458602) and 41457940413 (`agent/converter-ux`
+  `baf7a1c`, Tests 2/2, job 125319510384; the first attempt 34 s, the rerun 8 s); each passed on rerun. Neither
+  branch reaches it (the test runs with store-v3 and builds no Folder details panel); the test takes 9–18.5 s on
+  Windows runners (3.4 s locally), near its 20 s wait. **Fixed** (`ee4994b`, Quick Fixes 9): its five helper waits
+  share `HELPERS_MS` = 60 s; other tests' `wait_idle` keep 20 s; the assertions are unchanged.
+- [x] Beside conversion failed on a file system with neither hard links nor a no-replace rename:
+  `txy.write_atomic` refuses rather than risk replacing a file, and the run stopped with the reason (Quick
+  Fixes 7, `c194f37`; Q38.1). **Fixed** as Tony decided (Converter UX, landed `ed7bcf9`): the helper sends
+  `beside_refused`, and the app and `helab convert` ask Retry, or write to HeLab's cache or temp folder
+  instead, never silently. The lab share itself is M38.1 and M48.2.
 
 - [x] `test_typing.py::test_pyright_helab` and `test_accessible_names.py::test_every_script_and_each_library`
   passed pytest-timeout's 120 s on a slow macOS runner: `agent/caching-v2` CI 41389534725 (`93a938b`, macOS

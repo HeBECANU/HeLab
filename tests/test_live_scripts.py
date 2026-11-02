@@ -86,9 +86,14 @@ def no_marker() -> Iterator[None]:
     remove()
 
 
+# A compute that says it started, then blocks until the test opens its gate (ignoring cancellation).
+BLOCKS = "{helper}.STARTED.set()\n        {helper}.GATE.wait(30)\n        "
+
+
 def write_script(folder_: Path, helper: str, tag: str, *, specs: str = SPECS, name: str = "Live",
                  version: str = "1", wait: str = "") -> None:
-    (folder_ / f"{helper}.py").write_text(f"import threading\nTAG = {tag!r}\nGATE = threading.Event()\n")
+    (folder_ / f"{helper}.py").write_text(f"import threading\nTAG = {tag!r}\nGATE = threading.Event()\n"
+                                         "STARTED = threading.Event()\n")
     (folder_ / "live.py").write_text(SCRIPT.format(helper=helper, specs=specs, name=name, version=version,
                                                    wait=wait))
 
@@ -186,14 +191,16 @@ def test_a_reload_waits_for_a_run_of_its_scripts_on_the_worker_thread(
     """CoCo: a reload never runs while a compute of that script is on the worker thread; this one
     ignores cancellation, so the reload waits until its compute returns."""
     window = new_window(qtbot, cache, windows)
-    write_script(tmp_path, "lab_live_d", "old", wait="lab_live_d.GATE.wait(30)\n        ")
+    write_script(tmp_path, "lab_live_d", "old", wait=BLOCKS.format(helper="lab_live_d"))
     window.scripts.add_folder(str(tmp_path))
-    gate = sys.modules["lab_live_d"].GATE
+    gate, started = sys.modules["lab_live_d"].GATE, sys.modules["lab_live_d"].STARTED
     gate.set()
     instance = open_plot(qtbot, window, cache)
     gate.clear()
+    started.clear()
     instance.run()
-    qtbot.waitUntil(lambda: bool(instance.runner.in_flight()), timeout=10_000)
+    # Its compute has started on the worker (queued only, the cancel would end it before it runs).
+    qtbot.waitUntil(started.is_set, timeout=10_000)
     old_class = type(instance.script)
     write_script(tmp_path, "lab_live_d", "new")
     window.scripts.reload_scripts()
@@ -400,14 +407,15 @@ def test_removing_the_folder_a_reload_waits_for_ends_the_wait(
         qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
     """L2: "Reload (waiting)" ends when the folder it waits for is removed from the list."""
     window = new_window(qtbot, cache, windows)
-    write_script(tmp_path, "lab_live_k", "old", wait="lab_live_k.GATE.wait(30)\n        ")
+    write_script(tmp_path, "lab_live_k", "old", wait=BLOCKS.format(helper="lab_live_k"))
     window.scripts.add_folder(str(tmp_path))
-    gate = sys.modules["lab_live_k"].GATE
+    gate, started = sys.modules["lab_live_k"].GATE, sys.modules["lab_live_k"].STARTED
     gate.set()
     instance = open_plot(qtbot, window, cache)
     gate.clear()
+    started.clear()
     instance.run()
-    qtbot.waitUntil(lambda: bool(instance.runner.in_flight()), timeout=10_000)
+    qtbot.waitUntil(started.is_set, timeout=10_000)  # (Computing, not only queued.)
     window.scripts.reload_scripts()
     assert window.scripts.reload_button.text() == "Reload (waiting)"
     window.scripts.remove_folder(str(tmp_path))

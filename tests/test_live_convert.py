@@ -553,8 +553,13 @@ def test_work_offline_refuses_a_conversion(qtbot: QtBot, service: IOService, tmp
         cache.set_offline(False)
 
 
+@pytest.mark.parametrize("due", [False, True], ids=["as it comes", "a Live check comes due while offline"])
 def test_a_conversion_refused_offline_stops_auto_convert_and_says_so(
-        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+        qtbot: QtBot, service: IOService, tmp_path: Path, due: bool) -> None:
+    """Going offline with no Live check in flight, its next one (every 20 ms here) could be asked for while
+    offline: refused, its "cancelled" halted Live ("Live stopped: Cancelled", macOS CI 41472779247) before the
+    conversion's own refusal was said. So the next check is queued first; it stays (dispatch is frozen here),
+    and Live asks for none meanwhile (``due``: its tick runs while offline)."""
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache = explorer.model.cache
     cycle(qtbot, explorer, path, tmp_path)
@@ -563,8 +568,11 @@ def test_a_conversion_refused_offline_stops_auto_convert_and_says_so(
     assert session is not None and session.convert is not None
     cache.cancel(explorer.live_owner, "convert", path)  # (Cancelled by someone else: tried again next tick.)
     assert not session.convert.request and not session.convert.error
+    next_request(qtbot, explorer, path)  # Live's next check, queued before going offline.
     service.offline = True  # (As if offline came first; the window turns Live off then.)
     try:
+        if due:
+            explorer.live_control._live_tick()  # (As its timer can: a check in flight, it asks for none.)
         session.convert.ended_at = -1e9
         explorer.live_control._convert_tick(session)
         qtbot.waitUntil(lambda: bool(session.convert and session.convert.error))

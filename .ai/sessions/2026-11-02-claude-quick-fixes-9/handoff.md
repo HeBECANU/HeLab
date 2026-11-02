@@ -295,3 +295,68 @@ The run's results follow, every Tests and Converter backends job's log read for 
 - **Checks.** Full suite 8946 passed, no RERUN; the five type checks pass.
 - **Known-issues proposal:** add it as Fixed. "`test_io_trace.py::test_the_gui_process_never_touches_source_folders`:
   a 20 s wait for idle helpers on Windows CI (41456480233, Tests 2/2); its helper waits are 60 s now."
+
+### Run 41460607344 (`daed254`): success, all 12 job logs read
+
+- **No RERUN and no crashed worker.**
+  - Tests: windows 1/2 4448, 2/2 4462; macos 4465, 4481; ubuntu 4461, 4482.
+  - Converter backends: 847 / 849 / 849.
+  - A39.1 passed on all three builds.
+- **`test_the_gui_process_never_touches_source_folders` took 12 s on Windows 2/2.**
+- **That job took 24 min 40 s (usually 10–13).** No single test explains it.
+  - The longest test was 94 s (`test_analysis_gui`'s other-library one), then the type checks (43–71 s).
+  - The longest gap between two results was 18 s.
+  - So it was a slow runner, not a hang.
+
+## The cancelled Ubuntu job (CI 41468043383 attempt 1, agent/live-scripts 74b79b3): hunted, not pinned
+
+- **What happened** (job 125354149828, `Tests (1/2)`, cancelled at 20 min):
+  - **gw0:** `test_cache_admin.py::test_failed_listing_history_write_keeps_the_listing_guard` failed 6
+    times, from 15:08:18 to 15:08:45, about 5 s an attempt and the last 0.2 s. In the green attempt 2 it
+    took 0.4 s. gw0 then passed 457 tests normally.
+  - **gw1, from 15:08:52:** every remaining test failed 6 times at about 35 s an attempt, with teardown
+    ERRORs too. Those tests were `test_result_cache_badge`'s save test and `test_result_cache_plots`'
+    outdated `[script]`/`[data]`, `ends_unshown[cancelled]` and `live_reruns_are_never_saved`.
+    - Each attempt is their `WAIT = 30_000` for a save that never completed. In attempt 2 each takes
+      0.3–1.4 s.
+    - gw2 and gw3 had finished by about 15:10, so gw1's tail ran the job into its limit.
+  - **43 RERUN lines and no reason.** The summary (`rerun reasons`), tracebacks and junit.xml come only
+    when pytest ends.
+- **Tried:**
+  - the guard test alone, 15 of 15 passed;
+  - gw0's exact order (110 tests) and gw1's (915 tests, from the log, mapped to Ground's IDs), replayed in
+    one process with `pytest.main` and no xdist: both pass;
+  - the log searched for disk-full, memory, OOM and file-limit messages: none.
+- **What it looks like:** helper subprocesses on that runner getting nothing done from about 15:08. Both
+  workers turned within 34 s; gw0's one test recovered, while every test left on gw1 needed a helper's
+  save. Not proven: the run kept no reason.
+- **Diagnostic so the next one names itself (`1ca5baa`).** conftest writes `RERUN REASON <test>
+  (<phase>):` or `FAILED REASON …` live, on the controller's terminal, with the same lines as the
+  summary. A cancelled job now keeps them.
+- **Known-issues proposal (open):** "Ubuntu CI 41468043383 attempt 1: from 15:08, helper-dependent tests
+  timed out on gw0 (`test_failed_listing_history_write_keeps_the_listing_guard`, ×6, ~5 s each) and gw1
+  (`test_result_cache_*` saves, 30 s waits, ×6 each) until the job's 20-min cancel. No reason kept;
+  neither worker's order reproduces it. Live reasons since `1ca5baa`."
+- **A~ proposals.**
+  - **A~4: `--session-timeout` in CI.** pytest-timeout 2.4 has it. Set it a little under each job's limit
+    (e.g. 17 min for a 20-min job) so pytest ends itself and still prints its summary and writes
+    junit.xml, instead of being killed.
+  - **A~5: upload junit.xml `if: always()`.** Only useful with A~4: on a killed job the file doesn't exist,
+    since pytest writes it at the end.
+
+## test_live_convert's offline test: fixed (d03c0c6; Vault's reading)
+
+- **The RERUN** (caching-v2 CI 41472779247, macOS Tests 2/2):
+  `test_a_conversion_refused_offline_stops_auto_convert_and_says_so`, "assert 'auto-convert stopped: not
+  while working offline' in 'Live stopped: Cancelled'" at :575.
+- **Cause.** Live checks every 20 ms here. With no check in flight, its tick submits one; while the test
+  is offline that check is refused, and its "cancelled" halts Live first.
+- **Fix, in the test.** Live's next check is queued before going offline (`next_request`). With dispatch
+  frozen it stays in flight, so Live asks for none while offline.
+- **Repro case kept** ("a Live check comes due while offline": Live's tick runs while offline). With the old
+  flow it fails with CI's exact message; now it passes.
+- **Checks.** Full suite 9133 passed, no RERUN; the five type checks pass.
+- **Known-issues proposal:** add it as Fixed. "A Live check asked for while the test was offline was
+  refused and halted Live (CI 41472779247); the test queues Live's next check before going offline
+  (d03c0c6)."
+- **Test file touched:** `tests/test_live_convert.py`.
