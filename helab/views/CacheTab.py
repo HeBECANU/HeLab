@@ -42,15 +42,21 @@ POLICY_LABELS = (("raw+used", "Raw + what you load (default)"), ("raw", "Raw onl
                  ("txy", "TXY only (no raw)"))
 
 
-def remove_raw_following_text(raw: Mapping[str, Any]) -> str:
+def remove_raw_following_text(following: Mapping[str, Any]) -> str:
     """S4~1's question for Settings' policy (Tony's wording, 2026-11-02): every folder that follows it now keeps
-    no raw pulses; remove HeLab's cached copy of theirs?"""
-    only = int(raw.get("only_copy") or 0)
+    no raw pulses; remove HeLab's cached copy of theirs? ``following``: the inventory's ``raw.following``, what
+    ``remove_raw_following`` removes (S4-1)."""
+    only = int(following.get("only_copy") or 0)
+    folders = int(following.get("folders") or 0)
     return ("Folders that follow this setting keep no raw pulses from now on. Also remove HeLab's cached copy of "
-            f"their raw pulses (up to {byte_size(int(raw.get('bytes') or 0), 'disk')})? Your d files aren't "
-            "touched. Folders with their own cache policy keep theirs."
-            + (f"\n\nUp to {only:,} shots' raw pulses are the only copy: their raw files are gone from their "
+            f"their raw pulses ({plural(folders, 'folder')}, {byte_size(int(following.get('bytes') or 0), 'disk')})? "
+            "Your d files aren't touched. Folders with their own cache policy keep theirs."
+            + (f"\n\nRaw pulses of {plural(only, 'shot')} are the only copy: their raw files are gone from their "
                "folders, so they can't be read again." if only else ""))
+
+
+# What Settings says when it couldn't offer that (S4-3: busy, or the cache not checked yet).
+RAW_KEPT_MESSAGE = "Cached raw pulses kept: Clear raw pulses removes them"
 
 
 def _only_copies(txy: Mapping[str, Any] | None, raw: Mapping[str, Any] | None) -> str:
@@ -1125,10 +1131,15 @@ class CacheTab(QWidget):
             settings.setValue(CACHE_POLICY_SETTING, policy)
             folder_cache.set_cache_policy(policy)  # (Sent with the next store-v4 request.)
             raw = (self.inventory or {}).get("raw")
-            if policy == "txy" and before != "txy" and raw and int(raw.get("count") or 0) and not self.busy:
+            following = (raw or {}).get("following") or {}
+            if policy == "txy" and before != "txy":
                 # S4~1 (Tony, 2026-11-02): nothing is removed unasked; offer the raw pulses of the folders that
-                # follow this setting (those with their own policy keep theirs).
-                if self.confirm("TXY only", remove_raw_following_text(raw), "Remove"):
+                # follow this setting (those with their own policy keep theirs), sized as the removal (S4-1).
+                if self.inventory is None or self.busy:
+                    self.message = RAW_KEPT_MESSAGE  # (S4-3: not offered now; said, not skipped silently.)
+                    self._update()
+                elif int(following.get("count") or 0) and self.confirm(
+                        "TXY only", remove_raw_following_text(following), "Remove"):
                     self._run("Remove cached raw pulses", "clear_raw", following=True)
         # Never a value the store hasn't recorded (e.g. edited while it was recording another).
         settings.setValue(DISK_BUDGET_SETTING,

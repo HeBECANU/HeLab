@@ -3088,6 +3088,9 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return RawRemoval(tuple(self._source_path(key) for key in keys), count, size)
 
+    # (``remove_raw_following``'s rows, and its question's estimate: one condition for both, S4-1.)
+    _FOLLOWING = " WHERE path NOT IN (SELECT path FROM cache_policy WHERE policy != '')"
+
     def remove_raw_following(self) -> RawRemoval:
         """S4~1 for the global policy (the user asked, after Settings › Cache's TXY only): the raw pulses of every
         folder that follows Settings' policy (none of its own), each folder's ``raw:`` epoch bumped as
@@ -3098,8 +3101,7 @@ class CacheStore:
         try:
             with self.transaction():
                 keys = [str(key) for (key,) in self._conn.execute(
-                    "SELECT DISTINCT path FROM raw_layers WHERE path NOT IN "
-                    "(SELECT path FROM cache_policy WHERE policy != '')")]
+                    f"SELECT DISTINCT path FROM raw_layers{self._FOLLOWING}")]
                 for key in keys:
                     self._conn.execute("INSERT INTO folder_epochs (path, epoch) VALUES (?, 1) ON CONFLICT (path) "
                                        "DO UPDATE SET epoch = epoch + 1", (_raw_epoch(key),))
@@ -3118,8 +3120,14 @@ class CacheStore:
             "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COUNT(DISTINCT path), MAX(last_used) FROM raw_layers").fetchone()
         only, only_bytes = self._conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM raw_layers WHERE gone_at IS NOT NULL").fetchone()
+        # What Settings' TXY only would remove (``remove_raw_following``, by its own condition: S4-1).
+        f_count, f_size, f_folders, f_only = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(bytes), 0), COUNT(DISTINCT path), COALESCE(SUM(gone_at IS NOT NULL), 0) "
+            f"FROM raw_layers{self._FOLLOWING}").fetchone()
         return {"count": int(count), "bytes": int(size), "folders": int(folders), "only_copy": int(only),
-                "only_copy_bytes": int(only_bytes), "last_used": None if last is None else float(last)}
+                "only_copy_bytes": int(only_bytes), "last_used": None if last is None else float(last),
+                "following": {"count": int(f_count), "bytes": int(f_size), "folders": int(f_folders),
+                              "only_copy": int(f_only)}}
 
     def _raw_live(self) -> int:
         if self.layout < store_v4.LAYOUT:
