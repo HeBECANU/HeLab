@@ -17,7 +17,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
 from helab.convert.raw import ReadStop
-from helab.utils import app_log, events
+from helab.utils import app_log, cache_location, events
 from helab.utils import folder_cache
 from helab.utils import txy_sources
 from helab.utils.folder_cache import Dataset, FolderCache
@@ -25,7 +25,7 @@ from helab.utils.io_service import IORequest
 from helab.utils.settings_defaults import CONVERT_LOW_HITS_SETTING, read_setting, setting_default
 from helab.utils.settings_store import app_settings
 from helab.utils.time_format import relative_age
-from helab.views import live_launch
+from helab.views import explorer_convert, live_launch
 from helab.views.explorer_text import large_text, plural
 
 if TYPE_CHECKING:
@@ -108,6 +108,10 @@ class AutoConvert:
     damaged: set[str] = field(default_factory=set)
     kept: dict[int, str] = field(default_factory=dict)
     error: str = ""  # Why conversions stopped (Retry, or auto-convert off and on, starts them again).
+    # A beside write refused for want of a safe rename (Q38.1), until answered; and the user's choice then, or
+    # on a share (A39.5): HeLab's cache or temp folder instead of beside, for this session's auto-convert.
+    refused: str = ""
+    destination: str | None = None
 
     def stuck(self) -> dict[str, tuple[str, str]]:
         """Files waiting for more than being written: no final newline, off the trigger channel,
@@ -211,6 +215,8 @@ class LiveController:
         # Shots Live read again, by folder: the note and when (monotonic), shown for a minute
         # (``live_reread_note``), also after Live stops and its session ends.
         self._reread_notes: dict[str, tuple[str, float]] = {}
+        # The open converter question (A39.5's share warning, Q38.1's choice): one at a time, never modal.
+        self.box: QMessageBox | None = None
         self._live_timer = QTimer(explorer)
         self._live_timer.setSingleShot(True)
         self._live_timer.timeout.connect(self._live_tick)
@@ -335,7 +341,7 @@ class LiveController:
         if session is None:
             return
         if session.convert is not None and session.convert.error:
-            session.convert.error = ""
+            session.convert.error = session.convert.refused = ""
             if not session.error:
                 if not session.request:
                     self._live_next(0.0)
@@ -743,7 +749,12 @@ class LiveController:
     def _set_write_beside(self, path: str, on: bool) -> None:
         explorer = self.explorer
         name = os.path.basename(path.rstrip(os.sep)) or path
-        if on and QMessageBox.question(
+        share = cache_location.share_of(path) if on else ""
+        if share:  # (A39.5: on a share, its warning instead; yes confirms the folder for this session.)
+            if not explorer_convert.confirm_beside_on_share(explorer, path, share):
+                self._live_changed()
+                return
+        elif on and QMessageBox.question(
                 explorer, "Write TXY beside the raw files?",
                 f"HeLab will write its converted TXY files (d_txy_helab_<tag>_<N>.txt) into {name} itself, beside the raw "
                 "files, for every shot it converts from now on. It writes nothing else there and never replaces "
@@ -783,14 +794,57 @@ class LiveController:
         conversions found it unchanged, so they must be that far apart)."""
         convert = session.convert
         cache = self.explorer.model.cache
-        if (convert is None or convert.request or convert.error
+        if (convert is None or convert.request or convert.error or self.box is not None
                 or time.monotonic() - convert.ended_at < cache.live_interval):
             return
-        if not cache.convert(self.explorer.live_owner, session.path):
+        if convert.destination is None and cache.write_beside(session.path) and (
+                share := explorer_convert.share_to_confirm(session.path)):
+            # A39.5: beside the raw files on a share, asked once per folder this session; nothing converts meanwhile.
+            path = session.path
+            self.box = explorer_convert.ask_live_beside_on_share(
+                self.explorer, path, share, lambda choice: self._share_answered(path, choice))
+            return
+        if not cache.convert(self.explorer.live_owner, session.path, destination=convert.destination,
+                             beside=None if convert.destination is None else False):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
             return
         convert.request, convert.todo, convert.done = True, 0, 0
+
+    def _share_answered(self, path: str, choice: str) -> None:
+        """Live's auto-convert beside the raw files on a share (A39.5): beside (confirmed this session), HeLab's
+        cache folder instead (this session), or auto-convert off."""
+        self.box = None
+        session = self.live
+        if session is None or session.path != path or session.convert is None:
+            return
+        logging.info("Live auto-convert on the share of %s: %s", path, choice)
+        if choice == "beside":
+            explorer_convert.confirm_share(path)
+        elif choice == "cache":
+            session.convert.destination = "cache"
+        else:
+            self.set_auto_convert(False)
+            return
+        self._convert_tick(session)
+        self._live_changed()
+
+    def _refusal_answered(self, path: str, choice: str) -> None:
+        """Q38.1: after a refused beside write, Retry, or HeLab's cache or temp folder for this session's
+        auto-convert; Not now leaves it stopped (Retry on the Live line)."""
+        self.box = None
+        session = self.live
+        if session is None or session.path != path or session.convert is None:
+            return
+        convert = session.convert
+        logging.info("Live auto-convert after a refused beside write in %s: %s", path, choice)
+        if choice not in ("retry", "cache", "temp"):
+            return
+        if choice != "retry":
+            convert.destination = choice
+        convert.error = convert.refused = ""
+        self._convert_tick(session)
+        self._live_changed()
 
     def _convert_event(self, session: LiveSession, event: dict[str, Any]) -> None:
         """A conversion's events (``io_ops.events``: the converter's kinds)."""
@@ -824,6 +878,10 @@ class LiveController:
                 self._notify_damaged(session, event)
         elif kind == "shot_kept":
             convert.kept[int(event["shot"])] = str(event["reason"])
+        elif kind == "beside_refused":
+            convert.refused = str(event["message"])
+            logging.warning("Live auto-convert: %s in %s not written beside: %s", event["txy"], session.path,
+                            convert.refused)
         elif kind == "partial_removed":
             logging.info("Live auto-convert removed a leftover temporary TXY: %s", event["file"])
         elif kind == "convert_summary":
@@ -854,6 +912,11 @@ class LiveController:
                 convert.todo = convert.done = 0
             if convert.error and kind != "cancelled":
                 logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
+            if kind == "error" and convert.refused and self.box is None:
+                # Q38.1: never a silent refusal nor a silent fallback: the user chooses.
+                path = session.path
+                self.box = explorer_convert.ask_after_refusal(
+                    self.explorer, path, convert.refused, lambda choice: self._refusal_answered(path, choice))
         else:
             return
         self.explorer._update_activity()
@@ -980,8 +1043,13 @@ class LiveController:
                              + (" …" if len(entries) > 8 else ""))
         if convert.stuck():
             lines.append("A waiting file is checked again only when it changes.")
+        if convert.destination is not None:
+            lines.append(f"This session: TXY go to {explorer_convert.WHERE[convert.destination]} instead of beside the "
+                         "raw files (the folder's beside setting stays)")
         if convert.error:
-            lines.append(f"Auto-convert stopped: {convert.error}. Retry converts again.")
+            lines.append(f"Auto-convert stopped: {convert.error}. Retry converts again"
+                         + (" (or turn the folder's beside setting off to convert into HeLab's folder)."
+                            if convert.refused else "."))
         return text, lines, bool(convert.error or empty_text or convert.stopped)
 
     def live_line(self, session: LiveSession) -> tuple[str, str, bool]:

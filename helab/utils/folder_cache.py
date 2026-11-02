@@ -1374,13 +1374,16 @@ class FolderCache(QObject):
         if self.write_beside(path) != before:
             self.folderPrefsChanged.emit(path)
 
-    def convert(self, owner: str, path: str) -> bool:
+    def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
         background lane, pausable, refused while working offline: answered ``offline``). Sends
         the folder's last conversion's lists back (``seen``, ``done``, ``kept``, ``skip``; ``seen``
         is ``[]`` for its first this session, which only records), so done shots aren't checked
         again and a file is taken as finished only after two conversions saw it unchanged. One
-        conversion per folder at a time (a second asker joins it). Whether it was accepted."""
+        conversion per folder at a time (a second asker joins it). Whether it was accepted.
+        ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` False the folder's
+        flag, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a refused
+        beside write); None: as set."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
@@ -1391,8 +1394,9 @@ class FolderCache(QObject):
                                    "cache": store_options(),
                                    # (The setting, cache or temp: ``destination``, since every helper's
                                    # ``output`` is its private folder, set by IOService.)
-                                   "destination": constants.read_convert_output(settings),
-                                   "beside": self.write_beside(path), "seen": []}
+                                   "destination": destination or constants.read_convert_output(settings),
+                                   "beside": self.write_beside(path) if beside is None else beside and self.write_beside(path),
+                                   "seen": []}
         lists = self.convert_lists.get(path)
         if lists is not None:
             if lists["profile"] == profile:

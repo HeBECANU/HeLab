@@ -5,6 +5,7 @@ import math
 import os
 import time
 from datetime import datetime
+import weakref
 from typing import Any, Mapping
 
 from PyQt6.QtCore import QEvent, QObject, QRectF, Qt, QTimer, pyqtSignal
@@ -105,7 +106,7 @@ class FolderDetailsPanel(QScrollArea):
 
     ROWS = (("folder", "Folder"), ("state", "State"), ("files", "Files"), ("txy", "TXY"), ("time", "Time"),
             ("rate", "Rate"), ("data", "Data"), ("loaded", "Loaded"), ("source", "Source"), ("cache", "Disk cache"),
-            ("convert", "Auto-convert"), ("errors", "Problems"),
+            ("convert", "Auto-convert"), ("offer", "Convert"), ("errors", "Problems"),
             ("tab", "This tab"), ("io", "All I/O"))
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -152,6 +153,9 @@ class FolderDetailsPanel(QScrollArea):
         self.values["io"].installEventFilter(self)
         self._review_root: str | None = None
         self.values["cache"].installEventFilter(self)
+        # Clicking the Convert row (A39.5) asks how to convert the folder: (the tab, as a weak reference; its path).
+        self._convert: tuple[weakref.ref[FolderExplorer], str] | None = None
+        self.values["offer"].installEventFilter(self)
         layout.addLayout(grid)
         layout.addStretch(1)
         self.setWidget(body)
@@ -180,6 +184,13 @@ class FolderDetailsPanel(QScrollArea):
                 and self._review_root is not None):
             self.reviewRootRequested.emit(self._review_root)
             return True
+        if (a0 is self.values["offer"] and isinstance(a1, QMouseEvent)
+                and a1.type() == QEvent.Type.MouseButtonRelease and a1.button() == Qt.MouseButton.LeftButton
+                and self._convert is not None):
+            explorer = self._convert[0]()
+            if explorer is not None and not explorer.closed:
+                explorer.converter.clicked(self._convert[1])
+            return True
         return super().eventFilter(a0, a1)
 
     def text(self, key: str) -> str:
@@ -196,10 +207,16 @@ class FolderDetailsPanel(QScrollArea):
         cursor = Qt.CursorShape.PointingHandCursor if pending is not None else Qt.CursorShape.ArrowCursor
         if self.values["cache"].cursor().shape() != cursor:
             self.values["cache"].setCursor(cursor)
+        self._convert = None
         if explorer is None:
             rows["state"] = ("Select a data folder", "")
         else:
             rows.update(self._folder_rows(explorer))
+            path = explorer.selected_path_globally
+            offer = explorer.converter.row(path) if path else None
+            if offer is not None:
+                rows["offer"] = offer
+                self._convert = (weakref.ref(explorer), path)
             overwritten = self._raw_overwritten_row(explorer, rows["errors"])
             if overwritten is not None:
                 rows["errors"] = overwritten
@@ -217,6 +234,10 @@ class FolderDetailsPanel(QScrollArea):
         cursor = Qt.CursorShape.PointingHandCursor if self._reveal else Qt.CursorShape.ArrowCursor
         if io.cursor().shape() != cursor:
             io.setCursor(cursor)
+        convert_label = self.values["offer"]
+        cursor = Qt.CursorShape.PointingHandCursor if self._convert else Qt.CursorShape.ArrowCursor
+        if convert_label.cursor().shape() != cursor:
+            convert_label.setCursor(cursor)
         for key, (text, tooltip) in rows.items():
             self.set_row(key, text, tooltip)
         # A large folder's state is amber, as on the summary line.
