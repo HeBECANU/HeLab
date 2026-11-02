@@ -271,6 +271,8 @@ run at `db6b32e` (41484513530) reran it on windows Tests (3/3), and dev fixed it
 other job: **0 RERUN** (macOS Tests 3,113 + 3,029 + 3,015 and Converter backends 867; Ubuntu 3,112 + 3,027 +
 3,015 and 867; Windows 3,105 + 3,012). Merged `dev/v0.0.8` again (`1e06fc2`, with both fixes): the full suite **9163 passed, 673 skipped, 2 warnings (the known pyqtgraph one) in 175.43s; no RERUN**, the five type checks clean; pushed.
 
+CI **41492681998** (at `82502cc`): **success**, every job. Each Tests and Converter backends job's log was read: **0 RERUN** (macOS 3,117 + 3,029 + 3,017 and 867; Ubuntu 3,116 + 3,027 + 3,017 and 867; Windows 3,109 + 3,012 + 3,007 and 865 passed). This line's commit is local only.
+
 ## Questions for Tony (provisional)
 
 - **Q~1** The wording: Live line and Folder details `d3.txt read stopped at line 1010` (one) / `3 reads
