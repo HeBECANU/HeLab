@@ -70,6 +70,7 @@ if TYPE_CHECKING:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    _CONFIG[:] = [config]
     config.addinivalue_line("markers", "no_auto_data_root: test the RAM-only or explicit marker path")
     group_option(config.getoption("test_group"))  # (a bad --test-group stops the run before collecting)
     # The folders HeLab resolved must be this process's private ones, never the real app's.
@@ -133,14 +134,37 @@ def pytest_runtest_makereport(item: pytest.Item,
 
 
 _reruns: list[tuple[str, str]] = []  # (test, why it reran), in this process (the controller under xdist)
+_CONFIG: list[pytest.Config] = []  # (This run's, for its terminal: set in pytest_configure.)
+
+
+def failure_reason(report: pytest.TestReport) -> str:
+    """Why a test failed, in a few lines: its ``E`` lines and where it failed."""
+    text = report.longreprtext.splitlines()
+    lines = [line for line in text if line.startswith("E ")][:6]
+    lines += [line for line in text if re.match(r"\S+\.py:\d+: \w", line)][-1:]  # Where it failed.
+    return "\n".join(lines) or report.longreprtext[-600:]
+
+
+def live_reason(report: pytest.TestReport) -> str | None:
+    """The line written as a test fails or reruns (None for any other report): a CI job cancelled at its time
+    limit never reaches the summary, so its tracebacks and rerun reasons were lost (Ubuntu CI 41468043383,
+    attempt 1: 43 RERUN lines, not one reason)."""
+    outcome = str(report.outcome)  # ("rerun" is pytest-rerunfailures'.)
+    if outcome not in ("rerun", "failed"):
+        return None
+    return f"{outcome.upper()} REASON {report.nodeid} ({report.when}):\n{failure_reason(report)}"
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if report.outcome == "rerun":  # type: ignore[comparison-overlap]  # (pytest-rerunfailures' outcome)
-        text = report.longreprtext.splitlines()
-        lines = [line for line in text if line.startswith("E ")][:6]
-        lines += [line for line in text if re.match(r"\S+\.py:\d+: \w", line)][-1:]  # Where it failed.
-        _reruns.append((report.nodeid, "\n".join(lines) or report.longreprtext[-600:]))
+        _reruns.append((report.nodeid, failure_reason(report)))
+    line = live_reason(report)
+    config = _CONFIG[0] if _CONFIG else None
+    if line is not None and config is not None and not hasattr(config, "workerinput"):  # (The controller's terminal.)
+        terminal = config.pluginmanager.get_plugin("terminalreporter")
+        if terminal is not None:
+            terminal.ensure_newline()  # (Not after -q's progress characters.)
+            terminal.write_line(line)
 
 
 def pytest_terminal_summary(terminalreporter: Any) -> None:

@@ -15,7 +15,7 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 import helab
-from conftest import START_FOLDER, this_tests
+from conftest import START_FOLDER, live_reason, this_tests
 from helab.utils import constants
 from helab.utils.cache_store import CacheStore, store_root
 from helab.utils.folder_cache import store_options
@@ -119,3 +119,17 @@ def test_a_process_wide_fake_acts_on_this_tests_threads_only(monkeypatch: pytest
     later.join(10)
     call("ours")
     assert isinstance(answers["earlier"], int) and answers["later"] == answers["ours"] == "refused", answers
+
+
+def test_a_failure_or_rerun_is_said_as_it_happens() -> None:
+    """A CI job cancelled at its time limit never reaches pytest's summary, which lost every traceback and rerun
+    reason of Ubuntu CI 41468043383's attempt 1: conftest writes each failure's and rerun's reason live."""
+    text = "def test_x():\n>       assert 1 == 2\nE       assert 1 == 2\n\ntests/test_x.py:3: AssertionError"
+
+    def report(outcome: str, when: str = "call") -> pytest.TestReport:
+        return pytest.TestReport("tests/test_x.py::test_x", ("tests/test_x.py", 2, "test_x"), {},
+                                 outcome, text, when)  # type: ignore[arg-type]  # ("rerun" is rerunfailures')
+    assert live_reason(report("rerun")) == ("RERUN REASON tests/test_x.py::test_x (call):\n"
+                                            "E       assert 1 == 2\ntests/test_x.py:3: AssertionError")
+    assert (live_reason(report("failed", "teardown")) or "").startswith("FAILED REASON tests/test_x.py::test_x (teardown):")
+    assert live_reason(report("passed")) is None and live_reason(report("skipped")) is None
