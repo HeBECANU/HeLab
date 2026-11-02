@@ -687,3 +687,14 @@ with segments (A~2); the `.hlb` `kind` `txy` is additive within format 1.
     say so if it needs raw's ordering.
 - **Docs proposal:** `docs/hlb-format.md` gets a "TXY layers" section (§3's arrays and meta, the precision
   rule) and `helab cache export --kind txy`. AGENTS.md's code map row for `cache_cli.py` adds "TXY layers".
+- **CI 41375836115** (`84ccaeb`, checkpoint 1): green on all three OSes. I read every Tests and Converter job's
+  log (9 jobs). Windows Tests 2/2 (job 125055805809) had **2 RERUNs**, both known Windows flakes, both
+  passed on retry:
+  - `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`:
+    `waitUntil timed out in 3000 milliseconds` at line 292, the known entry's line (listed as `[2]`);
+  - `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: the known pathlib
+    `lstat` collection error.
+
+  No other RERUN. Windows Tests 1/2 took 19.1 min (2/2: 13.7). The new store tests take under a second.
+  **known-issues proposal:** add "Again: `agent/caching-v2` CI 41375836115 (Windows Tests 2/2, job
+  125055805809)" to both entries, and "`[1]` too" to the first.
