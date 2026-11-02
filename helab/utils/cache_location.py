@@ -124,7 +124,9 @@ def share_of(path: str, mounts: Iterable[Mount] | None = None, *, resolve: bool 
         return ""
     if smb := _smb_source(best.source, best.fstype):
         return "//" + smb.removeprefix("smb://")
-    source = best.source if "@" not in best.source else best.source.split("@", 1)[1]  # (No account names.)
+    # (No account names: "user@host:/path". In a UNC source an "@" is WebDAV's "host@SSL", kept.)
+    unc = best.source.replace("\\", "/").startswith("//")
+    source = best.source.split("@", 1)[1] if "@" in best.source and not unc else best.source
     return source if source and source != best.path else f"a network drive ({best.fstype})"
 
 

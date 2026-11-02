@@ -29,7 +29,9 @@ def no_stat(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_a_folder_on_an_smb_mount_is_on_its_share_named_without_the_account() -> None:
-    mounts = [Mount("/dev/disk1", BASE, "apfs"), Mount("//tony@LabServer/Data", at("lab"), "smbfs")]
+    # (Each OS's spelling: macOS's smbfs names the account; Windows' redirector gives a UNC path.)
+    source = "\\\\LabServer\\Data" if WINDOWS else "//tony@LabServer/Data"
+    mounts = [Mount("/dev/disk1", BASE, "apfs"), Mount(source, at("lab"), "smb" if WINDOWS else "smbfs", WINDOWS)]
     assert cache_location.share_of(at("lab", "2026", "run1"), mounts) == "//labserver/data"  # (The share as the cache keys it: lowercased.)
     assert cache_location.share_of(at("lab"), mounts) == "//labserver/data"  # (The share as the cache keys it: lowercased.)
     assert cache_location.share_of(at("local", "run1"), mounts) == ""
@@ -40,6 +42,7 @@ def test_a_folder_on_an_smb_mount_is_on_its_share_named_without_the_account() ->
     (Mount("tony@host:/data", at("nfs"), "fuse.sshfs"), "host:/data"),
     (Mount("map auto_home", at("nfs"), "autofs", remote=True), "map auto_home"),
     (Mount(at("nfs"), at("nfs"), "webdav"), "a network drive (webdav)"),
+    (Mount("\\\\host@SSL\\DavWWWRoot", at("nfs"), "remote", remote=True), "\\\\host@SSL\\DavWWWRoot"),
 ])
 def test_other_network_file_systems_and_remote_mounts_are_shares(mount: Mount, named: str) -> None:
     assert cache_location.share_of(at("nfs", "run"), [Mount("/", BASE, "ext4"), mount]) == named
