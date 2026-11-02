@@ -73,6 +73,24 @@ def beside_flag(explorer: FolderExplorer, path: str) -> None:
     explorer.model.cache._remember_convert_prefs(path, {"write_beside": True, "set_at": time.time()})
 
 
+def beside_flag_in_live(explorer: FolderExplorer, path: str, tmp_path: Path) -> None:
+    """``beside_flag`` after ``cycle``, with no conversion from before the flag left queued: on a slow runner
+    Live's next tick can come more than a check interval after ``cycle``'s conversion ended, before the flag
+    is known, and queue the next conversion (not beside) with its check, which nothing here would answer;
+    the share question then never comes (CI 41482722171, macOS: a RERUN). That conversion is run and its
+    check answered, and the next tick may convert at once (asking first, the flag now known)."""
+    cache = explorer.model.cache
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    beside_flag(explorer, path)
+    if ("convert", path) in cache.jobs:
+        assert producer(cache, path, "convert").payload["beside"] is False  # (Queued before the flag.)
+        run_convert(cache, path)
+    if job_of(cache, path) is not None:
+        check(cache, path, tmp_path)
+    session.convert.ended_at = -1e9
+
+
 # Live's auto-convert on a share (A39.5).
 
 def test_auto_convert_beside_on_a_share_asks_once_and_cache_instead_writes_nothing_there(
@@ -82,7 +100,7 @@ def test_auto_convert_beside_on_a_share_asks_once_and_cache_instead_writes_nothi
     session = explorer.live
     assert session is not None and session.convert is not None
     cycle(qtbot, explorer, path, tmp_path)  # (The first conversion: the flag not known yet.)
-    beside_flag(explorer, path)
+    beside_flag_in_live(explorer, path, tmp_path)
     write_raw(Path(path), 1, raw_bytes(10_000))
     qtbot.waitUntil(lambda: control.box is not None)
     assert ("convert", path) not in cache.jobs  # Nothing converts while asked.
@@ -110,7 +128,7 @@ def test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off(
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache, control = explorer.model.cache, explorer.live_control
     cycle(qtbot, explorer, path, tmp_path)
-    beside_flag(explorer, path)
+    beside_flag_in_live(explorer, path, tmp_path)
     qtbot.waitUntil(lambda: control.box is not None)
     session = explorer.live
     assert session is not None and session.convert is not None
@@ -173,7 +191,7 @@ def test_a_refused_beside_write_in_live_asks_retry_or_hellabs_folders(
     session = explorer.live
     assert session is not None and session.convert is not None
     request, _ = cycle(qtbot, explorer, path, tmp_path)
-    beside_flag(explorer, path)  # (A local folder: no share question.)
+    beside_flag_in_live(explorer, path, tmp_path)  # (A local folder: no share question.)
     convert_state = session.convert
     convert_state.request = True
     message = "Not written: this folder's file system can't add a file without risking replacing one already there"
@@ -419,7 +437,7 @@ def test_lives_question_goes_with_auto_convert_and_a_later_one_converts(
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache, control = explorer.model.cache, explorer.live_control
     cycle(qtbot, explorer, path, tmp_path)
-    beside_flag(explorer, path)
+    beside_flag_in_live(explorer, path, tmp_path)
     qtbot.waitUntil(lambda: control.box is not None)
     box = control.box
     control.set_auto_convert(False)
@@ -438,7 +456,7 @@ def test_lives_question_goes_when_live_stops(
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     control = explorer.live_control
     cycle(qtbot, explorer, path, tmp_path)
-    beside_flag(explorer, path)
+    beside_flag_in_live(explorer, path, tmp_path)
     qtbot.waitUntil(lambda: control.box is not None)
     box = control.box
     explorer.stop_live(save=False)
@@ -453,7 +471,7 @@ def test_the_choice_after_a_refusal_holds_for_the_folder_in_live_and_folder_deta
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache, control, converter = explorer.model.cache, explorer.live_control, explorer.converter
     cycle(qtbot, explorer, path, tmp_path)
-    beside_flag(explorer, path)
+    beside_flag_in_live(explorer, path, tmp_path)
     converter.conversions[path] = explorer_convert.FolderConversion(path, "beside", time.time(), error="refused",
                                                                     refused="Not written: …")
     converter._refusal_answered(path, "temp")
