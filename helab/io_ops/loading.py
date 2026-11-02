@@ -601,6 +601,9 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                 problematic = [shot for shot in previous if shot in reused]
             if too_big:
                 cache_reason = "Cached dataset too large to reuse"
+            if cached and access.seed:
+                # (store-v4: data from stage 1's dataset or store-v3's, Q45.4, Q45.5: saved into the layers.)
+                cached = False
         except Exception as exc:
             # A cache miss/failure must not prevent loading the actual files.
             data, cached, reused, problematic = {}, False, set(), []

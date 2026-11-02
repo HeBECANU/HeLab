@@ -44,8 +44,10 @@ def result_find(path: str, output: str, cache_options: dict[str, Any] | None, lo
             send({"kind": "result_missing", "no_cache": True, "store": store.store_id})
             return
         guard: ResultGuard | None
+        started: Any = None
         try:
-            guard = _guard_fields(store.start_result_job(path), store)
+            started = store.start_result_job(path)
+            guard = _guard_fields(started, store)
         except StoreReadOnly:
             guard = None  # (Read, never saved: a newer HeLab's store.)
         found = store.find_result(path, lookup, family)
@@ -58,6 +60,8 @@ def result_find(path: str, output: str, cache_options: dict[str, Any] | None, lo
             send(missing)
             return
         row = found.value.row
+        if found.value.legacy and started is not None and not store.read_only:
+            row = _copy_legacy(store, path, row, found.value.data, started, cache_options or {})
         artifact = os.path.join(output, "result.npz")
         with open(artifact, "wb") as handle:
             handle.write(found.value.data)
@@ -74,6 +78,22 @@ def result_find(path: str, output: str, cache_options: dict[str, Any] | None, lo
         send(event)
     finally:
         store.close()
+
+
+def _copy_legacy(store: Any, path: str, row: Any, data: bytes, guard: Any, cache_options: dict[str, Any]) -> Any:
+    """A42.1: a result read through from store-v3 (Keep) is copied into store-v4 as it is returned, under the
+    guard the find took, within the budget and never over a result saved since (``only_new``), never waiting
+    for an answer. Its row is then store-v4's (its new ``result_id``); on any failure the v3 row stands."""
+    from helab.utils.cache_store import SaveRejected, StoreError
+    try:
+        file = store.write_result_file(data)
+        saved = store.save_result(path, row["lookup"], row["family"], row["record"], file, guard,
+                                  analysis_id=row["analysis_id"], action=row["action"],
+                                  computed_at=row["computed_at"], budget=cache_options.get("budget"),
+                                  budget_set_at=cache_options.get("budget_set_at"), hold=False, only_new=True)
+    except (SaveRejected, StoreError, OSError):
+        return row
+    return {**row, "result_id": saved.result_id, "file": file} if saved.saved else row
 
 
 def result_save(path: str, cache_options: dict[str, Any] | None, blob_file: str, *, lookup: str, family: str,

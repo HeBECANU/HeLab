@@ -2270,6 +2270,34 @@ class CacheStore:
         except OSError as exc:
             return _error(f"Cached data file could not be read: {exc}")
 
+    def legacy_dataset(self, path: str, *, with_file: bool = True) -> Read[tuple[DatasetRow, bytes]]:
+        """store-v3's dataset of ``path`` under Keep (store-v4, Q45.5): its row and file, read only through
+        ``LegacyStore``, for a load to copy its shots into the layers. Missing in store-v3, after Ignore or
+        Clear, with no store-v3, or when store-v4 removed the folder's datasets since it was made
+        (``_legacy_hidden``: never read through again). ``with_file`` False: the row alone (its file b"")."""
+        if self.layout < store_v4.LAYOUT:
+            return _missing()
+        key = self._path_key(path)
+        try:
+            with self.transaction(write=False):
+                hidden = self._legacy_hidden("datasets", key)
+        except (sqlite3.Error, StoreError) as exc:
+            return _error(f"Disk cache could not be read: {exc}")
+        legacy = None if hidden else self._kept_legacy()
+        if legacy is None:
+            return _missing()
+        try:
+            row = legacy.dataset_row(key)
+            if row is None:
+                return _missing()
+            record = cast(DatasetRow, {
+                **row, "path": self._source_path(key), "fingerprint": json.loads(row["fingerprint"]),
+                "problematic": json.loads(row["problematic"]), "info": json.loads(row["info"]),
+                "raw_times": json.loads(row.get("raw_times") or "[]")})
+            return _found((record, legacy.read_file(str(row["file"])) if with_file else b""))
+        except (LegacyUnavailable, OSError, ValueError) as exc:
+            return _error(f"store-v3's cached data could not be read: {exc}")
+
     def confirm_dataset(self, path: str, fingerprint: Sequence[Sequence[int]], names: Sequence[str],
                         snapshot_at: float, guard: SaveGuard,
                         raw_times: Sequence[Sequence[int]] | None = None,
@@ -2381,14 +2409,16 @@ class CacheStore:
     def save_result(self, path: str, lookup: str, family: str, record: Mapping[str, Any], file: str,
                     guard: SaveGuard, *, analysis_id: str, action: str, computed_at: float,
                     budget: int | None = None, budget_set_at: float | None = None, label: str = "",
-                    hold: bool = True) -> ResultSave:
+                    hold: bool = True, only_new: bool = False) -> ResultSave:
         """Point the row of ``path``'s result ``lookup`` at a file from :meth:`write_result_file`,
         replacing (retiring) one saved before under the same key, if ``guard`` still holds and the
         folder may be cached (``no_cache``). Within the one disk budget, measured in the same
         transaction with the row written: a save that doesn't fit isn't made (``saved`` False,
         nothing removed to make room); with ``hold`` it waits in ``pending_results`` for the user's
         answer (``pending_id``; ``label``: the plot's name, for the question), else its file is
-        retired. A rejected save raises :class:`SaveRejected` and retires ``file`` too."""
+        retired. ``only_new``: saved only if no result of that key is saved now (a copy of store-v3's on use,
+        A42.1, never over a newer one: ``reason`` "exists", its file retired). A rejected save raises
+        :class:`SaveRejected` and retires ``file`` too."""
         key = self._path_key(path)
         now = time.time()
         size = self._size(file)
@@ -2397,6 +2427,10 @@ class CacheStore:
             with self.transaction():
                 self._check_result_guard(guard, key)
                 self._check_cacheable(key)
+                if only_new and self._conn.execute("SELECT 1 FROM results WHERE path = ? AND lookup = ?",
+                                                   (key, lookup)).fetchone() is not None:
+                    self._retire(file, now)
+                    return ResultSave(False, "exists", size, self._live(), self._writes(), budget)
                 budget = self._active_budget(budget, budget_set_at)
                 self._conn.execute("SAVEPOINT result_fit")
                 previous, result_id = self._upsert_result(key, lookup, family, analysis_id, action, text, file, size,

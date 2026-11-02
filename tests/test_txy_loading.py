@@ -276,3 +276,51 @@ def test_folder_cache_applies_a_folders_own_source_to_the_tab_only(monkeypatch: 
         assert txy_sources.with_choices({"tab": True}, {"source": "", "tag": "x"}, lambda tag: None) == {"tab": True}
     finally:
         service.shutdown()
+
+
+# Seeds: store-v4's own datasets (Q45.4) and store-v3's under Keep (Q45.5), step 3d
+
+def tree(folder: Path) -> dict[str, bytes]:
+    return {str(item.relative_to(folder)): item.read_bytes() for item in sorted(folder.rglob("*"))
+            if item.is_file() and not item.name.endswith(("-wal", "-shm"))}
+
+
+def test_store_v3s_dataset_seeds_the_layers_on_use_and_stays_as_it_was(tmp_path: Path) -> None:
+    source = data_folder(tmp_path)
+    v3 = {"directory": str(tmp_path / "caches" / "store-v3")}
+    run_load(source, tmp_path, v3)
+    before = tree(tmp_path / "caches" / "store-v3")
+    options = v4_options(tmp_path)  # (Beside it; not answered yet: kept, Q22.3.)
+    loaded = first(run_load(source, tmp_path, options), "loaded")
+    assert loaded["load_counts"]["read"] == 0 and loaded["load_counts"]["reused_disk"] == 2
+    with opened(options, source) as store:
+        assert sorted((store.txy_layers(str(source)).value or {})["matlab"].entries) == [1, 2]
+        assert store.read_dataset_row(str(source)).missing
+    again = first(run_load(source, tmp_path, options), "loaded")
+    assert again["cached"] and again["source"] == "disk"  # (The layers now.)
+    assert tree(tmp_path / "caches" / "store-v3") == before
+
+
+def test_store_v4s_own_dataset_seeds_the_layers(tmp_path: Path, monkeypatch: Any) -> None:
+    from helab.io_ops import txy_cache
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    with monkeypatch.context() as patch:  # (As stage 1 saved it: a dataset in store-v4.)
+        patch.setattr(txy_cache, "layered", lambda store: False)
+        run_load(source, tmp_path, options)
+    with opened(options, source) as store:
+        assert store.read_dataset_row(str(source)).found and store.txy_layers(str(source)).value == {}
+    loaded = first(run_load(source, tmp_path, options), "loaded")
+    assert loaded["load_counts"]["read"] == 0 and not loaded["cached"]
+    with opened(options, source) as store:
+        assert sorted((store.txy_layers(str(source)).value or {})["matlab"].entries) == [1, 2]
+
+
+def test_a_store_v3_dataset_store_v4_removed_is_never_read_through(tmp_path: Path) -> None:
+    source = data_folder(tmp_path)
+    run_load(source, tmp_path, {"directory": str(tmp_path / "caches" / "store-v3")})
+    options = v4_options(tmp_path)
+    with opened(options, source) as store:
+        store.remove(("datasets",), [str(source)])  # (The user cleared the folder's data in store-v4.)
+    loaded = first(run_load(source, tmp_path, options), "loaded")
+    assert loaded["load_counts"]["read"] == 2  # (From the files, not store-v3.)

@@ -197,6 +197,20 @@ class LegacyStore:
             raise LegacyUnavailable(f"store-v3's results can't be read ({exc})") from exc
         return found
 
+    def dataset_row(self, key: str) -> dict[str, Any] | None:
+        """The ``datasets`` row of ``key`` (caching v2 stage 2: its MATLAB shots seed store-v4's layers on use,
+        Q45.5), with its columns by name; None if it has none."""
+        if not self.has("datasets"):
+            return None
+        names = [name for name in ("path", "file", "bytes", "ram_bytes", "rows", "shots", "fingerprint",
+                                   "problematic", "info", "last_used", "job_seq", "raw_times")
+                 if name in self.columns("datasets")]
+        try:
+            row = self._conn.execute(f"SELECT {', '.join(names)} FROM datasets WHERE path = ?", (key,)).fetchone()
+        except sqlite3.Error as exc:
+            raise LegacyUnavailable(f"store-v3's datasets can't be read ({exc})") from exc
+        return None if row is None else dict(zip(names, row))
+
     def read_file(self, file: str) -> bytes:
         """A data file a v3 row names (``results/<name>`` or a dataset file), read only."""
         parts = file.split("/")

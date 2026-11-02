@@ -87,6 +87,9 @@ class Access:
         self.key = view_key(txy_source, txy)
         self.layers: dict[int, str] = {}  # (The last view read: each shot's layer.)
         self.info: dict[str, Any] = {}
+        # Where the row came from when the folder has no view yet (store-v4): "datasets" (its own, from stage
+        # 1, Q45.4) or "legacy" (store-v3's under Keep, Q45.5). A load then copies its shots into the layers.
+        self.seed = ""
 
     @classmethod
     def for_cached_read(cls, store: CacheStore, path: str, txy: Mapping[str, Any] | None) -> Access:
@@ -124,14 +127,21 @@ class Access:
         read = self._view_row(path)
         if read.value is None:
             return read
+        if self.seed:
+            seeded = (self.store.read_dataset(path) if self.seed == "datasets" else self.store.legacy_dataset(path))
+            if seeded.value is None:
+                return seeded  # type: ignore[return-value]
+            seed_row, packed = seeded.value
+            return _found((seed_row, lambda: unpack_dataset(packed)))
         row = read.value
         return _found((row, lambda: self._read_data(path, row)))
 
     def _view_row(self, path: str) -> Read[Any]:
         from helab.utils.cache_store import TXY_ROW_BYTES, _error, _found
+        self.seed = ""
         found = self.store.read_view(path, *self.key)
         if found.value is None:
-            return found
+            return found if found.failed else self._seed_row(path)
         view = found.value
         layers = self.store.txy_layers(path)
         if layers.failed:
@@ -146,6 +156,20 @@ class Access:
                        "rows": rows, "shots": len(view.fingerprint), "ram_bytes": rows * TXY_ROW_BYTES,
                        "bytes": sum(held[layer].bytes for layer in set(self.layers.values()) if layer in held),
                        "last_used": view.last_used, "job_seq": view.job_seq})
+
+    def _seed_row(self, path: str) -> Read[Any]:
+        """No view yet: store-v4's own ``datasets`` row of the folder (stage 1's, Q45.4), else store-v3's under
+        Keep (Q45.5), as the load's cached data; both read only. A load's save then writes them into layers."""
+        own = self.store.read_dataset_row(path)
+        if own.value is not None or own.failed:
+            self.seed = "datasets" if own.value is not None else ""
+            return own
+        legacy = self.store.legacy_dataset(path, with_file=False)
+        if legacy.value is None:
+            return legacy
+        self.seed = "legacy"
+        from helab.utils.cache_store import _found
+        return _found(legacy.value[0])
 
     def _read_data(self, path: str, row: Mapping[str, Any]) -> dict[int, Any] | None:
         """The view's shots from their layers; the shots a layer no longer holds are left out (a policy
@@ -162,7 +186,7 @@ class Access:
         return data
 
     def touch(self, path: str) -> None:
-        if not self.layered:
+        if not self.layered or self.seed:
             from helab.io_ops.fingerprints import _touch
             _touch(self.store, path)
             return
