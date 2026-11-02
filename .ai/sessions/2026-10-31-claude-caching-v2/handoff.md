@@ -791,3 +791,39 @@ a failure.
 `GUIWatchdog` running past the test; the worker, idle at the end of a run, then logs 'GUI stalled for ~63s'
 (likely `test_quit_confirms.py` or `test_txy_last_used_quit.py`). Fix: the tests finish or cancel the dialog,
 or the watchdog stops when the window is destroyed."
+
+## Step 4: Live's segments and compaction (`8be1be6`)
+
+Each Live autosave already writes one segment of what its layers lack (3a). Since `8be1be6`, after any unit is saved,
+each layer it wrote that is due is compacted in the same job (`Access.compact` → `CacheStore.compact_txy`). A layer
+is due at more than 8 segments, or with more than half its bytes superseded. The rewrite runs only if it fits beside
+the old segments, else waits for a later save, never asking (Q45.7). It runs under the converter's ticker. Test:
+nine autosaves give segments 2..8, the ninth compacts to one, and the next appends.
+
+## Step 5: the UI (after merging `dev/v0.0.8` at `6679245`)
+
+| Commit | What |
+|---|---|
+| `102c027` | Settings › Cache (store-v4 only): a TXY data row (shots, folders, size, tags, only copies; Clear… → `clear_txy`); Clear all sends and names `txy`; the global cache policy (a combo in S~6's proposed words, the `cache_policy` settings row, `FolderCache.cache_policy`, sent as `policy` with store-v4 requests only); policy `txy` keeps no raw pulses (`raw_fill` reason `policy`, conversions' raw rows skipped, `CacheStore.policy_of`); lowering the budget asks from `trim`'s plan (`plan_only`) and sends exactly its items (S2-1's step 5). Make room's `room_text` names TXY layers by group, and `room_items` is `cache_store.room_items` |
+| `d849372` | The folder's own choices: right-click "TXY for this folder…" and "Cache policy for this folder…" (QInputDialog lists; "As Settings (every folder)"; disabled without a data root); `FolderCache.set_folder_choice` (kept now, then saved); Folder details' TXY line names them |
+
+- **S~6** labels are as proposed, still waiting on Tony's answer (CoCo relays). In `CacheTab.POLICY_LABELS` and
+  `FolderExplorer.FOLDER_CHOICE_GLOBAL`.
+- The two menu dialogs are `QInputDialog.getItem`. Like the explorer's existing Custom depth… (`getInt`), they
+  aren't named widgets; the menu actions are.
+
+## Step 6: the integration check (`a39a94d`)
+
+`test_caching_v2_session.py::test_a_stage_2_session_with_layers_leaves_store_v3_as_it_was`, with the switch on,
+beside an older HeLab's store-v3:
+1. a conversion saves raw layers;
+2. the tab's load from the raw layer (no HeLab text read), then a plot's choice cached quietly, then the next load
+   from the layers;
+3. ten Live autosaves compacting;
+4. Clear all;
+5. Make room's order, through a real `cache_full`;
+6. store-v3 hashed unchanged and opened only by `LegacyStore`;
+7. a cache move, both stores verified, and `helab cache export --kind txy` on the moved store.
+
+**Checkpoint 2** (stage 2 complete, switch still off): local full suite at `a39a94d` gives 8925 passed, 672 skipped,
+no RERUN. mypy --strict (helab, tests, win32) and pyright (also Windows) are clean.
