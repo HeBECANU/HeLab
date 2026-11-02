@@ -30,6 +30,11 @@ MTIME = 1_700_000_000_000_000_000
 pytestmark = pytest.mark.no_auto_data_root
 
 
+def later(seconds: float = 60.0) -> float:
+    """A listing taken after the saves so far (a new layer was seen when its job saved it)."""
+    return time.time() + seconds
+
+
 def hits(shot: int, rows: int = 300) -> np.ndarray:
     rng = np.random.default_rng(shot * 7919 + rows)
     return rng.random((rows, 3))
@@ -272,7 +277,7 @@ def five_groups(store: CacheStore) -> None:
     save(store, Y, part(store, MATLAB, {1: 400}))
     store.save_raw_batch(W, [raw_entry(store, 1, 400)], store.start_raw_job(W), now=1.0)
     save(store, Z, part(store, MATLAB, {1: 400}))
-    store.mark_txy_seen(Z, {"txy": {}}, 5.0)
+    store.mark_txy_seen(Z, {"txy": {}}, later())
     with store.transaction():
         for path, used in ((X, 1.0), (Y, 2.0), (Z, 3.0)):
             store._conn.execute("UPDATE txy_layers SET last_used = ? WHERE path = ?", (used, path))
@@ -323,6 +328,31 @@ def test_trim_follows_make_rooms_order_and_says_what_it_removed(tmp_path: Path) 
         assert store.txy_layers(X).value == {} and store.txy_layers(Y).value and store.raw_rows(W).value
 
 
+def test_trim_keeps_only_copies_unless_its_plan_names_them(tmp_path: Path) -> None:
+    """S2-1 (Assay): lowering the budget takes datasets and layers in Make room's order, but an only copy (here
+    Z's MATLAB layer, its files gone) only when the plan the user was shown names it; a plan that changed
+    since removes nothing."""
+    with v4(tmp_path) as store:
+        five_groups(store)
+        options = {"directory": store.root}
+    events: list[Any] = []
+    cache_admin(options, "trim", events.append, budget=1, plan_only=True)
+    items = events[-1]["items"]
+    assert items[-1] == txy_item("txy-only:", Z, MATLAB) and txy_item("txy:", X, HELAB) in items
+    with CacheStore(options["directory"]) as store:
+        assert store.txy_layers(Z).value  # (Only a plan: nothing removed.)
+    events.clear()
+    cache_admin(options, "trim", events.append, budget=1)  # (No plan: everything but only copies.)
+    with CacheStore(options["directory"]) as store:
+        assert store.txy_layers(Z).value and not store.txy_layers(X).value and not store.raw_rows(W).value
+        plan = store.trim_plan(1)
+        assert plan.items == (txy_item("txy-only:", Z, MATLAB),)
+        assert store.trim(1, expected=["something else"]).txy_only == ()  # (Not what was shown.)
+        assert store.txy_layers(Z).value
+        assert store.trim(1, expected=list(plan.items)).txy_only == ((Z, MATLAB),)
+        assert store.txy_layers(Z).value == {}
+
+
 # Clear
 
 def test_clear_takes_txy_layers_everywhere_it_joins(tmp_path: Path) -> None:
@@ -342,12 +372,12 @@ def test_clear_takes_txy_layers_everywhere_it_joins(tmp_path: Path) -> None:
         assert store.txy_layers(X).value == {} and store.inventory()["txy"]["layers"] == 0
         save(store, RUN, part(store, MATLAB, {1: 10}))
         save(store, X, part(store, MATLAB, {1: 10}))
-        store.mark_txy_seen(X, {"txy": {}}, 5.0)  # (X's files are gone: its layer is the only copy.)
+        store.mark_txy_seen(X, {"txy": {}}, later())  # (X's files are gone: its layer is the only copy.)
         removal = store.clear_root(A)
         assert {pair for pair in removal.txy_seen} == {(RUN, MATLAB), (X, MATLAB)}
         save(store, RUN, part(store, MATLAB, {1: 10}))
         save(store, X, part(store, MATLAB, {1: 10}))
-        store.mark_txy_seen(X, {"txy": {}}, 5.0)
+        store.mark_txy_seen(X, {"txy": {}}, later())
         _, flagged = store.set_prefs_removing(X, True, False, 6.0, remove_cached=True)
         assert flagged is not None and flagged.txy_seen == () and store.txy_layers(X).value  # (Only copy stays.)
         _, flagged = store.set_prefs_removing(RUN, True, False, 6.0, remove_cached=True)
@@ -398,16 +428,40 @@ def test_a_store_v4_from_stage_1_gets_stage_2s_tables(tmp_path: Path) -> None:
     with CacheStore(str(root)) as store:
         assert store._meta()["gen_txy"] == 0 and store._pending_parts
         assert save(store, RUN, part(store, MATLAB, {1: 10})).saved == (MATLAB,)
+    conn = sqlite3.connect(root / "records.sqlite")  # (One migrated before a layer's last sighting, S2-2.)
+    conn.execute("ALTER TABLE txy_layers DROP COLUMN seen_at")
+    conn.commit()
+    conn.close()
+    with CacheStore(str(root)) as store:
+        assert "seen_at" in {row[1] for row in store._conn.execute("PRAGMA table_info(txy_layers)")}
+        assert store.mark_txy_seen(RUN, {"txy": {}}, later()) == 1
 
 
 def test_mark_seen_makes_a_layer_an_only_copy_and_back(tmp_path: Path) -> None:
     with v4(tmp_path) as store:
         save(store, RUN, part(store, MATLAB, {1: 10, 2: 10}))
-        assert store.mark_txy_seen(RUN, {"txy": {1: (1001, MTIME)}}, 5.0) == 1
-        assert (store.txy_layers(RUN).value or {})[MATLAB].gone_at == 5.0
+        gone_at = later()
+        assert store.mark_txy_seen(RUN, {"txy": {1: (1001, MTIME)}}, gone_at) == 1
+        assert (store.txy_layers(RUN).value or {})[MATLAB].gone_at == gone_at
         assert store.inventory()["txy"]["only_copy"] == 1
-        assert store.mark_txy_seen(RUN, {"txy": {1: (1001, MTIME), 2: (1002, MTIME)}}, 6.0) == 0
+        assert store.mark_txy_seen(RUN, {"txy": {1: (1001, MTIME), 2: (1002, MTIME)}}, gone_at + 1) == 0
         assert (store.txy_layers(RUN).value or {})[MATLAB].gone_at is None
+
+
+def test_an_older_listing_landing_late_undoes_no_mark(tmp_path: Path) -> None:
+    """S2-2 (Assay): C2-10's rule for layers. A listing that found a source gone, then a slower one that
+    started earlier and saw it: the layer stays an only copy (else Make room would name it "seen"); and the
+    other way, an older listing that missed a file doesn't mark gone a layer a newer one saw."""
+    with v4(tmp_path) as store:
+        save(store, RUN, part(store, MATLAB, {1: 10}))
+        newer = later()
+        assert store.mark_txy_seen(RUN, {"txy": {}}, newer) == 1
+        store.mark_txy_seen(RUN, {"txy": {1: (1001, MTIME)}}, newer - 50)  # (Older, lands late.)
+        assert (store.txy_layers(RUN).value or {})[MATLAB].gone_at == newer
+        save(store, X, part(store, MATLAB, {1: 10}))
+        store.mark_txy_seen(X, {"txy": {1: (1001, MTIME)}}, newer)
+        assert store.mark_txy_seen(X, {"txy": {}}, newer - 50) == 0  # (Older than the last sighting.)
+        assert (store.txy_layers(X).value or {})[MATLAB].gone_at is None
 
 
 def test_a_cache_move_verifies_txy_segments(tmp_path: Path) -> None:

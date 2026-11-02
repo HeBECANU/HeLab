@@ -98,6 +98,7 @@ class AdminResultFields(TypedDict, total=False):
     message: str
     path: str
     room: dict[str, Any] | None
+    items: list[str]  # ``trim``'s plan as Make room's items (``plan_only``, S2-1)
     cache_info: dict[str, Any]
     discarded: bool
     forgotten: str

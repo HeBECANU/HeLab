@@ -131,12 +131,20 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 result["removed"] = {kind: len(removal.paths or ()) for removal in removals for kind in removal.kinds}
                 result["bytes"] = sum(removal.dataset_bytes for removal in removals)
         elif action == "trim":
-            # In Make room's order (A42.2): datasets, then in store-v4 TXY layers, raw layers, only copies.
-            removal = store.trim(int(budget or params["budget"]), budget_set_at)
-            for event in _removal_events(removal):
-                send(event)
-            result.update({"datasets": removal.datasets,
-                           "bytes": removal.dataset_bytes + removal.raw_bytes + removal.txy_bytes})
+            # In Make room's order (A42.2): datasets, then in store-v4 TXY layers and raw layers. With ``plan_only``
+            # it says what that would remove, only copies named (S2-1); with ``plan`` (those items) only copies
+            # go too, exactly as named.
+            if params.get("plan_only"):
+                plan = store.trim_plan(int(budget or params["budget"]))
+                result.update({"room": asdict(plan), "items": list(plan.items)})
+            else:
+                planned = params.get("plan")
+                removal = (store.trim(int(budget or params["budget"]), budget_set_at) if planned is None else
+                           store.trim(int(budget or params["budget"]), budget_set_at, [str(item) for item in planned]))
+                for event in _removal_events(removal):
+                    send(event)
+                result.update({"datasets": removal.datasets,
+                               "bytes": removal.dataset_bytes + removal.raw_bytes + removal.txy_bytes})
         elif action == "adopt":
             try:
                 adopted = store.adopt_pending(params["pending_id"], budget=budget, budget_set_at=budget_set_at,

@@ -67,7 +67,7 @@ STAGE2_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS txy_layers ("
     "path TEXT NOT NULL, layer TEXT NOT NULL, tags TEXT NOT NULL, entries TEXT NOT NULL, shots INTEGER NOT NULL, "
     "rows INTEGER NOT NULL, ram_bytes INTEGER NOT NULL, bytes INTEGER NOT NULL, precision TEXT NOT NULL, "
-    "gone_at REAL, maker TEXT NOT NULL, job_seq INTEGER NOT NULL, saved_at REAL NOT NULL, last_used REAL NOT NULL, "
+    "gone_at REAL, seen_at REAL NOT NULL DEFAULT 0, maker TEXT NOT NULL, job_seq INTEGER NOT NULL, saved_at REAL NOT NULL, last_used REAL NOT NULL, "
     "PRIMARY KEY (path, layer))",
     "CREATE INDEX IF NOT EXISTS txy_layers_last_used ON txy_layers (last_used)",
     "CREATE TABLE IF NOT EXISTS txy_segments ("
@@ -117,7 +117,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     lock, and ``SCHEMA`` gives a new store all of them."""
     def no_layers() -> bool:  # (Stage 2's tables, in a store stage 1 made.)
         return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'txy_layers'").fetchone() is None
-    additions: list[tuple[Callable[[], bool], tuple[str, ...]]] = [(no_layers, STAGE2_SCHEMA)]
+
+    def no_seen_at() -> bool:  # (A layer's last sighting, S2-2: in a store migrated before it.)
+        return not no_layers() and not any(row[1] == "seen_at" for row in conn.execute("PRAGMA table_info(txy_layers)"))
+    additions: list[tuple[Callable[[], bool], tuple[str, ...]]] = [
+        (no_layers, STAGE2_SCHEMA),
+        (no_seen_at, ("ALTER TABLE txy_layers ADD COLUMN seen_at REAL NOT NULL DEFAULT 0",))]
     if not any(missing() for missing, _ in additions):
         return
     conn.execute("BEGIN IMMEDIATE")

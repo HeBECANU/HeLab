@@ -3240,17 +3240,18 @@ class CacheStore:
         (size,) = self._conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM txy_segments WHERE path = ? AND layer = ?",
                                      (key, layer)).fetchone()
         rows = sum(entry.rows for entry in entries.values())
-        gone = self._conn.execute("SELECT gone_at FROM txy_layers WHERE path = ? AND layer = ?",
-                                  (key, layer)).fetchone() if keep_gone else None
-        stored_job = self._conn.execute("SELECT job_seq FROM txy_layers WHERE path = ? AND layer = ?",
-                                        (key, layer)).fetchone()
+        stored = self._conn.execute("SELECT gone_at, seen_at, job_seq FROM txy_layers WHERE path = ? AND layer = ?",
+                                    (key, layer)).fetchone()
+        # (A new layer was just seen by the job that saved it; an existing one keeps its marks, S2-2.)
+        gone = stored[0] if stored is not None and keep_gone else None
+        seen = float(stored[1]) if stored is not None else now
         self._conn.execute(
             "INSERT OR REPLACE INTO txy_layers (path, layer, tags, entries, shots, rows, ram_bytes, bytes, precision, "
-            "gone_at, maker, job_seq, saved_at, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "gone_at, seen_at, maker, job_seq, saved_at, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (key, layer, _dumps(list(tags)),
              _dumps([entry.to_json() for _, entry in sorted(entries.items())]), len(entries), rows,
-             rows * TXY_ROW_BYTES, int(size), precision, None if gone is None else gone[0], maker,
-             max(job_seq, int(stored_job[0]) if stored_job else 0), now, now))
+             rows * TXY_ROW_BYTES, int(size), precision, gone, seen, maker,
+             max(job_seq, int(stored[2]) if stored is not None else 0), now, now))
 
     def _insert_txy_pending(self, key: str, source: str, tag: str, parts: Sequence[TxyPart],
                             sizes: Mapping[str, int], view: ViewRecord | None, guard: SaveGuard, reason: str,
@@ -3504,9 +3505,12 @@ class CacheStore:
         return {"maker": self._maker["maker"], "record": self._maker["record"]}
 
     def mark_txy_seen(self, path: str, present: Mapping[str, Mapping[int, tuple[int, int]]], seen_at: float) -> int:
-        """A full listing of ``path`` found these sources (``{"raw": {shot: (size, mtime_ns)}, "txy": {...}}``):
-        a layer with an entry whose source it didn't find is an only copy (``gone_at``, Q45.6); one whose
-        sources are all there no longer is. The layers marked gone."""
+        """A full listing of ``path`` taken at ``seen_at`` found these sources (``{"raw": {shot: (size,
+        mtime_ns)}, "txy": {...}}``): a layer with an entry whose source it didn't find is an only copy
+        (``gone_at``, Q45.6); one whose sources are all there is seen (``seen_at``). Each mark goes by when its
+        evidence was taken (C2-10's rule, S2-2): a sighting clears a gone mark only if newer than it, and a gone
+        mark needs a listing newer than the last sighting, so an older listing landing late undoes nothing.
+        The layers marked gone."""
         self._needs_v4()
         key = self._path_key(path)
         gone = 0
@@ -3516,9 +3520,15 @@ class CacheStore:
                                                          (key,)).fetchall():
                     missing = any(entry.shot not in present.get(entry.kind, {})
                                   for entry in map(TxyEntry.from_json, json.loads(entries)))
-                    self._conn.execute("UPDATE txy_layers SET gone_at = ? WHERE path = ? AND layer = ?",
-                                       (seen_at if missing else None, key, layer))
-                    gone += int(missing)
+                    if missing:
+                        gone += self._conn.execute(
+                            "UPDATE txy_layers SET gone_at = COALESCE(gone_at, ?) WHERE path = ? AND layer = ? "
+                            "AND seen_at < ?", (seen_at, key, layer, seen_at)).rowcount
+                    else:
+                        self._conn.execute(
+                            "UPDATE txy_layers SET seen_at = MAX(seen_at, ?), "
+                            "gone_at = CASE WHEN gone_at IS NOT NULL AND gone_at >= ? THEN gone_at END "
+                            "WHERE path = ? AND layer = ?", (seen_at, seen_at, key, layer))
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return gone
@@ -3634,11 +3644,12 @@ class CacheStore:
             groups["rebuildable" if rebuildable else "seen"].append((key, str(layer)))
         return groups
 
-    def _free_space(self, budget: int, exclude: str | None) -> list[Removal]:
+    def _free_space(self, budget: int, exclude: str | None, *, only_copies: bool = True) -> list[Removal]:
         """Make room's and ``trim``'s one order (Q45.6, A42.2), inside a transaction: other folders' whole rows,
         least recently used first within each group, until live usage fits ``budget``: (1) datasets, then in
         store-v4 (2) HeLab layers rebuildable here, (3) layers whose sources were seen, (4) raw layers seen,
-        (5) only copies: TXY layers, then raw layers. Never ``exclude`` (the folder being saved)."""
+        (5) only copies: TXY layers, then raw layers. Never ``exclude`` (the folder being saved). Without
+        ``only_copies`` it stops before group 5 (S2-1: only a plan that names them may take only copies)."""
         removed: list[Removal] = []
         for (other,) in self._conn.execute("SELECT path FROM datasets WHERE path IS NOT ? ORDER BY last_used, path",
                                            (exclude,)).fetchall():
@@ -3673,9 +3684,10 @@ class CacheStore:
                                        only_copy_paths=folder if only_copy else (), raw_rows=count, raw_bytes=size))
             return self._live() <= budget
 
-        if take_layers("rebuildable") or take_layers("seen") or take_raw(False) or take_layers("only"):
+        if take_layers("rebuildable") or take_layers("seen") or take_raw(False) or not only_copies:
             return removed
-        take_raw(True)
+        if not take_layers("only"):
+            take_raw(True)
         return removed
 
     # The user's per-folder choices for stage 2 (Q45.1, Q45.2): like ``convert_prefs``, never removed by
@@ -3958,18 +3970,50 @@ class CacheStore:
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
-    def trim(self, budget: int, set_at: float | None = None) -> Removal:
-        """Remove other data in Make room's order (``_free_space``: datasets, then in store-v4 TXY layers,
-        raw layers, only copies last; Q45.6, A42.2) until live usage fits ``budget``, and record it as the
-        active budget (set at ``set_at``). Only on the user's request (lowering the budget, after a question
-        naming what goes); never automatic."""
+    def trim(self, budget: int, set_at: float | None = None, expected: Sequence[str] | None = None) -> Removal:
+        """Remove other data in Make room's order (``_free_space``: datasets, then in store-v4 TXY layers and
+        raw layers; Q45.6, A42.2) until live usage fits ``budget``, and record it as the active budget (set at
+        ``set_at``). Only on the user's request (lowering the budget, after a question); never automatic.
+        Only copies (group 5) go only with ``expected``, the plan the user was shown (``trim_plan``'s
+        ``items``): then exactly that is removed, or nothing if the plan changed since (S2-1)."""
         try:
             with self.transaction():
                 budget = self._active_budget(budget, set_at) or budget
-                # Measured after each removal: a dataset's records are freed with its file.
-                return _combined_removal(self._free_space(budget, None)) or Removal(("datasets",), ())
+                if expected is None:
+                    # Measured after each removal: a dataset's records are freed with its file.
+                    return (_combined_removal(self._free_space(budget, None, only_copies=False))
+                            or Removal(("datasets",), ()))
+                self._conn.execute("SAVEPOINT trim_plan")
+                removal = _combined_removal(self._free_space(budget, None))
+                if set(() if removal is None else _removal_items(removal)) != set(expected):
+                    self._conn.execute("ROLLBACK TO trim_plan")  # (Not what the user agreed to: nothing goes.)
+                    self._conn.execute("RELEASE trim_plan")
+                    return Removal(("datasets",), ())
+                self._conn.execute("RELEASE trim_plan")
+                return removal or Removal(("datasets",), ())
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def trim_plan(self, budget: int) -> RoomPlan:
+        """What lowering the budget to ``budget`` would remove, only copies included and named (the question
+        step 5 asks from it, S2-1): tried and rolled back, so it is exact. ``possible`` False when even
+        removing all of it isn't enough."""
+        try:
+            with self.transaction():
+                self._conn.execute("SAVEPOINT trim_plan")
+                try:
+                    removal = _combined_removal(self._free_space(budget, None))
+                    fits = self._live() <= budget
+                finally:
+                    self._conn.execute("ROLLBACK TO trim_plan")
+                    self._conn.execute("RELEASE trim_plan")
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be read: {exc}") from exc
+        if removal is None:
+            return RoomPlan((), 0, None, None, fits)
+        return RoomPlan(tuple(removal.paths or ()), removal.dataset_bytes, None, None, fits, removal.raw_paths,
+                        removal.only_copy_paths, removal.raw_bytes, removal.txy_layers, removal.txy_seen,
+                        removal.txy_only, removal.txy_bytes)
 
     def purge_datasets(self, cutoff: float) -> Removal:
         """Remove cached data not used since ``cutoff`` (a timestamp)."""
@@ -4315,8 +4359,10 @@ def results_purge_estimate(inventory: Mapping[str, Any], cutoff: float) -> dict[
 
 
 def trim_estimate(inventory: Mapping[str, Any], budget: int) -> dict[str, int]:
-    """What :meth:`CacheStore.trim` to ``budget`` removes, from an inventory: least recently
-    used datasets until usage fits. An upper bound, since each dataset's records go with it."""
+    """What :meth:`CacheStore.trim` to ``budget`` removes in store-v3, from an inventory: least recently
+    used datasets until usage fits. An upper bound, since each dataset's records go with it. In store-v4
+    ``trim`` takes layers too: its question comes from ``CacheStore.trim_plan`` (the admin's ``trim`` with
+    ``plan_only``), never from this (S2-1)."""
     usage, count, freed = int(inventory["usage"]), 0, 0
     for _, size in sorted(inventory["ages"]["datasets"]):
         if usage <= budget:
