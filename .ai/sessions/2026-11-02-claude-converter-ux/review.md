@@ -151,3 +151,44 @@ before it", or "the rows up to it", in Q~1's proposed wording.
 
 - `io-and-browsing.md`: the patched-names list (finding 4) and the GUI's mount-table read (finding 5).
 - Q~5: whether Folder details' Q38.1 choice is per conversion or per session (finding 3).
+
+## Re-check of the fixes (`be40694..baf7a1c -- helab tests`, 2026-11-03)
+
+Fixes in `bc73f0c`, with the handoff in `baf7a1c`. **All six findings are fixed. No open findings.**
+
+1. **Fixed.**
+   - `explorer_convert.beside_unavailable` is now shared with the Live menu. The offer's beside button is
+     disabled and gives the reason, and `_offer_answered` refuses beside before the confirmation.
+   - A beside start saves the folder's flag first. It waits on `folderPrefsChanged`, which fires because the
+     memory flag goes from False to True, and then asks with an explicit `beside=True`. In `FolderCache.convert`,
+     `beside` now overrides the memory flag, and the helper still checks the store.
+   - A save that can't be queued, or that answers `error` or `cancelled`, stops the conversion and says so in
+     the row. That includes a folder without a root, where the helper raises.
+   - Tests: gated, waits then beside, can't be saved.
+2. **Fixed.** `_convert_off` closes and clears Live's box, and `stop_live` and auto-convert off both go through
+   it. Tested both ways, and the test checks that a later auto-convert isn't held.
+3. **Fixed.** `explorer_convert.instead` is a per-folder choice for the session. Live's auto-convert, its line
+   and Folder details' refusal answer all read or write it, and choosing beside in Folder details clears it.
+   The test fixture clears it too. Tested in both directions.
+4. **Fixed.** `convert_cli` now calls `cache_location.share_of` and `share_warning` through the module. An AST
+   test refuses importing `share_of` or `mount_table` by value anywhere in `helab/`.
+5. The handoff (`baf7a1c`) now proposes the `io-and-browsing.md` lines. The code had nothing to change.
+6. **Fixed.** `ReadStop.detail` now says "only the hits of what was read before it", and a test checks it.
+
+Each new or changed assertion names behaviour the old code lacked: `beside_unavailable`, no job before the
+flag, `payload["beside"] is True`, the box closed, `instead`, the AST check and the new wording. So each one
+fails on `be40694`. The two older Live share tests set `ended_at` so that the answer's tick converts at once:
+they were timing-dependent before, not weakened.
+
+**Info, not a finding:** `_admin_result` stops every Folder details conversion waiting on its flag when
+*any* `convert_prefs` job errors, because `cacheAdminResult` carries no path. Today the only other sender is
+Live's read of its own folder after a refusal, and the row says "Click to try again". Filtering by path would
+need the event's path. Leave it as it is unless it shows up.
+
+**Rerun:**
+- Touched tests: `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-strata` on
+  `test_explorer_convert`, `test_share_detection`, `test_convert_raw`, `test_live_convert`, `test_convert_helab`,
+  `test_accessible_names`, `test_destroyed_connections` and `test_helper_events`: **1698 passed, 1 skipped, no
+  RERUN**.
+- Type checks: `mypy helab/ --strict`, `mypy tests --strict`, `mypy helab/ --strict --platform win32`,
+  `pyright helab tests` and `pyright --pythonplatform Windows helab tests`: all clean.
