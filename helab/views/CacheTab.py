@@ -42,6 +42,17 @@ POLICY_LABELS = (("raw+used", "Raw + what you load (default)"), ("raw", "Raw onl
                  ("txy", "TXY only (no raw)"))
 
 
+def remove_raw_following_text(raw: Mapping[str, Any]) -> str:
+    """S4~1's question for Settings' policy (Tony's wording, 2026-11-02): every folder that follows it now keeps
+    no raw pulses; remove HeLab's cached copy of theirs?"""
+    only = int(raw.get("only_copy") or 0)
+    return ("Folders that follow this setting keep no raw pulses from now on. Also remove HeLab's cached copy of "
+            f"their raw pulses (up to {byte_size(int(raw.get('bytes') or 0), 'disk')})? Your d files aren't "
+            "touched. Folders with their own cache policy keep theirs."
+            + (f"\n\nUp to {only:,} shots' raw pulses are the only copy: their raw files are gone from their "
+               "folders, so they can't be read again." if only else ""))
+
+
 def _only_copies(txy: Mapping[str, Any] | None, raw: Mapping[str, Any] | None) -> str:
     """The sentence a question that removes store-v4's TXY data or raw pulses (Clear, Clear all) gives their only
     copies (Q22.6, C2-9: never removed unnamed), or "" when there are none."""
@@ -1110,8 +1121,15 @@ class CacheTab(QWidget):
         """Save both budgets (after :meth:`apply_budget`), how often Live saves, and the cache policy."""
         policy = str(self.policy_combo.currentData() or "")
         if policy:
+            before = folder_cache.cache_policy()
             settings.setValue(CACHE_POLICY_SETTING, policy)
             folder_cache.set_cache_policy(policy)  # (Sent with the next store-v4 request.)
+            raw = (self.inventory or {}).get("raw")
+            if policy == "txy" and before != "txy" and raw and int(raw.get("count") or 0) and not self.busy:
+                # S4~1 (Tony, 2026-11-02): nothing is removed unasked; offer the raw pulses of the folders that
+                # follow this setting (those with their own policy keep theirs).
+                if self.confirm("TXY only", remove_raw_following_text(raw), "Remove"):
+                    self._run("Remove cached raw pulses", "clear_raw", following=True)
         # Never a value the store hasn't recorded (e.g. edited while it was recording another).
         settings.setValue(DISK_BUDGET_SETTING,
                           self._acknowledged if self._acknowledged is not None else read_disk_budget(settings))

@@ -257,7 +257,11 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             # The user asked (Settings › Cache's Clear raw pulses, confirmed): every folder's raw layers, or
             # these folders' (``paths``); store-v4 only. Fenced: a batch being saved can't bring them back.
             paths = params.get("paths")
-            raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
+            if params.get("following"):
+                # (S4~1, the global TXY only: the folders that follow Settings' policy; the others keep theirs.)
+                raw = store.remove_raw_following()
+            else:
+                raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
             send(_raw_removed_event(raw.paths, raw.rows, raw.bytes))
             result.update({"raw": raw.rows, "bytes": raw.bytes})
         elif action == "clear_txy":
@@ -281,6 +285,9 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 raise StoreError(read.error)
             result["choices"] = read.value or {"policy": "", "source": "", "tag": ""}
             send({"kind": "folder_choices", "path": path, "choices": result["choices"]})
+            if params.get("policy") == "txy":
+                # S4~1: nothing is removed; the app offers to remove the folder's raw pulses, with their size.
+                result["folder_raw"] = store.folder_raw(path)
         elif action == "legacy_choice":
             # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
             result["legacy"] = store.set_legacy_choice(str(params["choice"]))

@@ -204,6 +204,8 @@ class FolderCache(QObject):
     folderIconChanged = pyqtSignal(str)
     # A folder's flags (S10: Don't cache, Don't auto-load) changed.
     folderPrefsChanged = pyqtSignal(str)
+    # A folder set to keep no raw pulses still has some (S4~1): (the tab's owner, path, bytes, only copies).
+    rawRemovalOffered = pyqtSignal(str, str, int, int)
     # A flag couldn't be saved (path, why, the owner that set it); memory shows the saved state again.
     folderPrefsFailed = pyqtSignal(str, str, str)
     # Constants the analyses use changed: a folder's own (its path; its subfolders inherit them),
@@ -339,6 +341,8 @@ class FolderCache(QObject):
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
         # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
         self._choice_writes: dict[str, str] = {}
+        # And the tab that set each (S4~1: its offer to remove raw pulses goes to that tab): job → owner.
+        self._choice_owners: dict[str, str] = {}
         # Constants (F0b): the lab's (Settings → Lab parameters, set by the main window), and each
         # folder's own, as the store or this session last said: {"values": {key: float}, "set_at"}.
         # Folders with no disk cache keep theirs for the session only (``constants_session_only``).
@@ -993,6 +997,13 @@ class FolderCache(QObject):
             txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
                         "profile": {"name": profile.name, "version": profile.version,
                                     "calibrated": profile.calibrated}})
+        if "profile_def" not in txy and (profile := self.convert_profile()).content_hash() == str(txy["profile_hash"]):
+            # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
+            # built-ins the helper knows itself; another user profile's TXY is read from its text).
+            txy["profile_def"] = profile.to_dict()
+        if "on_read" not in txy and "policy" in options:
+            # store-v4 (its options carry the policy): Live converts raw files on read too (stage 3, S3~4, R~1).
+            txy["on_read"] = True
         if "backend" not in txy:
             # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
             from helab.utils import constants
@@ -1017,6 +1028,34 @@ class FolderCache(QObject):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
+    def folder_source(self, path: str) -> str:
+        """The TXY source a load of ``path`` reads: the folder's own (Q45.2), else the tabs'. Memory only."""
+        return txy_sources.normal_source((self.folder_choices.get(path) or {}).get("source")) or self.tab_source()
+
+    def converts_on_read(self, path: str) -> bool:
+        """Whether a load of ``path`` converts its raw files on read (caching v2 stage 3, S3~5): store-v4 (the
+        switch on), a TXY source that reads HeLab's (the folder's own, else the tabs'), and the folder cached.
+        Memory only."""
+        if "policy" not in store_options():
+            return False
+        return txy_sources.wants_helab(self.folder_source(path)) and not self.folder_prefs(path).get("no_cache")
+
+    def on_read_shots(self, path: str, raw: int, txy: int) -> int:
+        """How many of a folder's shots a load converts from their raw files, when it converts on read; else 0.
+        Memory only. As the load decides (S3R-2, Q~16 as built): the raw files without a current HeLab TXY, given
+        the source. With MATLAB priority those MATLAB's TXY lacks (``raw - txy``); with HeLab priority or HeLab
+        only every raw file, since a conversion is taken over MATLAB's TXY. Once the folder's data is loaded, its
+        load's own count (a HeLab TXY in HeLab's TXY folder, which only a load looks for, is read instead)."""
+        if not raw or not self.converts_on_read(path):
+            return 0
+        dataset = self.latest_dataset(path)
+        counts = dataset.metadata.get("load_counts") if dataset is not None else None
+        if isinstance(counts, Mapping) and isinstance(counts.get("txy_helab"), int):
+            return int(counts.get("helab_on_read") or 0)  # (A load of a HeLab source counted them.)
+        if self.folder_source(path) == txy_sources.MATLAB_PRIORITY:
+            return max(0, raw - txy)
+        return raw
+
     def remember_choices(self, path: str, choices: object) -> None:
         """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the
         admin's). Each part (the policy; the TXY source with its tag) keeps its later one by its own set time, so a
@@ -1033,7 +1072,7 @@ class FolderCache(QObject):
             self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
 
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
-                          tag: str | None = None) -> str:
+                          tag: str | None = None, owner: str = "") -> str:
         """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
         one): kept now (the tab's next load and Live follow it), then saved; the store's answer
         (``folder_choices``) wins. The job's owner, "" if it couldn't be queued."""
@@ -1053,6 +1092,8 @@ class FolderCache(QObject):
         job = self.cache_admin("folder_choice", **params)
         if job:
             self._choice_writes[job] = path
+            if owner:
+                self._choice_owners[job] = owner
         return job
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
@@ -3852,12 +3893,18 @@ class FolderCache(QObject):
             logging.info("Disk cache cleanup: %s", event)
         elif kind in ("error", "cancelled"):
             logging.warning("Disk cache %s: %s", action, event.get("message", "Cancelled"))
+        if action == "folder_choice" and kind == "admin_result" and isinstance(raw := event.get("folder_raw"), dict) \
+                and int(raw.get("shots") or 0) and (asker := self._choice_owners.get(producer.owner)):
+            # S4~1: the folder now keeps no raw pulses; the tab that chose it offers to remove those it has.
+            self.rawRemovalOffered.emit(asker, self._choice_writes.get(producer.owner, ""), int(raw.get("bytes") or 0),
+                                        int(raw.get("only_copy") or 0))
         if kind in ("inventory", "admin_result", "swept", "error", "cancelled") and not stale:
             self.cacheAdminResult.emit(action, event)
         if kind in ("done", "error", "cancelled"):
             self._admin.pop(producer.owner, None)
             self._started.pop(producer.owner, None)
             self._choice_writes.pop(producer.owner, None)
+            self._choice_owners.pop(producer.owner, None)
             write = self._pref_writes.pop(producer.owner, None)
             if write is not None and kind != "done":
                 self._prefs_not_saved(write[0], write[1], str(event.get("message") or "the save was cancelled"),

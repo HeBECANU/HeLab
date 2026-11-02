@@ -63,6 +63,15 @@ REFUSED_TOOLTIP = "Folders larger than 30% of RAM are never loaded."
 # The user's choice for a folder (S10): selecting it loads nothing.
 AUTO_LOAD_OFF = "Auto-load off for this folder"
 # A folder's own TXY source or cache policy (caching v2 stage 2): following the global one.
+def remove_raw_text(path: str, size: int, only_copy: int) -> str:
+    """S4~1's question (Tony's wording, 2026-11-02): a folder now keeps no raw pulses; remove those it has?"""
+    name = os.path.basename(path.rstrip(os.sep)) or path
+    only = (f"\n\n{only_copy:,} of them are the only copy: their raw files are gone from the folder, so they can't "
+            "be read again." if only_copy else "")
+    return (f"{name} keeps no raw pulses from now on. Also remove HeLab's cached copy of this folder's raw pulses "
+            f"({byte_size(size, 'disk')})? Your d files aren't touched.{only}")
+
+
 FOLDER_CHOICE_GLOBAL = "As Settings (every folder)"
 AUTO_LOAD_OFF_TOOLTIP = ("Load this folder now. You chose not to load it automatically "
                          "(right-click › Don't auto-load this folder).")
@@ -254,6 +263,8 @@ class FolderExplorer(QWidget):
         # would keep this widget's wrapper alive after Qt deletes it.)
         self.confirm_large: Callable[[str, int], bool] | None = None
         self.ask_remove_cached: Callable[[str, int | None], bool] | None = None
+        # S4~1's question (path, bytes, only copies) → remove; tests set it.
+        self.ask_remove_raw: Callable[[str, int, int], bool] | None = None
         # (Tests: answers QInputDialog.getItem for a folder's own TXY source and cache policy.)
         self.ask_item: Callable[..., tuple[str, bool]] | None = None
         self.report_flag_failure: Callable[[str, str], None] | None = None
@@ -445,6 +456,7 @@ class FolderExplorer(QWidget):
         self.model.cache.datasetChanged.connect(self._shared_dataset_changed)
         self.model.cache.autoLoadPauseChanged.connect(self._auto_load_pause_changed)
         self.model.cache.folderPrefsChanged.connect(self._folder_prefs_changed)
+        self.model.cache.rawRemovalOffered.connect(self._offer_raw_removal)
         self.model.cache.folderPrefsFailed.connect(self._folder_prefs_failed)
         self.model.cache.folderConstantsFailed.connect(self._folder_constants_failed)
         self.model.cache.mountWarningChanged.connect(self._mount_warning_changed)
@@ -849,7 +861,16 @@ class FolderExplorer(QWidget):
         if node and node.cached_report:
             return False
         report = self.model.fetch_status(path)
-        return report.status in StatusReport.STATUS_CONTAINS_DATA_HERE and bool(report.d_txy_shots)
+        return report.status in StatusReport.STATUS_CONTAINS_DATA_HERE and bool(
+            report.d_txy_shots or self.on_read_count(path, report))
+
+    def on_read_count(self, path: str, report: StatusReport | None) -> int:
+        """The folder's shots a load converts from their raw files (store-v4, stage 3, S3~5); 0 otherwise.
+        Memory only."""
+        node = self.model.nodes.get(path)
+        raw = node.raw_count if node else len((report.d_dld_shots if report else None) or [])
+        txy = node.txy_count if node else len((report.d_txy_shots if report else None) or [])
+        return self.model.cache.on_read_shots(path, raw, txy)
 
     def load_to_ram_cache(self, path: str, *, dwell: bool = True, explicit: bool = False) -> bool:
         """Show this folder's data, loading it as the tab's visible load."""
@@ -1844,10 +1865,13 @@ class FolderExplorer(QWidget):
                     "TXY count not checked · Retry manually" if history["blocked"] or node and node.scan_skipped else
                     "Could not check folder · Retry" if scan_error else
                     scan_message or "TXY count not checked")
-        elif report.d_txy_shots or node and node.txy_count:
+        elif report.d_txy_shots or node and node.txy_count or self.on_read_count(path, report):
             found = (self.load_total_files if self.loading and self._load_path == path
                      and self.load_total_files is not None else node.txy_count if node else len(report.d_txy_shots or []))
-            text = f"{found:,} TXY found"
+            on_read = self.on_read_count(path, report)
+            # (store-v4, stage 3: raw files a load converts, S3~5.)
+            text = (f"{found:,} TXY found" + (f" · {on_read:,} converted when loaded" if on_read else "")
+                    if found or not on_read else f"{on_read:,} raw found · converted when loaded")
             if self.loading and self._load_path == path:
                 text += f" · {self.loading_message}"
             elif dataset and dataset.path == path:
@@ -1964,10 +1988,19 @@ class FolderExplorer(QWidget):
         on = self.live_control.auto_converting(path)
         if button.isChecked() != on:
             button.setChecked(on)
-        tooltip = ("Auto-convert is on: each Live check also converts the folder's new raw files (d<N>.txt) "
-                   "to HeLab's TXY once written. Click to stop; the arrow has its choices." if on else
-                   "Auto-convert: also convert the folder's new raw files (d<N>.txt) to HeLab's TXY once "
-                   "written, while Live is on. The arrow has its choices.")
+        if "policy" in folder_cache.store_options():
+            # store-v4 (stage 3, S3~4): Live converts new shots when it reads them anyway; this adds the text.
+            tooltip = ("Auto-convert is on: Live converts each new shot when it reads it, and also writes HeLab's "
+                       "TXY files of the folder's new raw files (d<N>.txt) once written (Settings › TXY converter "
+                       "says where). Click to stop; the arrow has its choices." if on else
+                       "Live converts each new shot when it reads it. Auto-convert also writes HeLab's TXY files "
+                       "of the folder's new raw files (d<N>.txt) once written (Settings › TXY converter says "
+                       "where). The arrow has its choices.")
+        else:
+            tooltip = ("Auto-convert is on: each Live check also converts the folder's new raw files (d<N>.txt) "
+                       "to HeLab's TXY once written. Click to stop; the arrow has its choices." if on else
+                       "Auto-convert: also convert the folder's new raw files (d<N>.txt) to HeLab's TXY once "
+                       "written, while Live is on. The arrow has its choices.")
         if button.toolTip() != tooltip:
             button.setToolTip(tooltip)
 
@@ -2000,7 +2033,8 @@ class FolderExplorer(QWidget):
             self.folder_cache_label.setText("Cache not checked")
             self.folder_cache_label.setToolTip("Cache availability is reported by the folder listing or a load.")
             return
-        if not (cache.disk_cached(path) or report is None or report.d_txy_shots or node and node.txy_count):
+        if not (cache.disk_cached(path) or report is None or report.d_txy_shots or node and node.txy_count
+                or self.on_read_count(path, report)):
             self.folder_cache_label.setText("No data to cache")
             self.folder_cache_label.setToolTip("This folder has no TXY files.")
             return
@@ -2386,7 +2420,8 @@ class FolderExplorer(QWidget):
 
     def choose_folder_policy(self, path: str) -> None:
         """Right-click › Cache policy for this folder… (store-v4, Q45.1): what its saves keep; "As Settings"
-        follows Settings › Cache's. Changing it removes nothing."""
+        follows Settings › Cache's. Changing it removes nothing; TXY only then offers to remove the folder's raw
+        pulses, when the store says it has some (S4~1, ``_offer_raw_removal``)."""
         from helab.views.CacheTab import POLICY_LABELS
         cache = self.model.cache
         current = str((cache.folder_choices.get(path) or {}).get("policy") or "")
@@ -2396,7 +2431,24 @@ class FolderExplorer(QWidget):
             self, "Cache policy for this folder", "This folder's saves keep:", names, index, False)
         if accepted:
             policy = "" if chosen == FOLDER_CHOICE_GLOBAL else POLICY_LABELS[names.index(chosen) - 1][0]
-            cache.set_folder_choice(path, policy=policy)
+            cache.set_folder_choice(path, policy=policy, owner=self.model.owner)
+
+    def _offer_raw_removal(self, owner: str, path: str, size: int, only_copy: int) -> None:
+        """S4~1 (Tony, 2026-11-02): this tab set a folder to keep no raw pulses and the store holds some; ask, and
+        remove only those, only on a yes. HeLab never removes d raw files."""
+        if owner != self.model.owner or self.closed or not path:
+            return
+        if (self.ask_remove_raw or self._ask_remove_raw)(path, size, only_copy):
+            self.model.cache.cache_admin("clear_raw", paths=[path])
+
+    def _ask_remove_raw(self, path: str, size: int, only_copy: int) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Question, "TXY only for this folder", remove_raw_text(path, size, only_copy),
+                          parent=self)
+        remove = box.addButton("Remove cached raw pulses", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Keep them", QMessageBox.ButtonRole.RejectRole)
+        identify_buttons(box, "txy_only_raw_confirm")
+        box.exec()
+        return box.clickedButton() is remove
 
     def set_folder_flag(self, path: str, key: str, on: bool) -> None:
         """Right-click › Don't cache / Don't auto-load this folder (this folder only). Ticking
@@ -2634,6 +2686,7 @@ class FolderExplorer(QWidget):
         self.model.cache.datasetChanged.disconnect(self._shared_dataset_changed)
         self.model.cache.autoLoadPauseChanged.disconnect(self._auto_load_pause_changed)
         self.model.cache.folderPrefsChanged.disconnect(self._folder_prefs_changed)
+        self.model.cache.rawRemovalOffered.disconnect(self._offer_raw_removal)
         self.model.cache.folderPrefsFailed.disconnect(self._folder_prefs_failed)
         self.model.cache.folderConstantsFailed.disconnect(self._folder_constants_failed)
         self.model.cache.mountWarningChanged.disconnect(self._mount_warning_changed)

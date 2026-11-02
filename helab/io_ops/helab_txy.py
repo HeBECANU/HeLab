@@ -255,6 +255,29 @@ def mark_used(marks: list[list[Any]]) -> list[list[Any]]:
     return unwritten
 
 
+def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot], only: set[int] | None,
+            options: Mapping[str, Any]) -> dict[int, HelabShot]:
+    """Caching v2 stage 3 (store-v4): the shots a load converts on read, by shot: each raw file without a
+    current HeLab TXY of the profile asked for (``helab``), among those the source could take (``only``), named
+    by its raw file with the raw file's size and mtime (so the settle time and the layer's key are the raw
+    file's). A raw file that can't be stat'ed is left out."""
+    wanted = str(options.get("profile_hash") or "")
+    if not wanted:
+        return {}
+    profile = options.get("profile")
+    info = dict(profile) if isinstance(profile, Mapping) else {}
+    found: dict[int, HelabShot] = {}
+    for shot, entry in raw.items():
+        if shot in helab or only is not None and shot not in only:
+            continue
+        try:
+            stat = _entry_stat(entry, "helab txy: raw")
+        except OSError:
+            continue
+        found[shot] = HelabShot(shot, entry.path, stat.st_size, stat.st_mtime_ns, wanted, info, 0.0)
+    return found
+
+
 def could_take(source: str, raw: Mapping[int, Any], matlab: Mapping[int, Any],
                held: Mapping[int, str] | None = None) -> set[int] | None:
     """The shots ``source`` could take from HeLab's TXY, for ``find``'s ``only``: with MATLAB priority those
@@ -282,10 +305,12 @@ def compose(source: str, matlab: Mapping[int, str], helab: Mapping[int, HelabSho
 
 
 def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabShot],
-           known: Mapping[str, Any] | None, options: Mapping[str, Any], state: list[list[Any]]) -> dict[str, Any]:
+           known: Mapping[str, Any] | None, options: Mapping[str, Any], state: list[list[Any]],
+           on_read: Any = ()) -> dict[str, Any]:
     """A dataset's ``txy`` metadata: its source, its shots' origins (HeLab's only), the profiles
     they were made with (``known``: those the caller had), the profile asked for and the folders'
-    state (for the next quick check)."""
+    state (for the next quick check); with stage 3, the HeLab shots made from their raw files when read
+    (``on_read``, only when some were: S3~6 names them)."""
     profiles = {str(key): dict(value) for key, value in (known or {}).items() if isinstance(value, Mapping)}
     for shot in helab.values():
         if shot.profile:
@@ -300,7 +325,8 @@ def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabSho
             "profile_hash": str(options.get("profile_hash") or ""),
             "profile_tag": str(options.get("profile_tag") or ""), "folders": state,
             # The root key HeLab's folders were found by (FolderCache sends it back when it knows no root).
-            "key": str(options.get("key") or "")}
+            "key": str(options.get("key") or ""),
+            **({"on_read": sorted(int(shot) for shot in on_read if int(shot) in origins)} if on_read else {})}
 
 
 def matlab_signature(fingerprint: Any, origins: Mapping[int, str]) -> str:

@@ -5,12 +5,12 @@ import os
 import time
 from typing import Any
 
-from helab.io_ops import fingerprints, helab_txy, infra
+from helab.io_ops import fingerprints, helab_txy, infra, txy_cache
 from helab.io_ops.events import LiveState, ProgressEvent, RawMtimeField
 from helab.io_ops.fingerprints import (DEFAULT_CHECK_LEVEL, _clock_ahead, _fingerprint_signature, _raw_list,
                                        _sample_indices, _settled)
 from helab.io_ops.identity import _folder_identity
-from helab.io_ops.infra import Emit, Heartbeat, Pause, _is_dir, _read_gate, _scandir, _stat, emit
+from helab.io_ops.infra import Emit, Heartbeat, Pause, _entry_stat, _is_dir, _read_gate, _scandir, _stat, emit
 from helab.io_ops.summary import _summary
 from helab.utils import file_kinds, txy_sources
 from helab.utils.time_format import span
@@ -113,10 +113,13 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     current_root: str | None = identity_root
     waiting: list[list[int]] = []  # New files not read yet, as stat'ed now (the next ``seen``).
     file_names: dict[int, str] = {}  # Their names.
+    # Held HeLab shots whose new TXY couldn't be read, as stat'ed (A40.2): their held data is kept and they are
+    # sent back with ``known``, so the same file isn't read again; None until this check lists the folder.
+    held_failed: list[list[int]] | None = None
 
     def state(listed: bool, unsettled: int, safe: bool) -> LiveState:
         # ``live_since``: what the next check may compare the folder's mtime with (None: list it).
-        return {"live_since": folder.st_mtime_ns if safe and not racy and not unsettled else None,
+        found: LiveState = {"live_since": folder.st_mtime_ns if safe and not racy and not unsettled else None,
                 "live_listed": listed, "live_seconds": time.monotonic() - started,
                 "unsettled_files": unsettled, "live_identity": current_identity, "live_seen": waiting,
                 "live_seen_names": [file_names[int(entry[0])] for entry in waiting],
@@ -127,6 +130,9 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
                                "key": helab_key,
                                "key_asked": bool(txy.get("key_asked")) or (not txy.get("key")
                                                                            and bool(txy.get("cache_directory")))}}
+        if held_failed is not None:
+            found["live_failed"] = held_failed
+        return found
 
     if since is not None and since == folder.st_mtime_ns and helab_same:
         send({"kind": "live_unchanged", **state(False, 0, True), "total_files": len(held)})
@@ -178,13 +184,24 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
             elif not has_dirs and _is_dir(entry):
                 has_dirs = True
     helab_found: dict[int, helab_txy.HelabShot] = {}
+    # Caching v2 stage 3 (store-v4 only: FolderCache says ``on_read``, S3~4): raw files without a current HeLab
+    # TXY are converted when read, whether or not Live also converts them to text.
+    on_read: dict[int, helab_txy.HelabShot] = {}
+    definition = txy.get("profile_def")
+    on_read_profile = txy_cache.profile_for(definition if isinstance(definition, dict) else None,
+                                            txy_sources.helab_origin(wanted_hash)) \
+        if txy.get("on_read") and wanted_hash else None
     if txy_sources.wants_helab(txy_source):
         trusted = {shot: (*held[shot], origin) for shot, origin in held_origins.items()}
-        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted,
-                                     helab_txy.could_take(txy_source, raw_entries, matlab, held_origins))
+        could = helab_txy.could_take(txy_source, raw_entries, matlab, held_origins)
+        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
+        if on_read_profile is not None:
+            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy)
     # Each shot's TXY as the source asks; a held shot keeps its kind while that TXY is there (one held from
     # MATLAB's too: "" its origin, so a HeLab TXY converted since doesn't replace it).
-    chosen = helab_txy.compose(txy_source, matlab, helab_found, {shot: held_origins.get(shot, "") for shot in held})
+    chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found},
+                               {shot: held_origins.get(shot, "") for shot in held})
+    on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}
     origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
 
     def pending_name(shot: int, filename: str, origin: str) -> str:
@@ -218,11 +235,18 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     held_helab = set(held_origins)
     dropped = sorted(shot for shot in held_helab if shot not in names)
     helab_rereads: list[tuple[int, int, int]] = []
+    held_on_read: set[int] = set()  # (Held shots made from their raw files when read: the record names them.)
     for shot in sorted(held_helab - set(dropped)):
         origin = origins.get(shot, "")
         found_shot = helab_found.get(shot)
-        if origin and found_shot is not None:
-            stat_now: tuple[int, int] | None = (found_shot.size, found_shot.mtime_ns)
+        raw_now = _raw_stat(raw_entries.get(shot))
+        if origin == held_origins[shot] and raw_now is not None and raw_now == held[shot]:
+            # Held from its raw file, converted on read (stage 3): a TXY of the same profile converted since is
+            # the same data by contract, so it isn't read again.
+            stat_now: tuple[int, int] | None = raw_now
+            held_on_read.add(shot)
+        elif origin and found_shot is not None:
+            stat_now = (found_shot.size, found_shot.mtime_ns)
         else:
             try:
                 info = _stat(names[shot], "live: held from HeLab's")
@@ -283,6 +307,8 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
         beat()
     # Known unreadable and unchanged since: still unreadable, not read again.
     still_failed = [item for item in candidates if failed.get(item[0]) == item[1:]]
+    # Held HeLab shots whose new TXY was unreadable and is unchanged: still held, still not read (A40.2).
+    held_failed = [list(item) for item in helab_rereads if failed.get(item[0]) == item[1:]]
     # Changed held shots Live read recently, and held ones whose HeLab TXY changed, are read again as new
     # files are.
     candidates += rereads + helab_rereads
@@ -301,6 +327,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     import pandas as pd
 
     replacing = {item[0] for item in to_read} & set(held)
+    helab_again = {item[0] for item in helab_rereads}  # (Held shots read again from a new HeLab TXY: A40.2.)
     gone = set(dropped)
     fingerprint = [(shot, *held[shot]) for shot in held if shot not in replacing and shot not in gone] + still_failed
     # Unreadable shots stay in the fingerprint but not in the data, as a load keeps them.
@@ -334,12 +361,20 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
         what = "read again" if again else "read"
         filename = switching.get(shot, names[shot])
         Pause.checkpoint(send)
-        send({"kind": "file_started", "filename": filename})
+        # (Converted from its raw file: no TXY file read, before any is announced, as a load does.)
+        converting = shot in on_read and filename == on_read[shot].file and on_read_profile is not None
+        if not converting:
+            send({"kind": "file_started", "filename": filename})
         read += 1
         read_bytes += item[1]
         try:
             array = None
-            if unchanged(filename, item, f"live: before {what}"):
+            if converting:
+                outcome, array = txy_cache.convert_raw_file(filename, shot, item[1], item[2], on_read_profile,
+                                                            str(txy.get("backend") or ""), send)
+                if outcome in (txy_cache.DAMAGED, txy_cache.FAILED):
+                    raise ValueError(f"Its raw file couldn't be converted ({outcome})")
+            elif unchanged(filename, item, f"live: before {what}"):
                 if shot in origins and item[1] == 0:
                     array = np.empty((0, 3), dtype=np.float64)  # HeLab's TXY of a shot with no hits (Q10.3).
                 else:
@@ -373,16 +408,23 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
                 send({"kind": "shot", "shot": shot, "artifact": artifact, "fingerprint": list(item),
                       "problematic": shot in problematic, **known_time})
         except (OSError, ValueError, pd.errors.ParserError):
-            # Sent back with ``known`` next time: not read again unless it changes.
-            unreadable.add(shot)
-            problematic.append(shot)
-            fingerprint.append(item)
-            if again:
-                replaced.add(shot)
+            if again and shot in helab_again:
+                # A40.2: a held shot whose new HeLab TXY is unreadable keeps its held data until a readable one
+                # is read; the file goes back with ``known`` (``live_failed``), so it isn't read again unchanged.
+                fingerprint.append((shot, *held[shot]))
+                held_failed.append(list(item))
+            else:
+                # Sent back with ``known`` next time: not read again unless it changes.
+                unreadable.add(shot)
+                problematic.append(shot)
+                fingerprint.append(item)
+                if again:
+                    replaced.add(shot)
+        if not converting:
+            send({"kind": "file_finished", "filename": filename})
         if again and shot in replaced:
             reread.append({"shot": shot, "path": filename, "old": list(held[shot]), "new": list(item[1:]),
                            "read": shot not in unreadable, **({"converted": True} if shot in converted else {})})
-        send({"kind": "file_finished", "filename": filename})
         now = time.monotonic()
         if now - last_progress >= 0.1 or i + 1 == len(to_read):
             send(progress(i + 1))
@@ -427,8 +469,20 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
           "fingerprint": [list(item) for item in fingerprint], "memory_shots": kept,
           "base_signature": "", "modified": summary["modified"], "modified_observed_at": time.time(),
           "signature": str(summary["signature"]),
-          "txy": helab_txy.record(txy_source, data_origins, helab_found, txy.get("profiles"), txy, helab_state),
+          "txy": helab_txy.record(txy_source, data_origins, {**on_read, **helab_found}, txy.get("profiles"), txy,
+                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins}),
           **state(True, unsettled, True)})
+
+
+def _raw_stat(entry: os.DirEntry[str] | None) -> tuple[int, int] | None:
+    """A raw file's (size, mtime) from its listing entry; None without one or when it can't be stat'ed."""
+    if entry is None:
+        return None
+    try:
+        info = _entry_stat(entry, "live: raw file")
+    except OSError:
+        return None
+    return info.st_size, info.st_mtime_ns
 
 
 def _helab_key(path: str, txy: dict[str, Any]) -> str:

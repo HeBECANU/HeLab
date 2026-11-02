@@ -104,3 +104,30 @@ On an export of `9e8c576`, whose `helab/` and `tests/` equal the floor's `HEAD` 
 - Scratch, not committed: A47-1 (`.ai/temp/assay/test_zz_a47.py`).
 
 On the fix diff I re-check only the fix, its test and the touched files' type checks.
+
+## Re-check of the fix (`a0d04bd..65f98d0`; `912f928` and `4e86094`, stage 3, not included)
+
+**Open findings: none.** A47-1 is fixed.
+
+- **The fix.**
+  - `_root_prefs_gone` now also drops `folder_choices` for the folders the old root held (not those of a nested
+    root below), and tells `folderPrefsChanged`.
+  - It keeps a folder whose `set_folder_choice` save is still running. `_choice_writes` tracks the admin job and
+    is cleared when that job ends (`done`, `error`, `cancelled`).
+- **Its tests:**
+  - `test_a_roots_change_of_identity_drops_the_old_roots_flags` (3 changes) now checks that `RUN`'s choices go,
+    that `with_txy` falls back to the tab's source, and that the nested root's folder keeps its own;
+  - `test_a_flag_write_still_running_survives_the_roots_change` checks that a choice being saved survives and
+    another folder's goes.
+- **Fails without the fix:** on an export of `65f98d0`, with `folder_cache.py` as it was at its parent,
+  `test_root_change_flags.py` gives **4 failed**; with the fix, **4 passed**. My scratch test for A47-1, which
+  expects the old behaviour, now fails.
+- **Checks:** on the export of `65f98d0`:
+  - the full suite (`-n 4 --reruns 5 --reruns-delay 1`): **8936 passed, 673 skipped, 2 warnings, 3 failed,
+    15 rerun in 171.02 s.** All 3 failures and all 15 RERUNs are the three git-provenance tests (the export has no
+    `.git`; 5 reruns each), which passed in the floor checkout with no RERUN at this review. No other RERUN. The 2
+    warnings are the known pyqtgraph ones.
+  - strict mypy (203, 191 files, also win32): no issues;
+  - pyright (also Windows): 0 errors.
+
+The A47 items have no open review findings.
