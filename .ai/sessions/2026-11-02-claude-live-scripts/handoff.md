@@ -37,6 +37,25 @@ How "fails before" was checked: the new test files were copied into a worktree o
 the three new names `script_tree` exports): 12 failed, 34 passed. M2 and L1 were checked by putting Prismo's
 mutations back: each test then fails.
 
+## Follow-up after landing (CoCo, 2026-11-03: the Ground CI rerun)
+
+Ground CI 41463943327, job 125340069131 (ubuntu + py3.13 / Tests (1/2)) reran
+`tests/test_live_scripts.py::test_a_reload_waits_for_a_run_of_its_scripts_on_the_worker_thread`
+(`assert (0 == 1)`, `in_flight()` empty, line 206), passed on retry. **Cause, in the test:** it waited for
+`runner.in_flight()`, which counts a job from when it is queued (right, for a reload: a queued run of the
+old code must hold it too), not from when its `compute` starts. On a busy runner the job was still queued
+when `reload_scripts` held the plot and cancelled it; the worker then ended it at once without computing,
+so `in_flight()` was empty by the test's next checks. The code is right: a cancelled run that never started
+shouldn't hold a reload. **Repro**: `repro_reload_wait_race.py` in this folder: with the worker reaching the
+job only after the cancel, the old test fails every time (`assert 'Reload' == 'Reload (waiting)'`).
+**Fix** (test only): the script's helper has a `STARTED` event its compute sets; this test and
+`test_removing_the_folder_a_reload_waits_for_ends_the_wait` (the same pattern) wait for it instead of
+`in_flight()`. Checked: both pass under the repro's stress (each job starts 0.3 s late, the GUI thread
+sleeps 0.2 s after each cancel), three times; the three live-scripts test files six times in a row with
+`-n 4` and no reruns (51 passed each; no reruns on purpose, to see a flake, against AGENTS.md's rule for
+`-n`); merged `dev/v0.0.8` (`8861de9`): full suite 9131 passed, 673 skipped, **no RERUN**; the five type
+checks clean. CI: CI4_PLACEHOLDER
+
 ## Re-check fix (Prismo, `f66a946`: R1)
 
 Commit `c79f210`. **R1** a loading marker could stick (HeLab stopped while Load Scripts… loaded a new folder,
