@@ -444,3 +444,26 @@ The run's results follow, every Tests and Converter backends job's log read for 
 
 `tests/conftest.py`, `tests/test_test_groups.py`, `tests/test_convert_helab.py`, `tests/test_test_isolation.py`;
 CI: `.github/workflows/ci-test.yml`.
+
+## (b), A~4, A~5 and the repro case's RERUN (CoCo's yes)
+
+- **(b) a599ac6: the detached-stamp test.** Its fresh clone gets one untimed `git status` before
+  `checkout_build_info`; the app's 2 s per git call stays.
+  - The failure mode is shown here: with git calls given 1 ms, the branch is "unknown".
+  - The slow first status itself doesn't happen on this Mac (0.14 s, then 0.13), so CI is the check.
+- **A~4 457debc: `--session-timeout`.** It's 20 min of the 30-min job on Windows and 12 of 20 elsewhere.
+  - pytest then stops between tests and fails the run with its summary, rerun reasons and junit.xml. This
+    was checked under -n 2 here: "xdist.dsession.Interrupted: session-timeout", exit 2, junit written.
+  - A test reads the job limits and the session timeouts, and keeps 8 min of each job for the rest.
+- **A~5 5324a7f: junit.xml upload.** A step keeps junit.xml as an artifact for 7 days, `if: always()`.
+  - Named `junit-<os>-py3<minor>-group-index-<N>`, where index 0 is group 1.
+  - A test reads the step.
+- **The repro case's RERUN** (Ground CI 41483647539, Windows Tests 3/3):
+  `test_two_writers_side_by_side_lose_nothing[a writer missing its window]`, "IndexUnavailable … after
+  0.04 s, attempt 4" at shot 0, with both writers making the index at once.
+  - Fixed in 28d8973: a busy shot is tried again until `RETRY_SECONDS` (30 s), as a conversion is retried
+    for as long as it takes, not 4 times.
+  - New writer: 0 of 10 runs failed. The old writer (no retry) still fails the 1 ms case 7 of 10 here.
+- **Each commit:** full suite (9157–9159 passed, no RERUN) and the five type checks before it.
+- **Test files and CI touched:** `tests/test_release_recovery.py`, `tests/test_test_groups.py`,
+  `tests/test_convert_helab.py`, `.github/workflows/ci-test.yml`.
