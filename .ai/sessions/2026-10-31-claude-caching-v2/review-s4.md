@@ -198,3 +198,31 @@ On an export of `3085e53`, whose `helab/` and `tests/` equal the floor's `HEAD` 
   **135 passed, no RERUN.**
 - `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
 - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+## Re-check 2 (`eb38718`: S4R-1)
+
+**Open findings: none.** S4R-1 is fixed.
+
+- **The fix.**
+  - `EventHub.notify` gains `status=True`. Without `desktop`, it hands the message to the main window's existing
+    status sink, `show_status_notice`, which `HelabMainWindow` registers and which shows the message for 10 s.
+  - It records the event as shown, with `desktop` False. It never shows a desktop notification.
+  - A failing sink is logged, and HeLab goes on.
+  - Settings' TXY only sends `RAW_KEPT` with `RAW_KEPT_MESSAGE` when it can't offer the removal (busy, or no
+    inventory yet), beside the tab's own message.
+  - The notice reaches the main window, which stays open after Settings closes.
+- **Its test.** In both states, the test checks that the status sink got the message once, that the event's kind
+  is `RAW_KEPT`, and that the event was shown and not desktop. A fake desktop notifier fails the test if it is
+  called. Hooks get the event as for any other kind.
+- **Fails without it.** On an export of `eb38718`, with `events.py` and `CacheTab.py` set back to `eb38718^`:
+  `test_txy_only_offer.py` gives **1 failed** (`AssertionError: busy`) and **4 passed**. Restored (compared with
+  git): **5 passed**.
+- **Checks.** On that export, whose `helab/` and `tests/` equal the floor's `HEAD`:
+  - Touched tests and every test file that uses `events`, run with `pytest -n 4 --reruns 5 --reruns-delay 1
+    --basetemp=.ai/temp/pytest-assay`: `test_txy_only_offer`, `test_cache_tab`, `test_events_hub`,
+    `test_headless_imports`, `test_clock_skew`, `test_live_convert` and `test_shot_trends`.
+    **118 passed, no RERUN.**
+  - `mypy helab/ --strict` (204 files), `mypy tests --strict` (199), `--platform win32`: no issues.
+  - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
+
+Stage 4 has no open review findings.
