@@ -1108,6 +1108,19 @@ class PartialRemovedEvent(TypedDict):
     age: float  # seconds since it was last modified
 
 
+class BesideRefusedEvent(TypedDict):
+    """A beside write refused because the source folder's file system can't add a file without risking
+    replacing one (no hard links and no rename that refuses an existing name: ``txy._rename_exclusive``,
+    Q38.1): sent before the conversion fails with that reason (its ``error``), so the app and
+    ``helab convert`` can offer Retry or HeLab's cache or temp folder instead, never falling back silently.
+    ``txy`` the file not written; ``message`` the refusal."""
+    kind: Literal["beside_refused"]
+    path: str
+    shot: int
+    txy: str
+    message: str
+
+
 HelperEvent = Union[
     DoneEvent, ErrorEvent, PausedEvent, ResumedEvent, HeartbeatEvent, DrivesEvent, ResolvedEvent,
     CacheWarningEvent, CacheSkippedEvent,
@@ -1129,6 +1142,7 @@ HelperEvent = Union[
     ResultFoundEvent, ResultMissingEvent, ResultSavedEvent, ResultNotSavedEvent, ResultPendingEvent,
     ConvertPrefsEvent, ConvertPlanEvent, ShotConvertedEvent, ShotWaitingEvent, ShotUnconvertibleEvent, ShotKeptEvent,
     ConvertProgressEvent, ConvertSummaryEvent, PartialRemovedEvent, RawOverwrittenEvent, RawFillDoneEvent,
+    BesideRefusedEvent,
 ]
 
 # Every kind a helper sends.
@@ -1149,6 +1163,6 @@ KINDS = frozenset({
     "roots_verified", "result_found", "result_missing", "result_saved", "result_not_saved",
     "result_pending",
     "convert_prefs", "convert_plan", "shot_converted", "shot_waiting", "shot_unconvertible", "shot_kept",
-    "convert_progress", "convert_summary", "partial_removed",
+    "convert_progress", "convert_summary", "partial_removed", "beside_refused",
     "raw_overwritten", "raw_fill_done",
 })

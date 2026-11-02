@@ -6,7 +6,7 @@ settle checks, outputs and provenance. Logs to the terminal and to HeLab's log f
 stops it between two writes (every TXY is written atomically, so none is left half-written).
 
     helab convert --watch FOLDER [--once] [--profile NAME|FILE.json] [--backend NAME]
-                  [--output temp|cache|cache-forced|beside] [--workers N] [--interval SECONDS] [--again]
+                  [--output temp|cache|cache-forced|beside] [--yes] [--workers N] [--interval SECONDS] [--again]
 
 The packaged app takes the same subcommand: ``HeLab convert --watch …`` (``helab/main.py``
 dispatches it before anything starts Qt widgets, caches or Dash).
@@ -18,7 +18,10 @@ by the conversion), as with the setting's default, unless the command line asks 
 standing for the user as in Q12.4). A typed ``--output cache``: one warning names the folder and, on
 a terminal, it asks once per run whether to write to the cache folder anyway (no by default: temp);
 without a terminal, temp. ``--output cache-forced``: the cache folder, said in one log line naming
-the folder, with no question. Its provenance rows go to the same
+the folder, with no question. ``--output beside`` on a network share (A39.5, Q39.2: the converter belongs
+on the computer that owns the data) warns once per run and, on a terminal, asks whether to write beside
+on the share anyway (no by default: the setting's output, HeLab's cache folder unless changed); without a
+terminal, the setting's output, with a line naming ``--yes``; ``--yes`` writes beside without asking. Its provenance rows go to the same
 ``converted-txy/index.sqlite`` as the app's, safely beside a running HeLab writing it too (SQLite
 transactions, ``helab.convert.provenance``). It registers as a running HeLab (``cache_locks``), so no cache move runs meanwhile,
 and finds the folder's data root (the nearest ``.helab-root`` at or above it) once at the start.
@@ -60,6 +63,8 @@ def _arguments(argv: list[str]) -> argparse.Namespace:
                         help="where the TXY go (default: the setting, cache unless changed). A folder marked "
                         "Don't cache goes to the temp folder; a typed --output cache asks first on a terminal "
                         f"(else temp); --output {CACHE_FORCED} writes to the cache folder without asking")
+    parser.add_argument("--yes", action="store_true",
+                        help="--output beside on a network share: write beside the raw files without asking")
     parser.add_argument("--workers", type=int, help="processes converting at once (default: a few)")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL,
                         help=f"seconds between checks of the folder (default {DEFAULT_INTERVAL:g})")
@@ -149,6 +154,8 @@ class _Log:
         # waiting and kept counts (None: none yet). A run that changed nothing logs none.
         self.no_hits = 0
         self.logged_counts: tuple[int, int, int] | None = None
+        # A beside write the folder's file system can't make safely (``beside_refused``, Q38.1): its message.
+        self.refused = ""
 
     def __call__(self, event: HelperEvent) -> None:
         if event["kind"] == "convert_plan":
@@ -197,6 +204,8 @@ class _Log:
                                   no_hit=self.no_hits, unconvertible=counts[0], waiting=counts[1], kept=counts[2],
                                   output=event["output"], seconds=event["seconds"])
                 self.logged_counts = counts
+        elif event["kind"] == "beside_refused":
+            self.refused = event["message"]
         elif event["kind"] == "partial_removed":
             LOG.info("Removed a leftover temporary file of an interrupted conversion: %s (%d bytes, %.0f h old)",
                      os.path.join(event["folder"], event["file"]), event["size"], event["age"] / 3600)
@@ -252,6 +261,56 @@ def _cache_anyway(folder: str, cache: dict[str, Any], forced: bool) -> bool:
     return _ask("Write to the cache folder anyway? [y/N] ")
 
 
+def _choose(question: str) -> str:
+    """The first letter of the answer, lowercased ("" for Enter or the end of input); the question goes
+    to stderr with the log."""
+    sys.stderr.write(question)
+    sys.stderr.flush()
+    return sys.stdin.readline().strip().lower()[:1]
+
+
+def _after_refusal(folder: str, message: str, request: ConvertRequest) -> str:
+    """Q38.1 (Tony): a beside write refused because the share's file system can't add a file without risking
+    replacing one. On a terminal the user chooses: ``retry``, HeLab's ``cache`` or ``temp`` folder instead
+    (this run's later passes write there), or ``quit``; without one, the refusal stands (the run fails as
+    before) and a line names the choice. Never a silent fallback."""
+    LOG.warning("%s: %s", folder, message)
+    if not _on_terminal():
+        LOG.warning("Not written beside the raw files. Run again with --output cache or --output temp to write "
+                    "to HeLab's folders instead")
+        return ""
+    answer = _choose("[r]etry, write to HeLab's [c]ache or [t]emp folder instead, or [q]uit? [r/c/t/Q] ")
+    if answer == "r":
+        return "retry"
+    if answer in ("c", "t"):
+        output = "cache" if answer == "c" else "temp"
+        request.pop("beside", None)
+        request.pop("beside_confirmed", None)
+        request["destination"] = output
+        LOG.info("Writing to HeLab's %s folder instead of beside the raw files (this run)", output)
+        return output
+    return "quit"
+
+
+def _beside_anyway(folder: str, yes: bool) -> bool:
+    """A typed ``--output beside`` on a network share (A39.5): one warning naming the share, then the
+    user's answer on a terminal, unless ``--yes``; without a terminal and ``--yes``, not beside (the
+    setting's output). Asked once, before the first check."""
+    from helab.utils.cache_location import share_of, share_warning
+    share = share_of(folder, resolve=True)
+    if not share:
+        return True
+    LOG.warning("%s", share_warning(folder, share))
+    if yes:
+        LOG.warning("Writing beside the raw files on the share anyway (--yes)")
+        return True
+    if _on_terminal() and _ask("Write the TXY beside the raw files on the share anyway? [y/N] "):
+        return True
+    LOG.warning("%s: not writing beside the raw files on the share; converting to HeLab's folder instead "
+                "(--output beside --yes writes beside without asking)", folder)
+    return False
+
+
 def _request(args: argparse.Namespace, folder: str, profile: dict[str, Any], cache: dict[str, Any]) -> ConvertRequest:
     from helab.utils.constants import DIR_TEMPS, read_convert_output
     from helab.utils.settings_store import app_settings
@@ -264,7 +323,7 @@ def _request(args: argparse.Namespace, folder: str, profile: dict[str, Any], cac
                                "seen": None if args.once else [],
                                "destination": read_convert_output(app_settings()) if output == "beside" else output,
                                "cache": cache, "redo": "always" if args.again else "stale"}
-    if output == "beside":
+    if output == "beside" and _beside_anyway(folder, bool(args.yes)):
         request["beside"] = request["beside_confirmed"] = True
     # Only a typed --output cache: the setting's default leaves the folder's flag the last word.
     if typed in ("cache", CACHE_FORCED) and _cache_anyway(folder, cache, typed == CACHE_FORCED):
@@ -308,7 +367,12 @@ def main(argv: list[str]) -> int:
                 convert_folder(folder, request, log)
             except (OSError, ValueError, RuntimeError) as exc:
                 LOG.error("Conversion of %s failed: %s", folder, exc)
-                if args.once:
+                choice = ""
+                if log.refused:
+                    choice, log.refused = _after_refusal(folder, log.refused, request), ""
+                if choice in ("retry", "cache", "temp"):
+                    continue  # (At once: the user is waiting.)
+                if args.once or choice == "quit":
                     status = 1
                     break
             else:

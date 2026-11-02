@@ -2133,6 +2133,41 @@ def test_a_typed_output_cache_asks_before_writing_a_dont_cache_folder_to_the_cac
     assert Path(plan["folder"], "d_txy_helab_m19v1_1.txt").is_file()
 
 
+@pytest.mark.parametrize("share, yes, terminal, answer, beside", [
+    ("//labserver/data", False, True, True, True), ("//labserver/data", False, True, False, False),
+    ("//labserver/data", False, False, None, False), ("//labserver/data", True, False, None, True),
+    ("//labserver/data", True, True, None, True), ("", False, True, None, True)],
+    ids=["terminal-y", "terminal-N", "no-terminal", "yes", "yes-on-terminal", "not-a-share"])
+def test_a_typed_output_beside_on_a_share_warns_and_asks_first(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        share: str, yes: bool, terminal: bool, answer: bool | None, beside: bool) -> None:
+    """A39.5 (Q39.2): ``--output beside`` on a network share warns once (the share named, the converter
+    belongs on the acquisition PC) and asks on a terminal, no by default; without one it converts to HeLab's
+    folder and names ``--yes``; ``--yes`` asks nothing. Detection is patched: no real share."""
+    from helab.utils import cache_location
+    write_raw(source, 1, raw_bytes(10_000))
+    resolved: list[bool] = []
+
+    def share_of(path: str, mounts: Any = None, *, resolve: bool = False) -> str:
+        resolved.append(resolve)
+        return share if path == str(source) else ""
+    monkeypatch.setattr(cache_location, "share_of", share_of)
+    with caplog.at_level("WARNING", logger="helab.convert"):
+        request, asked = typed(source, tmp_path, private_store, monkeypatch, "--output", "beside",
+                               *(["--yes"] if yes else []), terminal=terminal, answer=answer)
+    assert resolved == [True]  # (The command line may resolve the source path; the GUI never does.)
+    assert asked == (["Write the TXY beside the raw files on the share anyway? [y/N] "] if answer is not None else [])
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert bool(warnings) == bool(share)
+    if share:
+        assert "//labserver/data" in warnings[0] and "acquisition PC" in warnings[0]
+        assert any("--yes" in warning for warning in warnings) == (not beside or yes)
+    assert bool(request.get("beside_confirmed")) is beside
+    [plan] = of(run(source, request), "convert_plan")
+    assert plan["output"] == ("beside" if beside else "cache")
+    assert (source / "d_txy_helab_m19v1_1.txt").is_file() is beside
+
+
 @pytest.mark.parametrize("argv", [(), ("--output", "temp")], ids=["setting", "temp"])
 def test_the_output_settings_default_leaves_dont_cache_the_last_word(
         source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -2207,6 +2242,91 @@ def test_again_converts_each_shot_once_more(source: Path, tmp_path: Path, privat
     monkeypatch.setattr(time, "sleep", sleep)
     assert convert_cli.main(["--watch", str(source), "--output", "temp", "--again", "--interval", "0.01", *argv]) == 0
     assert passes == converted
+
+
+def refusing_beside(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file system with neither hard links nor a rename that refuses an existing name (Q38.1)."""
+    monkeypatch.setattr(txy, "PLATFORM", "linux")
+    monkeypatch.setattr(txy, "_exclusive_rename", lambda platform: None)
+    no_links(monkeypatch)
+
+
+def test_a_beside_write_that_cant_rename_safely_is_said_before_the_run_fails(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Q38.1: the refusal stays (nothing written, the run fails with the reason), and ``beside_refused``
+    names it first, so the app and ``helab convert`` can offer Retry or HeLab's cache or temp folder."""
+    write_raw(source, 1, raw_bytes(10_000))
+    refusing_beside(monkeypatch)
+    events: list[dict[str, Any]] = []
+    request = request_for(source, tmp_path, private_store, beside=True, beside_confirmed=True)
+    with pytest.raises(OSError) as failed:
+        convert_folder(str(source), request, events.append)  # type: ignore[arg-type]
+    assert convert.unsafe_rename(failed.value)
+    [refused] = of(events, "beside_refused")
+    assert refused["shot"] == 1 and refused["txy"] == str(source / "d_txy_helab_m19v1_1.txt")
+    assert refused["message"].startswith("Not written: this folder's file system can't add a file")
+    assert sorted(path.name for path in source.iterdir()) == ["d1.txt"]
+    # Another refusal (a cache folder, say) isn't one: only a beside write is the user's to redirect.
+    assert not convert.unsafe_rename(OSError(errno.ENOTSUP, "Operation not supported"))
+    assert not convert.unsafe_rename(FileExistsError(errno.EEXIST, "Not written: x"))
+
+
+@pytest.mark.parametrize("terminal, answers, status, where", [
+    (False, [], 1, ""), (True, ["c"], 0, "cache"), (True, ["t"], 0, "temp"), (True, ["r", "c"], 0, "cache"),
+    (True, ["q"], 1, ""), (True, [""], 1, "")],
+    ids=["no-terminal", "cache", "temp", "retry-then-cache", "quit", "enter"])
+def test_helab_convert_offers_retry_or_hellabs_folders_after_a_refused_beside_write(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        terminal: bool, answers: list[str], status: int, where: str) -> None:
+    """Q38.1 (Tony): ``helab convert --output beside`` where the write can't be made safely asks on a terminal:
+    Retry, HeLab's cache or temp folder instead, or quit (the default); without one the refusal stands
+    (exit 1) with a line naming ``--output cache`` and ``--output temp``. Never a silent fallback."""
+    from helab import convert_cli
+    from helab.utils import app_log
+    write_raw(source, 1, raw_bytes(10_000))
+    refusing_beside(monkeypatch)
+    real = convert.convert_folder
+    asked: list[str] = []
+    sent: list[dict[str, Any]] = []
+
+    def converting(path: str, request: ConvertRequest, send: Any) -> None:
+        request["temps"], request["workers"] = str(tmp_path / "temps"), 1
+
+        def both(event: Any) -> None:
+            sent.append(event)
+            send(event)
+        real(path, request, both)
+
+    def choose(question: str) -> str:
+        asked.append(question)
+        return answers[len(asked) - 1]
+    monkeypatch.setattr(convert_cli, "_start_cache", lambda: (options(private_store), None))
+    monkeypatch.setattr(app_log, "start_log_file", lambda folder: None)
+    monkeypatch.setattr(convert, "convert_folder", converting)
+    monkeypatch.setattr(convert_cli, "_on_terminal", lambda: terminal)
+    monkeypatch.setattr(convert_cli, "_choose", choose)
+    with caplog.at_level("WARNING", logger="helab.convert"):
+        assert convert_cli.main(["--watch", str(source), "--output", "beside", "--once"]) == status
+    assert len(asked) == len(answers)
+    assert all(question.startswith("[r]etry, write to HeLab's [c]ache or [t]emp folder instead") for question in asked)
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert any("can't add a file without risking" in warning for warning in warnings)
+    assert any("--output cache or --output temp" in warning for warning in warnings) == (not terminal)
+    assert sorted(path.name for path in source.iterdir()) == ["d1.txt"]  # (Never beside.)
+    plans = of(sent, "convert_plan")
+    assert plans[0]["output"] == "beside" and len(of(sent, "beside_refused")) == 1 + answers.count("r")
+    converted = of(sent, "shot_converted")
+    assert len(converted) == (1 if where else 0)
+    if where:
+        assert plans[-1]["output"] == where and Path(converted[0]["txy"]).is_file()
+
+
+def test_the_choice_reads_one_letter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from helab import convert_cli
+    for typed_answer, letter in (("Cache\n", "c"), ("\n", ""), ("", ""), (" t \n", "t")):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(typed_answer))
+        assert convert_cli._choose("Which? ") == letter
+    assert capsys.readouterr().err == "Which? " * 4
 
 
 @pytest.mark.parametrize("method", ["rename", "copy"])

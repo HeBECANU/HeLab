@@ -136,6 +136,13 @@ WINDOWS_MAX_PATH = 260
 PLATFORM = sys.platform
 
 
+def unsafe_rename(exc: BaseException) -> bool:
+    """Whether a write was refused because the folder's file system can't add a file without risking
+    replacing one (``txy._cannot_refuse``: ENOTSUP, "Not written: …"; Q38.1)."""
+    return (isinstance(exc, OSError) and exc.errno == errno.ENOTSUP
+            and str(exc.strerror or "").startswith("Not written: "))
+
+
 def path_too_long(exc: BaseException, path: str, platform: str | None = None,
                   folder_exists: Callable[[str], bool] | None = None) -> str | None:
     """What to tell the user when the OS refused ``path`` (or the name in ``exc``, e.g. the TXY's
@@ -739,6 +746,10 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                     refuse(shot, "failed", too_long)  # (Not converted again while unchanged: Q23.6.)
                     progress()
                     return
+                if beside and unsafe_rename(exc):
+                    # (Q38.1: the user chooses Retry or HeLab's cache or temp folder; the run fails as before.)
+                    send({"kind": "beside_refused", "path": path, "shot": shot.shot, "txy": target,
+                          "message": str(exc.strerror if isinstance(exc, OSError) else exc)})
                 if not (beside and isinstance(exc, FileExistsError)):
                     raise
                 # (Another conversion wrote it since the listing; it stays.)
