@@ -414,7 +414,7 @@ class PresetBar(QWidget):
             if not self.confirm(self, "Replace preset?", f"A preset “{name}” of {plot.name} exists. Replace it?",
                                 "Replace"):
                 return
-        preset = ScriptPreset(name, self.ref, plot.values(), plot.backend(), time.time())
+        preset = ScriptPreset(name, self.ref, plot.values(), plot.backend(), time.time(), plot.txy_saved())
         try:
             why = write_script_preset(preset)
         except ValueError as error:  # A value JSON can't hold (not a finite number).

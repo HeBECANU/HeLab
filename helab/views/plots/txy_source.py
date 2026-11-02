@@ -7,14 +7,16 @@ conversion profile's unless another is picked). "As the tab" follows the folder'
 Settings → TXY converter). A plot on another choice than the tab's loads its own dataset of the folder
 (RAM only) through ``FolderCache`` and loads it again when Live finds new shots. The row also names the
 profile HeLab converts with and, from the folder's date, the plate profile the swap dates suggest (Q6.10:
-shown, never applied).
+shown, never applied), and "Keep" (Keep this plot's TXY choice, on by default; Q14.2 = Q23.4): on, the
+choice is saved with the plot's presets, arrangements and the plots reopened at start; off, it isn't
+(for tweaking and exploring).
 """
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Callable, Optional
 
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from helab.analysis.dataset_view import DatasetView
 from helab.convert.profile import BUILTIN_PROFILES, UNCALIBRATED, DetectorProfile, file_tag, suggested_plates
@@ -57,11 +59,12 @@ def plate_note(view: DatasetView, profile_name: str) -> str:
 
 class TxySourceRow(QWidget):
     """``TXY: [source ▾] [profile ▾]`` and one line under it: the profile HeLab converts with, and a plate
-    suggestion when there is one. ``changed`` is called with the source ("": as the tab) and the profile's
-    name ("": the conversion profile's) chosen."""
+    suggestion when there is one, with the Keep box at its end. ``changed`` is called with the source ("":
+    as the tab) and the profile's name ("": the conversion profile's) chosen; ``kept`` with Keep's state."""
 
     def __init__(self, source: str, changed: Callable[[str, str], None], profile: str = "",
-                 parent: Optional[QWidget] = None) -> None:
+                 parent: Optional[QWidget] = None, keep: bool = True,
+                 kept: Optional[Callable[[bool], None]] = None) -> None:
         super().__init__(parent)
         self._changed = changed
         layout = QVBoxLayout(self)
@@ -90,8 +93,22 @@ class TxySourceRow(QWidget):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
         layout.addLayout(row)
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
         self.note = identify(ElidedLabel(), "txy_note")  # (One line that never widens the panel: Q33.2.)
-        layout.addWidget(self.note)
+        line.addWidget(self.note, 1)
+        # "Keep" for short (the row shrinks with the panel); its name and tooltip say it in full.
+        self.keep_box = identify(QCheckBox("Keep"), "txy_keep", "Keep this plot's TXY choice",
+                                 "Keep this plot's TXY choice: save it with its presets, arrangements and the "
+                                 "plots reopened at start. Off (for tweaking and exploring): they start as the "
+                                 "folder's tab.")
+        self.keep_box.setToolTip(self.keep_box.accessibleDescription())
+        self.keep_box.setChecked(keep)
+        self.keep_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        if kept is not None:
+            self.keep_box.toggled.connect(kept)
+        line.addWidget(self.keep_box)
+        layout.addLayout(line)
         self.set_source(source, profile)
         self.combo.currentIndexChanged.connect(self._picked)
         self.profile_combo.currentIndexChanged.connect(self._picked)
