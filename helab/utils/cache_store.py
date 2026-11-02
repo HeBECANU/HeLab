@@ -300,6 +300,12 @@ class Removal:
     only_copy_paths: tuple[str, ...] = ()
     raw_rows: int = 0
     raw_bytes: int = 0
+    # Stage 2's TXY layers ((folder, layer) pairs) by Make room's groups (Q45.6): rebuildable from the raw
+    # layer here, those whose sources the last listing saw, and only copies.
+    txy_layers: tuple[tuple[str, str], ...] = ()
+    txy_seen: tuple[tuple[str, str], ...] = ()
+    txy_only: tuple[tuple[str, str], ...] = ()
+    txy_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -442,19 +448,35 @@ class RoomPlan:
     raw_paths: tuple[str, ...] = ()
     only_copy_paths: tuple[str, ...] = ()
     raw_bytes: int = 0
+    # Stage 2 (Q45.6): (folder, layer) pairs by group, and the layers' bytes.
+    txy_layers: tuple[tuple[str, str], ...] = ()
+    txy_seen: tuple[tuple[str, str], ...] = ()
+    txy_only: tuple[tuple[str, str], ...] = ()
+    txy_bytes: int = 0
 
     @property
     def items(self) -> tuple[str, ...]:
         """Everything the plan removes, as ``adopt_pending``'s ``expected_room`` names it: a folder's
-        dataset by its path, its raw layer as ``raw:<path>``, an only copy as ``raw-only:<path>``."""
-        return room_items(self.paths, self.raw_paths, self.only_copy_paths)
+        dataset by its path, its raw layer as ``raw:<path>``, an only copy as ``raw-only:<path>``, and a
+        TXY layer as ``txy:``, ``txy-seen:`` or ``txy-only:<layer>:<path>`` (``txy_item``)."""
+        return room_items(self.paths, self.raw_paths, self.only_copy_paths, self.txy_layers, self.txy_seen,
+                          self.txy_only)
 
 
-def room_items(paths: Sequence[str], raw_paths: Sequence[str] = (), only_copy: Sequence[str] = ()) -> tuple[str, ...]:
-    return (*paths, *(RAW_ITEM + path for path in raw_paths), *(ONLY_COPY_ITEM + path for path in only_copy))
+def room_items(paths: Sequence[str], raw_paths: Sequence[str] = (), only_copy: Sequence[str] = (),
+               txy: Sequence[tuple[str, str]] = (), txy_seen: Sequence[tuple[str, str]] = (),
+               txy_only: Sequence[tuple[str, str]] = ()) -> tuple[str, ...]:
+    """Make room's items in its order (Q45.6): datasets, rebuildable layers, layers seen, raw layers seen,
+    then only copies (TXY layers, then raw layers)."""
+    return (*paths, *(txy_item(TXY_ITEM, path, layer) for path, layer in txy),
+            *(txy_item(TXY_SEEN_ITEM, path, layer) for path, layer in txy_seen),
+            *(RAW_ITEM + path for path in raw_paths),
+            *(txy_item(TXY_ONLY_ITEM, path, layer) for path, layer in txy_only),
+            *(ONLY_COPY_ITEM + path for path in only_copy))
 
 
 RAW_ITEM, ONLY_COPY_ITEM = "raw:", "raw-only:"
+TXY_ITEM, TXY_SEEN_ITEM, TXY_ONLY_ITEM = "txy:", "txy-seen:", "txy-only:"
 # A store-v3 being cleared is renamed ``store-v3.clearing-<8 hex>`` first (``clear_legacy``, C3-4).
 LEGACY_CLEARING = ".clearing-"
 
@@ -534,6 +556,176 @@ class RawRemoval:
     paths: tuple[str, ...] | None
     rows: int
     bytes: int
+
+
+# TXY layers (store-v4, caching v2 stage 2: design addendum §2–§8).
+
+def _txy_epoch(key: str) -> str:
+    """The ``folder_epochs`` row a removal of one folder's TXY layers bumps (``txy:<key>``, store-v4)."""
+    return f"txy:{key}"
+
+
+TXY_KINDS = ("raw", "txy")
+# A layer of more segments than this is compacted when it fits (Q45.7); a hit row is three float64.
+COMPACT_SEGMENTS = 8
+TXY_ROW_BYTES = 24
+_MATLAB_LAYER, _HELAB_LAYER = "matlab", "helab:"
+_TXY_LAYER_COLUMNS = ("path, layer, tags, entries, rows, ram_bytes, bytes, precision, gone_at, job_seq, saved_at, "
+                      "last_used")  # (A shot's fingerprint: its raw file's, or its TXY file's: Q45.3.)
+
+
+@dataclass(frozen=True)
+class TxyShot:
+    """One shot of a save's layer part: its source's fingerprint and ``kind`` (``raw``: the raw file's,
+    wherever one is listed; ``txy``: the TXY file's, Q45.3), its hit count, and whether it was problematic."""
+    shot: int
+    size: int
+    mtime_ns: int
+    kind: str
+    rows: int
+    problematic: bool = False
+
+
+@dataclass(frozen=True)
+class TxyPart:
+    """One layer's new segment in a save unit (``write_txy_file`` published it): the shots it holds, the
+    layer's tag names (display only, Q22.2) and precision (``g8`` or ``f64``)."""
+    layer: str
+    file: str
+    shots: tuple[TxyShot, ...]
+    tags: tuple[str, ...] = ()
+    precision: str = "g8"
+
+    def to_json(self, size: int, guard: SaveGuard) -> dict[str, Any]:
+        """As a waiting save keeps it (``pending_saves.parts``), with its job's guard (Q45.8)."""
+        return {"layer": self.layer, "file": self.file, "bytes": size, "tags": list(self.tags),
+                "precision": self.precision, "job_seq": guard.job_seq,
+                "shots": [[item.shot, item.size, item.mtime_ns, item.kind, item.rows, int(item.problematic)]
+                          for item in self.shots],
+                "guard": {"generations": dict(guard.generations), "epochs": dict(guard.epochs)}}
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> TxyPart:
+        return cls(str(value["layer"]), str(value["file"]),
+                   tuple(TxyShot(int(shot), int(size), int(mtime), str(kind), int(rows), bool(flag))
+                         for shot, size, mtime, kind, rows, flag in value["shots"]),
+                   tuple(str(tag) for tag in value.get("tags", ())), str(value.get("precision", "g8")))
+
+
+@dataclass(frozen=True)
+class TxyEntry:
+    """A shot of a ``txy_layers`` row: its fingerprint and kind, the segment holding it (``seq``), its hit
+    count, whether problematic, and the job that saved it (only a later job replaces it)."""
+    shot: int
+    size: int
+    mtime_ns: int
+    kind: str
+    seq: int
+    rows: int
+    problematic: bool
+    job_seq: int
+
+    def to_json(self) -> list[Any]:
+        return [self.shot, self.size, self.mtime_ns, self.kind, self.seq, self.rows, int(self.problematic),
+                self.job_seq]
+
+    @classmethod
+    def from_json(cls, value: Sequence[Any]) -> TxyEntry:
+        shot, size, mtime, kind, seq, rows, flag, job_seq = value
+        return cls(int(shot), int(size), int(mtime), str(kind), int(seq), int(rows), bool(flag), int(job_seq))
+
+
+@dataclass(frozen=True)
+class TxyLayerRow:
+    """A folder's layer: its shots (``entries``), totals, precision, when a listing last found some of its
+    sources gone (``gone_at``: the layer is then an only copy, Q45.6), and its segments (seq → file, bytes)."""
+    path: str
+    layer: str
+    tags: tuple[str, ...]
+    entries: dict[int, TxyEntry]
+    rows: int
+    ram_bytes: int
+    bytes: int
+    precision: str
+    gone_at: float | None
+    job_seq: int
+    saved_at: float
+    last_used: float
+    segments: dict[int, tuple[str, int]]
+
+
+class ViewRecord(TypedDict):
+    """What a save keeps of a composition (``txy_views``): ``fingerprint`` ``[shot, size, mtime_ns, kind,
+    layer]`` of each shot, ``problematic``, ``info`` (today's ``datasets.info``: listing, signature, the TXY
+    record) and ``raw_times``."""
+    fingerprint: list[list[Any]]
+    problematic: list[int]
+    info: dict[str, Any]
+    raw_times: NotRequired[list[list[int]]]
+
+
+@dataclass(frozen=True)
+class ViewRow:
+    path: str
+    source: str
+    tag: str
+    fingerprint: list[list[Any]]
+    problematic: list[int]
+    raw_times: list[list[int]]
+    info: dict[str, Any]
+    job_seq: int
+    last_used: float
+
+
+@dataclass(frozen=True)
+class TxySave:
+    """One save unit's outcome: the layers ``saved``, or the whole unit held as ``pending_id`` (``reason``
+    ``over_budget`` or ``needs_approval``; one waiting unit per folder, Q45.8); ``refused`` (layer, shot)
+    pairs a later job saved; ``dropped`` layers the folder's policy doesn't write (``raw``: no HeLab layer).
+    With usage after it, in the store's write order."""
+    saved: tuple[str, ...]
+    refused: tuple[tuple[str, int], ...]
+    dropped: tuple[str, ...]
+    reason: str
+    pending_id: str
+    bytes: int
+    usage: int
+    usage_seq: int
+    budget: int | None
+
+
+@dataclass(frozen=True)
+class TxyRemoval:
+    """What a removal of TXY layers did: the folders (None: every one), layers and bytes."""
+    paths: tuple[str, ...] | None
+    layers: int
+    bytes: int
+
+
+def _combined_removal(removed: Sequence[Removal]) -> Removal | None:
+    """Make room's or ``trim``'s removals as one (None for none), in the order they were made."""
+    if not removed:
+        return None
+    return Removal(("datasets",), tuple(path for item in removed for path in item.paths or ()),
+                   sum(item.datasets for item in removed), sum(item.dataset_bytes for item in removed),
+                   tuple(path for item in removed for path in item.raw_paths),
+                   tuple(path for item in removed for path in item.only_copy_paths),
+                   sum(item.raw_rows for item in removed), sum(item.raw_bytes for item in removed),
+                   tuple(pair for item in removed for pair in item.txy_layers),
+                   tuple(pair for item in removed for pair in item.txy_seen),
+                   tuple(pair for item in removed for pair in item.txy_only),
+                   sum(item.txy_bytes for item in removed))
+
+
+def _removal_items(removal: Removal) -> tuple[str, ...]:
+    """A removal as Make room's items (``room_items``)."""
+    return room_items(removal.paths or (), removal.raw_paths, removal.only_copy_paths, removal.txy_layers,
+                      removal.txy_seen, removal.txy_only)
+
+
+def txy_item(prefix: str, path: str, layer: str) -> str:
+    """A folder's layer as Make room names it (``<prefix><layer>:<path>``; compared, never parsed)."""
+    return f"{prefix}{layer}:{path}"
 
 
 @dataclass(frozen=True)
@@ -681,6 +873,7 @@ class CacheStore:
         self._legacy_tried = False
         self.datasets_dir = os.path.join(root, "datasets")
         self.raw_dir = os.path.join(root, store_v4.RAW_DIRNAME)
+        self.txy_dir = os.path.join(root, store_v4.TXY_DIRNAME)
         self.results_dir = os.path.join(root, RESULTS_DIRNAME)
         self.database = os.path.join(root, "records.sqlite")
         self.read_only = False
@@ -697,6 +890,8 @@ class CacheStore:
                 # (A read-only store may lack the column or the table: it then has no raw times, and
                 # no folder sets constants.)
                 self._raw_times = "raw_times" if _has_raw_times(self._conn) else "'[]'"
+                # (store-v4's waiting layer parts, Q45.8; a read-only store from before stage 2 has none.)
+                self._pending_parts = _has_column(self._conn, "pending_saves", "parts")
                 self._constants_table = _has_table(self._conn, "folder_constants")
                 self._presets_table = _has_table(self._conn, "presets")
                 # (Nor the results table: it then has no results saved, and saves none.)
@@ -751,6 +946,7 @@ class CacheStore:
         os.makedirs(self.results_dir, exist_ok=True)
         if self.layout >= store_v4.LAYOUT:
             os.makedirs(self.raw_dir, exist_ok=True)
+            os.makedirs(self.txy_dir, exist_ok=True)
         conn = self._connect(busy_timeout, read_only=False)
         try:
             if _layout_version(conn) is None:
@@ -764,7 +960,7 @@ class CacheStore:
                         if statement.strip():
                             conn.execute(statement)
                     if self.layout >= store_v4.LAYOUT:
-                        for statement in store_v4.SCHEMA:
+                        for statement in (*store_v4.SCHEMA, *store_v4.STAGE2_SCHEMA):
                             conn.execute(statement)
                     defaults: dict[str, object] = {
                         "layout_version": self._expected_layout, "store_id": uuid.uuid4().hex, "created_at": time.time(),
@@ -1044,11 +1240,13 @@ class CacheStore:
         if not old.startswith("root://") or not new.startswith("root://") or old == new:
             return []
         tables = ("folder_epochs", "folder_summaries", "scan_histories", "subtrees", "listings",
-                  "folder_prefs", "convert_prefs", "folder_constants", "pending_saves", "datasets")
+                  "folder_prefs", "convert_prefs", "folder_constants", "pending_saves", "datasets",
+                  "cache_policy", "txy_source_prefs")
         timestamps = {"folder_summaries": "saved_at", "scan_histories": "saved_at",
                       "subtrees": "saved_at", "listings": "saved_at", "folder_prefs": "set_at",
                       "convert_prefs": "set_at", "folder_constants": "set_at",
-                      "pending_saves": "created_at", "datasets": "last_used"}
+                      "pending_saves": "created_at", "datasets": "last_used",
+                      "cache_policy": "set_at", "txy_source_prefs": "set_at"}
         moved: set[str] = set()
         try:
             with self.transaction():
@@ -1080,15 +1278,73 @@ class CacheStore:
                             if table in ("datasets", "pending_saves"):
                                 loser = existing if source_wins else values
                                 self._retire(str(loser["file"]), time.time())
+                                for part in json.loads(str(loser.get("parts") or "[]")):
+                                    self._retire(str(part["file"]), time.time())
                             if not source_wins:
                                 self._conn.execute(f"DELETE FROM {table} WHERE path=?", (source,))
                                 continue
                             self._conn.execute(f"DELETE FROM {table} WHERE path=?", (target,))
                         self._conn.execute(f"UPDATE {table} SET path=? WHERE path=?", (target, source))
                 moved.update(self._rekey_results(old, new))
+                moved.update(self._rekey_sets(old, new))
             return sorted(moved)
         except sqlite3.Error as exc:
             raise StoreError(f"Data-root subtree could not be re-keyed: {exc}") from exc
+
+    def _rekey_sets(self, old: str, new: str) -> set[str]:
+        """:meth:`rekey_subtree` of store-v4's tables with many rows per folder (S2-0: stage 1 left raw layers
+        under the old key, unused but counted). A raw layer row moves per shot (the newer saved wins); a
+        folder's TXY layers, segments and views move as one set (a folder held at both keys keeps the newer
+        set). The loser's files are retired."""
+        if self.layout < store_v4.LAYOUT:
+            return set()
+        moved: set[str] = set()
+        now = time.time()
+        span = (old, old + "/", old + "0")
+
+        def folders(table: str) -> list[str]:
+            return sorted({str(path) for (path,) in self._conn.execute(
+                f"SELECT DISTINCT path FROM {table} WHERE path=? OR (path>=? AND path<?)", span)})
+
+        for source in folders("raw_layers"):
+            target = new + source[len(old):]
+            moved.add(source)
+            for shot, saved_at, file in self._conn.execute("SELECT shot, saved_at, file FROM raw_layers WHERE path=?",
+                                                           (source,)).fetchall():
+                previous = self._conn.execute("SELECT saved_at, file FROM raw_layers WHERE path=? AND shot=?",
+                                              (target, shot)).fetchone()
+                if previous is not None:
+                    if float(previous[0]) >= float(saved_at):
+                        self._retire(str(file), now)
+                        self._conn.execute("DELETE FROM raw_layers WHERE path=? AND shot=?", (source, shot))
+                        continue
+                    self._retire(str(previous[1]), now)
+                    self._conn.execute("DELETE FROM raw_layers WHERE path=? AND shot=?", (target, shot))
+                self._conn.execute("UPDATE raw_layers SET path=? WHERE path=? AND shot=?", (target, source, shot))
+
+        def newest(key: str) -> float | None:
+            row = self._conn.execute("SELECT MAX(stamp) FROM (SELECT saved_at AS stamp FROM txy_layers WHERE path=? "
+                                     "UNION ALL SELECT last_used FROM txy_views WHERE path=?)", (key, key)).fetchone()
+            return None if row[0] is None else float(row[0])
+
+        def drop(key: str) -> None:
+            for (file,) in self._conn.execute("SELECT file FROM txy_segments WHERE path=?", (key,)).fetchall():
+                self._retire(str(file), now)
+            for table in ("txy_segments", "txy_layers", "txy_views"):
+                self._conn.execute(f"DELETE FROM {table} WHERE path=?", (key,))
+
+        for source in sorted({*folders("txy_layers"), *folders("txy_views")}):
+            target = new + source[len(old):]
+            moved.add(source)
+            theirs, mine = newest(target), newest(source)
+            if theirs is not None:
+                if theirs >= (mine or 0.0):
+                    drop(source)
+                    continue
+                drop(target)
+            for table in ("txy_segments", "txy_layers", "txy_views"):
+                self._conn.execute(f"UPDATE {table} SET path=? WHERE path=?", (target, source))
+        return moved
 
     def _rekey_results(self, old: str, new: str) -> set[str]:
         """:meth:`rekey_subtree` of saved results (many rows per folder): each moves to its new
@@ -1238,8 +1494,14 @@ class CacheStore:
                     # named it to the user (C2-9, Q22.6; step 6's dialog may name and offer them).
                     keys, count, size = self._remove_raw_rows(" WHERE path = ? AND gone_at IS NULL", (path,),
                                                               time.time())
+                    # Its TXY layers too, but not an only copy (a source gone at the last look), as for raw.
+                    pairs, txy_bytes = self._remove_txy_rows(" WHERE path = ? AND gone_at IS NULL", (path,),
+                                                             time.time())
+                    self._conn.execute("DELETE FROM txy_views WHERE path = ?", (path,))
                     removal = dataclasses.replace(removal, raw_paths=tuple(self._source_path(key) for key in keys),
-                                                  raw_rows=count, raw_bytes=size)
+                                                  raw_rows=count, raw_bytes=size,
+                                                  txy_seen=tuple((self._source_path(key), layer) for key, layer in pairs),
+                                                  txy_bytes=txy_bytes)
                 return {"no_cache": no_cache, "no_auto_load": no_auto_load, "set_at": set_at}, removal
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
@@ -1301,6 +1563,14 @@ class CacheStore:
                         "SELECT path FROM convert_prefs WHERE write_beside AND set_at <= ?", (now,))
                         if path not in paths]
                     self._conn.execute("UPDATE convert_prefs SET write_beside = 0, set_at = ? WHERE set_at <= ?",
+                                       (now, now))
+                if self.layout >= store_v4.LAYOUT:  # (Stage 2's per-folder choices: back to the global ones.)
+                    paths += [path for (path,) in self._conn.execute(
+                        "SELECT path FROM cache_policy WHERE policy != '' AND set_at <= ? UNION "
+                        "SELECT path FROM txy_source_prefs WHERE source != '' AND set_at <= ?", (now, now))
+                        if path not in paths]
+                    self._conn.execute("UPDATE cache_policy SET policy = '', set_at = ? WHERE set_at <= ?", (now, now))
+                    self._conn.execute("UPDATE txy_source_prefs SET source = '', tag = '', set_at = ? WHERE set_at <= ?",
                                        (now, now))
                 # Also stops a choice made before the Clear for a folder with no row yet.
                 self._conn.execute("INSERT INTO meta (key, value) VALUES ('prefs_cleared_at', ?) ON CONFLICT (key) "
@@ -1670,13 +1940,7 @@ class CacheStore:
                 # a save that doesn't stand is rolled back to here.
                 self._conn.execute("SAVEPOINT budget_check")
                 self._upsert_dataset(path, file, size, record, guard.job_seq, now)
-                superseded = []
-                for old_id, old in self._conn.execute("SELECT pending_id, file FROM pending_saves "
-                                                      "WHERE path = ? AND job_seq < ?",
-                                                      (path, guard.job_seq)).fetchall():
-                    self._retire(old, now)
-                    superseded.append(old_id)
-                self._conn.execute("DELETE FROM pending_saves WHERE path = ? AND job_seq < ?", (path, guard.job_seq))
+                superseded = self._retire_pending(" WHERE path = ? AND job_seq < ?", (path, guard.job_seq), now)
                 usage, writes = self._live(), self._writes()
                 reason: Literal["over_budget", "needs_approval"] | None = None
                 if budget is not None and usage > budget:
@@ -1746,8 +2010,7 @@ class CacheStore:
         if existing and int(existing[1]) >= guard.job_seq:
             raise SaveRejected("newer", "Newer data is already waiting to be cached")
         if existing:
-            self._retire(existing[0], now)
-            self._conn.execute("DELETE FROM pending_saves WHERE path = ?", (path,))
+            self._retire_pending(" WHERE path = ?", (path,), now)
         pending_id = uuid.uuid4().hex
         self._conn.execute(
             "INSERT INTO pending_saves (pending_id, path, reason, file, bytes, record, gen_datasets, epoch, "
@@ -1758,40 +2021,48 @@ class CacheStore:
 
     def adopt_pending(self, pending_id: str, *, budget: int | None = None, budget_set_at: float | None = None,
                       make_room: bool = False, expected_room: Sequence[str] | None = None) -> AdoptResult:
-        """Make a pending save the folder's dataset (Save update, or Make room).
+        """Make a pending save the folder's dataset or layers (Save update, or Make room).
 
         Raises :class:`SaveRejected` if it is gone, or (discarding it) if the folder
         was cleared or newer data was cached since its job started; nothing else is
-        removed then. With a ``budget`` the fit rule is checked against current usage:
-        if it doesn't fit, the save stays pending as ``over_budget`` and the result says
-        what Make room would remove. With ``make_room``, least recently used **other**
-        datasets are removed until it fits, in the same transaction. With ``expected_room``
-        (the folders the user was told it removes), Make room removes exactly those or nothing:
-        if the plan changed (e.g. a new budget), it stays pending with the new plan.
+        removed then. A waiting layer unit (store-v4, Q45.8) is checked part by part: a part
+        whose job's guard no longer holds is dropped with its file, the rest still apply. With
+        a ``budget`` the fit rule is checked against current usage: if it doesn't fit, the save
+        stays pending as ``over_budget`` and the result says what Make room would remove. With
+        ``make_room``, other folders' data is removed in Make room's order (``_free_space``) until
+        it fits, in the same transaction. With ``expected_room`` (what the user was told it
+        removes), Make room removes exactly that or nothing: if the plan changed (e.g. a new
+        budget), it stays pending with the new plan.
         """
         now = time.time()
         rejection: SaveRejected | None = None
         result: AdoptResult | None = None
         try:
             with self.transaction():
+                parts_column = "parts" if self._pending_parts else "'[]'"
                 row = self._conn.execute(
-                    "SELECT path, file, bytes, record, gen_datasets, epoch, job_seq FROM pending_saves "
+                    f"SELECT path, file, bytes, record, gen_datasets, epoch, job_seq, {parts_column} FROM pending_saves "
                     "WHERE pending_id = ?", (pending_id,)).fetchone()
                 if row is None:
                     raise SaveRejected("gone", "This save is no longer waiting")
-                path, file, size, record, generation, epoch, job_seq = row
+                path, file, size, record, generation, epoch, job_seq, parts = row
                 budget = self._active_budget(budget, budget_set_at)
-                stored = self._stored_job_seq(path)
-                if (int(self._meta()["gen_datasets"]) != generation or self._epoch(path) != epoch):
-                    rejection = SaveRejected("cleared", "Cache was cleared before saving completed")
-                elif self._no_cache(path):
-                    rejection = SaveRejected("no_cache", NOT_CACHED)
-                elif stored is not None and stored >= job_seq:
-                    rejection = SaveRejected("newer", "Newer data is already cached")
-                if rejection is not None:
-                    self._retire(file, now)
-                    self._conn.execute("DELETE FROM pending_saves WHERE pending_id = ?", (pending_id,))
+                parts = json.loads(parts or "[]")
+                if parts:
+                    rejection = self._check_txy_pending(pending_id, str(path), parts, now)
                 else:
+                    stored = self._stored_job_seq(path)
+                    if (int(self._meta()["gen_datasets"]) != generation or self._epoch(path) != epoch):
+                        rejection = SaveRejected("cleared", "Cache was cleared before saving completed")
+                    elif self._no_cache(path):
+                        rejection = SaveRejected("no_cache", NOT_CACHED)
+                    elif stored is not None and stored >= job_seq:
+                        rejection = SaveRejected("newer", "Newer data is already cached")
+                if rejection is not None:
+                    self._retire_pending(" WHERE pending_id = ?", (pending_id,), now)
+                else:
+                    (size,) = self._conn.execute("SELECT bytes FROM pending_saves WHERE pending_id = ?",
+                                                 (pending_id,)).fetchone()
                     needed = int(size) + len(record)
                     fits, removal = self._adopt_in_savepoint(pending_id, budget, make_room, keep=True,
                                                              expected=expected_room)
@@ -1810,6 +2081,28 @@ class CacheStore:
         assert result is not None
         return result
 
+    def _check_txy_pending(self, pending_id: str, key: str, parts: list[dict[str, Any]],
+                           now: float) -> SaveRejected | None:
+        """A waiting layer unit before it is adopted (inside a transaction): rejected whole for a folder now
+        set to Don't cache; otherwise each part whose job's guard no longer holds (a Clear since) is dropped
+        and its file retired, and the unit is rejected only when no part is left."""
+        if self._no_cache(key):
+            return SaveRejected("no_cache", NOT_CACHED)
+        try:
+            standing = [part for part in parts if self._txy_guard_holds(part["guard"], key)]
+        except SaveRejected as rekeyed:
+            return rekeyed
+        if not standing:
+            return SaveRejected("cleared", "Cached TXY data was cleared before saving completed")
+        if len(standing) < len(parts):
+            for part in parts:
+                if part not in standing:
+                    self._retire(str(part["file"]), now)
+            self._conn.execute("UPDATE pending_saves SET parts = ?, file = ?, bytes = ? WHERE pending_id = ?",
+                               (_dumps(standing), str(standing[0]["file"]),
+                                sum(int(part["bytes"]) for part in standing), pending_id))
+        return None
+
     def _adopt_in_savepoint(self, pending_id: str, budget: int | None, make_room: bool, *,
                             keep: bool, expected: Sequence[str] | None = None) -> tuple[bool, Removal | None]:
         """Adopt a pending save inside a savepoint, with Make room if asked, and measure.
@@ -1818,41 +2111,30 @@ class CacheStore:
         ``keep`` and it fits; otherwise everything is rolled back. Returns whether it
         fits and what Make room removed (or would remove).
         """
-        path, file, size, record, job_seq = self._conn.execute(
-            "SELECT path, file, bytes, record, job_seq FROM pending_saves WHERE pending_id = ?",
+        parts_column = "parts" if self._pending_parts else "'[]'"
+        path, file, size, record, job_seq, parts = self._conn.execute(
+            f"SELECT path, file, bytes, record, job_seq, {parts_column} FROM pending_saves WHERE pending_id = ?",
             (pending_id,)).fetchone()
         self._conn.execute("SAVEPOINT adopt_fit")
         try:
-            self._upsert_dataset(path, file, int(size), json.loads(record), int(job_seq), time.time())
+            now = time.time()
+            waiting = json.loads(parts or "[]")
+            if waiting:
+                unit = json.loads(record)
+                for part in waiting:  # (Each part under its own job's sequence: Q45.8.)
+                    self._apply_txy_unit(str(path), str(unit.get("source", "")), str(unit.get("tag", "")),
+                                         [TxyPart.from_json(part)], {str(part["file"]): int(part["bytes"])}, None,
+                                         int(part["job_seq"]), now)
+                if unit.get("view") is not None:
+                    self._apply_txy_unit(str(path), str(unit.get("source", "")), str(unit.get("tag", "")), [], {},
+                                         unit["view"], int(unit.get("view_job_seq", job_seq)), now)
+            else:
+                self._upsert_dataset(path, file, int(size), json.loads(record), int(job_seq), now)
             self._conn.execute("DELETE FROM pending_saves WHERE pending_id = ?", (pending_id,))
-            removed: list[Removal] = []
-            if budget is not None and make_room:
-                # Least recently used other folders, one at a time, until it really fits.
-                others = [other for (other,) in self._conn.execute(
-                    "SELECT path FROM datasets WHERE path != ? ORDER BY last_used, path", (path,))]
-                for other in others:
-                    if self._live() <= budget:
-                        break
-                    removed.append(self.remove(("datasets",), [other], _stored_keys=True))
-                # store-v4 (D8): then other folders' raw layers whose files were there at the last look
-                # (re-readable from the share), least recently used folder first; then only copies.
-                for only_copy in (False, True) if self.layout >= store_v4.LAYOUT else ():
-                    gone = "IS NOT NULL" if only_copy else "IS NULL"
-                    for (other,) in self._conn.execute(
-                            f"SELECT path FROM raw_layers WHERE gone_at {gone} AND path != ? GROUP BY path "
-                            "ORDER BY MAX(last_used), path", (path,)).fetchall():
-                        if self._live() <= budget:
-                            break
-                        keys, count, size = self._remove_raw_rows(f" WHERE path = ? AND gone_at {gone}", (other,),
-                                                                  time.time())
-                        folder = (self._source_path(str(other)),)
-                        removed.append(Removal((), (), raw_paths=() if only_copy else folder,
-                                               only_copy_paths=folder if only_copy else (), raw_rows=count,
-                                               raw_bytes=size))
+            removed = self._free_space(budget, str(path)) if budget is not None and make_room else []
             fits = budget is None or self._live() <= budget
-            planned = set(room_items([other for item in removed for other in item.paths or ()],
-                                     [other for item in removed for other in item.raw_paths],
-                                     [other for item in removed for other in item.only_copy_paths]))
+            removal = _combined_removal(removed)
+            planned = set(() if removal is None else _removal_items(removal))
             if expected is not None and make_room and planned != set(expected):
                 fits = False  # Not what the user agreed to remove: nothing is.
         except BaseException:
@@ -1862,12 +2144,6 @@ class CacheStore:
         if not (keep and fits):
             self._conn.execute("ROLLBACK TO adopt_fit")
         self._conn.execute("RELEASE adopt_fit")
-        removal = None if not removed else Removal(
-            ("datasets",), tuple(other for item in removed for other in item.paths or ()),
-            sum(item.datasets for item in removed), sum(item.dataset_bytes for item in removed),
-            tuple(other for item in removed for other in item.raw_paths),
-            tuple(other for item in removed for other in item.only_copy_paths),
-            sum(item.raw_rows for item in removed), sum(item.raw_bytes for item in removed))
         return fits, removal
 
     def _room_plan(self, pending_id: str, budget: int) -> RoomPlan:
@@ -1878,12 +2154,11 @@ class CacheStore:
         # mounted path. Match stored rows through the display mapping, never re-key it.
         used = [] if not paths else [float(last_used) for key, last_used in self._conn.execute(
             "SELECT path, last_used FROM datasets") if self._source_path(str(key)) in paths]
-        planned = removal is not None and fits
-        return RoomPlan(paths, removal.dataset_bytes if planned and removal else 0,
-                        min(used, default=None), max(used, default=None), fits,
-                        removal.raw_paths if planned and removal else (),
-                        removal.only_copy_paths if planned and removal else (),
-                        removal.raw_bytes if planned and removal else 0)
+        if removal is None or not fits:
+            return RoomPlan(paths, 0, min(used, default=None), max(used, default=None), fits)
+        return RoomPlan(paths, removal.dataset_bytes, min(used, default=None), max(used, default=None), fits,
+                        removal.raw_paths, removal.only_copy_paths, removal.raw_bytes, removal.txy_layers,
+                        removal.txy_seen, removal.txy_only, removal.txy_bytes)
 
     def room_plan(self, pending_id: str, budget: int) -> RoomPlan:
         """What Make room would remove for a pending save: least recently used other
@@ -1902,12 +2177,8 @@ class CacheStore:
         """Drop a pending save and retire its file; False if it was already gone."""
         try:
             with self.transaction():
-                row = self._conn.execute("SELECT file FROM pending_saves WHERE pending_id = ?",
-                                         (pending_id,)).fetchone()
-                if row is None:
+                if not self._retire_pending(" WHERE pending_id = ?", (pending_id,), time.time()):
                     return False
-                self._retire(row[0], time.time())
-                self._conn.execute("DELETE FROM pending_saves WHERE pending_id = ?", (pending_id,))
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
         return True
@@ -2053,6 +2324,8 @@ class CacheStore:
             return os.path.join(self.results_dir, file[len(RESULTS_DIRNAME) + 1:])
         if file.startswith(store_v4.RAW_DIRNAME + "/"):
             return os.path.join(self.raw_dir, file[len(store_v4.RAW_DIRNAME) + 1:])
+        if file.startswith(store_v4.TXY_DIRNAME + "/"):
+            return os.path.join(self.txy_dir, file[len(store_v4.TXY_DIRNAME) + 1:])
         return os.path.join(self.datasets_dir, file)
 
     def start_result_job(self, path: str) -> SaveGuard:
@@ -2534,26 +2807,30 @@ class CacheStore:
     def write_raw_file(self, packed: bytes) -> str:
         """Publish a raw layer's ``.hlb`` under its final name (``raw/<name>``); no row names it yet (a
         killed writer's file is an orphan the sweep deletes after an hour, the existing rule)."""
+        return self._write_v4_file(self.raw_dir, store_v4.RAW_DIRNAME, packed, "raw layer")
+
+    def _write_v4_file(self, folder: str, dirname: str, packed: bytes, what: str) -> str:
+        """Publish a store-v4 ``.hlb`` in ``folder`` (temporary name, fsync, rename): ``<dirname>/<name>``."""
         self._needs_v4()
         if self.read_only:
             raise StoreReadOnly("This disk cache was written by a newer HeLab and is read-only")
         name = uuid.uuid4().hex
-        temporary = os.path.join(self.raw_dir, f"tmp-{name}")
+        temporary = os.path.join(folder, f"tmp-{name}")
         final = f"{name}.hlb"
         try:
-            os.makedirs(self.raw_dir, exist_ok=True)
+            os.makedirs(folder, exist_ok=True)
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(packed)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, os.path.join(self.raw_dir, final))
+            os.replace(temporary, os.path.join(folder, final))
         except OSError as exc:
             with contextlib.suppress(OSError):
                 os.remove(temporary)
-            raise StoreError(f"Cached raw layer could not be written: {exc}") from exc
-        _fsync_dir(self.raw_dir)
-        return f"{store_v4.RAW_DIRNAME}/{final}"
+            raise StoreError(f"Cached {what} could not be written: {exc}") from exc
+        _fsync_dir(folder)
+        return f"{dirname}/{final}"
 
     def start_raw_job(self, path: str) -> SaveGuard:
         """A guard for a job that may save ``path``'s raw layers: ``gen_raw``, the folder's ``raw:``
@@ -2801,6 +3078,669 @@ class CacheStore:
             return 0
         return int(self._conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM raw_layers").fetchone()[0])
 
+    # TXY layers (store-v4, caching v2 stage 2: design addendum §2–§8). A folder's ``matlab`` and
+    # ``helab:<profile hash>`` layers hold each shot once, in append-only segments (``txy/<uuid>.hlb``); a
+    # view (``txy_views``) is what one source mode and tag loads. Nothing here runs under store-v3.
+
+    def write_txy_file(self, packed: bytes) -> str:
+        """Publish a TXY segment's ``.hlb`` (``txy/<name>``); no row names it yet (an orphan otherwise, the
+        sweep's existing rule)."""
+        return self._write_v4_file(self.txy_dir, store_v4.TXY_DIRNAME, packed, "TXY segment")
+
+    def start_txy_job(self, path: str) -> SaveGuard:
+        """A guard for a job that may save ``path``'s TXY layers and views: ``gen_txy``, the folder's ``txy:``
+        epoch and its root's, and the folder's next ``job_seq`` (shared with its raw and dataset saves)."""
+        self._needs_v4()
+        key = self._path_key(path)
+        try:
+            with self.transaction():
+                self._conn.execute("INSERT INTO folder_epochs (path, job_seq) VALUES (?, 1) "
+                                   "ON CONFLICT (path) DO UPDATE SET job_seq = job_seq + 1", (key,))
+                (job_seq,) = self._conn.execute("SELECT job_seq FROM folder_epochs WHERE path = ?", (key,)).fetchone()
+                epochs = {_txy_epoch(key): self._epoch(_txy_epoch(key))}
+                if root := _root_epoch(key):
+                    epochs[root] = self._epoch(root)
+                generation = int(self._meta()["gen_txy"])
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return SaveGuard({"txy": generation}, epochs, int(job_seq))
+
+    def _txy_guard_holds(self, guard: Mapping[str, Any], key: str) -> bool:
+        """Whether a TXY guard (a ``SaveGuard``'s generations and epochs) still holds for ``key``; raises for
+        a guard of another key (a re-key since, as ``_guard_holds``)."""
+        generations, epochs = guard["generations"], guard["epochs"]
+        epoch, root = _txy_epoch(key), _root_epoch(key)
+        if "txy" not in generations or epoch not in epochs:
+            raise SaveRejected("cleared", REKEYED)
+        return (int(self._meta()["gen_txy"]) == int(generations["txy"]) and self._epoch(epoch) == int(epochs[epoch])
+                and (root is None or self._epoch(root) == int(epochs.get(root, 0))))
+
+    def _check_txy_guard(self, guard: SaveGuard, key: str) -> None:
+        if not self._txy_guard_holds({"generations": guard.generations, "epochs": guard.epochs}, key):
+            raise SaveRejected("cleared", "Cached TXY data was cleared before saving completed")
+
+    def _policy(self, key: str, default: str) -> str:
+        """The folder's cache policy (Q45.1): its own row, else the global setting the app sent."""
+        row = self._conn.execute("SELECT policy FROM cache_policy WHERE path = ?", (key,)).fetchone()
+        if row is not None and row[0] in store_v4.POLICIES:
+            return str(row[0])
+        return default if default in store_v4.POLICIES else store_v4.DEFAULT_POLICY
+
+    def save_txy(self, path: str, source: str, tag: str, parts: Sequence[TxyPart], view: ViewRecord | None,
+                 guard: SaveGuard, *, budget: int | None = None, budget_set_at: float | None = None,
+                 default_policy: str = store_v4.DEFAULT_POLICY, now: float | None = None) -> TxySave:
+        """Save one unit (design addendum §5): each part's new segment, the layer rows and the view, in one
+        transaction with one fit check, if ``guard`` holds and the folder may be cached. Under policy ``raw``
+        HeLab layers aren't written (their files are retired). A shot a later job saved is kept (``refused``).
+        Over the budget, or growing a folder's layers while usage is at 80 % or more, the unit waits as the
+        folder's one pending save, merged with one already waiting (Q45.8). A rejected unit raises
+        :class:`SaveRejected` and retires its files."""
+        self._needs_v4()
+        key = self._path_key(path)
+        now = time.time() if now is None else now
+        files = [part.file for part in parts]
+        try:
+            with self.transaction():
+                self._check_txy_guard(guard, key)
+                self._check_cacheable(key)
+                policy = self._policy(key, default_policy)
+                kept = [part for part in parts
+                        if not (policy == "raw" and part.layer.startswith(_HELAB_LAYER))]
+                dropped = tuple(part.layer for part in parts if part not in kept)
+                for part in parts:
+                    if part not in kept:
+                        self._retire(part.file, now)
+                sizes = {part.file: self._size(part.file) for part in kept}
+                budget = self._active_budget(budget, budget_set_at)
+                before = self._live()
+                had = self._conn.execute("SELECT 1 FROM txy_layers WHERE path = ?", (key,)).fetchone() is not None
+                self._conn.execute("SAVEPOINT txy_fit")
+                refused = self._apply_txy_unit(key, source, tag, kept, sizes, view, guard.job_seq, now)
+                usage = self._live()
+                grows = sum(sizes.values()) > 0
+                reason = ""
+                if budget is not None and grows and usage > budget:
+                    reason = "over_budget"
+                elif (budget is not None and had and grows and usage > before
+                      and before >= APPROVAL_SHARE * budget):
+                    reason = "needs_approval"
+                if reason:
+                    self._conn.execute("ROLLBACK TO txy_fit")
+                    self._conn.execute("RELEASE txy_fit")
+                    pending_id = self._insert_txy_pending(key, source, tag, kept, sizes, view, guard, reason, now)
+                    return TxySave((), (), dropped, reason, pending_id, sum(sizes.values()), self._live(),
+                                   self._writes(), budget)
+                self._conn.execute("RELEASE txy_fit")
+                usage, writes = self._live(), self._writes()
+        except SaveRejected as rejection:
+            raise self._reject_txy_files(files, rejection) from None
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return TxySave(tuple(part.layer for part in kept), refused, dropped, "", "", sum(sizes.values()), usage,
+                       writes, budget)
+
+    def _apply_txy_unit(self, key: str, source: str, tag: str, parts: Sequence[TxyPart], sizes: Mapping[str, int],
+                        view: ViewRecord | None, job_seq: int, now: float) -> tuple[tuple[str, int], ...]:
+        """Write a unit's parts and view (inside a write transaction): each part a new segment of its layer
+        holding the shots it replaces or adds; a shot whose entry a later job saved is kept and named; a
+        segment left without a live shot is deleted and its file retired. The view is replaced only by a
+        job that started no earlier than its own."""
+        maker = self._maker_id()
+        refused: list[tuple[str, int]] = []
+        for part in parts:
+            row = self._conn.execute("SELECT tags, entries, precision FROM txy_layers WHERE path = ? AND layer = ?",
+                                     (key, part.layer)).fetchone()
+            entries = {} if row is None else {entry.shot: entry for entry in map(TxyEntry.from_json,
+                                                                                    json.loads(row[1]))}
+            (seq,) = self._conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM txy_segments "
+                                        "WHERE path = ? AND layer = ?", (key, part.layer)).fetchone()
+            applied = 0
+            superseded: dict[int, int] = {}
+            for item in part.shots:
+                old = entries.get(item.shot)
+                if old is not None and old.job_seq > job_seq:
+                    refused.append((part.layer, item.shot))
+                    continue
+                if old is not None:
+                    superseded[old.seq] = superseded.get(old.seq, 0) + 1
+                entries[item.shot] = TxyEntry(item.shot, item.size, item.mtime_ns, item.kind, int(seq), item.rows,
+                                              item.problematic, job_seq)
+                applied += 1
+            for old_seq, count in superseded.items():
+                self._conn.execute("UPDATE txy_segments SET live_shots = live_shots - ? WHERE path = ? AND layer = ? "
+                                   "AND seq = ?", (count, key, part.layer, old_seq))
+            if applied:
+                self._conn.execute("INSERT INTO txy_segments (path, layer, seq, file, bytes, live_shots, all_shots) "
+                                   "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                   (key, part.layer, int(seq), part.file, sizes[part.file], applied, len(part.shots)))
+            else:
+                self._retire(part.file, now)
+            for (file,) in self._conn.execute("SELECT file FROM txy_segments WHERE path = ? AND layer = ? "
+                                              "AND live_shots <= 0", (key, part.layer)).fetchall():
+                self._retire(str(file), now)
+            self._conn.execute("DELETE FROM txy_segments WHERE path = ? AND layer = ? AND live_shots <= 0",
+                               (key, part.layer))
+            tags = sorted({*(json.loads(row[0]) if row is not None else ()), *part.tags})
+            self._write_layer_row(key, part.layer, tags, entries, part.precision, maker, job_seq, now,
+                                  keep_gone=row is not None)
+        if view is not None:
+            stored = self._conn.execute("SELECT job_seq FROM txy_views WHERE path = ? AND source = ? AND tag = ?",
+                                        (key, source, tag)).fetchone()
+            if stored is None or int(stored[0]) <= job_seq:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO txy_views (path, source, tag, fingerprint, problematic, raw_times, info, "
+                    "maker, job_seq, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (key, source, tag, _dumps(view["fingerprint"]), _dumps(view["problematic"]),
+                     _dumps(view.get("raw_times", [])), _dumps(view["info"]), maker, job_seq, now))
+        return tuple(refused)
+
+    def _write_layer_row(self, key: str, layer: str, tags: Sequence[str], entries: Mapping[int, TxyEntry],
+                         precision: str, maker: str, job_seq: int, now: float, *, keep_gone: bool = True) -> None:
+        """A layer row from its entries; its bytes are its segments'. ``gone_at`` stays as a listing set it."""
+        (size,) = self._conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM txy_segments WHERE path = ? AND layer = ?",
+                                     (key, layer)).fetchone()
+        rows = sum(entry.rows for entry in entries.values())
+        gone = self._conn.execute("SELECT gone_at FROM txy_layers WHERE path = ? AND layer = ?",
+                                  (key, layer)).fetchone() if keep_gone else None
+        stored_job = self._conn.execute("SELECT job_seq FROM txy_layers WHERE path = ? AND layer = ?",
+                                        (key, layer)).fetchone()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO txy_layers (path, layer, tags, entries, shots, rows, ram_bytes, bytes, precision, "
+            "gone_at, maker, job_seq, saved_at, last_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (key, layer, _dumps(list(tags)),
+             _dumps([entry.to_json() for _, entry in sorted(entries.items())]), len(entries), rows,
+             rows * TXY_ROW_BYTES, int(size), precision, None if gone is None else gone[0], maker,
+             max(job_seq, int(stored_job[0]) if stored_job else 0), now, now))
+
+    def _insert_txy_pending(self, key: str, source: str, tag: str, parts: Sequence[TxyPart],
+                            sizes: Mapping[str, int], view: ViewRecord | None, guard: SaveGuard, reason: str,
+                            now: float) -> str:
+        """Keep a unit waiting for the user's answer as the folder's one pending save (Q45.8): merged with a
+        unit already waiting, layer by layer (a later job's part replaces an earlier one's; an earlier one's
+        arriving later is dropped), the later job's view kept. A dataset waiting from stage 1 is replaced by
+        a later job, as today. Returns the new ``pending_id``."""
+        existing = self._conn.execute("SELECT pending_id, file, job_seq, parts, record FROM pending_saves "
+                                      "WHERE path = ?", (key,)).fetchone()
+        merged: dict[str, dict[str, Any]] = {}
+        record: dict[str, Any] = {"source": source, "tag": tag, "view": view, "view_job_seq": guard.job_seq}
+        if existing is not None:
+            old_parts = json.loads(existing[3] or "[]")
+            if not old_parts:  # (A dataset waiting: the earlier job's loses, as ``_insert_pending``.)
+                if int(existing[2]) >= guard.job_seq:
+                    raise SaveRejected("newer", "Newer data is already waiting to be cached")
+                self._retire(str(existing[1]), now)
+            else:
+                merged = {str(part["layer"]): part for part in old_parts}
+                old_record = json.loads(existing[4])
+                if view is None or int(old_record.get("view_job_seq", 0)) > guard.job_seq:
+                    record = old_record  # (The view of the job that started later, or the only one.)
+            self._conn.execute("DELETE FROM pending_saves WHERE path = ?", (key,))
+        for part in parts:
+            previous = merged.get(part.layer)
+            if previous is not None and int(previous["job_seq"]) > guard.job_seq:
+                self._retire(part.file, now)
+                continue
+            if previous is not None:
+                self._retire(str(previous["file"]), now)
+            merged[part.layer] = part.to_json(sizes[part.file], guard)
+        if not merged:
+            raise SaveRejected("newer", "Newer data is already waiting to be cached")
+        pending_id = uuid.uuid4().hex
+        ordered = [merged[layer] for layer in sorted(merged)]
+        self._conn.execute(
+            "INSERT INTO pending_saves (pending_id, path, reason, file, bytes, record, gen_datasets, epoch, job_seq, "
+            "created_at, parts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (pending_id, key, reason, str(ordered[0]["file"]), sum(int(part["bytes"]) for part in ordered),
+             _dumps(record), int(guard.generations["txy"]), int(guard.epochs[_txy_epoch(key)]),
+             max(int(part["job_seq"]) for part in ordered), now, _dumps(ordered)))
+        return pending_id
+
+    def _reject_txy_files(self, files: Sequence[str], rejection: SaveRejected) -> SaveRejected:
+        """Retire a rejected unit's files, in their own transaction (never one a row or a waiting part names)."""
+        with contextlib.suppress(sqlite3.Error, StoreError):
+            with self.transaction():
+                named = self._known_files()
+                now = time.time()
+                for file in files:
+                    if file not in named:
+                        self._retire(file, now)
+        return rejection
+
+    def txy_layers(self, path: str) -> Read[dict[str, TxyLayerRow]]:
+        """``path``'s TXY layers by layer, with their entries and segments."""
+        if self.layout < store_v4.LAYOUT:
+            return _missing()
+        key = self._path_key(path)
+        try:
+            with self.transaction(write=False):
+                found = {str(row[1]): self._layer_row(row) for row in self._conn.execute(
+                    f"SELECT {_TXY_LAYER_COLUMNS} FROM txy_layers WHERE path = ?", (key,)).fetchall()}
+        except (sqlite3.Error, StoreError, ValueError) as exc:
+            return _error(f"Disk cache could not be read: {exc}")
+        return _found(found)
+
+    def _layer_row(self, row: Sequence[Any]) -> TxyLayerRow:
+        segments = {int(seq): (str(file), int(size)) for seq, file, size in self._conn.execute(
+            "SELECT seq, file, bytes FROM txy_segments WHERE path = ? AND layer = ?", (row[0], row[1]))}
+        return TxyLayerRow(self._source_path(str(row[0])), str(row[1]), tuple(json.loads(row[2])),
+                           {entry.shot: entry for entry in map(TxyEntry.from_json, json.loads(row[3]))},
+                           int(row[4]), int(row[5]), int(row[6]), str(row[7]),
+                           None if row[8] is None else float(row[8]), int(row[9]), float(row[10]), float(row[11]),
+                           segments)
+
+    def read_view(self, path: str, source: str, tag: str) -> Read[ViewRow]:
+        """A composition's view (design addendum §4): found, missing, or an error (never "nothing saved")."""
+        if self.layout < store_v4.LAYOUT:
+            return _missing()
+        key = self._path_key(path)
+        try:
+            with self.transaction(write=False):
+                row = self._conn.execute(
+                    "SELECT fingerprint, problematic, raw_times, info, job_seq, last_used FROM txy_views "
+                    "WHERE path = ? AND source = ? AND tag = ?", (key, source, tag)).fetchone()
+        except (sqlite3.Error, StoreError) as exc:
+            return _error(f"Disk cache could not be read: {exc}")
+        if row is None:
+            return _missing()
+        try:
+            return _found(ViewRow(self._source_path(key), source, tag, json.loads(row[0]), json.loads(row[1]),
+                                  json.loads(row[2]), json.loads(row[3]), int(row[4]), float(row[5])))
+        except ValueError as exc:
+            return _error(f"Saved view record is unreadable: {exc}")
+
+    def read_txy_shots(self, path: str, layer: str,
+                       shots: Iterable[int] | None = None) -> Read[dict[int, Any]]:
+        """Shots of a layer (every one, or ``shots`` it holds) as read-only float64 (n, 3) arrays, each from
+        the segment its entry names; a segment replaced meanwhile (compaction) is looked up once more."""
+        from helab.convert import txy_layer
+        from helab.utils import hlb
+        if self.layout < store_v4.LAYOUT:
+            return _missing()
+        wanted = None if shots is None else {int(shot) for shot in shots}
+        for attempt in range(2):
+            rows = self.txy_layers(path)
+            if rows.failed:
+                return _error(rows.error)
+            row = (rows.value or {}).get(layer)
+            if row is None:
+                return _missing()
+            by_seq: dict[int, list[int]] = {}
+            for shot, entry in row.entries.items():
+                if wanted is None or shot in wanted:
+                    by_seq.setdefault(entry.seq, []).append(shot)
+            found: dict[int, Any] = {}
+            try:
+                for seq, needed in sorted(by_seq.items()):
+                    file = row.segments[seq][0]
+                    with open(self._store_file(file), "rb") as handle:
+                        held, _, _ = txy_layer.unpack_segment(handle.read())
+                    for shot in needed:
+                        found[shot] = held[shot]
+                return _found(found)
+            except (FileNotFoundError, KeyError):
+                if attempt:
+                    return _error("A cached TXY segment is missing")
+            except (OSError, hlb.HlbError) as exc:
+                return _error(f"A cached TXY segment could not be read: {exc}")
+        return _error("A cached TXY segment is missing")  # (Not reached.)
+
+    def confirm_view(self, path: str, source: str, tag: str, fingerprint: Sequence[Sequence[Any]],
+                     info: Mapping[str, Any], guard: SaveGuard, *, now: float | None = None) -> bool:
+        """A load that found every shot of a view unchanged (A40.3): only the view's ``info`` (signature,
+        listing, ``unsettled``, the TXY record with its folders) is written, if the guard holds, the view
+        still has this fingerprint and no later job wrote it. Nothing is rewritten. Whether it was written."""
+        self._needs_v4()
+        key = self._path_key(path)
+        now = time.time() if now is None else now
+        try:
+            with self.transaction():
+                if not self._txy_guard_holds({"generations": guard.generations, "epochs": guard.epochs}, key):
+                    return False
+                row = self._conn.execute("SELECT fingerprint, job_seq FROM txy_views WHERE path = ? AND source = ? "
+                                         "AND tag = ?", (key, source, tag)).fetchone()
+                if row is None or json.loads(row[0]) != [list(item) for item in fingerprint] or int(row[1]) > guard.job_seq:
+                    return False
+                self._conn.execute("UPDATE txy_views SET info = ?, job_seq = ?, last_used = ? WHERE path = ? "
+                                   "AND source = ? AND tag = ?", (_dumps(dict(info)), guard.job_seq, now, key, source,
+                                                                  tag))
+                return True
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def touch_txy(self, path: str, layers: Iterable[str], view: tuple[str, str] | None = None) -> None:
+        """Mark a folder's layers (and a view) used now, for Make room's least-recently-used order."""
+        if self.layout < store_v4.LAYOUT or self.read_only:
+            return
+        key = self._path_key(path)
+        now = time.time()
+        with contextlib.suppress(sqlite3.Error, StoreError):
+            with self.transaction():
+                for layer in layers:
+                    self._conn.execute("UPDATE txy_layers SET last_used = ? WHERE path = ? AND layer = ?",
+                                       (now, key, layer))
+                if view is not None:
+                    self._conn.execute("UPDATE txy_views SET last_used = ? WHERE path = ? AND source = ? AND tag = ?",
+                                       (now, key, *view))
+
+    def compaction_due(self, row: TxyLayerRow) -> bool:
+        """Q45.7: a layer of more than ``COMPACT_SEGMENTS`` segments, or more than half of whose stored bytes
+        are shots a later segment replaced."""
+        if len(row.segments) > COMPACT_SEGMENTS:
+            return True
+        live: dict[int, int] = {}
+        for entry in row.entries.values():
+            live[entry.seq] = live.get(entry.seq, 0) + 1
+        counts = {int(seq): (int(live_shots), int(all_shots)) for seq, live_shots, all_shots in self._conn.execute(
+            "SELECT seq, live_shots, all_shots FROM txy_segments WHERE path = ? AND layer = ?",
+            (self._path_key(row.path), row.layer))}
+        stale = sum(size * (1 - counts[seq][0] / max(1, counts[seq][1])) for seq, (_, size) in row.segments.items()
+                    if seq in counts)
+        return stale > row.bytes / 2
+
+    def compact_txy(self, path: str, layer: str, guard: SaveGuard, *, budget: int | None = None,
+                    budget_set_at: float | None = None, force: bool = False) -> bool:
+        """Rewrite a layer as one segment of its current shots when due (Q45.7), only if the new segment fits
+        beside the old ones (counted before they are retired); otherwise it waits for a later save and never
+        asks. Nothing changes if the layer changed meanwhile or the guard no longer holds. Whether it did."""
+        from helab.convert import txy_layer
+        self._needs_v4()
+        key = self._path_key(path)
+        rows = self.txy_layers(path)
+        row = (rows.value or {}).get(layer)
+        if row is None or not row.entries or not (force or self.compaction_due(row)):
+            return False
+        data = self.read_txy_shots(path, layer)
+        if data.value is None:
+            return False
+        packed = txy_layer.pack_segment(data.value, layer=layer, tags=row.tags, precision=row.precision,
+                                        problematic=[shot for shot, entry in row.entries.items() if entry.problematic],
+                                        maker=self._maker_record())
+        file = self.write_txy_file(packed)
+        now = time.time()
+        done = False
+        try:
+            with self.transaction():
+                current = self._conn.execute("SELECT entries FROM txy_layers WHERE path = ? AND layer = ?",
+                                             (key, layer)).fetchone()
+                if (current is not None and self._txy_guard_holds(
+                        {"generations": guard.generations, "epochs": guard.epochs}, key)
+                        and json.loads(current[0]) == [entry.to_json() for _, entry in sorted(row.entries.items())]):
+                    budget = self._active_budget(budget, budget_set_at)
+                    self._conn.execute("SAVEPOINT txy_compact")
+                    (seq,) = self._conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM txy_segments WHERE path = ? "
+                                                "AND layer = ?", (key, layer)).fetchone()
+                    self._conn.execute("INSERT INTO txy_segments (path, layer, seq, file, bytes, live_shots, all_shots) "
+                                       "VALUES (?, ?, ?, ?, ?, ?, ?)", (key, layer, int(seq), file, self._size(file),
+                                                                       len(row.entries), len(row.entries)))
+                    if budget is not None and self._live() > budget:
+                        self._conn.execute("ROLLBACK TO txy_compact")
+                    else:
+                        for (old,) in self._conn.execute("SELECT file FROM txy_segments WHERE path = ? AND layer = ? "
+                                                         "AND seq != ?", (key, layer, int(seq))).fetchall():
+                            self._retire(str(old), now)
+                        self._conn.execute("DELETE FROM txy_segments WHERE path = ? AND layer = ? AND seq != ?",
+                                           (key, layer, int(seq)))
+                        entries = {shot: dataclasses.replace(entry, seq=int(seq))
+                                   for shot, entry in row.entries.items()}
+                        self._write_layer_row(key, layer, row.tags, entries, row.precision, self._maker_id(),
+                                              row.job_seq, now)
+                        done = True
+                    self._conn.execute("RELEASE txy_compact")
+                if not done:
+                    self._retire(file, now)
+        except SaveRejected:
+            self._reject_txy_files([file], SaveRejected("cleared", REKEYED))
+            return False
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return done
+
+    def _maker_record(self) -> dict[str, Any]:
+        """This session's maker for an ``.hlb`` header ({} in store-v3)."""
+        if self.layout < store_v4.LAYOUT:
+            return {}
+        if self._maker is None:
+            self._maker = store_v4.session_maker()
+        return {"maker": self._maker["maker"], "record": self._maker["record"]}
+
+    def mark_txy_seen(self, path: str, present: Mapping[str, Mapping[int, tuple[int, int]]], seen_at: float) -> int:
+        """A full listing of ``path`` found these sources (``{"raw": {shot: (size, mtime_ns)}, "txy": {...}}``):
+        a layer with an entry whose source it didn't find is an only copy (``gone_at``, Q45.6); one whose
+        sources are all there no longer is. The layers marked gone."""
+        self._needs_v4()
+        key = self._path_key(path)
+        gone = 0
+        try:
+            with self.transaction():
+                for layer, entries in self._conn.execute("SELECT layer, entries FROM txy_layers WHERE path = ?",
+                                                         (key,)).fetchall():
+                    missing = any(entry.shot not in present.get(entry.kind, {})
+                                  for entry in map(TxyEntry.from_json, json.loads(entries)))
+                    self._conn.execute("UPDATE txy_layers SET gone_at = ? WHERE path = ? AND layer = ?",
+                                       (seen_at if missing else None, key, layer))
+                    gone += int(missing)
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return gone
+
+    def _remove_txy_rows(self, where: str, args: Sequence[Any], now: float) -> tuple[list[tuple[str, str]], int]:
+        """Delete the layers ``where`` selects (inside a transaction), with their segments and the folders'
+        views (derived: a view without its layer would be incomplete) and waiting parts; retire their files
+        and bump each folder's ``txy:`` epoch: ((folder key, layer) pairs, bytes)."""
+        found = [(str(key), str(layer)) for key, layer in self._conn.execute(
+            f"SELECT path, layer FROM txy_layers{where}", tuple(args)).fetchall()]
+        size = 0
+        for key, layer in found:
+            for file, bytes_ in self._conn.execute("SELECT file, bytes FROM txy_segments WHERE path = ? AND layer = ?",
+                                                   (key, layer)).fetchall():
+                self._retire(str(file), now)
+                size += int(bytes_)
+            self._conn.execute("DELETE FROM txy_segments WHERE path = ? AND layer = ?", (key, layer))
+            self._conn.execute("DELETE FROM txy_layers WHERE path = ? AND layer = ?", (key, layer))
+        for key in sorted({key for key, _ in found}):
+            self._conn.execute("DELETE FROM txy_views WHERE path = ?", (key,))
+            self._conn.execute("INSERT INTO folder_epochs (path, epoch) VALUES (?, 1) ON CONFLICT (path) "
+                               "DO UPDATE SET epoch = epoch + 1", (_txy_epoch(key),))
+        return found, size
+
+    def remove_txy(self, paths: Iterable[str] | None = None) -> TxyRemoval:
+        """Clear cached TXY data (the user asked: Settings › Cache, Clear all, a folder's clear): every
+        folder's (bumping ``gen_txy``) or these folders' (each one's ``txy:`` epoch), so a unit already being
+        saved can't bring it back. Layers, segments, views and waiting layer parts go; files are retired."""
+        if self.layout < store_v4.LAYOUT:
+            return TxyRemoval(None if paths is None else (), 0, 0)
+        now = time.time()
+        try:
+            with self.transaction():
+                if paths is None:
+                    self._conn.execute("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) "
+                                       "WHERE key = 'gen_txy'")
+                    found, size = self._remove_txy_rows("", (), now)
+                    self._conn.execute("DELETE FROM txy_views")
+                    self._retire_pending(" WHERE parts != '[]'", (), now)
+                    return TxyRemoval(None, len(found), size)
+                keys = list(dict.fromkeys(self._path_key(path) for path in paths))
+                for key in keys:  # (A folder with no layers is fenced too: a unit may be on its way.)
+                    self._conn.execute("INSERT INTO folder_epochs (path, epoch) VALUES (?, 1) ON CONFLICT (path) "
+                                       "DO UPDATE SET epoch = epoch + 1", (_txy_epoch(key),))
+                marks = ','.join('?' * len(keys)) or 'NULL'
+                found, size = self._remove_txy_rows(f" WHERE path IN ({marks})", keys, now)
+                self._conn.execute(f"DELETE FROM txy_views WHERE path IN ({marks})", keys)
+                self._retire_pending(f" WHERE parts != '[]' AND path IN ({marks})", keys, now)
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+        return TxyRemoval(tuple(self._source_path(key) for key in keys), len(found), size)
+
+    def _retire_pending(self, where: str, args: Sequence[Any], now: float) -> list[str]:
+        """Delete the pending saves ``where`` selects (inside a transaction), retiring each one's file and
+        its layer parts' files: their ids."""
+        columns = "pending_id, file, parts" if self._pending_parts else "pending_id, file, '[]'"
+        found = self._conn.execute(f"SELECT {columns} FROM pending_saves{where}", tuple(args)).fetchall()
+        for _, file, parts in found:
+            self._retire(str(file), now)
+            for part in json.loads(parts or "[]"):
+                self._retire(str(part["file"]), now)
+        self._conn.execute(f"DELETE FROM pending_saves{where}", tuple(args))
+        return [str(pending_id) for pending_id, _, _ in found]
+
+    def _txy_live(self) -> int:
+        if self.layout < store_v4.LAYOUT:
+            return 0
+        return int(self._conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM txy_segments").fetchone()[0])
+
+    def _txy_summary(self) -> dict[str, Any]:
+        """store-v4's TXY layers for Settings › Cache (inside a transaction): layers, folders, shots, bytes,
+        those that are only copies, their tag names, when one was last used."""
+        summary: dict[str, Any] = {"layers": 0, "folders": 0, "shots": 0, "bytes": 0, "only_copy": 0,
+                                   "only_copy_bytes": 0, "tags": {}, "last_used": None}
+        if self.layout < store_v4.LAYOUT:
+            return summary
+        tags: dict[str, int] = {}
+        folders: set[str] = set()
+        for path, layer, layer_tags, shots, size, gone_at, last_used in self._conn.execute(
+                "SELECT path, layer, tags, shots, bytes, gone_at, last_used FROM txy_layers").fetchall():
+            folders.add(str(path))
+            summary["layers"] += 1
+            summary["shots"] += int(shots)
+            summary["bytes"] += int(size)
+            if gone_at is not None:
+                summary["only_copy"] += 1
+                summary["only_copy_bytes"] += int(size)
+            for name in json.loads(layer_tags) or (["MATLAB"] if layer == _MATLAB_LAYER else []):
+                tags[str(name)] = tags.get(str(name), 0) + 1
+            summary["last_used"] = max(float(last_used), summary["last_used"] or 0.0)
+        summary.update(folders=len(folders), tags=tags)
+        return summary
+
+    def _txy_groups(self, exclude: str | None) -> dict[str, list[tuple[str, str]]]:
+        """Other folders' layers by Make room's groups (Q45.6), least recently used first (inside a
+        transaction): ``rebuildable`` (HeLab layers whose every shot is raw-keyed with its raw row held),
+        ``seen`` (the rest whose sources the last listing found) and ``only`` (a source gone: only copies)."""
+        groups: dict[str, list[tuple[str, str]]] = {"rebuildable": [], "seen": [], "only": []}
+        held: dict[str, set[tuple[int, int, int]]] = {}
+        for key, layer, entries, gone_at in self._conn.execute(
+                "SELECT path, layer, entries, gone_at FROM txy_layers WHERE path IS NOT ? "
+                "ORDER BY last_used, path, layer", (exclude,)).fetchall():
+            key = str(key)
+            if gone_at is not None:
+                groups["only"].append((key, str(layer)))
+                continue
+            if key not in held:
+                held[key] = {(int(shot), int(size), int(mtime)) for shot, size, mtime in self._conn.execute(
+                    "SELECT shot, size, mtime_ns FROM raw_layers WHERE path = ?", (key,))}
+            parsed = list(map(TxyEntry.from_json, json.loads(entries)))
+            rebuildable = str(layer).startswith(_HELAB_LAYER) and all(
+                entry.kind == "raw" and (entry.shot, entry.size, entry.mtime_ns) in held[key] for entry in parsed)
+            groups["rebuildable" if rebuildable else "seen"].append((key, str(layer)))
+        return groups
+
+    def _free_space(self, budget: int, exclude: str | None) -> list[Removal]:
+        """Make room's and ``trim``'s one order (Q45.6, A42.2), inside a transaction: other folders' whole rows,
+        least recently used first within each group, until live usage fits ``budget``: (1) datasets, then in
+        store-v4 (2) HeLab layers rebuildable here, (3) layers whose sources were seen, (4) raw layers seen,
+        (5) only copies: TXY layers, then raw layers. Never ``exclude`` (the folder being saved)."""
+        removed: list[Removal] = []
+        for (other,) in self._conn.execute("SELECT path FROM datasets WHERE path IS NOT ? ORDER BY last_used, path",
+                                           (exclude,)).fetchall():
+            if self._live() <= budget:
+                return removed
+            removed.append(self.remove(("datasets",), [other], _stored_keys=True))
+        if self.layout < store_v4.LAYOUT:
+            return removed
+        groups = self._txy_groups(exclude)
+
+        def take_layers(group: str) -> bool:
+            for key, layer in groups[group]:
+                if self._live() <= budget:
+                    return True
+                pairs, size = self._remove_txy_rows(" WHERE path = ? AND layer = ?", (key, layer), time.time())
+                named = tuple((self._source_path(path), name) for path, name in pairs)
+                removed.append(Removal((), (), txy_layers=named if group == "rebuildable" else (),
+                                       txy_seen=named if group == "seen" else (),
+                                       txy_only=named if group == "only" else (), txy_bytes=size))
+            return self._live() <= budget
+
+        def take_raw(only_copy: bool) -> bool:
+            gone = "IS NOT NULL" if only_copy else "IS NULL"
+            for (other,) in self._conn.execute(
+                    f"SELECT path FROM raw_layers WHERE gone_at {gone} AND path IS NOT ? GROUP BY path "
+                    "ORDER BY MAX(last_used), path", (exclude,)).fetchall():
+                if self._live() <= budget:
+                    return True
+                _, count, size = self._remove_raw_rows(f" WHERE path = ? AND gone_at {gone}", (other,), time.time())
+                folder = (self._source_path(str(other)),)
+                removed.append(Removal((), (), raw_paths=() if only_copy else folder,
+                                       only_copy_paths=folder if only_copy else (), raw_rows=count, raw_bytes=size))
+            return self._live() <= budget
+
+        if take_layers("rebuildable") or take_layers("seen") or take_raw(False) or take_layers("only"):
+            return removed
+        take_raw(True)
+        return removed
+
+    # The user's per-folder choices for stage 2 (Q45.1, Q45.2): like ``convert_prefs``, never removed by
+    # Clear all, purges or Make room; Clear folder preferences resets them ("" follows the global setting).
+
+    def set_cache_policy(self, path: str, policy: str, set_at: float) -> dict[str, Any]:
+        """Set a folder's cache policy (``raw+used``, ``raw``, ``txy``; "" follows the global one) unless a
+        later choice is saved; the policy now saved."""
+        self._needs_v4()
+        if policy not in ("", *store_v4.POLICIES):
+            raise ValueError(f"Not a cache policy: {policy!r}")
+        return self._set_folder_choice("cache_policy", path, {"policy": policy}, set_at)
+
+    def set_txy_source_pref(self, path: str, source: str, tag: str, set_at: float) -> dict[str, Any]:
+        """Set a folder's TXY source (Q18.2's mode and a tag; "" follows the global one, Q45.2) unless a later
+        choice is saved; the choice now saved."""
+        self._needs_v4()
+        return self._set_folder_choice("txy_source_prefs", path, {"source": source, "tag": tag if source else ""},
+                                       set_at)
+
+    def _set_folder_choice(self, table: str, path: str, values: Mapping[str, Any], set_at: float) -> dict[str, Any]:
+        key = self._path_key(path)
+        names = list(values)
+        try:
+            with self.transaction():
+                row = self._conn.execute(f"SELECT {', '.join(names)}, set_at FROM {table} WHERE path = ?",
+                                         (key,)).fetchone()
+                cleared = float(self._meta().get("prefs_cleared_at", 0.0))
+                if row is not None and float(row[-1]) > set_at:
+                    return {**dict(zip(names, row[:-1])), "set_at": float(row[-1])}
+                if cleared > set_at:
+                    return {**{name: "" for name in names}, "set_at": cleared}
+                self._conn.execute(f"INSERT OR REPLACE INTO {table} (path, {', '.join(names)}, set_at) VALUES "
+                                   f"(?, {', '.join('?' * len(names))}, ?)", (key, *values.values(), set_at))
+                return {**dict(values), "set_at": set_at}
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be written: {exc}") from exc
+
+    def read_folder_choices(self, paths: Sequence[str]) -> dict[str, Read[dict[str, Any]]]:
+        """Each folder's stage 2 choices: ``policy``, ``source`` and ``tag`` ("" for none) with when each was
+        set; missing if neither is set (or in store-v3)."""
+        unique = list(dict.fromkeys(paths))
+        if self.layout < store_v4.LAYOUT:
+            return {path: _missing() for path in unique}
+        keys = {path: self._path_key(path) for path in unique}
+        rows: dict[str, dict[str, Any]] = {}
+        try:
+            with self.transaction(write=False):
+                wanted = list(dict.fromkeys(keys.values()))
+                for start in range(0, len(wanted), 500):
+                    chunk = wanted[start:start + 500]
+                    marks = ','.join('?' * len(chunk))
+                    for key, policy, set_at in self._conn.execute(
+                            f"SELECT path, policy, set_at FROM cache_policy WHERE path IN ({marks})", chunk):
+                        rows.setdefault(str(key), {}).update(policy=str(policy), policy_set_at=float(set_at))
+                    for key, source, tag, set_at in self._conn.execute(
+                            f"SELECT path, source, tag, set_at FROM txy_source_prefs WHERE path IN ({marks})", chunk):
+                        rows.setdefault(str(key), {}).update(source=str(source), tag=str(tag),
+                                                             source_set_at=float(set_at))
+        except (sqlite3.Error, StoreError) as exc:
+            failure: Read[dict[str, Any]] = _error(f"Disk cache could not be read: {exc}")
+            return {path: failure for path in unique}
+        return {path: _found({"policy": "", "source": "", "tag": "", **rows[keys[path]]}) if keys[path] in rows
+                else _missing() for path in unique}
+
     def _legacy_counted(self) -> int:
         """store-v3's live bytes while it is kept (Keep, or not answered: D9), as last measured
         (``meta.legacy_bytes``, ``measure_legacy``); 0 under v3, after Ignore or Clear, or with none."""
@@ -2867,8 +3807,17 @@ class CacheStore:
                 # store-v4: its raw layers are cached data too (the root epoch fences their saves).
                 keys, count, size = self._remove_raw_rows(" WHERE path = ? OR substr(path, 1, ?) = ?",
                                                           (top, len(top) + 1, top + "/"), time.time())
+                # (And its TXY layers, stage 2: each folder's ``txy:`` epoch is bumped, the root's already was.)
+                pairs, txy_bytes = self._remove_txy_rows(" WHERE path = ? OR substr(path, 1, ?) = ?",
+                                                         (top, len(top) + 1, top + "/"), time.time())
+                self._retire_pending(" WHERE parts != '[]' AND (path = ? OR substr(path, 1, ?) = ?)",
+                                     (top, len(top) + 1, top + "/"), time.time())
+                self._conn.execute("DELETE FROM txy_views WHERE path = ? OR substr(path, 1, ?) = ?",
+                                   (top, len(top) + 1, top + "/"))
                 return dataclasses.replace(removal, raw_paths=tuple(self._source_path(key) for key in keys),
-                                           raw_rows=count, raw_bytes=size)
+                                           raw_rows=count, raw_bytes=size,
+                                           txy_seen=tuple((self._source_path(key), layer) for key, layer in pairs),
+                                           txy_bytes=txy_bytes)
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
@@ -2899,9 +3848,7 @@ class CacheStore:
                         self._retire(file, now)
                         datasets += 1
                         dataset_bytes += int(size)
-                    for (file,) in self._conn.execute(f"SELECT file FROM pending_saves{where}", args).fetchall():
-                        self._retire(file, now)
-                    self._conn.execute(f"DELETE FROM pending_saves{where}", args)
+                    self._retire_pending(where, args, now)
                 for kind in kinds:
                     if selected is None or selected:
                         self._conn.execute(f"DELETE FROM {TABLES[kind]}{where}", args)
@@ -2939,7 +3886,7 @@ class CacheStore:
             pending += self._conn.execute("SELECT COALESCE(SUM(LENGTH(record) + LENGTH(guard)), 0) "
                                           "FROM pending_results").fetchone()[0]
         # (store-v4: its raw layers, and store-v3's bytes while it is kept, D9.)
-        return (int(datasets) + self._result_files() + self._raw_live() + self._legacy_counted()
+        return (int(datasets) + self._result_files() + self._raw_live() + self._txy_live() + self._legacy_counted()
                 + max(0, self._records_bytes() - int(pending)))
 
     def _result_files(self) -> int:
@@ -3012,20 +3959,15 @@ class CacheStore:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
     def trim(self, budget: int, set_at: float | None = None) -> Removal:
-        """Remove least recently used datasets until live usage fits ``budget``, and record it
-        as the active budget (set at ``set_at``). Only on the user's request (lowering the
-        budget); never automatic."""
+        """Remove other data in Make room's order (``_free_space``: datasets, then in store-v4 TXY layers,
+        raw layers, only copies last; Q45.6, A42.2) until live usage fits ``budget``, and record it as the
+        active budget (set at ``set_at``). Only on the user's request (lowering the budget, after a question
+        naming what goes); never automatic."""
         try:
             with self.transaction():
                 budget = self._active_budget(budget, set_at) or budget
                 # Measured after each removal: a dataset's records are freed with its file.
-                victims: list[Removal] = []
-                for (path,) in self._conn.execute("SELECT path FROM datasets ORDER BY last_used, path").fetchall():
-                    if self._live() <= budget:
-                        break
-                    victims.append(self.remove(("datasets",), [path], _stored_keys=True))
-                return Removal(("datasets",), tuple(path for item in victims for path in item.paths or ()),
-                               sum(item.datasets for item in victims), sum(item.dataset_bytes for item in victims))
+                return _combined_removal(self._free_space(budget, None)) or Removal(("datasets",), ())
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be written: {exc}") from exc
 
@@ -3090,8 +4032,9 @@ class CacheStore:
                 pending_results = self.pending_result_rows()
                 live, writes = self._live(), self._writes()
                 raw = self._raw_summary()
+                txy = self._txy_summary()
                 records_bytes = (live - sum(size for _, size in dataset_ages) - self._result_files() - raw["bytes"]
-                                 - self._legacy_counted())
+                                 - txy["bytes"] - self._legacy_counted())
                 no_cache, no_auto_load = self._conn.execute(
                     "SELECT COALESCE(SUM(no_cache), 0), COALESCE(SUM(no_auto_load), 0) FROM folder_prefs").fetchone()
                 prefs = {"no_cache": int(no_cache), "no_auto_load": int(no_auto_load)}
@@ -3105,8 +4048,8 @@ class CacheStore:
         orphans = [name for name in self._listed_files() if name not in known]
         legacy = self.measure_legacy() if self.layout >= store_v4.LAYOUT else None
         return {
-            **({"legacy": legacy, "raw": raw, "older_stores": older_stores(os.path.dirname(os.path.abspath(self.root)),
-                                                                          self.layout)}
+            **({"legacy": legacy, "raw": raw, "txy": txy,
+                "older_stores": older_stores(os.path.dirname(os.path.abspath(self.root)), self.layout)}
                if legacy is not None else {}),
             "layout_version": self.layout_version, "store_id": self.store_id, "read_only": self.read_only,
             "root": self.root, "usage": live, "budget": budget, "records_bytes": records_bytes,
@@ -3243,6 +4186,10 @@ class CacheStore:
             known.update(str(file) for (file,) in self._conn.execute("SELECT file FROM pending_results"))
         if self.layout >= store_v4.LAYOUT:
             known.update(str(file) for (file,) in self._conn.execute("SELECT file FROM raw_layers"))
+            known.update(str(file) for (file,) in self._conn.execute("SELECT file FROM txy_segments"))
+        if self._pending_parts:  # (A waiting layer unit's segment files, Q45.8.)
+            known.update(str(file) for (file,) in self._conn.execute(
+                "SELECT json_extract(part.value, '$.file') FROM pending_saves, json_each(pending_saves.parts) AS part"))
         return known
 
     def _listed_files(self) -> list[str]:
@@ -3250,8 +4197,9 @@ class CacheStore:
         that can't be listed: leftovers are only tidied up, the next sweep tries again)."""
         names: list[str] = []
         folders = [(self.datasets_dir, ""), (self.results_dir, RESULTS_DIRNAME + "/")]
-        if self.layout >= store_v4.LAYOUT:  # (store-v4's raw layers: the same orphan rule.)
+        if self.layout >= store_v4.LAYOUT:  # (store-v4's raw layers and TXY segments: the same orphan rule.)
             folders.append((self.raw_dir, store_v4.RAW_DIRNAME + "/"))
+            folders.append((self.txy_dir, store_v4.TXY_DIRNAME + "/"))
         for folder, prefix in folders:
             try:
                 names += [prefix + name for name in os.listdir(folder)
@@ -3283,12 +4231,7 @@ class CacheStore:
         now = time.time() if now is None else now
         try:
             with self.transaction():
-                expired = self._conn.execute("SELECT pending_id, file FROM pending_saves WHERE created_at <= ?",
-                                             (now - PENDING_MAX_AGE,)).fetchall()
-                for _, file in expired:
-                    self._retire(file, now)
-                self._conn.executemany("DELETE FROM pending_saves WHERE pending_id = ?",
-                                       [(pending_id,) for pending_id, _ in expired])
+                expired = self._retire_pending(" WHERE created_at <= ?", (now - PENDING_MAX_AGE,), now)
                 expired_results = self._conn.execute(
                     "SELECT pending_id, file FROM pending_results WHERE created_at <= ?",
                     (now - PENDING_MAX_AGE,)).fetchall() if self._pending_results else []
@@ -3319,7 +4262,7 @@ class CacheStore:
             # Only files still open are past due: retry them shortly, not at once.
             deadline = now + RETRY_OPEN
         return Sweep(deleted, len(expired) + len(expired_results),
-                     [pending_id for pending_id, _ in (*expired, *expired_results)], still_open, deadline)
+                     [*expired, *(pending_id for pending_id, _ in expired_results)], still_open, deadline)
 
     def _sweep_orphans(self, now: float) -> int:
         names = self._listed_files()
@@ -3384,6 +4327,10 @@ def trim_estimate(inventory: Mapping[str, Any], budget: int) -> dict[str, int]:
 
 def _has_raw_times(conn: sqlite3.Connection) -> bool:
     return any(row[1] == "raw_times" for row in conn.execute("PRAGMA table_info(datasets)"))
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:

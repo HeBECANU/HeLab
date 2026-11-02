@@ -10,6 +10,12 @@ table (``datasets`` included through stage 1: T~3), plus:
   is the GUI's run (or one ``helab convert``): its first ``store_root`` call under v4 puts the maker in
   this process's environment (``MAKER_ENV``), which the helpers it starts inherit.
 - ``raw_layers``: one row per raw file (filled from step 5).
+- Stage 2 (design addendum §2): ``txy_layers`` (one per folder and layer, ``matlab`` or
+  ``helab:<profile hash>``, each shot's entry with its fingerprint kind, Q45.3), ``txy_segments`` (a layer's
+  ``.hlb`` files, append only), ``txy_views`` (what one source mode and tag loads: which layer each shot
+  comes from, and the folder's listing facts), ``cache_policy`` and ``txy_source_prefs`` (the user's
+  per-folder choices, Q45.1, Q45.2; "" follows the global setting), and ``pending_saves.parts`` (a waiting
+  save's layer parts, Q45.8). Added to stage 1's stores by ``migrate``.
 - ``meta``: ``format`` (``FORMAT``: an additive change keeps it; a store of a newer format opens read
   only, never rewritten), ``gen_raw``, ``legacy_v3`` (the store-v3 choice, step 6), ``legacy_bytes``,
   ``imported_v3``.
@@ -39,6 +45,7 @@ LAYOUT = 4
 DIRNAME = "store-v4"
 FORMAT = 1
 RAW_DIRNAME = "raw"
+TXY_DIRNAME = "txy"
 MAKER_ENV = "HELAB_STORE_MAKER"
 MACHINE_FILE = "machine-id"
 
@@ -55,7 +62,32 @@ SCHEMA = (
     "ALTER TABLE datasets ADD COLUMN maker TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE results ADD COLUMN maker TEXT NOT NULL DEFAULT ''",
 )
-META_DEFAULTS: dict[str, object] = {"format": FORMAT, "gen_raw": 0}
+# Stage 2's tables (design addendum §2), in a new store and, through ``migrate``, in one stage 1 made.
+STAGE2_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS txy_layers ("
+    "path TEXT NOT NULL, layer TEXT NOT NULL, tags TEXT NOT NULL, entries TEXT NOT NULL, shots INTEGER NOT NULL, "
+    "rows INTEGER NOT NULL, ram_bytes INTEGER NOT NULL, bytes INTEGER NOT NULL, precision TEXT NOT NULL, "
+    "gone_at REAL, maker TEXT NOT NULL, job_seq INTEGER NOT NULL, saved_at REAL NOT NULL, last_used REAL NOT NULL, "
+    "PRIMARY KEY (path, layer))",
+    "CREATE INDEX IF NOT EXISTS txy_layers_last_used ON txy_layers (last_used)",
+    "CREATE TABLE IF NOT EXISTS txy_segments ("
+    "path TEXT NOT NULL, layer TEXT NOT NULL, seq INTEGER NOT NULL, file TEXT NOT NULL, bytes INTEGER NOT NULL, "
+    "live_shots INTEGER NOT NULL, all_shots INTEGER NOT NULL, PRIMARY KEY (path, layer, seq))",
+    "CREATE INDEX IF NOT EXISTS txy_segments_file ON txy_segments (file)",
+    "CREATE TABLE IF NOT EXISTS txy_views ("
+    "path TEXT NOT NULL, source TEXT NOT NULL, tag TEXT NOT NULL, fingerprint TEXT NOT NULL, "
+    "problematic TEXT NOT NULL, raw_times TEXT NOT NULL DEFAULT '[]', info TEXT NOT NULL, maker TEXT NOT NULL, "
+    "job_seq INTEGER NOT NULL, last_used REAL NOT NULL, PRIMARY KEY (path, source, tag))",
+    "CREATE TABLE IF NOT EXISTS cache_policy (path TEXT PRIMARY KEY, "
+    "policy TEXT NOT NULL CHECK (policy IN ('', 'raw+used', 'raw', 'txy')), set_at REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS txy_source_prefs (path TEXT PRIMARY KEY, source TEXT NOT NULL, tag TEXT NOT NULL, "
+    "set_at REAL NOT NULL)",
+    "ALTER TABLE pending_saves ADD COLUMN parts TEXT NOT NULL DEFAULT '[]'",
+    "INSERT OR IGNORE INTO meta (key, value) VALUES ('gen_txy', '0')",
+)
+META_DEFAULTS: dict[str, object] = {"format": FORMAT, "gen_raw": 0, "gen_txy": 0}
+POLICIES = ("raw+used", "raw", "txy")
+DEFAULT_POLICY = "raw+used"
 
 # The user's own state imported from store-v3 once (Q22.4): each table's columns, as both layouts have them.
 IMPORTED: dict[str, tuple[str, ...]] = {
@@ -81,9 +113,11 @@ def epoch_key(layout: int, kind: str, key: str) -> str:
 
 def migrate(conn: sqlite3.Connection) -> None:
     """Tables and columns added **within** layout 4 after it shipped, on every writable open (the
-    ``_migrate`` rule, AGENTS.md): none yet. Each addition goes here, checked again under the write
+    ``_migrate`` rule, AGENTS.md): stage 2's tables (``STAGE2_SCHEMA``). Each addition goes here, checked again under the write
     lock, and ``SCHEMA`` gives a new store all of them."""
-    additions: list[tuple[Callable[[], bool], tuple[str, ...]]] = []
+    def no_layers() -> bool:  # (Stage 2's tables, in a store stage 1 made.)
+        return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'txy_layers'").fetchone() is None
+    additions: list[tuple[Callable[[], bool], tuple[str, ...]]] = [(no_layers, STAGE2_SCHEMA)]
     if not any(missing() for missing, _ in additions):
         return
     conn.execute("BEGIN IMMEDIATE")

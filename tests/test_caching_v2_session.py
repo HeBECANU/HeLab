@@ -130,11 +130,11 @@ def test_a_session_with_store_v4_live_leaves_store_v3_as_it_was(switch_on: None,
             assert format_txy(reconstruct(raw_layer.decode(layer), MATLAB_2019)) == convert_raw(
                 text, MATLAB_2019) == (run / f"d_txy_forc{shot}.txt").read_bytes()
 
-    # Clear (Settings › Cache's Clear all): every kind, raw pulses too.
+    # Clear (Settings › Cache's Clear all): every kind, raw pulses and (stage 2) TXY layers too.
     sent: list[Any] = []
     cache_admin(options, "clear", sent.append)
     removed = [event for event in sent if event["kind"] == "removed"]
-    assert [kind for event in removed for kind in event["kinds"]][-1] == "raw"
+    assert [kind for event in removed for kind in event["kinds"]][-2:] == ["raw", "txy"]
     assert next(event for event in removed if "raw" in event["kinds"])["raw"] == 3
     with opened(options, run) as store:
         assert store.raw_rows(str(run)).value == {} and store.read_dataset_row(str(run)).missing

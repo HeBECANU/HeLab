@@ -11,7 +11,7 @@ from helab.io_ops.events import AdminResultFields
 from helab.io_ops.infra import Emit, Heartbeat, emit
 from helab.io_ops.markers import _location_path, _root_rows
 from helab.io_ops.stores import (_cache_info, _deadline, _raw_removed_event, _removal_events, _removed_event,
-                                 _results_removed_event, _store_fields,
+                                 _results_removed_event, _store_fields, _txy_removed_event,
                                  _usage)
 
 
@@ -25,7 +25,7 @@ ADMIN_ACTIONS = ("inventory", "clear", "purge", "trim", "adopt", "discard", "swe
                  "convert_prefs", "clear_prefs", "clear_converted_txy", "mark_used",
                  "constants", "presets", "forget_root", "root_same", "clear_root", "clear_results",
                  "clear_root_results", "adopt_result", "discard_result", "identity", "clear_raw", "legacy_choice",
-                 "clear_legacy")
+                 "clear_legacy", "clear_txy", "folder_choice")
 
 
 def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, **params: Any) -> None:
@@ -95,9 +95,10 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                   "still_open": len(swept.still_open), "next_deadline": swept.next_deadline, **_usage(store)})
             return
         elif action == "clear":
-            # (Kind ``raw``: store-v4's raw layers, cleared with everything when no kinds are named.)
-            asked = tuple(params.get("kinds") or (*KINDS, "raw"))
-            unknown = set(asked) - set(KINDS) - {"raw"}
+            # (Kinds ``raw`` and ``txy``: store-v4's raw and TXY layers, cleared with everything when no kinds
+            # are named.)
+            asked = tuple(params.get("kinds") or (*KINDS, "raw", "txy"))
+            unknown = set(asked) - set(KINDS) - {"raw", "txy"}
             if unknown:
                 raise ValueError(f"Unknown cache kinds: {sorted(unknown)}")
             kinds: tuple[Kind, ...] = tuple(kind for kind in KINDS if kind in asked)
@@ -106,6 +107,9 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             if "raw" in asked and store.layout >= 4:
                 raw = store.remove_raw()
                 send(_raw_removed_event(None, raw.rows, raw.bytes))
+            if "txy" in asked and store.layout >= 4:
+                txy = store.remove_txy()
+                send(_txy_removed_event(None, [], txy.bytes))
         elif action == "purge":
             cutoff = float(params["cutoff"])
             if params["what"] == "results":
@@ -127,9 +131,12 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 result["removed"] = {kind: len(removal.paths or ()) for removal in removals for kind in removal.kinds}
                 result["bytes"] = sum(removal.dataset_bytes for removal in removals)
         elif action == "trim":
+            # In Make room's order (A42.2): datasets, then in store-v4 TXY layers, raw layers, only copies.
             removal = store.trim(int(budget or params["budget"]), budget_set_at)
-            send(_removed_event(removal))
-            result.update({"datasets": removal.datasets, "bytes": removal.dataset_bytes})
+            for event in _removal_events(removal):
+                send(event)
+            result.update({"datasets": removal.datasets,
+                           "bytes": removal.dataset_bytes + removal.raw_bytes + removal.txy_bytes})
         elif action == "adopt":
             try:
                 adopted = store.adopt_pending(params["pending_id"], budget=budget, budget_set_at=budget_set_at,
@@ -229,6 +236,26 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
             send(_raw_removed_event(raw.paths, raw.rows, raw.bytes))
             result.update({"raw": raw.rows, "bytes": raw.bytes})
+        elif action == "clear_txy":
+            # The user asked (Settings › Cache's Clear TXY data, confirmed): every folder's TXY layers, or these
+            # folders' (``paths``); store-v4 only. Fenced: a unit being saved can't bring them back.
+            paths = params.get("paths")
+            txy = store.remove_txy(None if paths is None else [str(path) for path in paths])
+            send(_txy_removed_event(txy.paths, [], txy.bytes))
+            result.update({"txy": txy.layers, "bytes": txy.bytes})
+        elif action == "folder_choice":
+            # A folder's stage 2 choices (Q45.1, Q45.2): its cache policy and its TXY source, each set when
+            # given (the newest choice wins, as ``convert_prefs``); read otherwise. "" follows the global one.
+            path = str(params["path"])
+            set_at = float(params.get("set_at") or time.time())
+            if params.get("policy") is not None:
+                store.set_cache_policy(path, str(params["policy"]), set_at)
+            if params.get("source") is not None:
+                store.set_txy_source_pref(path, str(params["source"]), str(params.get("tag") or ""), set_at)
+            read = store.read_folder_choices([path])[path]
+            if read.status == "error":
+                raise StoreError(read.error)
+            result["choices"] = read.value or {"policy": "", "source": "", "tag": ""}
         elif action == "legacy_choice":
             # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
             result["legacy"] = store.set_legacy_choice(str(params["choice"]))

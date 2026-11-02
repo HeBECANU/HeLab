@@ -239,8 +239,9 @@ def _verify_store(cache_dir: str, dirname: str, store_id: str, name: str | None 
             files = conn.execute("SELECT file, bytes FROM datasets UNION ALL "
                                  "SELECT file, bytes FROM pending_saves").fetchall()
             # (Saved results' files are ``results/<name>``, beside ``datasets/``, and raw layers'
-            # ``raw/<name>``; a store from before result caching has no such tables.)
-            for table in ("results", "pending_results", "raw_layers"):
+            # ``raw/<name>``, and TXY segments' ``txy/<name>``; a store from before result caching has no such
+            # tables.)
+            for table in ("results", "pending_results", "raw_layers", "txy_segments"):
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                                 (table,)).fetchone() is not None:
                     files += conn.execute(f"SELECT file, bytes FROM {table}").fetchall()

@@ -106,6 +106,8 @@ class AdminResultFields(TypedDict, total=False):
     recorded: bool
     results: int  # saved results removed (R2)
     raw: int  # store-v4's raw layer rows removed (``clear_raw``, caching v2)
+    txy: int  # store-v4's TXY layers removed (``clear_txy``, caching v2 stage 2)
+    choices: dict[str, Any]  # a folder's stage 2 choices after ``folder_choice`` (policy, source, tag)
     legacy: dict[str, Any]  # store-v3 beside store-v4 after ``legacy_choice``/``clear_legacy`` (``measure_legacy``)
     result_id: str  # an adopted result's saved row (R2)
     folder_results: dict[str, ResultCountField]  # an adoption's folders' saved results after it (R2)
@@ -553,6 +555,9 @@ class RemovedEvent(TypedDict):
     results: NotRequired[int]
     # Kind ``raw`` (store-v4's raw layers, caching v2): the rows removed.
     raw: NotRequired[int]
+    # Kind ``txy`` (store-v4's TXY layers, caching v2 stage 2): the layers removed, each [folder, layer].
+    txy: NotRequired[int]
+    layers: NotRequired[list[list[str]]]
     root: NotRequired[str | None]
     # Saved results Make room removed for a waiting one, [folder, lookup, result_id] each: not a clear
     # (no epoch moved; a newer copy of one of those keys has another result_id).

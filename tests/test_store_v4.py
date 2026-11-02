@@ -124,9 +124,12 @@ def test_a_new_store_v4_has_every_store_v3_table_and_its_own(tmp_path: Path) -> 
     with CacheStore(str(tmp_path / "store-v3")) as v3, CacheStore(str(tmp_path / "store-v4")) as v4:
         tables = {name for (name,) in rows(v3, "SELECT name FROM sqlite_master WHERE type = 'table'")}
         tables4 = {name for (name,) in rows(v4, "SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert tables4 == tables | {"makers", "raw_layers"} and "datasets" in tables4  # (T~3: datasets carried.)
+        assert tables4 == tables | {"makers", "raw_layers", "txy_layers", "txy_segments", "txy_views", "cache_policy",
+                                    "txy_source_prefs"} and "datasets" in tables4  # (T~3: datasets carried.)
         meta = v4._meta()
         assert meta["layout_version"] == 4 and meta["format"] == store_v4.FORMAT == 1 and meta["gen_raw"] == 0
+        assert meta["gen_txy"] == 0 and "parts" in {row[1] for row in rows(v4, "PRAGMA table_info(pending_saves)")}
+        assert "parts" not in {row[1] for row in rows(v3, "PRAGMA table_info(pending_saves)")}
         assert v3._meta()["layout_version"] == 3 and "format" not in v3._meta()
         assert v3.store_id != v4.store_id and v4.layout == 4 and v3.layout == 3
         for table in ("datasets", "results"):
