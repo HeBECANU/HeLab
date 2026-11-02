@@ -191,6 +191,7 @@ def test_hand_in_front_holds_the_lock(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(history, "DATA", tmp_path)
     cfg = config.load(HOME / "config.json")
     cfg.analysis_hz = 100
+    monkeypatch.setattr(engine, "ANCHORS", tmp_path / "anchors")  # not the real ones
     eng = engine.Engine(cfg, FrameSource(str(SAMPLE)))
     frame = cv2.imread(str(SAMPLE))
     hand = cv2.flip(frame, 1)
@@ -245,3 +246,127 @@ def test_old_days_deleted_and_compressed(tmp_path: Path, monkeypatch: pytest.Mon
     history.compress_old()
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
         [f"history-{day(0)}.csv", f"history-{day(2)}.csv.gz"])
+
+
+def test_compress_twice_at_once_keeps_every_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two compress runs at midnight (one per writer) once deleted each other's .gz (2026-11-01).
+    import gzip
+    import threading
+
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    day = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    body = "time,He3\n" + "".join(f"{day}T00:00:{i:02d},locked\n" for i in range(60)) * 200
+    for kind in ("history", "locks"):
+        (tmp_path / f"{kind}-{day}.csv").write_text(body)
+    runs = [threading.Thread(target=history.compress_old) for _ in range(4)]
+    for t in runs:
+        t.start()
+    for t in runs:
+        t.join()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+    assert gzip.decompress((tmp_path / f"history-{day}.csv.gz").read_bytes()).decode() == body
+    # A CSV whose .gz already exists with the same content (a run stopped before deleting it) just goes.
+    (tmp_path / f"locks-{day}.csv").write_text(body)
+    history.compress_old()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+
+
+def test_series_breaks_lines_across_gaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    now = time.time()
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
+    rows = [now - 3000, now - 2995, now - 100, now - 95]  # labcam off for about 48 min between
+    (tmp_path / f"history-{time.strftime('%Y-%m-%d')}.csv").write_text(
+        "time,He3\n" + "".join(f"{stamp(t)},locked\n" for t in rows))
+    if time.strftime("%Y-%m-%d", time.localtime(now - 3000)) != time.strftime("%Y-%m-%d"):
+        pytest.skip("just after midnight")
+    c = history.series(1)["columns"]
+    assert c["He3"] == ["locked", "locked", None, "locked", "locked"]
+
+
+def test_duration() -> None:
+    from labcam.detectors import duration
+
+    assert [duration(s) for s in (0, 45, 192, 3600, 7500, 97200, 86400 * 3 + 59)] == [
+        "0s", "45s", "3m 12s", "1h", "2h 5m", "1d 3h", "3d"]
+
+
+def test_relocate_finds_a_moved_instrument(tmp_path: Path) -> None:
+    from labcam import relocate
+
+    rng = np.random.default_rng(1)
+    scene = cv2.GaussianBlur(rng.integers(0, 255, (300, 400, 3), np.uint8), (0, 0), 3)
+    scene = cv2.normalize(scene, None, 0, 255, cv2.NORM_MINMAX)
+
+    def with_scope(dx: int, dy: int, screen: int) -> np.ndarray:
+        frame = scene.copy()
+        x, y = 150 + dx, 110 + dy
+        frame[y - 25:y + 85, x - 30:x + 120] = 200  # the bezel
+        cv2.putText(frame, "SCOPE", (x - 20, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (40, 40, 40), 1)
+        for k in range(4):  # buttons
+            cv2.circle(frame, (x + 105, y + 10 + 15 * k), 4, (60, 60, 60), -1)
+        frame[y:y + 60, x:x + 90] = screen  # the screen; what it shows changes
+        return frame
+
+    corners = [(150.0, 110.0), (240.0, 110.0), (240.0, 170.0), (150.0, 170.0)]
+    anchor = relocate.anchor(with_scope(0, 0, 90), corners)
+    assert anchor is not None
+    still = relocate.find(anchor, with_scope(0, 0, 30), corners)  # only the screen changed
+    assert still is not None and not still.moved
+    found = relocate.find(anchor, with_scope(14, -17, 30), corners)
+    assert found is not None and found.moved and found.shift == (14.0, -17.0)
+    gone = relocate.find(anchor, scene, corners)  # nothing like it nearby: the box stays
+    assert gone is not None and not gone.moved
+    relocate.save(anchor, tmp_path / "a.npz")
+    again = relocate.load(tmp_path / "a.npz")
+    assert again is not None and again.origin == anchor.origin
+    assert relocate.find(again, with_scope(14, -17, 30), corners).shift == (14.0, -17.0)  # type: ignore[union-attr]
+
+
+def test_seven_segment_display() -> None:
+    from labcam import segments
+
+    # Dark segments on a light LCD: "0", "1" and "8" side by side, 40 x 80 px cells, upright.
+    image = np.full((80, 120), 190, np.float32)
+    bars = {"a": (8, 2, 32, 8), "b": (30, 4, 36, 40), "c": (30, 40, 36, 76), "d": (8, 72, 32, 78),
+            "e": (4, 40, 10, 76), "f": (4, 4, 10, 40), "g": (8, 37, 32, 43)}
+    for k, on in enumerate(("abcdef", "bc", "abcdefg")):
+        for seg in on:
+            x0, y0, x1, y1 = bars[seg]
+            image[y0:y1, 40 * k + x0:40 * k + x1] = 110
+    read, contrast = segments.read_cells(image, [(0, 1 / 3), (1 / 3, 2 / 3), (2 / 3, 1)], 0.0)
+    assert read == "018" and contrast > 50
+    within = inst("segments", point=1, tolerance=0.3)
+    # Unreadable checks don't vote but lower how sure; an unsure digit shows as "?".
+    reading = segments.tally(within, "018", ["018", "018", "???", "018"], contrast)
+    assert reading.status == "ok" and reading.values["value"] == 0.18 and reading.confidence == 0.75
+    assert segments.tally(within, "048", ["018", "048"], contrast).status == "unknown"  # 0.18 or 0.48?
+    unsure_last = segments.tally(within, "013", ["012", "013"], contrast)  # 0.1? is within ±0.3 either way
+    assert unsure_last.status == "ok" and unsure_last.text.startswith("0.1?")
+    assert segments.tally(within, "048", ["048"], contrast).status == "off"  # 0.48 is beyond ±0.3
+
+
+def test_power_modes() -> None:
+    from labcam import engine
+
+    eng = engine.Engine.__new__(engine.Engine)  # only the power state, no camera
+    now = time.time()
+    eng.power_mode, eng._low_until_input = "auto", False
+    eng._last_focused = eng._last_input = now
+    assert eng.power() == (False, "a page is in use")
+    eng._last_focused = now - engine.UNFOCUSED_LOW - 1  # 10 min with no page in focus
+    assert eng.power()[0]
+    eng.presence(focused=True, active=False)
+    assert not eng.power()[0]
+    eng._last_input = now - engine.IDLE_LOW - 1  # in focus but 1 h without input
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)
+    eng.low_power_now()
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)  # the next input ends "low power now"
+    assert not eng.power()[0]
+    eng.power_mode = "low"
+    assert eng.power() == (True, "kept at low power")
+    eng.power_mode = "full"
+    eng._last_focused = 0.0
+    assert not eng.power()[0]
