@@ -15,6 +15,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Optional, Sequence
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from helab.analysis.dataset_view import DatasetView
@@ -57,6 +59,31 @@ def plate_note(view: DatasetView, profile_name: str) -> str:
     return f"{suggested}{' (uncalibrated)' if suggested in UNCALIBRATED else ''} suggested for this folder's date ({day})"
 
 
+class ElidedButton(QPushButton):
+    """A push button whose text is cut with "…" to its width (the full text in ``full`` and the tooltip), so it
+    shrinks with the settings panel and is never narrower than what it shows (Q33.2, R2-2)."""
+
+    PADDING = 24  # (The style's margins around a push button's text.)
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self.full = text
+
+    def set_full_text(self, text: str) -> None:
+        self.full = text
+        self._elide()
+
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
+        super().resizeEvent(a0)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self.full, Qt.TextElideMode.ElideRight,
+                                              max(0, self.width() - self.PADDING))
+        if shown != self.text():
+            self.setText(shown)
+
+
 class TxySourceRow(QWidget):
     """``TXY: [the plot's list ▸]`` and one line under it: the profile HeLab converts with, and a plate
     suggestion when there is one, with the Keep box at its end. The button opens the TXY list editor
@@ -78,7 +105,7 @@ class TxySourceRow(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("TXY:"))
-        self.button = identify(QPushButton(""), "txy_source", "TXY priority",
+        self.button = identify(ElidedButton(""), "txy_source", "TXY priority",
                                "Which TXY this plot's data is made of, in order: each shot from the first entry with "
                                "a usable TXY (External: the MATLAB converter's d_txy_forc; HeLab's "
                                "d_txy_helab_<tag>). As the folder's tab: what its tab and Live read.")
@@ -110,8 +137,10 @@ class TxySourceRow(QWidget):
         """Show the plot's list (None: as the tab)."""
         self.entries = tuple(entries) if entries is not None else None
         tag, tab = self._context()
-        self.button.setText(f"As the folder's tab ({tab})" if self.entries is None and tab
-                            else list_summary(self.entries, tag, "As the folder's tab"))
+        text = (f"As the folder's tab ({tab})" if self.entries is None and tab
+                else list_summary(self.entries, tag, "As the folder's tab"))
+        self.button.set_full_text(text)
+        self.button.setToolTip(f"{text}\n\n{self.button.accessibleDescription()}")
 
     def edit(self) -> None:
         """The list editor; a change is the plot's (``changed``)."""

@@ -413,7 +413,7 @@ def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> N
                                "(2023-02-04)")
     assert "it is not applied" in row.note.toolTip()
     # One button naming the list (Q53.2), the list editor behind it ("As the folder's tab" at its top).
-    assert row.entries is None and row.button.text() == "As the folder's tab (Conversion (m19v1) › External)"
+    assert row.entries is None and row.button.full == "As the folder's tab (Conversion (m19v1) › External)"
     asked: list[tuple[Any, ...]] = []
 
     def answer(*args: Any) -> tuple[bool, Any]:
@@ -422,14 +422,14 @@ def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> N
     answers: list[tuple[bool, Any]] = [(True, ("p22v1",)), (False, None), (True, ("p22v1",)), (True, None)]
     row.ask_list = answer
     row.edit()
-    assert picked == [("p22v1",)] and row.button.text() == "p22v1 only"
+    assert picked == [("p22v1",)] and row.button.full == "p22v1 only"
     assert asked[0][6] == "As the folder's tab" and "p22v1" in asked[0][5]  # (Every profile by its tag.)
     row.edit()  # Cancel.
     row.edit()  # The same list again: no change.
     row.edit()  # Back to the tab's.
     assert picked == [("p22v1",), None] and row.entries is None
     row.set_entries(("External",))  # (Set by the plot: not a choice.)
-    assert len(picked) == 2 and row.button.text() == "External only"
+    assert len(picked) == 2 and row.button.full == "External only"
 
 
 # A plot switching its TXY source (``AnalysisInstance.set_txy_source``).

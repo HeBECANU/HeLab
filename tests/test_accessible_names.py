@@ -253,7 +253,7 @@ def script_button(window: QWidget, name: str) -> QPushButton:
 @pytest.mark.no_auto_data_root  # RAM only: no save left for the quit to wait for (handoff A~5).
 @covers("HelabMainWindow", "FolderTabWidget", "FolderExplorer", "FolderDetailsPanel", "LoadBar", "CentralHint",
         "ClickableLabel", "ElidedLabel", "HoverMenuToolButton", "TreePanelWidget", "PlotSettingsPanel", "PresetBar",
-        "TxySourceRow", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture")
+        "TxySourceRow", "ElidedButton", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture")
 def test_the_main_window_with_a_folder_and_plots(qtbot: QtBot, tmp_path: Path) -> None:
     """The main window empty, then with a synthetic folder loaded, two plots tabbed together, one
     released (its picture and Reload) and one floating (its own settings section)."""
