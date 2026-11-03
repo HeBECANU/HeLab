@@ -245,3 +245,42 @@ no RERUN (output: `.ai/temp/suite-c4.txt`). The five type checks pass: `mypy hel
 `pyright --pythonplatform Windows helab tests` (0 errors). CI: see the report to CoCo.
 
 **Follow-ups:** none.
+
+### Round 2's review (Probe2, `review.md`, `d91c3d3`): C4-1 and C4-2 fixed
+
+- **C4-1 (Medium): confirmed, fixed in `b19a07e`** (`instance.py`, which the brief allows for holding a plot). A
+  plot held from its start whose folder then kept its code never ran. That happens when the folder's test import
+  failed, its class or action is gone, or it was removed meanwhile. `keep_script` only called `_follow_next`, and
+  nothing waited. It now runs the plot (`run()`) when the plot has no result yet and neither has a run in flight
+  nor waits for its data or its own TXY choice; otherwise it calls `_follow_next` as before. The kept code is the
+  code that stays loaded, and no import of that folder follows in the round. This also covers a plot whose first
+  run a reload cancelled.
+
+  Test: `test_a_plot_held_from_its_start_whose_folder_keeps_its_code_runs_it`, over a failed test import and the
+  folder removed. Both cases timed out before the fix and draw "old" now.
+- **C4-2 (Low): confirmed, fixed in `364ee45`.** A run ending between `_busy`'s count and the `finished` connection
+  went unseen, and the reload stayed "Reload (waiting)". In the answered wait a click on Reload couldn't recover
+  it. The fix has two parts:
+  - `_listen` connects every runner before each count, in both `_end_round` and `_try_reload` (L2's wait), and
+    `_stop_waiting` still disconnects;
+  - `_try_reload`, while an answered round waits, calls `_end_round` to count again.
+
+  Test: `test_a_run_ending_as_the_reload_counts_it_doesnt_leave_the_reload_waiting`. A `_busy` wrapper lets the
+  counted run end, its `finished` emitted (seen through a direct connection), before the count returns. Before
+  the fix the reload stayed waiting; now it imports, in one round.
+
+**Doc proposal, added to round 2's (`plots-and-scripts.md`):** "a plot held from its start that keeps its code runs
+it then (`keep_script`); the runners' `finished` is connected before runs are counted (`_listen`), and Reload during
+the answered wait counts them again".
+
+**Reply text, if CoCo mentions the review on the PR:** "Follow-up from our own review: a plot held from its start
+whose folder kept its old code now runs it (`b19a07e`), and the reload listens for runs ending before it counts
+them (`364ee45`)."
+
+**Checks (at `364ee45`):**
+- The full suite, `pytest -n 12 --reruns 5 --reruns-delay 1`: **9296 passed, 673 skipped**, no RERUN (output:
+  `.ai/temp/suite-c4b.txt`).
+- The five type checks pass: `mypy helab/ --strict` (207 files), `mypy tests --strict` (210), `pyright helab tests`
+  (0 errors), `mypy helab/ --strict --platform win32` (207), `pyright --pythonplatform Windows helab tests`
+  (0 errors).
+- CI: see the report to CoCo.
