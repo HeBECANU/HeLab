@@ -34,6 +34,7 @@ LOW_COUNTS = "low_counts"  # a shot below a plot's low-count rule(s), during Liv
 LIVE_ERROR = "live_error"  # Live stopped checking a folder on an error (LiveController._live_halt)
 CLOCK_SKEW = "clock_skew"  # a folder's files dated ahead of this computer's clock (ClockSkewWarning)
 DAMAGED_RAW = "damaged_raw"  # a raw file Live's auto-convert found damaged (Q18.5), once per file
+READ_STOPPED_RAW = "read_stopped_raw"  # a raw file whose read stopped early in Live's auto-convert (Q48.2), once per file
 RAW_OVERWRITTEN = "raw_overwritten"  # a raw file overwritten in place since store-v4 cached it (Q28.6), once per shot
 RAW_KEPT = "raw_kept"  # Settings set TXY only but couldn't offer to remove the cached raw pulses (S4~1, S4R-1)
 SEEN_LIMIT = 4096

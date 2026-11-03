@@ -90,6 +90,9 @@ there while the left panel is collapsed). Before Live starts, the same button re
 - The Live line counts converted shots, shots still waiting, and **damaged** raw files (unchanged
   for 20 s and still failing the format checks). A damaged file gets one desktop notification, no
   TXY, and never holds up later shots. Shots converted with no hits are named in amber.
+- A raw file whose read stopped early (at a line that isn't numbers, where MATLAB's converter stops
+  too) is named in amber, `d3.txt read stopped at line 1010`, and gets one desktop notification:
+  its TXY holds only the hits before that line.
 - The arrow beside **Auto-convert** opens its menu: **Write TXY beside the raw files in this
   folder…**, **Start Live and auto-convert here when HeLab launches**, and **Notify when a
   converted shot has fewer than 100 hits…** (a desktop notification once per shot; 0 turns it off).

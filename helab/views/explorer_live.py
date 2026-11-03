@@ -995,6 +995,18 @@ class LiveController:
                            int(event["raw_mtime_ns"])),
                       desktop=True, path=session.path, shot=int(event["shot"]), source="convert")
 
+    @staticmethod
+    def _notify_read_stopped(session: LiveSession, event: dict[str, Any], stop: ReadStop) -> None:
+        """A raw file whose read stopped early (A37.1): a system notification, once per file (its name, size
+        and mtime), as a damaged one's (Q48.2), since its TXY lacks the hits after that line."""
+        name = os.path.basename(session.path.rstrip(os.sep)) or session.path
+        raw_name = str(event["raw_name"])
+        events.notify(events.READ_STOPPED_RAW, f"{raw_name} in {name}: {stop.detail()}. Later shots go on.",
+                      title="HeLab: raw file read stopped early",
+                      key=(events.READ_STOPPED_RAW, session.path, raw_name, int(event["raw_size"]),
+                           int(event["raw_mtime_ns"])),
+                      desktop=True, path=session.path, shot=int(event["shot"]), line=stop.line, source="convert")
+
     def _converted(self, session: LiveSession, convert: AutoConvert, event: dict[str, Any]) -> None:
         """A shot converted: its TXY reaches the data through Live's next check (now, or as soon
         as the running one ends); a low-count one notifies (Q9.4), once per shot."""
@@ -1008,6 +1020,7 @@ class LiveController:
         if event.get("read_stop"):
             convert.stopped[raw_name] = stop = ReadStop.of(event["read_stop"])
             logging.warning("Live auto-convert: %s in %s: %s", raw_name, session.path, stop.detail())
+            self._notify_read_stopped(session, event, stop)
         else:
             convert.stopped.pop(raw_name, None)  # (Converted again, read to its end.)
         threshold = low_hits_threshold()
