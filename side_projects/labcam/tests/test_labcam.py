@@ -261,6 +261,21 @@ def test_lost_is_unknown_while_someone_moves_or_covers(tmp_path: Path, monkeypat
         assert update.called and not eng.align_paused
 
 
+def test_motion_says_how_sure() -> None:
+    """Quiet: sure; a large moving patch: sure it's movement, with the share of the view that changed."""
+    from labcam.detectors import Motion
+
+    motion = Motion(config.Instrument("people", "motion", "People", config.rect_corners(0, 0, 400, 300), {}))
+    quiet = np.full((300, 400, 3), 90, np.uint8)
+    for _ in range(30):
+        reading = motion.update(quiet)
+    assert reading.status == "ok" and reading.confidence == 1.0
+    person = quiet.copy()
+    cv2.rectangle(person, (100, 60), (220, 280), (220, 200, 180), -1)
+    reading = motion.update(person)
+    assert reading.status == "off" and reading.confidence == 1.0 and reading.values["moved"] > 0.15
+
+
 def test_history_thins_rows_and_reads_gzip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import gzip
 

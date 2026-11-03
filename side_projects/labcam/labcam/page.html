@@ -297,6 +297,10 @@ const PANELS = [
   {title: "Locks", kind: "state", about: "Each laser's lock state: green locked, orange lost, grey can't tell.<br>" +
     "The fainter a square, the less sure labcam was. He3: the left middle scope shows a flat thin line.<br>" +
     "He4: the left top scope is flat, the scope dot still and the lock-in needle in the middle."},
+  {title: "People: movement (% of the view)", match: k => k.endsWith(".moved"), kind: "bars", scale: 100, sure: true,
+    about: "How much of the view changed (outside the instruments' screens), in %: bright blue while it counts as someone<br>" +
+      "moving (until 5 s after the last movement), dark otherwise. Right axis: how sure the camera check was.<br>" +
+      "A loss seen while someone moves reads unknown, and lost once it's quiet."},
   {title: "Wavemeter", match: k => k === "wavemeter.value", about: "The wavemeter's reading (nm or GHz), read from its display.<br>" +
     "Grey points had digits it couldn't read for sure."},
   {title: "Power (µW)", match: k => k === "wavemeter_power.value", about: "The power under the wavemeter's reading, read from its display."},
@@ -312,8 +316,6 @@ const PANELS = [
   {title: "Dot movement (px)", match: k => k.endsWith(".spread_px"),
     about: "How far the scope dot moved over the last few seconds, in pixels of the camera frame.<br>" +
       "It counts as moving past a tenth of the screen's width."},
-  {title: "People", match: k => k.endsWith(".present"), kind: "bars", range: [0, 1.05],
-    about: "1 (blue) when labcam saw someone moving in the room. A loss seen then reads unknown, and lost once it's quiet."},
 ];
 let historyDrawn = false, PANEL_ABOUT = {};
 
@@ -366,10 +368,11 @@ const LINE_COLOURS = ["#4fc3f7", "#ba68c8", "#fff176", "#f06292"];
 function valueTraces(c, panel, axis) {
   return Object.keys(c).filter(panel.match).map((col, n) => {
     const name = col.split(".")[0], status = c[name + ".status"] || [], sure = c[name + ".sure"] || [], shape = c[name + ".shape"] || [];
-    const bars = panel.kind === "bars";
+    const bars = panel.kind === "bars", present = c[name + ".present"] || [];
+    const y = panel.scale ? c[col].map(v => typeof v === "number" ? v * panel.scale : null) : c[col];
     return {
-      type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y: c[col], yaxis: axis,
-      marker: bars ? {color: "#288cff"} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
+      type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y, yaxis: axis,
+      marker: bars ? {color: present.map(v => v === 1 ? "#288cff" : "#1d3f6e")} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
       line: {width: 1, color: LINE_COLOURS[n % LINE_COLOURS.length]}, connectgaps: false, showlegend: false,
       customdata: c.time.map((_, i) => [status[i] ?? "", shape[i] ? ", " + shape[i] : "",
                                         sure[i] == null ? "" : ` (sure ${Math.round(100 * sure[i])}%)`]),
@@ -419,10 +422,11 @@ async function refreshHistory() {
                                xanchor: "left", yanchor: "bottom", showarrow: false, font: {size: 11, color: "#bbb"},
                                hovertext: p.about, captureevents: true, name: p.title});
       layout[key] = {domain: [top - h, top], gridcolor: "#222", zeroline: false,
-                     ...(p.kind === "state" ? {type: "category"} : {range: p.range || robustRange(p.traces)})};
+                     ...(p.kind === "state" ? {type: "category"} : p.kind === "bars" ? {rangemode: "tozero", ticksuffix: "%"}
+                         : {range: p.range || robustRange(p.traces)})};
       layout[key].fixedrange = !zoom;
       p.traces.forEach(t => traces.push({...t, yaxis: axis}));
-      if (!sure || p.kind === "state") return;  // the Locks panel shows how sure by its squares' opacity
+      if (!(sure || p.sure) || p.kind === "state") return;  // the Locks panel shows how sure by its squares' opacity
       // How sure, on a 0–100 % axis of its own over the panel: per laser for the locks, per instrument otherwise.
       const cols = [...new Set(p.traces.map(t => t.name.split(".")[0] + ".sure"))];
       const sureAxis = "y" + (shown.length + n), sureKey = "yaxis" + (shown.length + n);
@@ -434,7 +438,7 @@ async function refreshHistory() {
         hovertemplate: `<b>${col.replace(/[._]sure$/, "")}</b> sure %{y:.0f}%<br>%{x}<extra></extra>`,
       }));
     });
-    if (sure) layout.margin.r = 36;
+    if (sure || shown.some(p => p.sure)) layout.margin.r = 36;
     const lockAt = shown.findIndex(p => p.kind === "state");
     if (lockAt >= 0 && shown.length > 1) {
       // The Locks panel gets its own time axis (the same times as the others'), and a label at each lock change.

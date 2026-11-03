@@ -362,7 +362,13 @@ class Motion(Detector):
             return Reading("unknown", "learning the background…", {"frames": self.frames})
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         min_area = self.inst.option("min_area", 0.004) * mask.size
-        regions = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) >= min_area]
+        areas = [cv2.contourArea(c) for c in contours]
+        regions = [cv2.boundingRect(c) for c, a in zip(contours, areas) if a >= min_area]
+        # How sure this check is (Tony, 2026-11-03): how clearly its largest moving patch is above or below the
+        # least that counts. Moving: 50 % at that size, 100 % at three times it; quiet: 100 % with nothing moving,
+        # 50 % with a patch just under it.
+        largest = max(areas, default=0.0) / max(1.0, min_area)
+        sure = min(1.0, 0.5 + 0.25 * (largest - 1)) if regions else 1.0 - 0.5 * min(1.0, largest)
         now = time.time()
         if regions:
             self.last_motion = now
@@ -373,6 +379,6 @@ class Motion(Detector):
             "off" if present else "ok",
             ("movement" if present else "quiet") + ago,
             {"present": "yes" if present else "no", "regions": len(regions), "moved": round(float(np.count_nonzero(mask)) / mask.size, 4)},
-            1.0,
+            round(sure, 2),
             marks=marks,
         )

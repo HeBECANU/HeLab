@@ -9,7 +9,7 @@ Watches the lab rack camera (an MJPEG stream, e.g. the Raspberry Pi's ustreamer 
 | Lock-in needle | `needle` | the needle's offset from the centre (-1 … 1); `ok` within `tolerance` |
 | Lock-in reading | `segments` | the 7-segment number beside the needle, read segment by segment (no sign); `ok` within ±`tolerance` (0.3) |
 | Scope dot | `dot` | whether the spot moved more than `still` (a fraction of the screen's width, 0.1) in the last `window` s, or disappeared (`ok` = still, `want`) |
-| People | `motion` | movement outside the instruments' regions (`off` = someone moving, drawn blue) |
+| People | `motion` | movement outside the instruments' regions (`off` = someone moving, drawn blue; `moved`: the share of the view that changed; how sure: how clearly its largest moving patch is above or below `min_area`) |
 
 It serves a page with the overlay stream, a table of every reading (with how sure it is), the log, and a
 region editor. Statuses: `ok`, `off` (amber), `unknown` (grey: couldn't tell; never a guess).
@@ -76,12 +76,12 @@ Under `data/`, a row every 5 s and at every lock change (so no loss falls betwee
 earlier days gzipped to about a tenth at start and at midnight; days older than 7 are deleted):
 - `locks-<date>.csv`: each laser's state, how sure, and why;
 - `history-<date>.csv`: the locks, then each instrument's status, how sure (0–1) and numbers (trace shape, level, thickness and
-  waviness; wavemeter value; power; needle offset; dot spread and position; movement 0/1).
+  waviness; wavemeter value; power; needle offset; dot spread and position; movement 0/1 and the share of the view that changed).
 
 The page plots them with Plotly (served by labcam from the plotly package, no internet needed; 15 min to 7
 days, one figure on a shared time axis, hover for each point's time, value, status and, for a lock, why; drag to
-zoom): the locks as coloured bands (paler when less sure), the wavemeter
-and power, trace thickness and level, the needle, the dot's movement and people. `/locks.csv` and
+zoom): the locks as coloured bands (paler when less sure), then people's movement (blue bars, how sure on the right),
+the wavemeter and power, trace thickness and level, the needle and the dot's movement. `/locks.csv` and
 `/history.csv` download today's files.
 
 ## Set up (once)
