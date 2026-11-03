@@ -67,6 +67,33 @@ def _rect(x: float, y: float, w: float, h: float) -> list[Point]:
     return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
 
 
+EXPOSURE = (0.35, 2.5)  # the screen's exposure against the empty screen's (`background`) that's allowed for
+EXPOSURE_SPREAD = 1.3  # the most one colour channel's ratio may exceed another's for an even scaling
+
+
+def _without_edges(signal: np.ndarray) -> np.ndarray:
+    """The signal without the screen's own edges where the box overlaps them a little (2026-11-03: after the
+    camera turned, the bezel showed as a strip along a box's bottom, under where the trace faded, and read as a
+    second, low trace): parts against the top or bottom no taller than EDGE of the height, and upright strokes
+    against the left or right side no wider than EDGE of the width. A trace touches the sides too, but runs
+    across them, not up them."""
+    h, w = signal.shape
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(signal.astype(np.uint8), connectivity=8)
+    keep = signal.copy()
+    for k in range(1, count):
+        x, y = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_TOP]
+        bw, bh = stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]
+        along = (y == 0 or y + bh >= h) and bh <= EDGE * h
+        up = (x == 0 or x + bw >= w) and bh > 2 * bw and bw <= EDGE * w
+        if along or up:
+            keep[labels == k] = False
+    return keep
+
+
+EDGE = 0.15  # an edge strip's most height (top, bottom) or width (sides), as a fraction of the screen's
+NEAR_SHARE = 0.75  # columns near the trace's fit that make the rest marks beside it
+
+
 class TraceLevel(Detector):
     """A digital scope's signal: its shape and its height on the screen (0 top, 1 bottom).
 
@@ -75,7 +102,8 @@ class TraceLevel(Detector):
     `contrast` away is signal. `margin` (fraction) trims the screen's edges (bezel, menus, labels).
     - thickness: the median column's count of signal pixels, as a fraction of the height (a line ≈ 0.04–0.12,
       a stray label or grid dot adds a pixel, not an extent);
-    - filled: how far the columns' median colour is from the empty screen's (`background`, [B, G, R]); a block
+    - filled: how far the columns' median colour is from the empty screen's (`background`, [B, G, R], scaled for
+      the camera's exposure when the screen is that colour evenly brighter or darker; `exposure`); a block
       covering most of the screen makes the median the block's colour, so it reads as filled even when the
       leftover screen is what differs per column;
     - waviness: how far the columns' median signal rows spread (10–90 %) around their straight-line fit, as a
@@ -105,10 +133,20 @@ class TraceLevel(Detector):
         if inner.shape[0] < 5 or inner.shape[1] < 5:
             return Reading("unknown", "region too small")
         column_colour = np.median(inner, axis=0, keepdims=True)
-        signal = np.abs(inner - column_colour).max(axis=2) >= self.inst.option("contrast", 25.0)
         filled = 0.0
+        gain = 1.0
         if self.background is not None:
-            filled = float(np.median(np.abs(column_colour[0] - self.background).max(axis=1)))
+            # The camera's exposure scales the screen's colour as a whole (2026-11-03: after the camera moved, the
+            # empty screens came out at 0.4-0.55 of their colour). A screen that is the empty one's colour scaled
+            # evenly (every channel within EXPOSURE_SPREAD of the others) is compared with it at that exposure;
+            # a block of another colour isn't an even scaling, and a black one is beyond the range.
+            ratios = (np.median(column_colour[0], axis=0) + 1.0) / (self.background + 1.0)
+            if (EXPOSURE[0] <= float(np.median(ratios)) <= EXPOSURE[1]
+                    and float(ratios.max() / ratios.min()) <= EXPOSURE_SPREAD):
+                gain = float(np.median(ratios))
+            filled = float(np.median(np.abs(column_colour[0] - gain * self.background).max(axis=1)))
+        signal = np.abs(inner - column_colour).max(axis=2) >= self.inst.option("contrast", 25.0)
+        signal = _without_edges(signal)
         fill_limit = self.inst.option("fill", 40.0)
         columns = np.nonzero(signal.any(axis=0))[0]
         found = len(columns) / signal.shape[1]
@@ -117,10 +155,10 @@ class TraceLevel(Detector):
         tol = self.inst.option("tolerance", 0.15)
         if found < self.MIN_COLUMNS:
             if filled > fill_limit:
-                return Reading("off", "block (fills the screen)", {"shape": "block", "filled": round(filled), "found": round(found, 2)},
+                return Reading("off", "block (fills the screen)", {"shape": "block", "filled": round(filled), "exposure": round(gain, 2), "found": round(found, 2)},
                                round(min(1.0, filled / (2 * fill_limit)), 2))
             if self.background is not None:
-                return Reading("off", "empty screen", {"shape": "none", "filled": round(filled), "found": round(found, 2)}, 0.6,
+                return Reading("off", "empty screen", {"shape": "none", "filled": round(filled), "exposure": round(gain, 2), "found": round(found, 2)}, 0.6,
                                "no trace on the screen: off-screen or switched off?")
             return Reading("unknown", "no signal", {"shape": "none", "found": round(found, 2)}, 0.5,
                            f"signal seen in {found:.0%} of columns")
@@ -131,6 +169,12 @@ class TraceLevel(Detector):
         # shallower than the screen) stays flat; a wave or an oscillation still spreads (left top, 2026-11-02).
         xs = np.asarray(columns, np.float64)
         ys = np.asarray(medians, np.float64)
+        # Columns far off the rest are marks beside the trace (the screen's menu text, a label, a bit of bezel),
+        # not the trace: when they're few, they're left out before the fit too, so they can't tilt it.
+        off = np.abs(ys - np.median(ys))
+        first = off <= max(2.0, 3 * float(np.median(off)))
+        if len(xs) > 2 and first.mean() >= NEAR_SHARE:
+            xs, ys = xs[first], ys[first]
         residual = ys - ys.mean()
         if len(xs) > 2:
             slope, offset = np.polyfit(xs, ys, 1)
@@ -142,7 +186,7 @@ class TraceLevel(Detector):
             # when they're few (under a quarter of the columns), the spread is the rest's.
             spread = max(2.0, 3 * float(np.median(np.abs(residual - np.median(residual)))))
             near = np.abs(residual - np.median(residual)) <= spread
-            if near.mean() >= 0.75:
+            if near.mean() >= NEAR_SHARE:
                 residual = residual[near]
         waviness = float(np.percentile(residual, 90) - np.percentile(residual, 10)) / scale
         level = (float(np.median(medians)) + top) / scale
@@ -172,7 +216,7 @@ class TraceLevel(Detector):
             status,
             text,
             {"shape": shape, "level": round(level, 3), "thickness": round(thickness, 3),
-             "waviness": round(waviness, 3), "filled": round(filled), "found": round(found, 2)},
+             "waviness": round(waviness, 3), "filled": round(filled), "exposure": round(gain, 2), "found": round(found, 2)},
             confidence,
             marks=marks,
         )

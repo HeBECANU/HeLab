@@ -466,3 +466,19 @@ def test_align_holds_still_when_the_camera_does() -> None:
     shifted = cv2.warpAffine(ref, np.float32([[1, 0, 9], [0, 1, -6]]), (640, 480), borderMode=cv2.BORDER_REFLECT)
     a.update(shifted)
     assert a.moved and np.allclose(a.current.shift, (9, -6), atol=1.0)
+
+
+def test_trace_darker_exposure_and_bezel_strip() -> None:
+    """A darker exposure of the empty screen isn't a block, a block of another colour still is, and a strip of
+    bezel along the box's bottom (where the trace fades) doesn't make a flat line wavy (2026-11-03)."""
+    trace = inst("trace", background=[150, 150, 150], contrast=30)  # type: ignore[arg-type]
+    dark = screen(30, background=60, colour=200)  # the empty screen at 0.4 of its colour
+    assert TraceLevel(trace).update(dark).status == "ok"
+    block = screen(None, background=60)
+    cv2.rectangle(block, (0, 0), (99, 59), (30, 160, 200), -1)
+    assert TraceLevel(trace).update(block).values["shape"] == "block"
+    strip = screen(None, background=150)
+    cv2.line(strip, (40, 30), (99, 30), (240, 240, 240), 2)  # the trace, faded on the left
+    cv2.rectangle(strip, (0, 52), (99, 55), (10, 10, 10), -1)  # the bezel, inside the margin's cut
+    reading = TraceLevel(trace).update(strip)
+    assert reading.values["shape"] == "line" and reading.status == "ok", reading
