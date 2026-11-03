@@ -110,3 +110,46 @@ def test_the_newest_stable_release_is_latest_and_the_front_page() -> None:
     assert site.plan("0.0.8", after)[0][-1] == "latest"
     # An entry that isn't a version (deployed by hand) is left alone.
     assert site.plan("0.0.9", [*after, {"version": "dev", "aliases": []}])[0][-1] == "latest"
+
+
+def _check_offline() -> Any:
+    path = WORKFLOWS.parents[1] / "docs" / "publish" / "check_offline.py"
+    spec = importlib.util.spec_from_file_location("check_offline", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_offline_check_names_each_script_from_elsewhere(tmp_path: Path) -> None:
+    """The bundled manual must search from file:// without a network: a page loading a script from
+    elsewhere (unpkg's iframe-worker shim, a protocol-relative URL) is named; the site's own files and
+    data: URLs aren't; external stylesheets (fonts) aren't counted."""
+    check = _check_offline()
+    (tmp_path / "how-to").mkdir()
+    (tmp_path / "index.html").write_text(
+        '<html><head><script src="https://unpkg.com/iframe-worker/shim"></script>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css"></head>'
+        '<body><script src="js/iframe-worker-shim.js"></script><script>inline()</script></body></html>')
+    (tmp_path / "how-to" / "live.html").write_text(
+        '<script src="//cdn.example.org/x.js"></script><script src="data:text/javascript,1"></script>'
+        '<script src="../assets/javascripts/bundle.js"></script>')
+    assert check.external_scripts(tmp_path) == [
+        ("how-to/live.html", "//cdn.example.org/x.js"), ("index.html", "https://unpkg.com/iframe-worker/shim")]
+    assert check.main([str(tmp_path)]) == 1
+    (tmp_path / "index.html").write_text('<script src="js/iframe-worker-shim.js"></script>')
+    (tmp_path / "how-to" / "live.html").write_text('<script src="../assets/javascripts/bundle.js"></script>')
+    assert check.main([str(tmp_path)]) == 0
+
+
+def test_the_shim_is_vendored_with_its_licence_and_the_docs_job_checks_the_offline_copy() -> None:
+    """Material's offline plugin loads the iframe-worker shim from unpkg.com unless a polyfill names it:
+    the vendored copy (MIT, its licence beside it) is listed, and the Docs job checks the offline build."""
+    root = WORKFLOWS.parents[1]
+    shim = (root / "docs" / "js" / "iframe-worker-shim.js").read_text(encoding="utf-8")
+    assert shim.startswith("/*! iframe-worker 1.0.4") and "location.protocol===\"file:\"" in shim
+    licence = (root / "docs" / "js" / "LICENSE-iframe-worker.txt").read_text(encoding="utf-8")
+    assert "Permission is hereby granted, free of charge" in licence
+    assert "  polyfills:\n    - js/iframe-worker-shim.js\n" in (root / "mkdocs.yml").read_text(encoding="utf-8")
+    docs_job = (WORKFLOWS / "dev-cicd.yml").read_text(encoding="utf-8")
+    assert "HELAB_DOCS_OFFLINE: 'true'" in docs_job and 'python docs/publish/check_offline.py "$RUNNER_TEMP/offline"' in docs_job
