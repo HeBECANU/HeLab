@@ -243,12 +243,13 @@ CONVERT_OVER_MATLAB = False
 
 def converts_over_matlab(source: str) -> bool:
     """Whether a load of ``source`` converts on read the shots MATLAB's TXY has too: HeLab only always, HeLab
-    priority only with ``CONVERT_OVER_MATLAB``, MATLAB priority and MATLAB only never (Q50.1); a list
-    (Q~1, generalising Q50.1 (a)) when External isn't in it, or comes after a HeLab entry with the flag."""
+    priority only with ``CONVERT_OVER_MATLAB``, MATLAB priority and MATLAB only never (Q50.1). A list's text is
+    always of several entries, so External is in its chain (Q~2) and blocks, as ``helab_txy.find_list`` decides:
+    only with the flag, and the list's own External (if any) after its first HeLab entry (TP-4)."""
     normal = normal_source(source)
     if normal is None and is_list(source):
         entries = entries_of(source)
-        return EXTERNAL not in entries or CONVERT_OVER_MATLAB and entries[0] != EXTERNAL
+        return CONVERT_OVER_MATLAB and (EXTERNAL not in entries or entries[0] != EXTERNAL)
     return normal == HELAB_ONLY or normal == HELAB_PRIORITY and CONVERT_OVER_MATLAB
 
 

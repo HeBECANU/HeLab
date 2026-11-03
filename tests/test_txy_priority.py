@@ -112,9 +112,16 @@ def test_a_lists_record_names_its_entries() -> None:
 
 
 def test_convert_on_read_follows_q1_for_lists() -> None:
-    """Q~1: a list converts only shots no entry has a file of; External blocks unless it isn't in the list."""
-    assert not txy_sources.converts_over_matlab("m23v1>m19v1>External")
-    assert txy_sources.converts_over_matlab("m23v1>m19v1")
+    """Q~1, Q~2.3: a list converts only shots no stage of its chain has a file of; a list's chain always has
+    External (TP-4: as find_list decides), so it blocks unless CONVERT_OVER_MATLAB, External not first."""
+    for text in ("m23v1>m19v1>External", "m23v1>m19v1", "External>m23v1>m19v1"):
+        assert not txy_sources.converts_over_matlab(text)
+    assert txy_sources.converts_over_matlab(txy_sources.HELAB_ONLY)  # (One entry: no chain, as before.)
+
+
+def test_convert_over_matlab_for_lists_follows_find_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(txy_sources, "CONVERT_OVER_MATLAB", True)
+    assert txy_sources.converts_over_matlab("m23v1>m19v1") and txy_sources.converts_over_matlab("m23v1>m19v1>External")
     assert not txy_sources.converts_over_matlab("External>m23v1>m19v1")
 
 
