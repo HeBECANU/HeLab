@@ -118,3 +118,63 @@ branch's worktree (`helab.__file__` confirmed there).
 - **A~1 (CachedRuns' verification timer outliving a closed plot):** a fair separate item. It is not
   needed for this fix.
 - **testing.md text:** fine. With FM-1, it should also mention `--basetemp`.
+
+
+## Re-check of the fixes (ee4bbdf..21e614a)
+
+Code: `21e614a`, the only commit that changes code. `helab/` and `tests/` are the same at `e629969`. Its
+handoff commits after it (`f987747`, `e629969`) were read for A~2 and the testing.md proposal.
+
+**Result: FM-1, FM-2 and FM-3 are closed. One new Info note (FM-4). No blocker, no open finding.**
+
+- **FM-1 (Low): closed.**
+  - `fixed_mount` takes several mounts, `os.pathsep`-separated. Empty items are skipped, and each item
+    is compared through `_normal`, as before.
+  - conftest's `name_fixed_mount` adds the mount holding the temp folder at import, and `--basetemp`'s
+    in `pytest_configure`. It adds each mount once, appending.
+  - **On xdist workers:** I checked `xdist/remote.py`. `setup_config` sets `config.option.basetemp` to
+    the worker's `popen-gwN` folder before `pytest_cmdline_main`, so the worker's own `pytest_configure`
+    sees it. Its helpers start later and inherit the variable.
+  - **Old code:** with `ee4bbdf`'s `data_roots.py` under `21e614a`'s tests, the seam test fails at
+    `:342` (the two-mount part). The other three pass, as expected: the naming test exercises conftest,
+    not the seam.
+  - **My repro of FM-1, now on the fix:** the normal `TMPDIR`, with `--basetemp` on a 2 GB sparse
+    APFS image mounted in my scratch folder (since detached). I ran
+    `tests/test_root_discovery.py tests/test_result_cache_plots.py` with `-n 2 --reruns 5
+    --reruns-delay 1`: 50 passed, no RERUN. Before the fix, the same layout timed out at `:238`.
+- **FM-2 (Low): closed.**
+  - The wrong comment is gone. `mount_holding` gives the drive on Windows (`Path(real).anchor`, as
+    `HELAB_TEST_LOCAL_MOUNT` names it), and the seam is now set there too. So a TEMP off
+    `%SystemDrive%` is trusted.
+  - For CI's Windows runners nothing changes: TEMP is on `C:`, which is already the system drive.
+  - The docstring states what stays: a basetemp on another drive than TEMP's has no mount in the list.
+    A~2 proposes that check, which is fair, and it predates this branch.
+  - The naming test skips on Windows, fairly: its mount table is a POSIX fake. The seam and live-variable
+    tests run there.
+- **FM-3 (Info): closed.** The proposed testing.md text now says "wherever `fixed_mount` is asked", and
+  it names the `test_offline_browsing` tmpfs side effect.
+
+### FM-4 (Info, new): an inherited `HELAB_TEST_FIXED_MOUNT` is now kept
+
+- **Where:** `tests/conftest.py`, `name_fixed_mount`, called at import.
+- **What changed:** at `ee4bbdf`, conftest overwrote the variable on import (POSIX). Now it appends to
+  whatever the process inherited. So a value exported in a developer's shell, or left by a parent
+  process, stays trusted for the whole run.
+- **Why it's Info:** it is still only a test seam, and nothing sets it outside conftest (I re-grepped
+  `helab/`, `tests/` and `.github/`). CI's environment doesn't have it. xdist workers inheriting the
+  controller's value is harmless, because they re-add the same mounts.
+- **Fix if wanted:** clear it at conftest's import (`os.environ["HELAB_TEST_FIXED_MOUNT"] = ""`) before
+  naming the temp folder's mount. Workers then rebuild it, and their basetemp is below the
+  controller's.
+- **Also noted, no action:** `os.pathsep` is `:` on POSIX, so a mountpoint whose name contains a colon
+  would be split. That mount would then go untrusted, and a mount at one of the pieces' paths would be
+  trusted instead. Temp and checkout mounts don't have such names.
+
+### Checks
+
+- **Full suite at `e629969`** (code `21e614a`): `pytest -n 4 --reruns 5 --reruns-delay 1
+  --basetemp=.ai/temp/pytest-review` gave **9233 passed, 673 skipped, no RERUN**.
+  - My image was mounted for a few seconds during this run (the FM-1 repro). No test failed.
+- **Type checks:** `mypy helab/ --strict`, `mypy tests --strict`, `mypy helab/ --strict --platform win32`, `pyright helab tests` and `pyright --pythonplatform Windows helab tests` are all clean.
+- **Not done:** I didn't read CI 41608759890's logs myself (the handoff reports all 15 green, no
+  RERUN). I didn't run the full suite in the own-mount layouts either.
