@@ -185,3 +185,66 @@ items while a box is open), and answer the beside case like `ask_after_refusal`.
   saw once (6 tries) should be listed. AGENTS.md lists every RERUN or repeated failure until its cause is found, and
   the handoff only proposes it conditionally.
 - The Q~6/TP-6 and TP-8 points for DECISIONS_TODO, beside Q~5–Q~8.
+
+## Re-check of the fixes (`41aed17..bf3fb85`)
+
+Reviewer: Claude (Opus 5.5). I read only Prio's fix commits (`35a7007` … `70b6f27`, and the handoff's review table).
+I skipped what the merge `b959de1` brought from dev/v0.0.8 (labcam, Ground's `.ai` lists, known-issues).
+
+**Checks at `bf3fb85`:**
+- Full suite (`pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review -rR`): **9228 passed,
+  673 skipped, no RERUN** (156 s).
+- The five type checks are clean.
+
+| TP | Verdict | Notes |
+|---|---|---|
+| TP-1 (High) | **Closed** | See the note below the table. |
+| TP-2 (Medium) | **Closed** | `_profile_for_tag` reads memory only. The profiles are read once on a request's path (`with_txy` → `read_user_profiles`) or handed over by Settings' Save (`set_user_profiles`). `set_convert_profile` no longer clears them, so the tooltip path (`on_read_shots` → `folder_source` → `resolved`) never reads disk. Before the first request a user tag is simply unresolved there, which only affects a display estimate. |
+| TP-3 (Medium) | **Closed** | See the note below the table. |
+| TP-4 (Low) | **Closed** | `converts_over_matlab` now gives True for a list only with the flag, and only when the list's own External doesn't come first. That matches `find_list`'s `over_matlab` for the first convertible entry. The test now pins the right values. |
+| TP-5 (Low) | **Closed**, one new Low (TP-11) | `FolderCache.convert` refuses to join another profile's job. Live's tick waits. Convert this folder… says which profile is converting. |
+| TP-6 (Low) | **Closed** | The design §2 addendum and `test_a_modes_dataset_with_fallback_shots_across_versions` say it accurately. It is left for Tony under Q~6. |
+| TP-7 (Low) | **Closed** | `taken_convert_with` drops the offer once the list no longer resolves to that one tag. `set_folder_list` drops it at once. |
+| TP-8 (Low) | **Closed for now**: the summary is enough until Tony answers Q~9 | `list_summary` adds "(reads as m19v1 only)", shown in the editor, Settings' row and the plot's button. A Nit: Folder details' "this folder: …" line uses `txy_sources.summary`, so it doesn't carry the note. Worth adding if Q~9 stays as built. |
+| TP-9 (Low) | **Closed** | `convert_unavailable` names an open question, so the menu items are disabled with that reason. Beside becoming unavailable while the dialog was open now gets a non-modal message (`convert_folder_beside_ok`) that says nothing was converted. |
+| TP-10 (Nit) | **Closed** | Settings' summary follows the profile combo. Folder details passes the conversion tag. The plot row refreshes on `folderPrefsChanged` for its own folder, through a bound slot that is disconnected on close. |
+
+**TP-1.** `helab_txy.tag_lookup` resolves a tag in this order: what FolderCache already resolved (the mode's profile,
+the list's and fallback's entries), then `known`, `conversion`, and last the built-ins. I re-ran my reproduction:
+- a `helab-only`/`u3f` row now gives `helab-only u3f HUSER`;
+- the list row keeps `u3f`'s hash;
+- a row newer than FolderCache's memory (the app followed Settings, the row says `u3f`) resolves to `u3f`
+  through `known`.
+
+The new test fails without the fix.
+
+**TP-3.** The real bug is fixed in two places:
+- `live.py`: a shot held from External as a fallback stage, which an own entry now has, is read again as a
+  switching shot, and External's TXY feeds the mismatch rule until then.
+- `save_held`: uses `compose_list(reclaim=False)`, so a save keeps every held shot while its TXY is there.
+
+The new `live_check` and `save_held` tests cover:
+- the reclaim;
+- a shot held from an own entry;
+- a new External-only shot taken from the fallback;
+- on-read conversion with m23v1;
+- the record's `fallback`.
+
+They fail without the fix. The new `live.py` branch also catches a held-External shot whose chosen TXY is HeLab's
+for any other reason, for example a one-entry list. Reading it again is the right answer there too.
+
+### TP-11 — Low (new, from TP-5) — Live compares the running conversion by name, `convert` by the whole profile
+
+`helab/views/explorer_live.py` (the tick: `converting_with(path)` against `profile.name`) and
+`helab/utils/folder_cache.py` (`convert`: `running.payload["profile"] != profile`, a whole-dict compare).
+
+Take a conversion of the folder that runs with the conversion profile (say Folder details'). If that profile's
+*content* changes meanwhile while its name stays (a user profile edited and saved, or a calibration), Live's tick
+passes its name check. `convert` then returns False, and Live sets "the conversion couldn't be queued" and stops
+Auto-convert until Retry. Before TP-5 it would have joined. Rare. Fix: compare the same thing on both sides (have
+`converting_with` return the payload's profile dict, or compare `profile.to_dict()`), so Live waits instead of
+stopping.
+
+**Verdict:** no blocker. TP-1 to TP-10 are closed (TP-8 pending Tony's Q~9; I agree the summary is enough
+meanwhile). TP-11 is a new Low that can go to AI_TODO or known-issues, or get a two-line fix before landing. Landing
+still needs the branch's CI run on `bf3fb85` (or its pushed successor) read job by job for RERUN.
