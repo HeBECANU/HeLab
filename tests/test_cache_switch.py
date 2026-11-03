@@ -195,7 +195,9 @@ def test_folder_cache_submits_the_cleanup_once(monkeypatch: pytest.MonkeyPatch) 
         assert [r.payload for r in requests] == [
             {"cache": store_options(), "action": "sweep", "params": {}},
             {"cache": store_options(), "action": "inventory", "params": {"temps": DIR_TEMPS}}]
-        assert store_options()["directory"].endswith("store-v3")
+        from helab.utils import cache_store
+        assert store_options()["directory"] == cache_store.store_root_for(os.path.dirname(store_options()["directory"]),
+                                                                          cache_store.live_layout())
         assert "cache_admin" in service.LOCAL_OPERATIONS
     finally:
         service.shutdown()

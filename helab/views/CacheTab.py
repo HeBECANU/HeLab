@@ -766,7 +766,7 @@ class CacheTab(QWidget):
                   choice=choice)
 
     def clear_legacy(self) -> None:
-        """Clear old stores… (Q28.5): store-v3 goes, after asking with its size, while no other HeLab runs."""
+        """The Older cache row's Clear… (as Make room's Clear old stores…, Q28.5): store-v3 goes, after asking with its size, while no other HeLab runs."""
         from helab.utils.cache_locks import other_instances
         from helab.utils.constants import app_folder
         from helab.views.CacheDialogs import legacy_clear_text, legacy_clearable

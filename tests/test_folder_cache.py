@@ -933,14 +933,15 @@ def test_real_helpers_reuse_warm_tab_without_scan_or_decompression(
     first_saved_at = first.model.cache.cache_status(str(tmp_path)).info["saved_at"]
     assert first.folder_cache_label.text().startswith("Cache created ")
     # The load lists and fingerprints the folder, so the details scan is skipped.
-    assert operations == ["list", "load"]
+    # (store-v4, the shipped default: the load's save queues the folder's raw pulses, raw_fill.)
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load"]
     second = explorer_for_test(qtbot, str(tmp_path))
     qtbot.waitUntil(lambda: second.folder_opened_data is not None)
     assert second.load_source == "memory"
     assert second.folder_cache_label.text().startswith("Cached data loaded · Cached ")
     assert second.model.cache.cache_status(str(tmp_path)).info["saved_at"] == first_saved_at
     assert second.load_counts["reused_memory"] == 1 and second.load_counts["read"] == 0
-    assert operations == ["list", "load"]  # No helper for warm memory reuse.
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load"]  # No helper for warm memory reuse.
     assert first.folder_opened_data is not None and second.folder_opened_data is not None
     assert first.folder_opened_data[1] is second.folder_opened_data[1]
     source.write_text("10,20,30\n")
@@ -948,7 +949,7 @@ def test_real_helpers_reuse_warm_tab_without_scan_or_decompression(
     qtbot.waitUntil(lambda: second.folder_opened_data is not None and second.folder_opened_data[1][0, 0] == 10,
                    timeout=15000)
     # The listing finds the same names; the details scan finds the modified file.
-    assert operations == ["list", "load", "list", "details", "load"]
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load", "list", "details", "load"]
     assert first.folder_opened_data[1] is second.folder_opened_data[1]
     qtbot.waitUntil(lambda: first.model.cache.cache_status(str(tmp_path)).info.get("saved_at", 0)
                    > first_saved_at, timeout=15000)

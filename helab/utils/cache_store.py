@@ -771,6 +771,23 @@ def _reset_live_layout(layout: int | None = None) -> None:
     _live_layout = layout
 
 
+# Keep's read-through of an older HeLab's store-v3 lasts through v0.0.8 only (Tony, V~3, 2026-11-03): from
+# v0.0.9 store-v4 reads it no more and counts it in no budget; Settings › Cache's Older cache Clear… (or Make
+# room's Clear old stores…) still removes it.
+LEGACY_READ_UNTIL = (0, 0, 9)
+
+
+def legacy_read_through(version: str | None = None) -> bool:
+    """Whether Keep still reads store-v3 (V~3): this HeLab's release (``helab._version``) before
+    ``LEGACY_READ_UNTIL``."""
+    import re
+    from helab._version import __version__
+    found = re.match(r"(\d+)\.(\d+)\.(\d+)", version or __version__)
+    if found is None:
+        return False
+    return tuple(int(part) for part in found.groups()) < LEGACY_READ_UNTIL
+
+
 def store_root(caches_dir: str) -> str:
     """The live store's folder in the cache folder: store-v3, or store-v4 with the switch on. Under v4
     this process's session maker goes into its environment first, for the helpers it starts."""
@@ -1012,8 +1029,10 @@ class CacheStore:
 
     def _kept_legacy(self) -> LegacyStore | None:
         """store-v3, read only, while it is kept (Keep, or not answered yet: Q22.3); None under v3
-        itself, after Ignore or Clear, or when there is none or it can't be read now."""
-        if self.layout < store_v4.LAYOUT:
+        itself, after Ignore or Clear, or when there is none or it can't be read now, and from v0.0.9 on
+        (Keep's read-through ends then, V~3: only Settings › Cache's Older cache Clear…, or Make room's
+        Clear old stores…, remains)."""
+        if self.layout < store_v4.LAYOUT or not legacy_read_through():
             return None
         if self._legacy_choice() not in (None, "keep"):
             return None
@@ -3952,7 +3971,8 @@ class CacheStore:
             return 0
         meta = self._meta()
         measured = meta.get("legacy_bytes")
-        if self._legacy_choice(meta) not in (None, "keep") or not isinstance(measured, dict):
+        if (self._legacy_choice(meta) not in (None, "keep") or not isinstance(measured, dict)
+                or not legacy_read_through()):
             return 0
         from helab.utils.legacy_store import present
         return int(measured.get("bytes", 0)) if present(self.legacy_root) else 0

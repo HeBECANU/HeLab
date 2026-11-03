@@ -36,6 +36,17 @@ from helab.utils.io_service import IOService
 from helab.views.FolderExplorer import FolderExplorer
 
 
+def cached(store: Any, folder: Path) -> tuple[Any, Any]:
+    """A folder's cached row and data as a load reads them, in store-v3 (its dataset) or store-v4 (its view and
+    layers): through ``txy_cache.Access`` of the source a save without a TXY choice uses."""
+    from helab.io_ops import txy_cache
+    from helab.utils import txy_sources
+    full = txy_cache.Access(store, txy_sources.requested_source(None), {}).full(str(folder)).value
+    assert full is not None
+    row, loader = full
+    return row, loader()
+
+
 def write_shots(folder: Path, shots: range, *, age: float = 60.0) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     when = time.time() - age
@@ -506,7 +517,9 @@ def test_a_changed_cached_folder_is_listed_once_by_its_load(
     qtbot.wait(300)
     wait_idle(qtbot, service)
     listings = [record for record in lines(trace)[before:] if record["op"] == "scandir" and record["path"] == str(run)]
-    assert [record["request"] for record in listings] == ["load"]
+    # (store-v4, the shipped default: the load's save queues raw_fill, which lists the folder for its raw files,
+    # in the background; the load itself still lists it once.)
+    assert [record["request"] for record in listings if record["request"] != "raw_fill"] == ["load"]
     node = model.nodes[str(run)]
     assert not node.cached_report and node.txy_count == 4 and node.signature and node.loaded
     explorer.close_cleanup()
@@ -740,10 +753,7 @@ def test_a_live_save_checks_every_held_file_once_and_reads_none(tmp_path: Path, 
     assert [key for key in found if key[0] == "stat"] == [("stat", "folder mtime")]  # (The summary's, once.)
     assert found[("stat", "folder mtime")] == 1 and found[("marker_read", "save: identity")] == 1
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        value = store.read_dataset(str(run)).value
-        assert value is not None
-        row, packed = value
-        data = unpack_dataset(packed)
+        row, data = cached(store, run)
         assert data is not None and sorted(data) == list(range(1, 10))
         np.testing.assert_array_equal(data[4], [[4, 2, 3], [4, 4, 5]])
         assert row["info"]["unsettled"] == 1 and row["problematic"] == [3]
@@ -776,7 +786,7 @@ def test_a_live_save_saves_nothing_for_a_missing_changed_or_other_folder(tmp_pat
     (run / "d_txy_forc2.txt").unlink()
     assert stopped(save(), "missing")
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        assert store.read_dataset_row(str(run)).value is None
+        assert store.read_dataset_infos([str(run)])[str(run)].missing  # (store-v4: no view either.)
 
 
 def test_a_live_save_reads_a_shot_live_read_recently_that_changed_again(tmp_path: Path, trace: Path) -> None:
@@ -813,10 +823,7 @@ def test_a_live_save_reads_a_shot_live_read_recently_that_changed_again(tmp_path
     assert summary["signature"] == loaded["signature"] and summary["txy"] == [1, 2, 3] and summary["unsettled"] == 0
     assert counts(lines(trace))[("read", "save: read again")] == 1
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        value = store.read_dataset(str(run)).value
-        assert value is not None
-        row, packed = value
-        data = unpack_dataset(packed)
+        row, data = cached(store, run)
         assert data is not None and sorted(data) == [1, 2, 3]
         np.testing.assert_array_equal(data[3], [[3, 2, 3], [3, 4, 5], [3, 6, 7]])
     # Not read by Live recently: a mismatch, nothing saved over it.
