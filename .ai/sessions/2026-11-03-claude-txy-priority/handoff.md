@@ -58,7 +58,7 @@ Worker: Claude (Opus 5.5), floor TXY Priority, branch `agent/txy-priority` from 
   - `tests/test_txy_priority_session.py`: the integration check, store-v4 and `store_v3`.
   - `tests/test_convert_folder.py`: Q~4.
   - The two new dialogs are in `tests/test_accessible_names.py`'s walk.
-- **CI:** not pushed yet. I push at this checkpoint after CoCo's word.
+- **CI:** run **41583803573** on `64d08c8`, green on macOS, Windows and Ubuntu: all 9 Tests jobs and 3 Converter backends jobs. I read every job's whole log (downloaded through the API): **no RERUN** in any.
 
 ## What changed, by area (for the Reviewer)
 
