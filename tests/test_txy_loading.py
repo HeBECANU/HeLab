@@ -501,3 +501,37 @@ def test_helabs_txy_doesnt_make_a_gone_matlab_txys_layer_recoverable(tmp_path: P
         removal = store.purge_cached(time.time() + 3600, ("txy",))
         left = store.txy_layers(str(source)).value or {}
         assert "matlab" in left and (str(source), "matlab") not in removal.txy_seen  # (The only copy stays.)
+
+
+# PR #11's review (C-3): the profile's completion check before converting cached raw pulses
+
+def test_a_raw_layer_not_starting_on_the_trigger_is_rejected_as_its_file_is(tmp_path: Path) -> None:
+    """``raw_fill`` caches a raw file whose first line isn't on a trigger channel (it has no profile to check
+    with). A HeLab load converting on read rejects that file as damaged (``raw.not_done``); from the raw layer it
+    must too, not make an apparently valid shot with the wrong first row as time zero and keep it in a layer."""
+    from helab.convert.profile import MATLAB_2019
+    from helab.io_ops.raw_fill import raw_fill
+    from test_convert_helab import raw_bytes, write_raw
+    options = v4_options(tmp_path)
+    txy = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+           "cache_base": str(tmp_path / "caches"), "temps": str(tmp_path / "temps"),
+           "profile_def": MATLAB_2019.to_dict()}
+    helab = "helab:" + MATLAB_2019.content_hash()
+    results: dict[str, dict[str, Any]] = {}
+    for name in ("from-file", "from-layer"):
+        source = tmp_path / "data" / name
+        source.mkdir(parents=True)
+        write_raw(source, 1, raw_bytes(10_000, 20_000))
+        write_raw(source, 2, raw_bytes(10_000, 20_000, trigger=0))  # (Its first line: channel 0, a hit's.)
+        if name == "from-layer":
+            sent: list[dict[str, Any]] = []
+            raw_fill(str(source), options, sent.append)  # type: ignore[arg-type]
+            assert first(sent, "raw_fill_done")["saved"] == 2  # (Both cached: no profile to check with.)
+        events = run_load(source, tmp_path, options, txy=txy)
+        results[name] = first(events, "loaded")
+        with opened(options, source) as store:
+            layer = (store.txy_layers(str(source)).value or {}).get(helab)
+            assert layer is not None and sorted(layer.entries) == [1], name  # (Shot 2 isn't kept.)
+    assert results["from-file"]["problematic"] == [2]
+    assert results["from-layer"]["problematic"] == results["from-file"]["problematic"]
+    assert results["from-layer"]["files"] == results["from-file"]["files"]

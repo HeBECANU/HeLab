@@ -296,8 +296,9 @@ class Access:
 
     def from_raw(self, path: str, shot: int, key: tuple[int, int, str] | None, origin: str) -> Any | None:
         """The loading order's second step (design addendum §4): a HeLab shot from the raw layer instead of
-        its TXY text, when the raw layer holds the raw file's current fingerprint with the current parser and
-        the shot's profile is known (``profile_for``: the one sent, or a built-in). Converted and formatted as the converter writes it, then
+        its TXY text, when the raw layer holds the raw file's current fingerprint with the current parser, the
+        shot's profile is known (``profile_for``: the one sent, or a built-in) and the file looks finished for it
+        (``raw_layer.not_done``, C-3; else the file is judged as ``convert_raw_file`` judges it). Converted and formatted as the converter writes it, then
         parsed as a TXY file is (``infra._read_txy_file``), so the data is the text's exactly. None when it
         can't be (the text is read)."""
         if not self.layered or key is None or key[2] != "raw" or not origin:
@@ -316,6 +317,11 @@ class Access:
             return None
         try:
             layer, _ = raw_layer.from_hlb(packed)
+            if raw_layer.not_done(layer.facts, profile.channel_trigger) is not None:
+                # (C-3: ``raw_fill`` keeps a file whose first line isn't on a trigger channel, having no profile
+                # to check with. Not a whole shot for this profile: the file's own path judges it, late or
+                # damaged, as ``convert_raw_file`` does.)
+                return None
             text = format_txy(reconstruct(raw_layer.decode(layer), profile, self.backend_for(profile)))
         except Exception:  # (A layer or backend that can't: the text is read.)
             return None
