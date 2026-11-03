@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Mapping, Sequence, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Mapping, Sequence, TYPE_CHECKING
 
 from helab.io_ops.infra import Emit, _entry_stat
 from helab.utils import txy_sources
@@ -375,14 +375,22 @@ class Access:
                 missing.add(shot)
         return missing
 
-    def mark_seen(self, path: str, raw_shots: Sequence[int], txy_shots: Sequence[int], listed_at: float) -> None:
-        """A full listing's sources, for Make room's only copies (Q45.6); best effort."""
+    def mark_seen(self, path: str, raw_shots: Iterable[int], matlab_shots: Iterable[int],
+                  helab_shots: Mapping[int, str], listed_at: float) -> None:
+        """A full listing's sources, for Make room's only copies (Q45.6); best effort. Each kind apart (C-2):
+        the raw files, MATLAB's TXY, and HeLab's TXY found (shot → its profile hash), each layer checked
+        against its own."""
         if not self.layered or self.store.read_only:
             return
         from helab.utils.cache_store import StoreError
+        present: dict[str, dict[int, tuple[int, int]]] = {
+            "raw": {int(shot): (0, 0) for shot in raw_shots},
+            layer_of(""): {int(shot): (0, 0) for shot in matlab_shots}}
+        for shot, profile_hash in helab_shots.items():
+            if profile_hash:
+                present.setdefault(layer_of(txy_sources.helab_origin(profile_hash)), {})[int(shot)] = (0, 0)
         try:
-            self.store.mark_txy_seen(path, {"raw": {int(shot): (0, 0) for shot in raw_shots},
-                                            "txy": {int(shot): (0, 0) for shot in txy_shots}}, listed_at)
+            self.store.mark_txy_seen(path, present, listed_at)
         except StoreError:
             pass
 

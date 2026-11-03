@@ -3703,9 +3703,13 @@ class CacheStore:
         return {"maker": self._maker["maker"], "record": self._maker["record"]}
 
     def mark_txy_seen(self, path: str, present: Mapping[str, Mapping[int, tuple[int, int]]], seen_at: float) -> int:
-        """A full listing of ``path`` taken at ``seen_at`` found these sources (``{"raw": {shot: (size,
-        mtime_ns)}, "txy": {...}}``): a layer with an entry whose source it didn't find is an only copy
-        (``gone_at``, Q45.6); one whose sources are all there is seen (``seen_at``). Each mark goes by when its
+        """A full listing of ``path`` taken at ``seen_at`` found these sources: ``"raw"`` the raw files
+        (``{shot: (size, mtime_ns)}``), and by layer name the TXY files of that layer's own source (``"matlab"``:
+        MATLAB's; ``"helab:<hash>"``: HeLab's of that profile). An entry keyed by its raw file is checked against
+        the raw files, one keyed by its TXY file against its own layer's TXY only (C-2: another profile's TXY of
+        the shot is no copy of it; a layer the listing names no TXY for has none). A layer with an entry whose
+        source it didn't find is an only copy (``gone_at``, Q45.6); one whose sources are all there is seen
+        (``seen_at``). Each mark goes by when its
         evidence was taken (C2-10's rule, S2-2): a sighting clears a gone mark only if newer than it, and a gone
         mark needs a listing newer than the last sighting, so an older listing landing late undoes nothing.
         The layers marked gone."""
@@ -3716,7 +3720,7 @@ class CacheStore:
             with self.transaction():
                 for layer, entries in self._conn.execute("SELECT layer, entries FROM txy_layers WHERE path = ?",
                                                          (key,)).fetchall():
-                    missing = any(entry.shot not in present.get(entry.kind, {})
+                    missing = any(entry.shot not in present.get("raw" if entry.kind == "raw" else str(layer), {})
                                   for entry in map(TxyEntry.from_json, json.loads(entries)))
                     if missing:
                         gone += self._conn.execute(

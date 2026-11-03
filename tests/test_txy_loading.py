@@ -466,3 +466,38 @@ def test_a_view_saved_before_entry_keys_serves_its_matlab_shots(tmp_path: Path) 
     with opened(options, source) as store:
         view = store.read_view(str(source), "", "").value
         assert view is not None and all(len(item) == 6 for item in view.fingerprint)
+
+
+# PR #11's review (C-2): a listing checks each layer against its own source
+
+def test_helabs_txy_doesnt_make_a_gone_matlab_txys_layer_recoverable(tmp_path: Path) -> None:
+    """A MATLAB TXY goes while HeLab's TXY of that shot stays. A load of HeLab's TXY lists the folder: the MATLAB
+    layer's shot has no source of its own left, so the layer is the only copy (``gone_at``), whatever HeLab's
+    conversion of that shot; ordinary removal (a purge by age) then leaves it."""
+    from helab.convert.profile import MATLAB_2019
+    from helab.io_ops.convert import convert_folder
+    from test_convert_helab import raw_bytes, write_raw
+    source = tmp_path / "data" / "run"
+    source.mkdir(parents=True)
+    old = time.time() - 600
+    for shot in (1, 2):
+        write_raw(source, shot, raw_bytes(*(10_000 * k for k in range(1, shot + 2))), mtime=old)
+        (source / f"d_txy_forc{shot}.txt").write_text(f"{shot}.0,2,3\n{shot}.1,2,3\n")
+        os.utime(source / f"d_txy_forc{shot}.txt", (old, old))
+    caches = tmp_path / "caches"
+    options = v4_options(tmp_path)
+    request: dict[str, Any] = {"path": str(source), "profile": MATLAB_2019.to_dict(), "temps": str(tmp_path / "temps"),
+                               "seen": None, "destination": "cache", "workers": 1, "cache": options}
+    convert_folder(str(source), request, lambda event: None)  # type: ignore[arg-type]
+    run_load(source, tmp_path, options, txy={"source": "matlab-only"})  # (The MATLAB layer.)
+    (source / "d_txy_forc1.txt").unlink()
+    helab = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+             "cache_base": str(caches), "temps": str(tmp_path / "temps")}
+    assert first(run_load(source, tmp_path, options, txy=helab), "loaded")["files"] == 2
+    with opened(options, source) as store:
+        layers = store.txy_layers(str(source)).value or {}
+        assert layers["matlab"].gone_at is not None  # (Shot 1's MATLAB TXY is gone: the only copy.)
+        assert layers["helab:" + MATLAB_2019.content_hash()].gone_at is None  # (Its raw files are there.)
+        removal = store.purge_cached(time.time() + 3600, ("txy",))
+        left = store.txy_layers(str(source)).value or {}
+        assert "matlab" in left and (str(source), "matlab") not in removal.txy_seen  # (The only copy stays.)
