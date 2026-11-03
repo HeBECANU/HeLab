@@ -1,0 +1,52 @@
+name: Docs site
+
+# The user manual's site (Q54.2): one version per release on this repository's GitHub Pages (mike, on
+# its gh-pages branch), so another copy of the repo (a fork) publishes its own. It runs only when a
+# release is *published*: dev-cicd.yml's release job makes a draft, which stays private until it is
+# published by hand, and an abandoned draft never reaches the site. Never on a push or a PR.
+# "latest" follows the newest published release and is the site's front page. Help › User manual
+# opens <owner>.github.io/<repo>/<version>/.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write  # mike pushes to gh-pages
+
+# One deploy at a time: each pushes a commit to gh-pages.
+concurrency:
+  group: helab-docs-site
+  cancel-in-progress: false
+
+jobs:
+  docs-site:
+    name: Publish the user manual
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - name: Checkout the released tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the docs tools
+        run: pip install -r requirements-docs.lock
+
+      - name: Deploy this release's manual with mike
+        run: |
+          version="${RELEASE_TAG#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages || echo "No gh-pages branch yet: mike creates it."
+          mike deploy --push --update-aliases "$version" latest
+          mike set-default --push latest
