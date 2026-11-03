@@ -172,3 +172,33 @@ On an export of `4c47227`, with testdata linked:
   - `pyright helab tests` and `--pythonplatform Windows`: 0 errors.
 - `ruff check` (0.17.3): passes at the head; 29 errors on the parent's files (above).
 - The syntax-tree comparison script is scratch, not committed.
+
+## Re-check of the fixes (`git diff 4c47227 9631294`, agent/docs-a54-1)
+
+**Open findings: none.** D-1, D-2 and D-3 are closed, and nothing new. `9631294` descends from `4c47227` and changes
+only `helab/scripts/base.py` and `helab/analysis/dataset_view.py`.
+
+- **Still docstrings only:** with bare strings removed, both files' syntax trees are identical to `4c47227`'s.
+- **D-1: closed.** `file_hash` now says that with helper modules in the folder it is a SHA-256 of the file's hash
+  and every helper's path and hash, so it differs from the file's own SHA-256. This matches
+  `_fold_helper_hashes`.
+  - **Nit, not a finding:** the folded helpers are those imported now or seen imported before
+    (`_know_helpers`), and an unreadable file's "" is folded too. Neither matters to a script writer.
+- **D-2: closed.** `source` now says "" for the two priority modes (the shots' `origins` tell them apart), else the
+  mode's name. This matches `txy_sources.identity_source`.
+- **D-3: closed.**
+  - `revision` now counts a newer load that adds or replaces shots, or only finds raw-file times.
+  - `added_shots` now includes replaced shots (rewritten TXY, or from another TXY) and is empty for a times-only
+    revision. Both match `revise` and `with_shots`: `added` is `{}` when only `filled`.
+  - The running-total advice is right.
+
+### Checks (re-check)
+
+On an export of `9631294`:
+- `ruff check` (0.17.3): all checks passed.
+- `mypy --strict` and `pyright` of the two files: no issues, 0 errors.
+- The full suite, `-n 4 --reruns 5 --reruns-delay 1`: **9179 passed, 674 skipped, 2 warnings, 3 failed, 15 rerun.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests, 5 reruns each, because the export has no
+    `.git`.
+  - No other RERUN.
+  - The totals equal `4c47227`'s, as a docstring-only change should give.
