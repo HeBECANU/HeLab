@@ -597,6 +597,21 @@ person, lab machine or internal ID.
   converter › Edit…, a folder's and a plot's own lists, the fallback shots and how a plot's record names them),
   and the External label.
 
+## Test isolation follow-ups (block 57; [handoff](sessions/2026-11-03-claude-fixed-mount-seam/handoff.md))
+
+- [ ] **A57.1 CachedRuns' verification timer outlives a closed plot.** In 41587336570's leaked plots,
+  `CachedRuns._verification_due` reached `AnalysisInstance._cached_status` on a deleted QLabel (a plot closed
+  while its save waited for the volume check), and `AnalysisInstance.close` raised `'AnalysisRunner' object has
+  no attribute 'results'` after its test's runner was released. Both are logged and HeLab goes on. Fix: stop
+  `_verify_timer` and drop the plot's callbacks when it closes (or check `sip.isdeleted`), and let `close` skip a
+  runner that is gone; a test for each.
+- [ ] **A57.2 Windows tests with `--basetemp` on another drive than TEMP's.** conftest's
+  `HELAB_TEST_LOCAL_MOUNT` lists only TEMP's drive, so a `--basetemp=.ai/temp/pytest-<name>` on `D:` has no mount
+  in the tests' list. Check whether those tests then run as on CI; if not, let it list several drives.
+- [ ] **A57.3 An inherited `HELAB_TEST_FIXED_MOUNT`** (Sieve's FM-4, Info): conftest appends to a value set in
+  the shell or by a parent process, so that mount stays trusted for the run. Clear it at import before naming
+  the temp folder's mount.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

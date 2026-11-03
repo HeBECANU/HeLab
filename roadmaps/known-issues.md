@@ -121,15 +121,6 @@ How to use it:
 
 ## Tests and CI
 
-- [ ] **Ground CI went red once after the switch-on: a worker stuck through every rerun.** Ground CI 41587336570
-  (`a51176f`, docs only on top of the switch-on landing `92f9d1a`), Ubuntu Tests 3/3, job 125755838908: 4 failed,
-  3 errors, 30 reruns. On gw0 `test_result_cache_plots.py`'s `test_a_reopened_plot_shows_its_exact_saved_result_without_computing`,
-  `test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_ends[data]` and
-  `test_clear_cached_analysis_leaves_the_plot_but_its_record_says_ram_only` timed out (30 s, line 409) on every
-  attempt; on gw1 `test_preset_folder_live.py::test_offline_a_folder_never_listed_is_named_as_such[at_once]` saw
-  "The volume of /tmp/… is not yet verified". Both look like state a test earlier on the same worker left behind
-  (store-v4 on by default since `92f9d1a`?). The next Ground runs (41594686581 `9bf99ff`, 41595342227 `dc86412`)
-  were green. Not yet investigated (CoCo read this run late, 2026-11-03).
 - [ ] `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second` reran once on Windows,
   Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
   quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
@@ -373,6 +364,14 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 
 ## Fixed
 
+- [x] **A runner whose /tmp is a mount of its own failed the result-cache, lifecycle and offline
+  tests.** Ground CI 41587336570 (`a51176f`, Ubuntu Tests 3/3, job 125755838908) and 41570883747 (`b1a16d3`,
+  Ubuntu Tests 1/3, job 125703300662), both on ubuntu-26.04 image 20261018.50.1: the tests' folders under
+  `/tmp` weren't on a trusted mount, so cached reads waited for a volume check the tests' own FolderCaches never
+  run ("its volume wasn't verified within 120 s"), on every rerun. Not store-v4 and not test order (Rivet).
+  Fixed: conftest names the temp folder's and `--basetemp`'s mounts in `HELAB_TEST_FIXED_MOUNT`, which
+  `data_roots.fixed_mount` trusts only when set (`ee4bbdf`, `21e614a`; landed `ab0b306`). Repro: `TMPDIR` on a
+  mounted disk image; without the fix 63 failed and 20 errors.
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
 
