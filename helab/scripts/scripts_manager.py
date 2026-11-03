@@ -10,6 +10,8 @@ import sysconfig
 import time
 import traceback
 import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import invalidate_caches
 from typing import Any, Dict, List, Optional, Tuple, Type
@@ -26,6 +28,41 @@ def _described(error: BaseException) -> str:
     if isinstance(error, SyntaxError):
         return f"{type(error).__name__}: {error}"
     return str(error)
+
+
+# The script modules being imported now (``_importing``), to refuse an overlapping load of one.
+_IMPORTING: set[str] = set()
+
+
+@contextmanager
+def _importing(name: str, module: ModuleType) -> Iterator[None]:
+    """``module`` in ``sys.modules`` under ``name`` while its file runs, then whatever held ``name``
+    before put back (normally nothing), whether it loaded or failed.
+
+    Python's own machinery expects a module being imported to be in ``sys.modules``: a ``@dataclass``
+    in a file with ``from __future__ import annotations`` looks its module up there as the class is
+    made, and fails without it. Afterwards the module isn't left there: a script is loaded from its
+    file, not imported, and its name is its file's name only, so two folders' ``analysis.py`` would
+    otherwise share one entry, and a reload would find the old one. (So ``typing.get_type_hints``
+    can't resolve a script class's string annotations later; HeLab never asks for them.)
+
+    Loads run one at a time (the GUI thread loads and reloads the folders); a second load of the same
+    name while one runs is refused here rather than waited for, so it can't replace the entry the
+    first one is using."""
+    if name in _IMPORTING:
+        raise ScriptLoadError(f"{name} is already being loaded")
+    previous = sys.modules.get(name)
+    held = name in sys.modules
+    _IMPORTING.add(name)
+    sys.modules[name] = module
+    try:
+        yield
+    finally:
+        if held and previous is not None:
+            sys.modules[name] = previous
+        else:
+            sys.modules.pop(name, None)
+        _IMPORTING.discard(name)
 
 
 class ScriptLoadError(Exception):
@@ -407,7 +444,8 @@ class ScriptsManager:
                 raise ScriptLoadError("Could not create module spec")
 
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            with _importing(name, module):
+                spec.loader.exec_module(module)
             self._register_module(module, file_path, digest)
         except (Exception, SystemExit) as e:
             # SystemExit too: a script that exits at import (sys.exit, argparse on HeLab's argv)

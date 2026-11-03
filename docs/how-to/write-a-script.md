@@ -149,11 +149,10 @@ What each part does:
 - **`update`** (optional) shows a newer result in the plot already drawn. Return `False` to have
   `render` draw it anew instead.
 
-!!! warning "Dataclasses and `from __future__ import annotations`"
-    In a script file that starts with `from __future__ import annotations`, a `@dataclass` with a
-    field such as `count: int` stops the file from loading, with
-    `'NoneType' object has no attribute '__dict__'`. Leave out the `__future__` import, as the
-    example does, or define the dataclass in a helper module beside the script.
+!!! note "Your script isn't an importable module"
+    HeLab runs a script's file rather than importing it, so after loading it isn't in
+    `sys.modules`: `typing.get_type_hints()` can't resolve a script class's string annotations
+    (those `from __future__ import annotations` makes). Dataclasses work either way.
 
 ## Threads and shared data
 
