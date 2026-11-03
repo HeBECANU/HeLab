@@ -111,11 +111,22 @@ def test_saving_picks_the_profile_backend_and_output(qtbot: QtBot, tmp_path: Pat
         tab.backend_combo.setCurrentIndex(tab.backend_combo.findData("rust"))
         tab.output_combo.setCurrentIndex(tab.output_combo.findData("temp"))
         # Tabs and Live read helab-priority until set otherwise (Q18.2).
-        assert tab.source_combo.currentData() == "helab-priority" and cache.tab_source() == "helab-priority"
-        tab.source_combo.setCurrentIndex(tab.source_combo.findData("matlab-priority"))
+        assert tab.txy_entries == ("Conversion", "External") and cache.tab_source() == "helab-priority"
+        assert tab.source_label.text() == "Conversion (m19v1) › External"
+        # Edit… (the list editor answered here, Q53.2): a mode's list is saved as the mode.
+        tab.ask_list = lambda *args: (True, ("External", "Conversion"))
+        tab.edit_txy_list()
         tab.save(ini)
         assert constants.read_txy_source(ini) == "matlab-priority" and cache.tab_source() == "matlab-priority"
         assert cache.with_txy(str(tmp_path), {})["txy"]["source"] == "matlab-priority"
+        # Any other list as its text; Cancel changes nothing.
+        tab.ask_list = lambda *args: (True, ("m23v1", "Conversion", "External"))
+        tab.edit_txy_list()
+        tab.ask_list = lambda *args: (False, None)
+        tab.edit_txy_list()
+        tab.save(ini)
+        assert constants.read_txy_source(ini) == "m23v1>Conversion>External"
+        assert cache.tab_source() == f"m23v1>{cache.convert_profile_tag()}>External"
         ini.setValue(constants.TXY_SOURCE_SETTING, "matlab")  # (A name before Q18.2.)
         assert constants.read_txy_source(ini) == "matlab-priority"
         ini.setValue(constants.TXY_SOURCE_SETTING, "both")
@@ -390,8 +401,8 @@ def view_dated(day: str, origins: dict[str, str] | None = None) -> Any:
 
 
 def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> None:
-    picked: list[tuple[str, str]] = []
-    row = TxySourceRow("", lambda source, profile: picked.append((source, profile)))
+    picked: list[Any] = []
+    row = TxySourceRow(None, picked.append, lambda: ("m19v1", "Conversion (m19v1) › External"))
     qtbot.addWidget(row)
     view = view_dated("2023-02-04")
     assert folder_day(view) == "2023-02-04"
@@ -401,17 +412,24 @@ def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> N
     assert row.note.text() == ("HeLab converts with matlab-2019 · plates-2022 suggested for this folder's date "
                                "(2023-02-04)")
     assert "it is not applied" in row.note.toolTip()
-    assert row.source() == "" and row.combo.currentText() == "As the folder's tab"
-    row.combo.setCurrentIndex(row.combo.findData("helab-only"))
-    assert picked == [("helab-only", "")] and row.source() == "helab-only"
-    # The profile whose HeLab TXY are read, by its tag (Q18.2).
-    assert row.profile_combo.findText("plates-2022 (p22v1)") >= 0
-    row.profile_combo.setCurrentIndex(row.profile_combo.findData("plates-2022"))
-    assert picked[-1] == ("helab-only", "plates-2022") and row.profile() == "plates-2022"
-    row.set_source("matlab-priority", "")  # (Set by the plot: not a choice.)
-    assert len(picked) == 2 and row.profile() == "" and row.profile_combo.isEnabled()
-    row.combo.setCurrentIndex(row.combo.findData("matlab-only"))
-    assert not row.profile_combo.isEnabled()  # (MATLAB's alone: no profile.)
+    # One button naming the list (Q53.2), the list editor behind it ("As the folder's tab" at its top).
+    assert row.entries is None and row.button.text() == "As the folder's tab (Conversion (m19v1) › External)"
+    asked: list[tuple[Any, ...]] = []
+
+    def answer(*args: Any) -> tuple[bool, Any]:
+        asked.append(args)
+        return answers.pop(0)
+    answers: list[tuple[bool, Any]] = [(True, ("p22v1",)), (False, None), (True, ("p22v1",)), (True, None)]
+    row.ask_list = answer
+    row.edit()
+    assert picked == [("p22v1",)] and row.button.text() == "p22v1 only"
+    assert asked[0][6] == "As the folder's tab" and "p22v1" in asked[0][5]  # (Every profile by its tag.)
+    row.edit()  # Cancel.
+    row.edit()  # The same list again: no change.
+    row.edit()  # Back to the tab's.
+    assert picked == [("p22v1",), None] and row.entries is None
+    row.set_entries(("External",))  # (Set by the plot: not a choice.)
+    assert len(picked) == 2 and row.button.text() == "External only"
 
 
 # A plot switching its TXY source (``AnalysisInstance.set_txy_source``).
@@ -436,7 +454,7 @@ def test_a_plot_loads_its_own_source_and_goes_back_to_the_tabs(qtbot: QtBot, mon
         instance.set_txy_source("helab-only")
         [request] = [r for r in service.pending if r.operation == "load"]
         assert request.payload["txy"]["source"] == "helab-only" and request.payload["no_cache"] is True
-        assert instance.follow_text() == "TXY: HeLab only (loading…)"
+        assert instance.follow_text() == "TXY: Conversion (m19v1) only (loading…)"
         helab = Dataset(path, "sig", {1: np.ones((1, 3)), 2: np.ones((1, 3))},
                         {"fingerprint": [[1, 11, 101], [2, 12, 102]],
                          "txy": {"source": "helab-only", "origins": {"1": "helab:h", "2": "helab:h"},
@@ -459,7 +477,7 @@ def test_a_plot_loads_its_own_source_and_goes_back_to_the_tabs(qtbot: QtBot, mon
         request = [r for r in service.pending if r.operation == "load"][-1]
         assert request.payload["txy"]["profile_tag"] == "m23v1" and instance.txy_choice() == "helab-only@m23v1"
         assert request.payload["txy"]["profile"]["name"] == "matlab-2023-lab-edit"
-        assert instance.follow_text().startswith("TXY: HeLab only (m23v1) (loading…)")
+        assert instance.follow_text().startswith("TXY: m23v1 only (loading…)")
         instance._source_owner = ""
         before = len(ran)
         instance._source_loaded(newer)

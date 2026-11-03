@@ -265,15 +265,46 @@ per Q53.1 (step 2), e.g. "TXY: HeLab's (m23v1 v1) for 3 of 10 shots, External fo
 - Step 2's label may touch strings in `helab/views/CacheTab.py`/`FolderSummary`/tooltip builders if they say
   "MATLAB's"; I'll list them before editing.
 
-## Tony's answers (via CoCo, 2026-11-03)
+## Tony's answers (via CoCo, 2026-11-03; provisional decisions until Ground files them)
 
-- **Q~1:** yes, as proposed (built).
+- **Q~1:** yes, as proposed (built), now inside Q~2's chain (below).
 - **Q~3:** yes, keep the `Conversion` entry (built).
-- **Q~2:** not (a). Direction (exact rule being confirmed): if Auto-convert wrote m19v1 and the folder's list
-  is `m23v1 › External`, the folder still reads the m19v1; only a one-entry list (m23v1 only) offers to
-  convert with m23v1. Not built yet; the seam is `FolderCache.auto_convert_profile(path)` (today Settings'
-  conversion profile) and `FolderCache.convert(…, profile_used=)`, which Live's Auto-convert goes through
-  and the coming "Convert this folder…" can use.
+- **Q~2, fallback (replaces §6's options):**
+  1. A multi-entry list falls back, for a shot none of its entries has a usable TXY of, to Settings' list's
+     entries next, then to **any TXY in the folder**: External first, then HeLab's TXY of any other profile,
+     newest first. A plot's chain: its own list → the folder's (tab's) list → Settings' → any.
+  2. A one-entry ("only") list never falls back. When Live's Auto-convert profile isn't its entry, Live's
+     line offers "Convert with <tag>" for that folder.
+  3. Convert on read (Q~1) only when nothing in that whole chain has a file, with the first convertible
+     HeLab entry of the shot's own list.
+  4. Datasets record which entry each shot came from (origins as now); the identity stays the requested
+     list's.
+- **Q~4 (new scope), manual convert:** right-click › "Convert this folder…" (any profile by tag; HeLab's cache,
+  HeLab's temp, or beside the raw files) and the same item in the menu bar for the current folder, through
+  `explorer_convert.py`'s machinery and its share questions, in a helper, the folder only, beside as
+  `d_txy_helab_<tag>_<N>.txt` by the existing rules (temp name, rename), never overwriting a TXY.
+
+### How Q~2 is built
+
+- **The chain** (`helab_txy.find_list`): the payload's own `entries`, then `fallback` (entries FolderCache
+  resolves: for a tab load with a folder list, Settings'; for a plot, the folder's then Settings'; each entry
+  once), then External, then one **any-HeLab** stage: per shot, the newest current HeLab TXY of any profile
+  (HeLab's folders by provenance, `converted_at`; beside the raw files by tag for profiles HeLab knows, by
+  date). A one-entry own list has no chain beyond itself. Each stage looks only at shots no earlier stage has
+  a file of, as entries do.
+- **"Newest profile first"** is read as *the most recently converted TXY first*, per shot (the order
+  `helab_txy.find` already keeps for HeLab's folders). If Tony meant a profile order (built-ins by version,
+  say), only the any-HeLab stage changes. **Q~5** asks.
+- **Convert on read:** a shot is a candidate only when no stage has a file of it; it converts with the
+  first convertible HeLab entry of the own list (with a one-entry HeLab list, External doesn't block,
+  as HeLab only today).
+- **The four modes:** HeLab priority and MATLAB priority are multi-entry, so they now fall back too (a
+  folder with only m23v1's TXY under `[Conversion, External]` loads them). Their identities, view keys and
+  saved results' keys are unchanged; the data differs only where a shot had no TXY before. HeLab only and
+  MATLAB only never fall back: unchanged.
+- **The record:** the dataset's `txy` gains `fallback`, the shots taken beyond the own list (each one's origin
+  says which TXY). `describe` and Folder details say it: "TXY: HeLab's (matlab-2023-lab-edit v1) for 7 of 10
+  shots, 3 shots from m19v1 (fallback)" / Folder details' TXY row "… · 3 fallback", its tooltip naming them.
 
 ## Questions (provisional)
 
@@ -284,3 +315,5 @@ per Q53.1 (step 2), e.g. "TXY: HeLab's (m23v1 v1) for 3 of 10 shots, External fo
 - **Q~3** Keep a `Conversion` entry that follows Settings' conversion profile (§1), so the default and every
   saved mode keep following it as they do today. Proposed: yes; the alternative pins tags at migration and
   changes behaviour on the next profile change.
+- **Q~5** In Q~2's fallback, "other HeLab profiles, newest profile first": built as the most recently
+  converted TXY of each shot first. Proposed: keep; the alternative is a fixed profile order.

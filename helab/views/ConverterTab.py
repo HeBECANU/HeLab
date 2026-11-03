@@ -35,6 +35,7 @@ from helab.utils.constants import (
 )
 from helab.utils.folder_cache import FolderCache
 from helab.utils.settings_defaults import CONVERT_OUTPUTS, read_setting
+from helab.views.txy_list import AskList, ask_txy_list, list_summary
 
 # Backends by name (``reconstruct._MODULES``), without importing them: whether one can run here is the
 # conversion's to say (an optional package or compiled extension may be missing).
@@ -216,16 +217,24 @@ class ConverterTab(QWidget):
             self.output_combo.addItem(OUTPUT_LABELS[name], name)
         self.output_combo.setToolTip("Folders set to write them beside the raw files do that instead.")
         grid.addWidget(self.output_combo, 2, 1)
-        grid.addWidget(QLabel("Tabs and Live read (when a folder loads again)"), 3, 0)
-        self.source_combo = QComboBox()
-        for name in txy_sources.SOURCES:
-            self.source_combo.addItem(txy_sources.LABELS[name], name)
-        self.source_combo.setToolTip("Which TXY a folder's tab and Live load (Q18.2): HeLab's are those of the "
-                                     "profile conversions use (its tag in their names). A change applies when a "
-                                     "folder loads again (Refresh, or selecting it again): the data a tab shows "
-                                     "now stays until then, and a load already running finishes first. A plot "
-                                     "can choose another source or profile in its settings.")
-        grid.addWidget(self.source_combo, 3, 1)
+        grid.addWidget(QLabel("TXY priority (tabs and Live)"), 3, 0)
+        # The list tabs and Live read (Q53.2): its summary and Edit… (helab/views/txy_list.py).
+        self.txy_entries: txy_sources.Entries = txy_sources.list_of(txy_sources.DEFAULT_SOURCE)
+        self.ask_list: AskList = ask_txy_list  # (A test answers in its place.)
+        source_row = QHBoxLayout()
+        self.source_label = QLabel("")
+        self.source_button = QPushButton("Edit…")
+        self.source_button.clicked.connect(self.edit_txy_list)
+        tip = ("Which TXY a folder's tab and Live load, in order: each shot takes the first entry with a usable TXY "
+               "(External: the MATLAB converter's d_txy_forc; Conversion profile: the one above; or a profile's "
+               "d_txy_helab_<tag>). A change applies when a folder loads again (Refresh, or selecting it again): "
+               "the data a tab shows now stays until then, and a load already running finishes first. A folder "
+               "(right-click › TXY for this folder…) and a plot can have their own.")
+        self.source_label.setToolTip(tip)
+        self.source_button.setToolTip(tip)
+        source_row.addWidget(self.source_label, 1)
+        source_row.addWidget(self.source_button)
+        grid.addLayout(source_row, 3, 1)
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)
         profiles_label = QLabel("Profiles (changes to profiles are saved at once; the choices above with Save)")
@@ -254,7 +263,7 @@ class ConverterTab(QWidget):
                 (self.profile_combo, "convert_profile", "Conversions use the profile"),
                 (self.backend_combo, "convert_backend", "Backend"),
                 (self.output_combo, "convert_output", "HeLab's TXY go to"),
-                (self.source_combo, "tabs_txy_source", "Tabs and Live read"),
+                (self.source_button, "tabs_txy_list", "Edit the TXY priority tabs and Live read…"),
                 (self.list, "profiles_list", "Profiles"),
                 (self.duplicate_button, "profiles_duplicate", "Duplicate profile…"),
                 (self.edit_button, "profiles_edit", "Edit profile…"),
@@ -272,7 +281,24 @@ class ConverterTab(QWidget):
         self.refresh(read_setting(settings, CONVERT_PROFILE_SETTING, typed=True) or DEFAULT_PROFILE)
         self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(read_convert_backend(settings))))
         self.output_combo.setCurrentIndex(max(0, self.output_combo.findData(read_convert_output(settings))))
-        self.source_combo.setCurrentIndex(max(0, self.source_combo.findData(read_txy_source(settings))))
+        self.set_txy_entries(txy_sources.parse_list(read_txy_source(settings))
+                             or txy_sources.list_of(txy_sources.DEFAULT_SOURCE))
+
+    def set_txy_entries(self, entries: txy_sources.Entries) -> None:
+        self.txy_entries = tuple(entries)
+        self.source_label.setText(list_summary(self.txy_entries, file_tag(self.chosen_profile())))
+
+    def profile_names(self) -> dict[str, str]:
+        """Every profile's tag → name, built-ins first, as the list editor offers them."""
+        return {file_tag(profile): name for name, profile in self.profiles().items()}
+
+    def edit_txy_list(self) -> None:
+        """Edit… : the list tabs and Live read, in the list editor (saved with Save)."""
+        accepted, entries = self.ask_list(self, "TXY priority", "Tabs and Live read, in this order (each shot "
+                                          "from the first entry with a usable TXY):", self.txy_entries,
+                                          file_tag(self.chosen_profile()), self.profile_names())
+        if accepted and entries:
+            self.set_txy_entries(entries)
 
     # The list
 
@@ -460,7 +486,7 @@ class ConverterTab(QWidget):
         settings.setValue(CONVERT_PROFILE_SETTING, name if name in self.profiles() else DEFAULT_PROFILE)
         settings.setValue(CONVERT_BACKEND_SETTING, self.backend_combo.currentData())
         settings.setValue(CONVERT_OUTPUT_SETTING, self.output_combo.currentData())
-        source = str(self.source_combo.currentData() or txy_sources.DEFAULT_SOURCE)
+        source = txy_sources.setting_text(self.txy_entries)
         settings.setValue(TXY_SOURCE_SETTING, source)
         if self.cache is not None:
             self.cache.set_convert_profile(self.chosen_profile())

@@ -1020,7 +1020,7 @@ class FolderCache(QObject):
             txy.update(self.conversion_options())
         txy["conversion"] = self.conversion_options()  # (``Conversion``'s profile, whatever the list resolved to.)
         if listed is not None:
-            entries = txy_sources.parse_list(txy_sources.list_text([str(token) for token in listed]))
+            entries = txy_sources.valid_list(listed)
             txy = txy_sources.with_list(txy, entries or self.tab_list(), self._profile_for_tag)
         elif txy["tab"]:
             # The folder's own TXY list (store-v4, Q45.2, Q53.2), else Settings', for the tab's loads, Live and

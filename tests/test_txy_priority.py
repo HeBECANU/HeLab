@@ -269,6 +269,8 @@ def test_folder_cache_resolves_the_settings_the_folders_and_a_plots_list(monkeyp
         # A plot's own list ("list", Conversion among it), not the tab's.
         plot = cache.with_txy(path, {"txy": {"list": [EXTERNAL, CONVERSION]}})["txy"]
         assert (plot["source"], plot["profile_tag"], plot["tab"]) == (txy_sources.MATLAB_PRIORITY, M19, False)
+        plot = cache.with_txy(path, {"txy": {"list": [M23]}})["txy"]
+        assert (plot["source"], plot["profile_hash"]) == (txy_sources.HELAB_ONLY, H23)  # (One entry: a mode.)
         plot = cache.with_txy(path, {"txy": {"list": [M23, CONVERSION]}})["txy"]
         assert plot["source"] == "m23v1>m19v1" and plot["tab"] is False
         # The folder's row as the store keeps it.
@@ -302,3 +304,40 @@ def test_the_setting_reads_lists_old_values_and_junk(tmp_path: Path) -> None:
                         ("m23v1", "helab-priority"), ("", "helab-priority")):
         settings.setValue(constants.TXY_SOURCE_SETTING, value)
         assert constants.read_txy_source(settings) == read, value
+
+
+# --- the list editor (helab/views/txy_list.py) -------------------------------------------------------------
+
+def test_the_list_editor_ticks_orders_and_follows(qtbot: Any) -> None:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QDialogButtonBox
+    from helab.views.txy_list import TxyListDialog
+    names = {M19: "matlab-2019", M23: "matlab-2023-lab-edit", "p22v1": "plates-2022"}
+    dialog = TxyListDialog("TXY", "", (M23, EXTERNAL), M19, names, "As Settings", "Conversion (m19v1) › External")
+    qtbot.addWidget(dialog)
+    editor = dialog.editor
+    ok = dialog.buttons.button(QDialogButtonBox.StandardButton.Ok)
+    assert ok is not None and ok.isEnabled()
+    assert editor.entries() == (M23, EXTERNAL) and editor.summary.text() == "m23v1 › External"
+    texts = [editor.list.item(row).text() for row in range(editor.list.count())]  # type: ignore[union-attr]
+    assert texts[:3] == ["matlab-2023-lab-edit (m23v1)", "External (MATLAB converter)", "Conversion profile (m19v1)"]
+    # Move External up, tick Conversion: the order is the list's.
+    editor.list.setCurrentRow(1)
+    editor.move_entry(-1)
+    conversion = editor.list.item(2)
+    assert conversion is not None
+    conversion.setCheckState(Qt.CheckState.Checked)
+    assert editor.entries() == (EXTERNAL, M23, CONVERSION)
+    assert editor.summary.text() == "External › m23v1 › Conversion (m19v1)"
+    # Nothing ticked: OK off; the follow box: OK on, the list off, None chosen.
+    editor.set_ticked(())
+    assert not ok.isEnabled() and editor.summary.text() == "Nothing ticked"
+    assert editor.follow_box is not None
+    editor.follow_box.setChecked(True)
+    assert ok.isEnabled() and editor.entries() is None and not editor.list.isEnabled()
+    assert editor.summary.text() == "Conversion (m19v1) › External"
+    # A saved tag no profile is known by is still offered, and said so.
+    other = TxyListDialog("TXY", "", ("u0123abcd",), M19, names)
+    qtbot.addWidget(other)
+    first_item = other.editor.list.item(0)
+    assert first_item is not None and first_item.text() == "u0123abcd (no profile known by this tag)"

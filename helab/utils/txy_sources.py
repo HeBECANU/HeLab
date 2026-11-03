@@ -112,6 +112,14 @@ def parse_list(value: Any, tag: str = "") -> Entries | None:
     return entries
 
 
+def valid_list(tokens: Any) -> Entries | None:
+    """Entries given one by one (a plot's, an editor's): at least one, each once, each an entry; else None."""
+    if not isinstance(tokens, (list, tuple)) or not tokens:
+        return None
+    entries = tuple(tokens)
+    return entries if len(set(entries)) == len(entries) and all(is_entry(token) for token in entries) else None
+
+
 def list_text(entries: Sequence[str]) -> str:
     return LIST_SEPARATOR.join(entries)
 
@@ -184,8 +192,9 @@ def short_entry(token: str, conversion_tag: str = "") -> str:
 
 
 def summary(entries: Sequence[str], conversion_tag: str = "") -> str:
-    """A list in short: "m23v1 › m19v1 › External"."""
-    return " › ".join(short_entry(token, conversion_tag) for token in entries)
+    """A list in short: "m23v1 › m19v1 › External"; one entry: "m23v1 only"."""
+    text = " › ".join(short_entry(token, conversion_tag) for token in entries)
+    return f"{text} only" if len(entries) == 1 else text
 
 
 def normal_source(value: Any) -> str | None:

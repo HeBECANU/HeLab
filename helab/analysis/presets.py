@@ -84,7 +84,7 @@ class TxyChoice:
         if not self.source:
             return None
         if self.entries:
-            return txy_sources.parse_list(txy_sources.list_text([token for token, _ in self.entries]))
+            return txy_sources.valid_list([token for token, _ in self.entries])
         return txy_sources.parse_list(self.source, self.tag)
 
     def to_json(self) -> dict[str, Any]:

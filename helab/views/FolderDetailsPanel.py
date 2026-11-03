@@ -448,11 +448,12 @@ class FolderDetailsPanel(QScrollArea):
         from helab.views.CacheTab import POLICY_LABELS
         text, tip = row
         parts, lines = [], []
-        source = str(choices.get("source") or "")
-        if source in txy_sources.LABELS:
-            tag = str(choices.get("tag") or "")
-            parts.append(f"this folder: {txy_sources.LABELS[source]}" + (f" ({tag})" if tag else ""))
-            lines.append("This folder's own TXY source (right-click › TXY for this folder…), instead of Settings'.")
+        entries = txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+        if entries is not None:
+            # (Q53.2: its list in short, "m23v1 › Conversion › External".)
+            parts.append(f"this folder: {txy_sources.summary(entries)}")
+            lines.append("This folder's own TXY priority (right-click › TXY for this folder…), instead of "
+                         "Settings': each shot from the first entry with a usable TXY.")
         policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
         if policy:
             parts.append(f"cache: {policy}")

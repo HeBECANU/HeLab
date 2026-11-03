@@ -274,14 +274,29 @@ def test_the_explorers_dialogs_set_exactly_what_was_picked(monkeypatch: pytest.M
 
         def ask(parent: Any, title: str, label: str, items: list[str], index: int, editable: bool) -> tuple[str, bool]:
             return answers.pop(0), True
-        explorer = SimpleNamespace(model=SimpleNamespace(cache=cache, owner="tab"), ask_item=ask)
-        answers[:] = [txy_sources.LABELS["helab-only"], "m19v1"]
+        lists: list[tuple[bool, Any]] = []
+        asked: list[tuple[Any, ...]] = []
+
+        def ask_list(*args: Any) -> tuple[bool, Any]:
+            asked.append(args)
+            return lists.pop(0)
+        explorer = SimpleNamespace(model=SimpleNamespace(cache=cache, owner="tab"), ask_item=ask, ask_list=ask_list)
+        # A mode's list is saved as the mode and its tag (Q53.2); "As Settings" (None) as "".
+        lists[:] = [(True, ("m19v1",))]
         FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
         assert admin_request(service, "folder_choice").payload["params"] | {"set_at": 0} == {
             "path": "/data/run", "source": "helab-only", "tag": "m19v1", "set_at": 0}
-        answers[:] = [FOLDER_CHOICE_GLOBAL]
+        assert asked[-1][3] is None and asked[-1][6] == "As Settings"  # (It followed Settings until now.)
+        lists[:] = [(True, ("m23v1", "Conversion", "External"))]
+        FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
+        assert admin_request(service, "folder_choice").payload["params"]["source"] == "m23v1>Conversion>External"
+        assert asked[-1][3] == ("m19v1",)  # (Its own list, shown.)
+        lists[:] = [(True, None)]
         FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
         assert admin_request(service, "folder_choice").payload["params"]["source"] == ""
+        lists[:] = [(False, None)]
+        FolderExplorer.choose_folder_txy(explorer, "/data/run")  # type: ignore[arg-type]
+        assert cache.folder_choices["/data/run"]["source"] == ""  # (Cancel: nothing set.)
         answers[:] = [dict(POLICY_LABELS)["raw"]]
         FolderExplorer.choose_folder_policy(explorer, "/data/run")  # type: ignore[arg-type]
         assert admin_request(service, "folder_choice").payload["params"]["policy"] == "raw"
@@ -294,7 +309,9 @@ def test_folder_details_names_a_folders_own_choices() -> None:
     row = ("120 MATLAB", "MATLAB's TXY")
     assert FolderDetailsPanel._with_choices(row, {}) == row
     text, tip = FolderDetailsPanel._with_choices(row, {"source": "helab-only", "tag": "m19v1", "policy": "txy"})
-    assert "this folder: " in text and "(m19v1)" in text and "cache: TXY only (no raw)" in text
+    assert "this folder: m19v1" in text and "cache: TXY only (no raw)" in text
+    text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""})
+    assert text.endswith("this folder: m23v1 › Conversion › External")
     assert "right-click › TXY for this folder…" in tip
 
 

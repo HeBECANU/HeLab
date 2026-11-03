@@ -268,6 +268,8 @@ class FolderExplorer(QWidget):
         self.ask_remove_raw: Callable[[str, int, int], bool] | None = None
         # (Tests: answers QInputDialog.getItem for a folder's own TXY source and cache policy.)
         self.ask_item: Callable[..., tuple[str, bool]] | None = None
+        # The TXY list editor's question (Q53.2; None: the dialog), so a test answers in its place.
+        self.ask_list: Callable[..., tuple[bool, Any]] | None = None
         self.report_flag_failure: Callable[[str, str], None] | None = None
         self._auto_load_off_paths: set[str] = set()
         self._loading_data: dict[int, npt.NDArray[np.float64]] = {}
@@ -2408,27 +2410,20 @@ class FolderExplorer(QWidget):
             self.folder_opened_path != path)
 
     def choose_folder_txy(self, path: str) -> None:
-        """Right-click › TXY for this folder… (store-v4, Q45.2): its own source and, for HeLab's, the profile tag
-        (the conversion profile's or a built-in's); "As Settings" follows the global one."""
-        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        """Right-click › TXY for this folder… (store-v4, Q45.2, Q53.2): its own TXY priority list in the list
+        editor (``helab/views/txy_list.py``); "As Settings" follows Settings › TXY converter's. The folder only,
+        not its subfolders (Q50.11)."""
+        from helab.views.txy_list import ask_txy_list, known_names, list_summary
         cache = self.model.cache
         current = cache.folder_choices.get(path) or {}
-        names = [FOLDER_CHOICE_GLOBAL] + [txy_sources.LABELS[name] for name in txy_sources.SOURCES]
-        index = 1 + txy_sources.SOURCES.index(current["source"]) if current.get("source") in txy_sources.SOURCES else 0
-        chosen, accepted = (self.ask_item or QInputDialog.getItem)(
-            self, "TXY for this folder", "This folder's tab and Live load:", names, index, False)
-        if not accepted:
-            return
-        source = "" if chosen == FOLDER_CHOICE_GLOBAL else txy_sources.SOURCES[names.index(chosen) - 1]
-        tag = ""
-        if source and txy_sources.wants_helab(source):
-            tags = list(dict.fromkeys([cache.convert_profile_tag(), *(file_tag(item) for item in BUILTIN_PROFILES.values())]))
-            at = tags.index(current["tag"]) if current.get("tag") in tags else 0
-            tag, accepted = (self.ask_item or QInputDialog.getItem)(
-                self, "TXY for this folder", "HeLab's TXY of the profile tagged:", tags, at, False)
-            if not accepted:
-                return
-        cache.set_folder_choice(path, source=source, tag=tag)
+        own = txy_sources.parse_list(current.get("source"), str(current.get("tag") or ""))
+        tag = cache.convert_profile_tag()
+        accepted, entries = (getattr(self, "ask_list", None) or ask_txy_list)(
+            self, "TXY for this folder", f"{os.path.basename(path) or path}: this folder's tab and Live read, in this "
+            "order (each shot from the first entry with a usable TXY). This folder only, not its subfolders.",
+            own, tag, known_names(), "As Settings", list_summary(cache.tab_list(), tag))
+        if accepted:
+            cache.set_folder_list(path, entries)
 
     def choose_folder_policy(self, path: str) -> None:
         """Right-click › Cache policy for this folder… (store-v4, Q45.1): what its saves keep; "As Settings"

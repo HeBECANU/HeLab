@@ -509,6 +509,13 @@ def memory_usage(cache: FolderCache, path: Path) -> QWidget:
     return MemoryUsageWindow()
 
 
+def txy_list(cache: FolderCache, path: Path) -> QWidget:
+    from helab.views.txy_list import TxyListDialog
+    return TxyListDialog("TXY for this folder", "This folder's tab and Live read:", ("m23v1", "External"), "m19v1",
+                         {"m19v1": "matlab-2019", "m23v1": "matlab-2023-lab-edit"}, "As Settings",
+                         "Conversion (m19v1) › External")
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
@@ -522,6 +529,7 @@ DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]
     "debug icons": (debug_icons, ("DebugIconsWindow", "_IconGroup")),
     "memory usage": (memory_usage, ("MemoryUsageWindow",)),
     "correlation plot": (correlation_plot, ("CorrelationPlot",)),
+    "txy list": (txy_list, ("TxyListDialog", "TxyListEditor")),
 }
 COVERED.update({name: f"test_dialog[{case}]" for case, (_, names) in DIALOGS.items() for name in names})
 
