@@ -108,6 +108,8 @@ shot 1 in the layer.
   `test_t_spectrum.py`, unrelated.
 - Type checks, all clean: `mypy helab/ --strict` (207 files), `mypy tests --strict` (210), `pyright helab tests`
   (0 errors), `mypy helab/ --strict --platform win32` (207), `pyright --pythonplatform Windows helab tests` (0 errors).
+- After the landing review (PR-1's test `f90217c`, handoff `c609506`): full suite **9290 passed, 673 skipped, 2
+  warnings in 141.04 s, no RERUN**; the five type checks clean again.
 - Each new test was run before its fix and failed as described above.
 - CI: run **41651767280** on `7238242` (push to `agent/pr11-codex`): **success**, every job green on macOS,
   Ubuntu and Windows (Build, Tests 1/3, 2/3, 3/3, Converter backends, each per OS; Docs; the 3.11/3.12/3.14 compat
