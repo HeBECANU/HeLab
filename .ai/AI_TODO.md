@@ -550,7 +550,7 @@ Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f
   by mkdocstrings from A54.1's docstrings, a CI job that builds it with warnings as errors, and Help › User
   manual. First pages: install and first folder, `.helab-root`, Live, converting TXY, writing a script, the cache,
   `helab convert` / `helab cache`, the settings. Written for users from `.ai/architecture/` and the memory
-  notes; names no person or lab machine. Publishing and the offline copy wait on Q54.2 and Q54.3.
+  notes; names no person or lab machine. Published on GitHub Pages per release (Q54.2), bundled in the app as an offline copy (Q54.3); the deploy workflow publishes from whichever repo it runs in, so `HeBECANU/HeLab` gets its own site; which site Help opens waits on Q54.4.
 
 ## Not AI work (stays in MANUAL_TODO)
 

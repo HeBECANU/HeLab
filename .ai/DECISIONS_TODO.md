@@ -31,15 +31,12 @@ How to use this list:
 
 ## Documentation (block 54; open)
 
-Tony in Chat, 2026-11-03: "do (a) and (b) now, before PR" (Q54.1). Two choices for the manual (b):
-
-- **Q54.2 Where the manual is published.** (a) GitHub Pages on `TonyXTYan/HeLab`. The repo is already public,
-  so the manual would be too, and like the repo it must name no person and no lab machine. (b) The manual is
-  only bundled in the app and in the repo's `docs/`, with no site. **Proposed:** (a), versioned per release
-  (`mike`), with the app's Help › User manual opening the running version's page.
-- **Q54.3 An offline copy in the app.** Bundle the built HTML (a few MB) in HeLab.app and the Windows zip.
-  Help › User manual then opens it in the system browser when the site can't be reached (lab PCs may be
-  offline; the Side PC's QtWebEngine can't draw). **Proposed:** yes.
+- **Q54.4 Which site Help › User manual opens.** Q54.2 publishes the manual from `TonyXTYan/HeLab`; once
+  `HeBECANU/HeLab` receives a push with the same workflow and Pages turned on there (Settings › Pages › Source:
+  GitHub Actions, by an admin of HeBECANU), it gets its own site, `hebecanu.github.io/HeLab`. (a) The app opens
+  the site of the repo it was built from (a release from `HeBECANU` opens the lab's site). (b) Always the lab's
+  site once it exists, the dev site until then. **Proposed:** (a), with the bundled copy (Q54.3) when neither can
+  be reached.
 
 ## Recently decided
 
@@ -272,6 +269,11 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
 - **Q54.1** before the v0.0.8 PR: (a) a docstring pass on the script-facing API with a check that keeps it
   (A54.1), and (b) a user manual with MkDocs Material, an API reference from the docstrings (mkdocstrings) and
   Help › User manual (A54.2) (Tony in Chat, 2026-11-03).
+- **Q54.2** the manual is published on GitHub Pages from `TonyXTYan/HeLab` (public, naming no person or lab
+  machine), one version per release (`mike`); `HeBECANU/HeLab` gets its own site when it is pushed there (Q54.4)
+  (Tony, 2026-11-03: "ok").
+- **Q54.3** the built manual is bundled in HeLab.app and the Windows zip, opened in the system browser when the
+  site can't be reached (Tony, 2026-11-03: "yes").
 
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 
