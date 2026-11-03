@@ -154,3 +154,26 @@ Beyond the handoff's three `cache-store.md` items:
   value would raise in `_view_row`; only HeLab writes views, so I don't report it.
 - `confirm`'s fallback branch (an item whose first three values differ) writes a five-item item, but `confirm_view`
   then refuses on fingerprint inequality, so it never lands.
+
+## Re-check: PR-1's follow-up (`git diff 2aeba41..9b2ec20`)
+
+Reviewer: Probe2, 2026-11-04. The new commits are `f90217c` (PR-1's regression test), `c609506` and `9b2ec20`
+(handoff notes); the range also contains this review (`e25426b`). No code change under `helab/`.
+
+- **`f90217c`, `tests/test_txy_loading.py::test_old_helab_view_is_read_again_once_then_keyed`**: this is the scratch
+  test, tightened into assertions. Its steps: a HeLab-only load converting on read; view items cut to five; then
+  `read_cached` raises "No cached data for this folder". The next load is not cached, reads both shots under "Cached
+  dataset invalid" and saves six-item items. The load after it is cached, reading nothing. It names the view by
+  `view_key("helab-only", txy)`, which is better than the scratch test's first row.
+- **It guards C-1.** In a throwaway worktree at `9b2ec20` with `0d2b9c7`'s `helab/` change reverted, it fails
+  (`DID NOT RAISE ValueError`: without the key check the old view serves HeLab shots with no proof they are its own).
+- **Checks at `9b2ec20`:** `pytest -n 4 --reruns 5 --reruns-delay 1 tests/test_txy_loading.py` gave 27 passed, no
+  RERUN. `mypy tests --strict` (210 files) is clean, and `pyright` and `pyright --pythonplatform Windows` on the file
+  give 0 errors. The worker's full suite (9290 passed, 673 skipped, no RERUN) and the five type checks are recorded
+  in the handoff; I didn't rerun the full suite for a test-only change.
+- **Handoff:** the C-1 note now says what the user sees: no cached read, then one read under "Cached dataset
+  invalid", and `loading.py` unchanged. It lists the test, and carries PR-2 and PR-3 as accepted and PR-4's doc
+  proposals. All of it matches this review.
+
+**PR-1: closed** (accepted as is, with its regression test). There are no open findings. PR-2 to PR-4 are Info,
+accepted. CI hasn't run on `9b2ec20` yet (unpushed); the landing rule's CI run on the latest commit is still to come.
