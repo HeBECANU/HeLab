@@ -516,6 +516,13 @@ def txy_list(cache: FolderCache, path: Path) -> QWidget:
                          "Conversion (m19v1) › External")
 
 
+def convert_folder(cache: FolderCache, path: Path) -> QWidget:
+    from helab.convert.profile import BUILTIN_PROFILES, file_tag
+    from helab.views.explorer_convert import ConvertFolderDialog
+    return ConvertFolderDialog(None, str(path), {file_tag(p): p for p in BUILTIN_PROFILES.values()}, "m19v1", "cache",
+                               "", lambda profile, where: None)
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
@@ -530,6 +537,7 @@ DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]
     "memory usage": (memory_usage, ("MemoryUsageWindow",)),
     "correlation plot": (correlation_plot, ("CorrelationPlot",)),
     "txy list": (txy_list, ("TxyListDialog", "TxyListEditor")),
+    "convert folder": (convert_folder, ("ConvertFolderDialog",)),
 }
 COVERED.update({name: f"test_dialog[{case}]" for case, (_, names) in DIALOGS.items() for name in names})
 

@@ -24,6 +24,15 @@ the session: ``instead``, which Live's auto-convert and Folder details' conversi
 flag stays), or not now. Never a silent refusal nor a silent fallback. Live's "Convert to HeLab's cache
 instead" on a share is kept the same way.
 
+**Convert this folder…** (Q~4, Tony 2026-11-03: right-click, and File › Convert This Folder… for the tab's
+selected folder): ``ConvertFolderDialog`` picks any profile (built-in or user, by its tag; the folder's
+Auto-convert profile first) and where HeLab's TXY go (HeLab's cache, its temp folder, or beside the raw files);
+``ExplorerConverter.ask_convert`` then runs it as Folder details' conversions run (``start`` with the profile):
+beside asks first on a share (``confirm_beside_on_share``) and needs the folder's beside setting, which it turns
+on as Folder details' offer does; the folder only, never its subfolders; the helper writes
+``d_txy_helab_<tag>_<N>.txt`` by its rules (a temporary name, then a rename; never over an existing TXY).
+Not while Live's Auto-convert converts that folder (one conversion per folder: its menu's Convert with… instead).
+
 Every question is a non-modal ``QMessageBox`` (``open``) but the beside confirmation, which answers a
 click: none waits on a helper. Each button has an ID (``<prefix>_<choice>``).
 """
@@ -38,10 +47,12 @@ from typing import TYPE_CHECKING, Any, Callable
 import weakref
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QMessageBox, QPushButton, QWidget
+from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QMessageBox,
+                             QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
+from helab.convert.profile import DetectorProfile, file_tag
 from helab.utils import cache_location, folder_cache
-from helab.utils.accessible import identify
+from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
 from helab.views.explorer_text import plural
 
@@ -205,6 +216,63 @@ def offer_conversion(parent: QWidget, path: str, share: str, answer: Callable[[s
     return box
 
 
+class ConvertFolderDialog(QDialog):
+    """Convert this folder… (Q~4): the profile (every known one, by tag) and where HeLab's TXY go. Non-modal:
+    ``answer`` gets the profile and the destination, or (None, "cancel")."""
+
+    def __init__(self, parent: QWidget | None, path: str, profiles: dict[str, DetectorProfile], tag: str,
+                 destination: str, beside_why: str, answer: Callable[[DetectorProfile | None, str], None]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Convert this folder")
+        self.profiles = profiles
+        self._answer = answer
+        layout = QVBoxLayout(self)
+        intro = QLabel(f"Convert {_name(path)}'s raw files (d<N>.txt) to HeLab's TXY, this folder only (not its "
+                       "subfolders). Shots already converted with the profile are skipped; HeLab never replaces "
+                       "a TXY file.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self.profile_combo = identify(QComboBox(), "convert_folder_profile", "Profile",
+                                      "The detector profile the raw files are converted with (its tag names the "
+                                      "TXY files)")
+        for item_tag, profile in profiles.items():
+            self.profile_combo.addItem(f"{profile.name} ({item_tag})", item_tag)
+        self.profile_combo.setCurrentIndex(max(0, self.profile_combo.findData(tag)))
+        form.addRow("Profile", self.profile_combo)
+        layout.addLayout(form)
+        self.group = QButtonGroup(self)
+        self.radios: dict[str, QRadioButton] = {}
+        for name, text in (("cache", "HeLab's cache folder"), ("temp", "HeLab's temp folder"),
+                           ("beside", "Beside the raw files, in this folder")):
+            radio = identify(QRadioButton(text), f"convert_folder_{name}", f"Convert to {text}")
+            self.group.addButton(radio)
+            self.radios[name] = radio
+            layout.addWidget(radio)
+        beside = self.radios["beside"]
+        beside.setToolTip(f"Not available: {beside_why}" if beside_why else
+                          "d_txy_helab_<tag>_<N>.txt beside the raw files; turns the folder's beside setting on "
+                          "(on a network share HeLab asks first)")
+        beside.setEnabled(not beside_why)
+        self.radios[destination if destination in self.radios and (destination != "beside" or not beside_why)
+                    else "cache"].setChecked(True)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        identify_buttons(self.buttons, "convert_folder")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.finished.connect(self._finished)
+
+    def chosen(self) -> tuple[DetectorProfile | None, str]:
+        tag = str(self.profile_combo.currentData() or "")
+        where = next((name for name, radio in self.radios.items() if radio.isChecked()), "cache")
+        return self.profiles.get(tag), where
+
+    def _finished(self, result: int) -> None:
+        self._answer(*(self.chosen() if result == int(QDialog.DialogCode.Accepted) else (None, "cancel")))
+        self.deleteLater()
+
+
 @dataclass(eq=False)
 class FolderConversion:
     """A folder's conversion from Folder details (not Live's): its passes and what they found."""
@@ -224,6 +292,7 @@ class FolderConversion:
     error: str = ""
     finished: bool = False
     flag: bool = False  # Beside: waiting for the store to say the folder's flag is on.
+    profile: DetectorProfile | None = None  # Convert this folder… 's (Q~4); None: Settings' conversion profile.
 
 
 class ExplorerConverter:
@@ -282,7 +351,8 @@ class ExplorerConverter:
                 if conversion.stuck:
                     parts.append(f"{conversion.stuck:,} not convertible")
                 text = " · ".join(parts)
-            lines = [f"Converting {path}'s raw files from Folder details, since "
+            with_profile = f" with {file_tag(conversion.profile)}" if conversion.profile is not None else ""
+            lines = [f"Converting {path}'s raw files{with_profile}, since "
                      f"{time.strftime('%H:%M:%S', time.localtime(conversion.started_at))}, to {where}"
                      + (f" ({conversion.fallback})" if conversion.fallback else ""),
                      f"Passes: {conversion.passes:,} (the first only records each file; a file converts once "
@@ -311,7 +381,7 @@ class ExplorerConverter:
                 self.box = ask_after_refusal(self.explorer, path, conversion.refused,
                                              lambda choice: self._refusal_answered(path, choice))
             else:
-                self.start(path, conversion.destination)
+                self.start(path, conversion.destination, conversion.profile)
             return
         if conversion is not None and not conversion.finished:
             return
@@ -340,12 +410,55 @@ class ExplorerConverter:
         if choice in ("cache", "temp"):
             write_instead(path, choice)  # (The folder's for the session: Live's auto-convert follows it too.)
         if choice in ("retry", "cache", "temp"):
-            self.start(path, conversion.destination if choice == "retry" else choice)
+            self.start(path, conversion.destination if choice == "retry" else choice, conversion.profile)
 
-    def start(self, path: str, destination: str) -> bool:
-        """Convert ``path``'s raw files to ``destination`` (``cache``, ``temp`` or ``beside``): passes until
-        nothing settles, then the folder is listed and loaded again. Whether its first pass was queued."""
-        conversion = self.conversions[path] = FolderConversion(path, destination, time.time())
+    def convert_unavailable(self, path: str) -> str:
+        """Why Convert this folder… can't run now ("" when it can): Live converts it, or a conversion of it from
+        here is running."""
+        if self.explorer.live_control.auto_converting(path):
+            return "Live's Auto-convert converts this folder (its menu: Convert with…)"
+        conversion = self.conversions.get(path)
+        if conversion is not None and not conversion.finished and not conversion.error:
+            return "this folder is being converted (Folder details)"
+        return ""
+
+    def ask_convert(self, path: str) -> ConvertFolderDialog | None:
+        """Right-click › Convert this folder… (Q~4): the dialog, then the conversion as chosen."""
+        if self.box is not None or self.convert_unavailable(path):
+            return None
+        from helab.utils.constants import read_convert_output
+        from helab.utils.settings_store import app_settings
+        from helab.views.plots.txy_source import known_profiles
+        cache = self.explorer.model.cache
+        profiles: dict[str, DetectorProfile] = {}
+        for profile in known_profiles().values():
+            profiles.setdefault(file_tag(profile), profile)
+        default = cache.auto_convert_profile(path)
+        profiles.setdefault(file_tag(default), default)
+        destination = "beside" if cache.write_beside(path) else read_convert_output(app_settings())
+        dialog = ConvertFolderDialog(self.explorer, path, profiles, file_tag(default), destination,
+                                     beside_unavailable(cache, path),
+                                     lambda profile, where: self._convert_answered(path, profile, where))
+        dialog.open()
+        return dialog
+
+    def _convert_answered(self, path: str, profile: DetectorProfile | None, where: str) -> None:
+        if profile is None or where not in WHERE:
+            return
+        if where == "beside":
+            if why := beside_unavailable(self.explorer.model.cache, path):
+                logging.info("Converting %s beside the raw files isn't available: %s", path, why)
+                return
+            share = share_to_confirm(path)
+            if share and not confirm_beside_on_share(self.explorer, path, share):
+                return
+        self.start(path, where, profile)
+
+    def start(self, path: str, destination: str, profile: DetectorProfile | None = None) -> bool:
+        """Convert ``path``'s raw files to ``destination`` (``cache``, ``temp`` or ``beside``) with ``profile``
+        (None: Settings' conversion profile): passes until nothing settles, then the folder is listed and loaded
+        again. Whether its first pass was queued."""
+        conversion = self.conversions[path] = FolderConversion(path, destination, time.time(), profile=profile)
         logging.info("Converting %s to %s (Folder details)", path, WHERE.get(destination, destination))
         cache = self.explorer.model.cache
         if destination == "beside":
@@ -385,7 +498,7 @@ class ExplorerConverter:
         beside = conversion.destination == "beside"
         cache = self.explorer.model.cache
         if not cache.convert(self.owner, conversion.path, destination=None if beside else conversion.destination,
-                             beside=beside):
+                             beside=beside, profile_used=conversion.profile):
             conversion.error = "the conversion couldn't be queued"
             self.explorer.loadStateChanged.emit()
             return False

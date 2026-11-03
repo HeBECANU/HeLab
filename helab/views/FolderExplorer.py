@@ -2310,6 +2310,14 @@ class FolderExplorer(QWidget):
         if constants:
             constants.setToolTip("Fall distance, fall time and trap frequencies for this folder and its "
                                  "subfolders" + (" (RAM only: this session)" if ram_only else ""))
+        # Q~4: convert this folder's raw files with any profile, to HeLab's cache, its temp folder or beside them.
+        convert = menu.addAction("Convert this folder…", lambda: self.converter.ask_convert(path))
+        if convert:
+            why = self.converter.convert_unavailable(path)
+            convert.setEnabled(not why)
+            convert.setToolTip(f"Not now: {why}" if why else
+                               "Convert this folder's raw files (d<N>.txt) to HeLab's TXY with a profile you pick, to "
+                               "HeLab's cache, its temp folder or beside them; this folder only, not its subfolders")
         if os.path.basename(str(folder_cache.store_options().get("directory") or "")) == STORE_V4_DIRNAME:
             # Caching v2 stage 2 (store-v4): this folder's own TXY source and what its saves keep (Q45.1, Q45.2).
             for label, slot, tip in (
