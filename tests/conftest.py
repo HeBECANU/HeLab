@@ -50,21 +50,36 @@ os.environ["HELAB_TEST_VOLUME_ID"] = "test-volume"
 os.environ["HELAB_TEST_LOCAL_MOUNT"] = Path(tempfile.gettempdir()).anchor
 
 
-def _temp_mount() -> str:
-    """The mount holding the temp folder, where every test's folders are: trusted at once, as the system
-    volume is (``data_roots.fixed_mount``'s ``HELAB_TEST_FIXED_MOUNT``), whether the runner's /tmp is on /
-    or a mount of its own (CI 41587336570 and 41570883747 on ubuntu-26.04 20261018.50.1, where the
-    result-cache, lifecycle and offline tests' folders waited for a volume check that never ran).
-    Windows' HELAB_TEST_LOCAL_MOUNT above already stands in for its drives."""
-    import psutil
-    temp = os.path.realpath(tempfile.gettempdir())
-    paths = [part.mountpoint for part in psutil.disk_partitions(all=True)
-             if temp == part.mountpoint or temp.startswith(part.mountpoint.rstrip(os.sep) + os.sep)]
+def mount_holding(path: str, mountpoints: list[str] | None = None) -> str:
+    """The mount holding ``path`` (its longest mountpoint; ``psutil``'s list unless given), as HeLab's
+    ``Mount.path`` names it; on Windows the drive, as ``HELAB_TEST_LOCAL_MOUNT`` above makes it."""
+    real = os.path.realpath(os.path.abspath(path))
+    if sys.platform == "win32":
+        return Path(real).anchor
+    if mountpoints is None:
+        import psutil
+        mountpoints = [part.mountpoint for part in psutil.disk_partitions(all=True)]
+    paths = [point for point in mountpoints if real == point or real.startswith(point.rstrip(os.sep) + os.sep)]
     return max(paths, key=len) if paths else ""
 
 
-if sys.platform != "win32":
-    os.environ["HELAB_TEST_FIXED_MOUNT"] = _temp_mount()
+def name_fixed_mount(path: str, mountpoints: list[str] | None = None) -> None:
+    """Add the mount holding ``path`` to ``HELAB_TEST_FIXED_MOUNT`` (``os.pathsep``-separated): the tests'
+    folders there are trusted at once, as the system volume is (``data_roots.fixed_mount``), wherever it
+    is asked, whether the runner's /tmp is on / or a mount of its own (CI 41587336570 and 41570883747 on
+    ubuntu-26.04 20261018.50.1, where the result-cache, lifecycle and offline tests' folders waited for a
+    volume check that never ran). Named here at import for the temp folder, and in ``pytest_configure`` for
+    ``--basetemp`` (most tests' folders are ``tmp_path``, below it), before any helper starts; helpers
+    inherit it. On Windows ``fixed_mount`` trusts only %SystemDrive%, so a TEMP on another drive is named
+    too; a basetemp on a drive other than TEMP's is named but changes nothing, since
+    ``HELAB_TEST_LOCAL_MOUNT`` gives the tests' mount list only the temp folder's drive."""
+    mount = mount_holding(path, mountpoints)
+    named = [item for item in os.environ.get("HELAB_TEST_FIXED_MOUNT", "").split(os.pathsep) if item]
+    if mount and mount not in named:
+        os.environ["HELAB_TEST_FIXED_MOUNT"] = os.pathsep.join([*named, mount])
+
+
+name_fixed_mount(tempfile.gettempdir())
 # Tests never touch real data (a mounted share, a developer's data folder): helpers, and
 # helab.io_ops' functions called here, refuse such source paths before touching them and note
 # them in this folder, which fails the test (``no_real_data``). New tabs start in an empty folder
@@ -88,6 +103,8 @@ if TYPE_CHECKING:
 
 def pytest_configure(config: pytest.Config) -> None:
     _CONFIG[:] = [config]
+    if config.option.basetemp:  # (On an xdist worker, its own folder below the run's.)
+        name_fixed_mount(str(config.option.basetemp))
     config.addinivalue_line("markers", "no_auto_data_root: test the RAM-only or explicit marker path")
     config.addinivalue_line("markers", "store_v3: a test about store-v3 itself, run with the store_v4 switch off "
                                        "(v0.0.8 ships store-v4, the suite's default)")

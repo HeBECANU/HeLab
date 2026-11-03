@@ -41,20 +41,22 @@ class VolumeUnverified(NoDataRoot):
         self.args = (f"The volume of {path} is not yet verified",)
 
 
-# A test seam, set only by tests/conftest.py, never by HeLab: the mount that holds the tests' temp folder.
+# A test seam, set only by tests/conftest.py, never by HeLab: the mounts (``os.pathsep``-separated) that
+# hold the tests' folders (the temp folder's, and ``--basetemp``'s).
 TEST_FIXED_MOUNT_ENV = "HELAB_TEST_FIXED_MOUNT"
 
 
 def fixed_mount(mount: Mount) -> bool:
     """The system volume: another disk can't be mounted in its place, so its hint stays valid.
 
-    Tests only: the mount named by ``HELAB_TEST_FIXED_MOUNT`` counts too. It acts only when that
-    variable is set, and only tests/conftest.py sets it (to the mount holding the temp folder, where
-    every test's folders are), never HeLab. Without it a runner whose /tmp is a mount of its own
-    (GitHub's ubuntu-26.04 image 20261018.50.1) left those folders waiting for a volume check that
-    tests' own FolderCaches never run (CI 41587336570, 41570883747)."""
-    test_mount = os.environ.get(TEST_FIXED_MOUNT_ENV)
-    if test_mount and _normal(mount.path) == _normal(test_mount):
+    Tests only: the mounts named by ``HELAB_TEST_FIXED_MOUNT`` (``os.pathsep``-separated) count too,
+    wherever this is asked. It acts only when that variable is set, and only tests/conftest.py sets it
+    (to the mounts holding the temp folder and ``--basetemp``, where the tests' folders are), never
+    HeLab. Without it a runner whose /tmp is a mount of its own (GitHub's ubuntu-26.04 image
+    20261018.50.1) left those folders waiting for a volume check that tests' own FolderCaches never run
+    (CI 41587336570, 41570883747)."""
+    named = os.environ.get(TEST_FIXED_MOUNT_ENV)
+    if named and any(item and _normal(mount.path) == _normal(item) for item in named.split(os.pathsep)):
         return True
     if sys.platform == "win32":
         drive = os.environ.get("SystemDrive", "C:")
