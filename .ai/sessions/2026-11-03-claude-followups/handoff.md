@@ -45,7 +45,10 @@ read: **one RERUN**, Ubuntu Converter backends (job in that run, `test_convert_h
 "rerun reasons": `AssertionError: assert -2 == 0` from `wait(20)`: `helab convert --watch` killed by the SIGINT),
 passed on rerun. That is the open known-issues item from CI 41561765280; this branch didn't touch the watch loop or
 its signal handling (Q48.3 changed only argument parsing). Every other job: 0 RERUN (macOS 3,143 + 3,069 + 3,056
-and 869; Ubuntu 3,142 + 3,067 + 3,056 and 869; Windows 3,135 + 3,052 + 3,045 and 867 passed). CI **41626693781**
+and 869; Ubuntu 3,142 + 3,067 + 3,056 and 869; Windows 3,135 + 3,052 + 3,045 and 867 passed). CI **41632238929** (at `3ee1660`, the review fixes): **success**, every job; each Tests, Converter backends,
+Build and Docs job's log read: **0 RERUN** (macOS 3,149 + 3,074 + 3,060 and 869; Ubuntu 3,148 + 3,072 + 3,060 and
+869; Windows 3,141 + 3,057 + 3,048 and 867 passed); `test_script_probe.py`'s 14 tests ran on each OS (the SIGKILL
+one skipped on Windows); the probe step and the offline check as before. CI **41626693781**
 (at `2eac45a`, the shim and the probe step): **success**, every job; each Tests, Converter backends, Build and
 Docs job's log read: **0 RERUN** (macOS 3,144 + 3,072 + 3,059 and 869; Ubuntu 3,143 + 3,070 + 3,059 and 869;
 Windows 3,136 + 3,055 + 3,048 and 867 passed). The probe step on each OS: `ready` with `application: offscreen`,
