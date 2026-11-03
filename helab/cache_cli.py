@@ -1,4 +1,4 @@
-"""``helab cache``: look into caching v2's ``.hlb`` files and export them, read only (Tony, 2026-10-31).
+"""``helab cache``: look into caching v2's ``.hlb`` files and export them, read only.
 
     helab cache dump FILE.hlb
     helab cache export FILE.hlb [--to npz|mat|csv] [--out PATH] [--bin-time SECONDS] [--force]
@@ -261,9 +261,13 @@ def _export_layers(store: pathlib.Path, key: str, out: pathlib.Path, args: argpa
     return 0
 
 
+# ``--help``'s description: written for users, never taken from the docstring (its notes are for developers).
+DESCRIPTION = ("Look into the .hlb files of HeLab's disk cache and export them as NumPy (.npz), MATLAB (.mat) "
+               "or CSV files. Read only: it never writes into the disk cache or a source folder.")
+
+
 def main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="helab cache", description=(__doc__ or "").split("\n\n")[0],
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(prog="helab cache", description=DESCRIPTION)
     commands = parser.add_subparsers(dest="command", required=True)
     dump = commands.add_parser("dump", help="print a .hlb file's header")
     dump.add_argument("file")
