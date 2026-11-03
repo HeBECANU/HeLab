@@ -756,7 +756,7 @@ class LiveController:
         action.toggled.connect(self.set_auto_convert)
         # Q~2.2: a folder whose TXY list is one profile Auto-convert doesn't convert with offers that profile.
         offer = cache.auto_convert_offer(path)
-        taken = cache.convert_with.get(FolderCache.key(path))
+        taken = cache.taken_convert_with(path)
         if (shown := offer or taken) is not None:
             tag = file_tag(shown)
             action = menu.addAction(f"Convert with {tag} (this folder reads {tag} only)")

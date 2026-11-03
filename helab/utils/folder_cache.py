@@ -1142,6 +1142,7 @@ class FolderCache(QObject):
         """Set a folder's own TXY list (Q53.2; None follows Settings'), saved in its old form when it is a mode
         (``txy_sources.folder_row``). The job's owner, "" if it couldn't be queued."""
         source, tag = txy_sources.folder_row(entries) if entries else ("", "")
+        self.convert_with.pop(self.key(path), None)  # (Live's offer was for the list it replaces, TP-7.)
         return self.set_folder_choice(path, source=source, tag=tag, owner=owner)
 
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
@@ -1533,7 +1534,20 @@ class FolderCache(QObject):
     def auto_convert_profile(self, path: str) -> DetectorProfile:
         """The profile Live's Auto-convert converts ``path`` with: the one its Live line's offer set this session
         (``convert_with``, Q~2.2), else Settings' conversion profile. Memory only."""
-        return self.convert_with.get(self.key(path)) or self.convert_profile()
+        return self.taken_convert_with(path) or self.convert_profile()
+
+    def taken_convert_with(self, path: str) -> DetectorProfile | None:
+        """Live's offer as taken for ``path`` this session, while the folder's list is still that one profile
+        (TP-7: a list changed since drops it). Memory only."""
+        from helab.convert.profile import file_tag
+        key = self.key(path)
+        chosen = self.convert_with.get(key)
+        if chosen is None:
+            return None
+        if txy_sources.resolve(self.folder_list(path), self.convert_profile_tag()) != (file_tag(chosen),):
+            del self.convert_with[key]
+            return None
+        return chosen
 
     def auto_convert_offer(self, path: str) -> DetectorProfile | None:
         """The profile Live's line offers to convert ``path`` with (Q~2.2): its TXY list's one entry, when that

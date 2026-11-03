@@ -419,6 +419,16 @@ def test_a_one_entry_folder_offers_its_profile_to_auto_convert(monkeypatch: pyte
         cache.set_convert_with(path, None)
         cache.remember_choices(path, {"source": "m23v1>m19v1", "tag": "", "source_set_at": 3.0})
         assert cache.auto_convert_offer(path) is None
+        # TP-7: a taken offer holds only while the list is still that one profile.
+        cache.remember_choices(path, {"source": "helab-only", "tag": M23, "source_set_at": 4.0})
+        cache.set_convert_with(path, offer)
+        assert cache.taken_convert_with(path) is offer
+        cache.remember_choices(path, {"source": "m19v1>External", "tag": "", "source_set_at": 5.0})  # (Elsewhere.)
+        assert cache.taken_convert_with(path) is None and cache.auto_convert_profile(path).name == "matlab-2019"
+        cache.remember_choices(path, {"source": "helab-only", "tag": M23, "source_set_at": 6.0})
+        cache.set_convert_with(path, offer)
+        cache.set_folder_list(path, (M19, EXTERNAL))  # (Here: dropped at once.)
+        assert path not in cache.convert_with
     finally:
         service.shutdown()
 
