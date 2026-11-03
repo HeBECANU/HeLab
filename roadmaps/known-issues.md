@@ -121,6 +121,15 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots` reran once on
+  Windows CI 41561765280 (Tests 3/3, job 125673863803, `agent/v4-switch-on` `23134c0`, 2026-11-03):
+  `assert took < 5.0` failed at 5.52 s (the load with the converted-TXY index held by another writer, which must
+  not wait out the index's 10 s busy timeout); passed on rerun. The 5 s bound has little room on a busy Windows
+  runner, or part of the load waits on the held index; unchecked which.
+- [ ] `test_convert_helab.py::test_watch_converts_new_shots_and_stops_on_ctrl_c` reran once on macOS CI
+  41561765280 (Converter backends, job 125673863875, `23134c0`): `helab convert --watch` ended with -2 (killed
+  by the SIGINT) instead of 0 ("Stopped"); passed on rerun. The SIGINT reached the process when Python's default
+  handler wasn't the converter's (before it was set, or after it was reset); unchecked.
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
