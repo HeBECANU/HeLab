@@ -60,6 +60,23 @@ Worker: Claude (Opus 5.5), floor TXY Priority, branch `agent/txy-priority` from 
   - The two new dialogs are in `tests/test_accessible_names.py`'s walk.
 - **CI:** run **41583803573** on `64d08c8`, green on macOS, Windows and Ubuntu: all 9 Tests jobs and 3 Converter backends jobs. I read every job's whole log (downloaded through the API): **no RERUN** in any.
 
+## Review fixes (Sieve's [review.md](review.md), 10 findings)
+
+One commit each, every one with a test. TP-1 and TP-3 were checked to fail without their fix.
+
+| Finding | Commit | Fix |
+|---|---|---|
+| TP-1 (High) | `35a7007` | The helper's folder-row step resolves tags from what the app resolved and sent (`helab_txy.tag_lookup`: the mode's profile, the entries, `known`, `conversion`, then the built-ins). A user-profile row stays that profile, as a mode and as a list. |
+| TP-2 (Medium) | `93ecebd` | `FolderCache._profile_for_tag` is memory only. The user's profiles are read once on a request's path (`with_txy` → `read_user_profiles`), or handed over by Settings' Save (`set_user_profiles`, no read). A tooltip never reads the profile folder. |
+| TP-3 (Medium) | `8f250df` | Tests of `live_check` and `save_held` under `m23v1 › m19v1`. They **found a bug**: a shot held from a fallback External, which an own entry then had, stopped Live and the save with "changed". Live now reads it again (as A39.2's switch); `save_held` composes with `reclaim=False`. |
+| TP-4 (Low) | `b6b2a84` | `converts_over_matlab` for a list matches `find_list`: External blocks, except with `CONVERT_OVER_MATLAB`. |
+| TP-5 (Low) | `b0c8741` | A conversion of another profile is never joined. `FolderCache.converting_with` and `convert` refuse; Live's tick waits; Convert this folder… says which profile is converting. |
+| TP-6 (Low) | `f9d0f28` | design.md §2: the modes' fallback across versions (v0.0.7a1's quick check, pre-Q~2 data). A test pins both. No code change; for Tony under Q~6. |
+| TP-7 (Low) | `aa39796` | Live's "Convert with <tag>" holds only while the folder reads that one profile (`taken_convert_with`); `set_folder_list` drops it. |
+| TP-8 (Low) | `66cde23` | A list that resolves to fewer entries says so: "Conversion (m19v1) › m19v1 (reads as m19v1 only)". The behaviour choice is **Q~9**. |
+| TP-9 (Low) | `962838c` | No silent refusals. While a converter question is open, the items are disabled with the reason; beside becoming unavailable while the dialog is open gets a message. |
+| TP-10 (Nit) | `70b6f27` | The summaries follow the conversion profile picked in Settings, show Folder details' "Conversion (tag)", and refresh the plot row when its folder's list changes. |
+
 ## What changed, by area (for the Reviewer)
 
 ### Model (`helab/utils/txy_sources.py`)
@@ -179,6 +196,21 @@ All were OK'd by CoCo:
   change).
 - **Q~8** Settings stores a mode with a pinned tag as `helab-only@m23v1` (the `choice_text` form), since the
   `txy_source` setting has no tag of its own. v0.0.7a1 reads it as its default, HeLab priority. Proposed: keep.
+- **Q~9** (review TP-8) `[Conversion, m19v1]` with conversion m19v1 resolves to `m19v1` alone: a one-entry list,
+  which never falls back. A saved `[Conversion, m23v1]` turns into one entry if the conversion profile becomes
+  m23v1. Built: the summaries say "(reads as m19v1 only)". The alternative is to decide fallback on the list as
+  saved (two entries or more), which needs the payload to say so. Proposed: keep as built (identity follows what
+  is read).
+- **Q~6 addendum** (review TP-6, design §2): a HeLab or MATLAB priority dataset may now hold fallback shots of
+  other profiles. v0.0.7a1 may keep such a store-v3 dataset on a quick check until HeLab's folders change or a
+  full check. This build keeps data saved before Q~2 on a quick check until a change. Nothing is mislabelled.
+
+## Known issues (for Ground to file)
+
+- `tests/test_converter_tab.py::test_the_cache_tab_shows_and_clears_converted_txy` failed all 6 tries in one
+  `-n 4` run of about 750 tests (after `99000a5`). It passed alone, in its file, and in every run since (two
+  full suites and CI). The cause is not found. File it in known-issues until it is (AGENTS.md: every repeated
+  failure).
 
 ## Follow-ups (A~)
 
@@ -226,10 +258,17 @@ All were OK'd by CoCo:
   - `DatasetView.fallback`, and `describe`'s fallback text.
 - **`settings.md`:** the `txy_source` row's values (mode, `mode@tag`, list text), and Settings › TXY converter's
   "TXY priority".
-- **`live.md`:** Live reads with its folder's list; Auto-convert converts with `auto_convert_profile` (Settings',
-  or the one-entry list's after the offer, Q~2.2).
-- **`io-and-browsing.md`:** loads, Live checks and saves compose with `find_list`/`compose_list` (the chain; the
-  held-shot rule).
+- **`live.md`:**
+  - Live reads with its folder's list.
+  - Auto-convert converts with `auto_convert_profile`: Settings' profile, or the one-entry list's after the offer
+    while the list stays so (Q~2.2, TP-7).
+  - It waits while a conversion of another profile runs (TP-5).
+- **`io-and-browsing.md`:**
+  - Loads, Live checks and saves compose with `find_list`/`compose_list` (the chain; the held-shot rule).
+  - A shot held from a fallback stage is reclaimed by an own entry in loads and Live (read again, External
+    feeding the mismatch rule meanwhile), never in Live's save (`reclaim=False`, TP-3).
+  - The helper's store-v4 folder-row step resolves tags with `tag_lookup` (TP-1).
+  - FolderCache's profile lookups are memory only (TP-2).
 - **`app-runtime-and-ui.md`:** right-click › Convert this folder… and File › Convert "<folder>"…, and the TXY
   list editor.
 - **`roadmaps/txy-priority.md`:** status built (Q53.1, Q53.2, Q~1–Q~4), with the open Q~5–Q~8.
