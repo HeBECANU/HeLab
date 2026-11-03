@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from helab.analysis.presets import TxyChoice, check_txy
+from helab.convert.profile import MATLAB_2019, MATLAB_2023_LAB_EDIT
 from helab.io_ops import stores
 from helab.io_ops.admin import cache_admin
 from helab.io_ops.loading import load
@@ -21,7 +22,7 @@ from helab.utils import txy_sources
 from helab.utils.folder_cache import store_options
 from helab.utils.txy_sources import CONVERSION, EXTERNAL
 
-from test_txy_priority import H19, H23, M19, M23, MATLAB_2019, MATLAB_2023_LAB_EDIT, converted, mixed_folder
+from test_txy_priority import H19, H23, M19, M23, converted, mixed_folder
 
 EXTRAS = ("list", "tab", "fallback", "known", "conversion", "key_asked")
 
@@ -31,10 +32,15 @@ def run(path: Path, tmp_path: Path, payload: dict[str, Any]) -> tuple[dict[str, 
     output = tmp_path / f"artifacts-{time.monotonic_ns()}"
     output.mkdir()
     sent: list[dict[str, Any]] = []
-    load(str(path), str(output), sent.append, payload["cache"], txy=payload["txy"],
+    load(str(path), str(output), sent.append, payload["cache"], txy=payload["txy"],  # type: ignore[arg-type]
          no_cache=bool(payload.get("no_cache")))
     loaded = next(event for event in sent if event["kind"] == "loaded")
     return loaded, {event["shot"]: np.load(event["artifact"]) for event in sent if event["kind"] == "shot"}
+
+
+def strip(txy: dict[str, Any]) -> dict[str, Any]:
+    """A load's options without what only lists and the tab add (the mode's own fields compared)."""
+    return {key: item for key, item in txy.items() if key not in EXTRAS}
 
 
 def value(shots: dict[int, Any], shot: int) -> float:
@@ -91,7 +97,6 @@ def test_a_session_under_priority_lists(monkeypatch: pytest.MonkeyPatch, tmp_pat
         for mode in txy_sources.SOURCES:
             as_list = cache.with_txy(path, {"cache": options, "txy": {"list": list(txy_sources.list_of(mode))}})
             as_mode = cache.with_txy(path, {"cache": options, "txy": {"source": mode}})
-            strip = (lambda txy: {key: item for key, item in txy.items() if key not in EXTRAS})
             assert strip(as_list["txy"]) == strip(as_mode["txy"]), mode
             assert txy_sources.identity_source(as_list["txy"]["source"]) == txy_sources.identity_source(mode)
         # An old preset (before Q53.2: a mode, a profile's name and tag) still opens, as that mode.
