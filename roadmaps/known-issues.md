@@ -327,7 +327,8 @@ How to use it:
 - [ ] `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
   ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
-  run on Ground (Quick Fixes 8, 2026-11-01, Rivet's handoff).
+  run on Ground (Quick Fixes 8, 2026-11-01, Rivet's handoff). Again on Ubuntu: Ground CI 41567847672 (Tests 1/3,
+  job 125693660872, `5878bd2`, 2026-11-03), the same `'completed' == 'cancelled'`, passed on rerun.
 - [ ] `test_analysis_gui.py::test_scatter_from_the_panel` (a Dash/web-view plot) reran in local
   full runs on 2026-10-20 (`dld-d7` and `refactor-prep` handoffs); it passed on retry and alone.
   Cause unknown (audit #16, 2026-10-28).
