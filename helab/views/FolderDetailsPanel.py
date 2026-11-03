@@ -451,7 +451,7 @@ class FolderDetailsPanel(QScrollArea):
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
 
     @staticmethod
-    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any]) -> tuple[str, str]:
+    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any], conversion_tag: str = "") -> tuple[str, str]:
         """The TXY line with the folder's own choices (store-v4, Q45.1, Q45.2), when it has any: its TXY source
         and tag, and its cache policy unless it follows Settings › Cache's."""
         from helab.views.CacheTab import POLICY_LABELS
@@ -460,7 +460,7 @@ class FolderDetailsPanel(QScrollArea):
         entries = txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
         if entries is not None:
             # (Q53.2: its list in short, "m23v1 › Conversion › External".)
-            parts.append(f"this folder: {txy_sources.summary(entries)}")
+            parts.append(f"this folder: {txy_sources.summary(entries, conversion_tag)}")
             lines.append("This folder's own TXY priority (right-click › TXY for this folder…), instead of "
                          "Settings': each shot from the first entry with a usable TXY.")
         policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
@@ -492,7 +492,8 @@ class FolderDetailsPanel(QScrollArea):
             rows["files"] = (files, "Counts from when this data was loaded")
             rows["txy"] = FolderDetailsPanel._with_choices(
                 FolderDetailsPanel._txy_row(meta),
-                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {})
+                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {},
+                explorer.model.cache.convert_profile_tag())
         rows["data"] = (f"{plural(number('rows'), 'data row')} · {fnum(number('bytes')).strip()}B in RAM",
                         "Rows (t, x, y) across the loaded TXY files, and the memory their arrays use")
         loaded_at = meta.get("loaded_at")

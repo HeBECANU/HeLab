@@ -225,6 +225,8 @@ class ConverterTab(QWidget):
         self.source_label = QLabel("")
         self.source_button = QPushButton("Edit…")
         self.source_button.clicked.connect(self.edit_txy_list)
+        # (The summary names the conversion profile picked above, before Save too: TP-10.)
+        self.profile_combo.currentIndexChanged.connect(self._profile_picked)
         tip = ("Which TXY a folder's tab and Live load, in order: each shot takes the first entry with a usable TXY "
                "(External: the MATLAB converter's d_txy_forc; Conversion profile: the one above; or a profile's "
                "d_txy_helab_<tag>). A change applies when a folder loads again (Refresh, or selecting it again): "
@@ -287,6 +289,9 @@ class ConverterTab(QWidget):
     def set_txy_entries(self, entries: txy_sources.Entries) -> None:
         self.txy_entries = tuple(entries)
         self.source_label.setText(list_summary(self.txy_entries, file_tag(self.chosen_profile())))
+
+    def _profile_picked(self, _index: int) -> None:
+        self.set_txy_entries(self.txy_entries)
 
     def profile_names(self) -> dict[str, str]:
         """Every profile's tag → name, built-ins first, as the list editor offers them."""

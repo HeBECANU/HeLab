@@ -234,6 +234,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._reload_constants: Optional[Mapping[str, Mapping[str, float]]] = None
         if self.constant_keys:
             self._cache().constantsChanged.connect(self._constants_changed)
+        # The folder's own TXY list as the row's "As the folder's tab (…)" names it (TP-10).
+        self._cache().folderPrefsChanged.connect(self._folder_prefs_changed)
         # Presets (helab/views/plots/presets.py): the settings page's Presets row, and the script
         # preset last applied (its name and when it was saved), which an arrangement records.
         self.presets: Optional[PresetBar] = None
@@ -1277,6 +1279,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.follow.pending = view
         self._submit(view, one_off=True)
 
+    def _folder_prefs_changed(self, path: str) -> None:
+        """A folder's own choices changed: the row names the tab's list afresh when it is this plot's folder."""
+        if FolderCache.key(path) == FolderCache.key(self.path):
+            self._show_txy()
+
     def _show_txy(self) -> None:
         if self.txy_row is None or sip.isdeleted(self.txy_row):
             return
@@ -1746,6 +1753,10 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 self._cache().constantsChanged.disconnect(self._constants_changed)
             except TypeError:
                 pass
+        try:
+            self._cache().folderPrefsChanged.disconnect(self._folder_prefs_changed)
+        except TypeError:
+            pass
         if self.budget is not None:
             self.budget.remove(self)
         try:

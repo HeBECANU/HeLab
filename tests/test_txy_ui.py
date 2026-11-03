@@ -312,6 +312,8 @@ def test_folder_details_names_a_folders_own_choices() -> None:
     assert "this folder: m19v1" in text and "cache: TXY only (no raw)" in text
     text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""})
     assert text.endswith("this folder: m23v1 › Conversion › External")
+    text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""}, "m19v1")
+    assert text.endswith("this folder: m23v1 › Conversion (m19v1) › External")  # (As Settings and plots say, TP-10.)
     assert "right-click › TXY for this folder…" in tip
 
 

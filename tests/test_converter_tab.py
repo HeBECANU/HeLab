@@ -112,7 +112,10 @@ def test_saving_picks_the_profile_backend_and_output(qtbot: QtBot, tmp_path: Pat
         tab.output_combo.setCurrentIndex(tab.output_combo.findData("temp"))
         # Tabs and Live read helab-priority until set otherwise (Q18.2).
         assert tab.txy_entries == ("Conversion", "External") and cache.tab_source() == "helab-priority"
-        assert tab.source_label.text() == "Conversion (m19v1) › External"
+        tab.profile_combo.setCurrentIndex(tab.profile_combo.findData("matlab-2023-lab-edit"))
+        assert tab.source_label.text() == "Conversion (m23v1) › External"  # (Before Save too, TP-10.)
+        tab.profile_combo.setCurrentIndex(tab.profile_combo.findData("mine"))
+        assert tab.source_label.text().startswith("Conversion (u") and tab.source_label.text().endswith("› External")
         # Edit… (the list editor answered here, Q53.2): a mode's list is saved as the mode.
         tab.ask_list = lambda *args: (True, ("External", "Conversion"))
         tab.edit_txy_list()
@@ -484,6 +487,13 @@ def test_a_plot_loads_its_own_source_and_goes_back_to_the_tabs(qtbot: QtBot, mon
         assert len(ran) == before
         # Back to the tab's data, also after Settings changed the tabs' source (Avocet's review): until the
         # folder loads again, the data the tab shows is still the tab's.
+        # TP-10: the row follows a change of its folder's own list (named in "As the folder's tab (…)").
+        shown: list[str] = []
+        setattr(instance, "_show_txy", lambda: shown.append("shown"))
+        cache.folderPrefsChanged.emit("/elsewhere")
+        cache.folderPrefsChanged.emit(path)
+        assert shown == ["shown"]
+        delattr(instance, "_show_txy")  # (Its own method again.)
         cache.set_tab_source("matlab-priority")
         instance.set_txy_source("")
         assert instance.on_tab_choice() and ran[-1].identity.source == "" and ran[-1].shots.keys() == {1}
