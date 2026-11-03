@@ -13,6 +13,11 @@ repo_url: !ENV [HELAB_DOCS_REPO_URL, "https://github.com/TonyXTYan/HeLab"]
 repo_name: HeLab
 edit_uri: ""
 docs_dir: docs
+# {repo_url} in a page is repo_url above (docs/hooks/repo_links.py), so links follow the building repo.
+hooks:
+  - docs/hooks/repo_links.py
+exclude_docs: |
+  hooks/
 site_dir: site
 strict: true
 

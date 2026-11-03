@@ -97,7 +97,10 @@ jobs:
       - name: Build the user manual (mkdocs --strict)
         env:
           HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: mkdocs build --strict -d "$RUNNER_TEMP/site"
+        run: |
+          mkdocs build --strict -d "$RUNNER_TEMP/site"
+          # Its links follow the repository it is built from (docs/hooks/repo_links.py), not a fixed one.
+          grep -q "$HELAB_DOCS_REPO_URL/releases" "$RUNNER_TEMP/site/getting-started/install/index.html"
 
   # Required coverage runs to completion on every OS, even after a failure.
   required-tests:

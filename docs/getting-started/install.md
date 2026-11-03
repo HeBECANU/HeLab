@@ -23,7 +23,7 @@ installs Python by itself: you don't need a system Python, conda or admin rights
 2. Clone HeLab and create its Python 3.13 environment:
 
     ```bash
-    git clone --recurse-submodules https://github.com/HeBECANU/HeLab.git
+    git clone --recurse-submodules {repo_url}.git
     cd HeLab
     uv python install 3.13
     uv venv --seed --python 3.13 venv
@@ -53,7 +53,7 @@ Next time, activate `venv` and run `helab`, or run `venv/bin/helab` (macOS and L
 
 ## Or download a release build
 
-Each release on the [releases page](https://github.com/TonyXTYan/HeLab/releases) has a
+Each release on the [releases page]({repo_url}/releases) has a
 ready-built HeLab for macOS (`HeLab.app`), Windows and Linux. Download the archive for your
 system, unpack it and open HeLab. You don't need Python for a release build.
 

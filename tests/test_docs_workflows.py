@@ -41,3 +41,13 @@ def test_a_release_of_a_commit_without_the_manual_skips() -> None:
     steps = text.split("- name: ")[1:]
     after_check = [step for step in steps if not step.startswith(("Checkout", "Check this commit"))]
     assert after_check and all("if: steps.manual.outputs.present == 'true'" in step for step in after_check)
+
+
+def test_the_pages_name_no_fixed_repository() -> None:
+    """Each copy of the repo publishes its own site (Q54.2): a page links its repository through
+    ``{repo_url}`` (docs/hooks/repo_links.py), never a fixed github.com/<owner>/HeLab."""
+    docs = WORKFLOWS.parents[1] / "docs"
+    pages = [path for path in docs.rglob("*.md") if ".ai-generated" not in path.parts]
+    assert pages
+    for path in pages:
+        assert "github.com/" not in path.read_text(encoding="utf-8").replace("github.com/{", ""), path
