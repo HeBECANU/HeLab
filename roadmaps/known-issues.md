@@ -124,6 +124,11 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] `test_script_probe.py::test_without_the_offscreen_plugin_the_probe_runs_without_an_application` reran once
+  on Ubuntu, Ground CI 41640562938 (Tests 2/3, job 125932836198, `72ab47a`, the Follow-ups landing): it expected the
+  probe to crash, but the folder read "didn't load: its import didn't finish within 2 s", so under CI load the probe
+  hadn't started within the test's 2 s limit; passed on rerun. Being fixed on the Follow-ups floor (a limit the
+  probe's start-up can't race).
 - [ ] `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second` reran once on Windows,
   Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
   quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
