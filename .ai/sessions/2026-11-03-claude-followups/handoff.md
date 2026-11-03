@@ -15,6 +15,8 @@ Design for Q49.3 (b): [design.md](design.md) (CoCo's ◆ answers below). Zensica
 | `563bf40` | Q56.1: the Zensical check (◆; no switch: Tony chose (b)) |
 | `c942613` | The bundled manual's search works offline: iframe-worker's shim vendored (`docs/js/`), `docs/publish/check_offline.py` in the Docs job |
 | `2eac45a` | CI: `ci-build.yml` runs the packaged app's script probe on each OS |
+| `56f594b` | Review FU-1, FU-2: a probe that answers `done` but doesn't exit no longer holds its round (the QApplication kept until `os._exit`; a 5 s deadline after `done`); tests for the paths Assay listed |
+| `dd8005a` | Review nit: a failing `mike list` stops the deploy |
 
 **Paths beyond the brief's list, each approved by CoCo:** `tests/test_headless_imports.py` (`helab.scripts.probe`
 in `PURE`, P5) and `.github/workflows/ci-build.yml` (the probe step only, 2026-11-03). Also touched, as "their
@@ -26,7 +28,8 @@ offscreen plugin are collected without it).
 ## Checks
 
 Full suite (macOS, M4 Max), `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`:
-**9275 passed, 673 skipped, 2 warnings in 160 s at `2eac45a`; no RERUN** (the warnings: pyqtgraph's NumPy
+**9283 passed, 673 skipped, 2 warnings in 196 s at `dd8005a` (the review fixes); no RERUN**. Before them:
+9275 passed at `2eac45a`, no RERUN (the warnings: pyqtgraph's NumPy
 `arr.shape` DeprecationWarning, known). Earlier runs: 9262 at `c114e2c`, 9268 at `fdd895c`, 9272 at `53ec411`, all
 without a RERUN. One run during step 3 had **5 RERUNs then FAILED** for
 `tests/test_script_system.py::test_load_scripts_adds_a_working_group` ("rerun reasons": its group selector still
@@ -107,13 +110,20 @@ probe in `PURE`; and the tooltip says the folder was checked in a separate proce
   scripts gone from the panel and its plots on their old code (`keep_script`), stamped so a save tests it again.
   Folders removed from the list while tested are dropped. Bundled analyses are never probed. `PROBING` (module
   flag) is the tests' seam.
+- **After `done`** (review FU-1, `56f594b`): the probe keeps its QApplication referenced until `os._exit(0)`
+  (deleting it waited for the global `QThreadPool`, so a script's endless pool task held the probe open), and
+  `FolderProbes` kills a probe still running `PROBE_EXIT_SECONDS` (5 s) after `done`, with a warning, and passes
+  its folder (it finished): no exit path can hold a round. The stderr tail is read from the file's end.
 - **The loading marker** stays as it was: the backstop for what the probe can't catch (a file changed between the
   test and the import, code that acts differently in the GUI process, a probe that couldn't start).
 - **The double import**: `docs/how-to/write-a-script.md` says top-level code runs twice.
 - Tests: `tests/test_script_probe.py` (the probe's answers with a raising, exiting and widget-making file and a
   missing folder; the frozen dispatch through `main.py`, no GUI module imported; a hang at start, its probe killed
   and reaped; a crash from Load Scripts…; `input()` on reload with a second reload queued, then fixed and adopted;
-  a probe that can't start; the `ci-build.yml` step).
+  a probe that can't start; the `ci-build.yml` step); and, after the review (FU-1, FU-2): a script leaving a
+  `QThreadPool` task running (fails with the old `del application`), a probe answering `done` then sleeping,
+  the offscreen fallback, the start limit, a crash by SIGKILL (POSIX), `stop()` at quit and auto-reload with
+  probing on.
 
 ## Q56.3: the site's versions
 
@@ -162,11 +172,24 @@ and no star count.
   → "with a line naming `--output beside-forced`, which writes beside without asking and still logs the warning;
   `--yes` is an argparse error naming it (Q48.3)". The Live section: a read stopped early also notifies once per
   file (`READ_STOPPED_RAW`, Q48.2).
+- **`.ai/architecture/settings.md:33`**: after "The loading marker `<app folder>/scripts-loading.json` is a file,
+  not a setting." add "Before each folder load, the folder is test-imported in a separate process (Q49.3 (b),
+  [plots-and-scripts](plots-and-scripts.md#script-system)); the marker is the backstop for what that can't
+  catch."
+- **`roadmaps/known-issues.md:29-35`** ("A user script that blocks at import freezes HeLab once"): Q49.3 is
+  decided and built. Narrow the item to what the probe can't catch: "A user script that blocks only in HeLab's
+  own process (it acts on the GUI's `QApplication` or widgets, deadlocks against the GUI thread's import lock,
+  or changed between its test import and the import) can still freeze HeLab once; the test import in a separate
+  process (Q49.3 (b), `fdd895c`) skips folders that hang or crash at import, and the loading marker makes the
+  next start skip the folders." Keep "a slow cloud folder the mount table calls local is still loaded" (now with
+  the probe first, so a placeholder that stalls the import meets the 10 s limit).
 - **`.ai/architecture/testing.md`**: `script_tree.PROBING` (off in `test_live_scripts.py`, `no_probe`; on in
   `test_script_probe.py`, with `PROBE_SECONDS` 2 s); end-to-end panel tests wait for the asynchronous load.
 - **`roadmaps/known-issues.md`**: the `test_watch_converts_new_shots_and_stops_on_ctrl_c` item gains CI
   41622979011 (Ubuntu Converter backends, `fdd895c`, `assert -2 == 0`, passed on rerun).
-- **`.ai/DECISIONS_TODO.md`**: Q48.2, Q48.3, Q49.3 (b), Q56.3 built; Q56.1 decided (b) (A~1).
+- **`.ai/DECISIONS_TODO.md`**: Q48.2, Q48.3, Q49.3 (b), Q56.3 built; Q56.1 decided (b) (A~1); Q~3 (Assay's
+  FU-3) for Tony.
+- **`.ai/architecture/plots-and-scripts.md`**, also: `ScriptsManager.skip_folder`, `PROBE_EXIT_SECONDS`.
 
 ## Follow-ups (provisional IDs)
 
@@ -190,9 +213,12 @@ and no star count.
   process, so a script that hangs or crashes at import can't stop HeLab." **Proposed:** as built.
 - **Q~2** `PROBE_SECONDS` a constant (10 s, from the probe's start of the import) or a Settings › General row.
   **Proposed:** the constant until someone's import is legitimately slower.
-- **Q~3** The `pre-release` alias stays on the newest pre-release even when a newer stable release exists (e.g.
-  0.0.8a2 after 0.0.8). **Proposed:** keep (literal "newest alpha or beta"); alternative: drop the alias once a
-  stable release is newer.
+- **Q~3** (= Assay's FU-3; CoCo is asking Tony, nothing built) The `pre-release` alias stays on the newest
+  pre-release even when a newer stable release exists: after 0.0.8a1, 0.0.8b1, 0.0.8 the menu reads `0.0.8
+  [latest]`, `0.0.8b1 [pre-release]` until 0.0.9a1. Options: (a) keep (the brief's "newest alpha or beta");
+  (b) a stable release newer than the alias's target removes it (or points it at `latest`), and the next
+  pre-release brings it back. Assay proposes (b); I'd take (b) too, since "pre-release" on a version older than
+  the stable one reads as a preview of something newer. Either is a few lines in `site_versions.plan`.
 - **M~1** Windows lab PC: Load Scripts… of a folder, Reload, and a script with `input()` at import: the panel
   shows "Reload (checking)" then the skip line; no console window flashes; HeLab stays responsive.
 - **M~2** Help › User manual with the network off on a packaged build: the bundled copy opens and its search finds
