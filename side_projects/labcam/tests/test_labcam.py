@@ -218,6 +218,49 @@ def test_hand_in_front_holds_the_lock(tmp_path: Path, monkeypatch: pytest.Monkey
     assert eng.locks["He4"].state == he4 and "covered" in eng.locks["He4"].summary
 
 
+def test_lost_is_unknown_while_someone_moves_or_covers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing sign while someone moves (or a box is covered) reads unknown, lost once it's quiet; alignment
+    waits for the room to be quiet."""
+    from unittest import mock
+
+    from labcam import engine
+    from labcam.source import FrameSource
+
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    monkeypatch.setattr(engine, "ANCHORS", tmp_path / "anchors")
+    instruments = {"top": config.Instrument("top", "trace", "Top", config.rect_corners(0, 0, 1, 1), {}),
+                   "people": config.Instrument("people", "motion", "People", config.rect_corners(0, 0, 1, 1), {})}
+    cfg = config.load(HOME / "config.json")
+    cfg.instruments, cfg.locks = instruments, {"L": ["top:flat"]}
+    eng = engine.Engine(cfg, FrameSource(str(tmp_path / "none.jpg")))
+    eng.raw_readings["top"] = Reading("ok", "wavy", {"shape": "wavy"}, 0.9)
+    clock = [time.time()]
+
+    def run(present: str, covered: dict[str, str], times: int = 6) -> str:
+        eng.readings["people"] = Reading("off" if present == "yes" else "ok", "", {"present": present}, 1.0)
+        eng.covered = covered
+        with mock.patch("time.time", lambda: clock[0]):
+            for _ in range(times):
+                eng._update_locks()
+                clock[0] += 0.5
+        return eng.locks["L"].state
+
+    assert run("yes", {}) == "unknown" and "someone is moving" in eng.locks["L"].summary
+    assert run("no", {"top": "movement in front"}) == "unknown" and "covered: Top" in eng.locks["L"].summary
+    assert run("no", {}) == "lost"
+    assert run("yes", {}) == "unknown"  # a loss seen before doesn't stay while someone moves
+
+    frame = np.zeros((40, 40, 3), np.uint8)
+    with mock.patch.object(eng.aligner, "update") as update:
+        eng.readings["people"] = Reading("off", "", {"present": "yes"}, 1.0)
+        eng._last_align = 0.0
+        eng._analyse(frame, time.time())
+        assert not update.called and eng.align_paused
+        eng.readings["people"] = Reading("ok", "", {"present": "no"}, 1.0)
+        eng._analyse(frame, time.time())
+        assert update.called and not eng.align_paused
+
+
 def test_history_thins_rows_and_reads_gzip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import gzip
 

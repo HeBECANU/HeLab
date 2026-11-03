@@ -90,6 +90,7 @@ class Engine:
         self.readings: dict[str, Reading] = {}
         self.raw_readings: dict[str, Reading] = {}  # before the status debounce; locks read these
         self.covered: dict[str, str] = {}  # instrument → why it may be hidden this analysis
+        self.align_paused = ""  # why alignment is paused now ("" when it runs)
         self.surround_change: dict[str, float] = {}
         self._usual_rings: dict[str, Any] = {}
         self._covered_since: dict[str, float] = {}
@@ -363,13 +364,18 @@ class Engine:
 
     def _analyse(self, frame: Image, now: float) -> None:
         t0 = time.monotonic()
-        if now - self._last_align >= ALIGN_EVERY:
+        # Not while someone is moving (Tony, 2026-11-03): a person in view brings matches of their own, and a
+        # box would follow them. Checked again at the next analysis, so it runs as soon as the room is quiet.
+        self.align_paused = "someone is moving" if self._someone_moving() else ""
+        if now - self._last_align >= ALIGN_EVERY and not self.align_paused:
             self._last_align = now
             self.aligner.update(frame)
             with self.config.lock:
-                # The movement detector's area is most of the view: it follows the frame's transform.
+                # The movement detector's area is most of the view: it follows the frame's transform. A box
+                # covered at the last analysis keeps its transform: what's around it is hidden.
                 moved = [name for name, inst in self.config.instruments.items()
-                         if inst.kind != "motion" and self.aligner.refine(name, inst.corners)]
+                         if inst.kind != "motion" and name not in self.covered
+                         and self.aligner.refine(name, inst.corners)]
             if self.aligner.moved:
                 moved = list(self.config.instruments)
             for name in moved:  # the usual surroundings were seen from the old place
@@ -428,6 +434,10 @@ class Engine:
             threading.Thread(target=self._run_autofit, args=(frame, False), name="labcam-autofit", daemon=True).start()
         self._update_locks()
         self.recorder.record(now, self.config.instruments, self.readings, self.locks)
+
+    def _someone_moving(self) -> bool:
+        people = self.readings.get("people")
+        return people is not None and people.values.get("present") == "yes"
 
     def _cover(self, frame: Image, name: str) -> str:
         """Why the instrument may be hidden right now ("" if it isn't): movement over its region, or its
@@ -613,14 +623,22 @@ class Engine:
         `locked` only after every sign has held for LOCK_AFTER seconds, so a lock signal passing through a
         flat moment isn't taken for a lock."""
         now = time.time()
+        moving = self._someone_moving()
         for laser, specs in self.config.locks.items():
             lock = locks_module.evaluate(specs, self.config.instruments, self.raw_readings)
             previous = self.locks.get(laser)
             hidden = [self.config.instruments[s.split(":")[0]].label for s in specs if s.split(":")[0] in self.covered]
-            if lock.state == "unknown" and hidden and previous is not None and previous.state != "unknown":
-                # Someone in front: keep what was last seen rather than call it lost or unknown.
-                lock = locks_module.Lock(previous.state, round(previous.confidence * 0.5, 2), lock.signs,
-                                         held=f"{previous.state} before; now covered: {', '.join(hidden)}")
+            if lock.state == "unknown" and hidden and previous is not None and previous.state == "locked":
+                # Someone in front: keep a lock last seen rather than call it unknown.
+                lock = locks_module.Lock("locked", round(previous.confidence * 0.5, 2), lock.signs,
+                                         held=f"locked before; now covered: {', '.join(hidden)}")
+            elif lock.state == "lost" and (hidden or moving):
+                # A failing sign while someone is moving or an instrument is covered may be them, not the laser
+                # (Tony, 2026-11-03): unknown, and lost only once the room is quiet and nothing is covered.
+                why = "; ".join(s.why for s in lock.signs if s.holds is False)
+                lock = locks_module.Lock("unknown", 0.0, lock.signs, held=(
+                    f"lost? can't tell while {'covered: ' + ', '.join(hidden) if hidden else 'someone is moving'}"
+                    f" ({why})"))
             streak_state, streak, since = self._lock_streaks.get(laser, ("", 0, now))
             if lock.state == streak_state:
                 streak += 1
@@ -657,6 +675,7 @@ class Engine:
                 "shift": [round(v, 1) for v in alignment.shift],
                 "angle": round(alignment.angle, 2),
                 "note": alignment.note,
+                "paused": self.align_paused,
             },
             "covered": self.covered,
             "surround_change": self.surround_change,

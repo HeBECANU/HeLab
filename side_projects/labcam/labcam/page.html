@@ -3,7 +3,7 @@
 <title>Lab camera</title>
 <script src="plotly.min.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#111;--fg:#ddd;--dim:#888;--ok:#50c850;--off:#ffa028;--unknown:#aaa;--line:#333}
+:root{color-scheme:dark;--bg:#111;--fg:#ddd;--dim:#888;--ok:#50c850;--off:#ffa028;--unknown:#aaa;--people:#288cff;--line:#333}
 body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.35 -apple-system,system-ui,sans-serif}
 #view{position:relative;max-width:1280px;margin:0 auto}
 details{border-top:1px solid var(--line);margin:4px 0}
@@ -20,7 +20,7 @@ button:hover{border-color:#777}
 table{border-collapse:collapse;width:100%}
 td,th{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
 th{color:var(--dim);font-weight:normal}
-.ok{color:var(--ok)}.off{color:var(--off)}.unknown{color:var(--unknown)}
+.ok{color:var(--ok)}.off{color:var(--off)}.unknown{color:var(--unknown)}.people{color:var(--people)}
 .values{color:var(--dim);font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
 #log{height:260px;overflow:auto;background:#000;border:1px solid var(--line);padding:4px;font:12px ui-monospace,monospace;white-space:pre-wrap}
 .WARNING{color:var(--off)}.ERROR,.CRITICAL{color:#f55}.DEBUG{color:#777}
@@ -234,7 +234,7 @@ async function refresh() {
     $("src").textContent = src.connected ? `connected, frame ${src.last_frame_age ?? "–"} s old` : `not connected: ${src.error}`;
     $("src").className = src.connected ? "ok" : "off";
     const a = s.alignment;
-    $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}` : a.note;
+    $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}${a.paused ? " · paused: " + a.paused : ""}` : a.note;
     $("align").className = a.ok ? (a.note.startsWith("camera moved") ? "off" : "ok") : "off";
     if (s.ocr && document.activeElement !== $("ocrfast")) { $("ocrfast").checked = s.ocr.every_check; $("ocrcores").textContent = ` (${s.ocr.workers} cores)`; }
     if (s.power) {
@@ -254,7 +254,7 @@ async function refresh() {
       const details = `${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}`;
       const buttons = sep => `<button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `${sep}<button onclick="snapCurrent('${name}')" title="Snap the box's sides to the screen's edges near them, and preview it before using it">Snap</button>` : ""}`;
       return `<tr class="main"><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
-        <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
+        <td class="${i.kind === "motion" && r.status === "off" ? "people" : r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
         <td>${Math.round((r.confidence || 0) * 100)}%<br><span class="values">${sure10(i.sure_10s).trim()}</span></td>
         <td class="values wide">${details}</td>
         <td class="wide">${buttons("<br>")}</td></tr>
@@ -313,7 +313,7 @@ const PANELS = [
     about: "How far the scope dot moved over the last few seconds, in pixels of the camera frame.<br>" +
       "It counts as moving past a tenth of the screen's width."},
   {title: "People", match: k => k.endsWith(".present"), kind: "bars", range: [0, 1.05],
-    about: "1 when labcam saw someone moving in the room. Readings behind a person are held, not counted as lost."},
+    about: "1 (blue) when labcam saw someone moving in the room. A loss seen then reads unknown, and lost once it's quiet."},
 ];
 let historyDrawn = false, PANEL_ABOUT = {};
 
@@ -369,7 +369,7 @@ function valueTraces(c, panel, axis) {
     const bars = panel.kind === "bars";
     return {
       type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y: c[col], yaxis: axis,
-      marker: bars ? {color: "#ffa028"} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
+      marker: bars ? {color: "#288cff"} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
       line: {width: 1, color: LINE_COLOURS[n % LINE_COLOURS.length]}, connectgaps: false, showlegend: false,
       customdata: c.time.map((_, i) => [status[i] ?? "", shape[i] ? ", " + shape[i] : "",
                                         sure[i] == null ? "" : ` (sure ${Math.round(100 * sure[i])}%)`]),
