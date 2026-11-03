@@ -42,6 +42,12 @@ def view_key(txy_source: str, txy: Mapping[str, Any]) -> tuple[str, str]:
     the HeLab profile asked for (its content hash, else its tag; "" when no HeLab TXY is read)."""
     if not txy_sources.wants_helab(txy_source):
         return txy_sources.identity_source(txy_source), ""
+    if txy_sources.is_list(txy_source):
+        # A list (Q53.2): its text, and its HeLab entries' profiles in order (hash, else tag), as a mode's view is
+        # bound to its one profile's.
+        return txy_source, txy_sources.LIST_SEPARATOR.join(
+            str(item.get("profile_hash") or item.get("tag") or "")
+            for item in txy_sources.payload_entries({**txy, "source": txy_source}) if not item.get("external"))
     return txy_sources.identity_source(txy_source), str(txy.get("profile_hash") or txy.get("profile_tag") or "")
 
 

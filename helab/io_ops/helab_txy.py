@@ -20,11 +20,11 @@ source folder's listing).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import re
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from helab.io_ops.events import ConvertedSummaryField, ConvertedUsageField
 from helab.io_ops.fingerprints import _quick_mtime
@@ -61,6 +61,37 @@ def beside_wanted(name: str, options: Mapping[str, Any]) -> bool:
     from helab.convert.provenance import parse_txy_name
     parsed = parse_txy_name(name)
     return parsed is not None and parsed[0] == str(options.get("profile_tag") or "")
+
+
+def beside_tag(name: str, options: Mapping[str, Any]) -> str | None:
+    """The tag of a source listing's ``d_txy_helab_<tag>_<N>.txt`` when it is one of the profiles a load's
+    entries ask for (Q53.2: a list asks for several), else None."""
+    from helab.convert.provenance import parse_txy_name
+    from helab.utils.txy_sources import payload_entries
+    parsed = parse_txy_name(name)
+    if parsed is None:
+        return None
+    return parsed[0] if any(item.get("tag") == parsed[0] for item in payload_entries(options)) else None
+
+
+Beside = dict[str, dict[int, "os.DirEntry[str]"]]  # tag → shot → a HeLab TXY beside the raw files.
+
+
+def add_beside(beside: Beside, name: str, shot: int, entry: os.DirEntry[str], options: Mapping[str, Any]) -> None:
+    """Keep a listing's HeLab TXY beside the raw files when its tag is one the load asks for."""
+    tag = beside_tag(name, options)
+    if tag is not None:
+        beside.setdefault(tag, {})[shot] = entry
+
+
+def is_beside(beside: Beside, shot: int, filename: str) -> bool:
+    """``filename`` is one of the listing's HeLab TXY beside the raw files (named in the source folder)."""
+    return any(shot in by_shot and by_shot[shot].path == filename for by_shot in beside.values())
+
+
+def beside_any(beside: Beside, shot: int) -> os.DirEntry[str] | None:
+    """A HeLab TXY of ``shot`` beside the raw files, any tag asked for (they are all in the source folder)."""
+    return next((by_shot[shot] for by_shot in beside.values() if shot in by_shot), None)
 
 
 def folders(path: str, options: Mapping[str, Any], key: str) -> list[str]:
@@ -257,7 +288,7 @@ def mark_used(marks: list[list[Any]]) -> list[list[Any]]:
 
 def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot], only: set[int] | None,
             options: Mapping[str, Any], matlab: Mapping[int, Any] | None = None,
-            held: Mapping[int, str] | None = None) -> dict[int, HelabShot]:
+            held: Mapping[int, str] | None = None, over_matlab: bool | None = None) -> dict[int, HelabShot]:
     """Caching v2 stage 3 (store-v4): the shots a load converts on read, by shot: each raw file without a
     current HeLab TXY of the profile asked for (``helab``), among those the source could take (``only``), named
     by its raw file with the raw file's size and mtime (so the settle time and the layer's key are the raw
@@ -265,9 +296,11 @@ def on_read(raw: Mapping[int, os.DirEntry[str]], helab: Mapping[int, HelabShot],
     (``txy_sources.converts_over_matlab``: HeLab only; HeLab priority only with Q50.1's flag), but not one the
     caller holds from HeLab's TXY (``held``: Live's origins; SQ-1, as ``could_take`` keeps them): a shot Live
     converted on read stays HeLab's when MATLAB's TXY of it appears. A raw file that can't be stat'ed is left
-    out."""
+    out. ``over_matlab``: whether ``matlab`` blocks nothing (None: as the source says; ``find_list`` says it per
+    list, Q~1)."""
     from helab.utils import txy_sources
-    over_matlab = txy_sources.converts_over_matlab(str(options.get("source") or ""))
+    if over_matlab is None:
+        over_matlab = txy_sources.converts_over_matlab(str(options.get("source") or ""))
     wanted = str(options.get("profile_hash") or "")
     if not wanted:
         return {}
@@ -312,6 +345,138 @@ def compose(source: str, matlab: Mapping[int, str], helab: Mapping[int, HelabSho
     return chosen
 
 
+@dataclass
+class Found:
+    """What a load, Live check or save finds for its entries (``find_list``, Q53.2), in the list's order:
+    each HeLab entry's current TXY by shot (External's: empty, ``matlab`` has them), the shots converted on
+    read (``on_read``: also in their entry's), and the entry they convert with (-1: none)."""
+    entries: list[dict[str, Any]]
+    by_entry: list[dict[int, HelabShot]]
+    on_read: dict[int, HelabShot] = field(default_factory=dict)
+    converting: int = -1
+
+    def texts(self) -> dict[int, HelabShot]:
+        """Every shot's current HeLab TXY (a file), of the first HeLab entry that has one."""
+        found: dict[int, HelabShot] = {}
+        for index, by_shot in enumerate(self.by_entry):
+            for shot, item in by_shot.items():
+                if index != self.converting or shot not in self.on_read:
+                    found.setdefault(shot, item)
+        return found
+
+    def options(self, index: int, txy: Mapping[str, Any]) -> dict[str, Any]:
+        return entry_options(txy, self.entries[index])
+
+
+def entry_options(txy: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, Any]:
+    """A load's options for one HeLab entry: its profile's hash, tag and description in place of the load's."""
+    return {**txy, "profile_hash": str(item.get("profile_hash") or ""), "profile_tag": str(item.get("tag") or ""),
+            "profile": dict(item.get("profile") or {})}
+
+
+def find_list(path: str, txy: Mapping[str, Any], key: str, beside: Beside, raw: Mapping[int, os.DirEntry[str]],
+              matlab: Mapping[int, Any], trusted: Mapping[int, tuple[int, int, str]] | None = None,
+              held: Mapping[int, str] | None = None,
+              can_convert: Callable[[str], bool] | None = None) -> Found:
+    """Each HeLab entry's current TXY (``find``), in the list's order (``txy_sources.payload_entries``): an
+    entry looks only at shots no earlier entry has a file of (and those held from HeLab's, ``held``), so a check
+    reads no record of a shot an earlier entry wins (MATLAB priority's ``could_take``, generalised). Then, when
+    ``can_convert`` (profile hash → whether this read may convert with it; None: no conversion on read), the
+    raw files to convert on read (Q~1, generalising Q50.1 (a)): only shots no entry has a file of, with the
+    first HeLab entry that can convert; External blocks only when it is in the list, before that entry or
+    without ``CONVERT_OVER_MATLAB``; a shot held from HeLab's stays a candidate (SQ-1)."""
+    from helab.utils import txy_sources
+    entries = txy_sources.payload_entries(txy)
+    by_entry: list[dict[int, HelabShot]] = []
+    covered: set[int] = set()
+    looked: list[set[int] | None] = []
+    for item in entries:
+        only = None if not by_entry else (set(raw) - covered) | set(held or {})
+        looked.append(only)
+        if item.get("external"):
+            by_entry.append({})
+            covered |= set(matlab)
+            continue
+        found = find(path, entry_options(txy, item), key, beside.get(str(item.get("tag") or ""), {}), raw, trusted,
+                     only)
+        by_entry.append(found)
+        covered |= set(found)
+    result = Found(entries, by_entry)
+    if can_convert is None:
+        return result
+    external = next((index for index, item in enumerate(entries) if item.get("external")), None)
+    for index, item in enumerate(entries):
+        if not item.get("external") and item.get("profile_hash") and can_convert(str(item["profile_hash"])):
+            texts = result.texts()
+            over_matlab = external is None or external > index and txy_sources.CONVERT_OVER_MATLAB
+            converted = on_read(raw, texts, looked[index], entry_options(txy, item), matlab, held, over_matlab)
+            result.on_read = converted
+            result.converting = index
+            by_entry[index] = {**converted, **by_entry[index]}
+            break
+    return result
+
+
+def compose_list(found: Found, matlab: Mapping[int, str],
+                 held: Mapping[int, str] | None = None) -> tuple[dict[int, tuple[str, str]], dict[int, HelabShot]]:
+    """Each shot's TXY for a list (Q53.2): the first entry with a TXY for it, shot → (file, origin), and the
+    HeLab shot taken where it is HeLab's. ``held``: the origin of shots the caller holds, kept while that
+    entry is in the list and its TXY is there (``""`` External's; ``helab:<hash>`` the first HeLab entry with
+    that profile's, or the list's one HeLab entry): the four modes' ``choose(held=…)`` exactly."""
+    from helab.utils.txy_sources import helab_origin, is_helab
+    entries, by_entry = found.entries, found.by_entry
+    external = next((index for index, item in enumerate(entries) if item.get("external")), None)
+    helab = [index for index, item in enumerate(entries) if not item.get("external")]
+    chosen: dict[int, tuple[str, str]] = {}
+    shots: dict[int, HelabShot] = {}
+    every = set(matlab) if external is not None else set()
+    for by_shot in by_entry:
+        every |= set(by_shot)
+
+    def has(index: int, shot: int) -> bool:
+        return shot in matlab if index == external else shot in by_entry[index]
+    for shot in sorted(every):
+        pick: int | None = None
+        origin = (held or {}).get(shot)
+        if origin == "" and external is not None and shot in matlab:
+            pick = external
+        elif origin is not None and is_helab(origin):
+            wanted = origin[len("helab:"):]
+            pick = next((index for index in helab if shot in by_entry[index]
+                         and by_entry[index][shot].profile_hash == wanted), None)
+            if pick is None and len(helab) == 1 and has(helab[0], shot):
+                pick = helab[0]
+        if pick is None:
+            pick = next((index for index in range(len(entries)) if has(index, shot)), None)
+        if pick is None:
+            continue
+        if pick == external:
+            chosen[shot] = (matlab[shot], "")
+        else:
+            taken = by_entry[pick][shot]
+            chosen[shot] = (taken.file, helab_origin(taken.profile_hash))
+            shots[shot] = taken
+    return chosen, shots
+
+
+def wanted_key(txy: Mapping[str, Any]) -> list[Any]:
+    """What HeLab TXY a load asks for, as a dataset's record and Live's state keep it: a mode's profile
+    ``[hash, tag]``; a list's ``[[tag, hash], …]`` of its HeLab entries in order (Q53.2)."""
+    from helab.utils import txy_sources
+    if txy_sources.is_list(str(txy.get("source") or "")):
+        return [[str(item.get("tag") or ""), str(item.get("profile_hash") or "")]
+                for item in txy_sources.payload_entries(txy) if not item.get("external")]
+    return [str(txy.get("profile_hash") or ""), str(txy.get("profile_tag") or "")]
+
+
+def saved_wanted(saved: Mapping[str, Any]) -> list[Any]:
+    """``wanted_key`` of a dataset's record or Live's state (a list's ``entries``, else its profile)."""
+    entries = saved.get("entries")
+    if isinstance(entries, list):
+        return [[str(item[0]), str(item[1])] for item in entries if isinstance(item, (list, tuple)) and len(item) == 2]
+    return [str(saved.get("profile_hash", "") or ""), str(saved.get("profile_tag", "") or "")]
+
+
 def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabShot],
            known: Mapping[str, Any] | None, options: Mapping[str, Any], state: list[list[Any]],
            on_read: Any = ()) -> dict[str, Any]:
@@ -328,10 +493,13 @@ def record(source: str, origins: Mapping[int, str], helab: Mapping[int, HelabSho
             names = [str(name) for name in entry.get("names") or [f"{entry.get('name', '?')} v{entry.get('version', '?')}"]]
             entry["names"] = sorted({*names, text})
     used = {origin.split(":", 1)[1] for origin in origins.values()}
+    from helab.utils.txy_sources import is_list
+    listed = is_list(source)  # (A list, Q53.2: its entries say what it asked for; the one-profile fields are "".)
     return {"source": source, "origins": {str(shot): origin for shot, origin in sorted(origins.items())},
             "profiles": {key: value for key, value in profiles.items() if key in used},
-            "profile_hash": str(options.get("profile_hash") or ""),
-            "profile_tag": str(options.get("profile_tag") or ""), "folders": state,
+            "profile_hash": "" if listed else str(options.get("profile_hash") or ""),
+            "profile_tag": "" if listed else str(options.get("profile_tag") or ""), "folders": state,
+            **({"entries": wanted_key({**options, "source": source})} if listed else {}),
             # The root key HeLab's folders were found by (FolderCache sends it back when it knows no root).
             "key": str(options.get("key") or ""),
             **({"on_read": sorted(int(shot) for shot in on_read if int(shot) in origins)} if on_read else {})}
