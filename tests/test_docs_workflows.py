@@ -99,6 +99,7 @@ def test_the_newest_stable_release_is_latest_and_the_front_page() -> None:
     site = _site_versions()
     assert site.plan("0.0.8", _deployed(("0.0.8a1", ["pre-release"]))) == [
         ["mike", "deploy", "--push", "--update-aliases", "0.0.8", "latest"],
+        ["mike", "delete", "--push", "pre-release"],  # (Q~3 (b): a newer stable release removes it.)
         ["mike", "set-default", "--push", "latest"]]
     after = _deployed(("0.0.8", ["latest"]), ("0.0.8a1", ["pre-release"]))
     assert site.plan("0.0.9a1", after) == [
@@ -168,3 +169,45 @@ def test_a_failing_mike_list_stops_the_deploy(monkeypatch: Any, capsys: Any) -> 
     monkeypatch.setattr(site.subprocess, "run", failing)
     assert site.main(["0.0.8a1"]) == 1
     assert ran == [["mike", "list", "--json"]] and "mike list failed (1): fatal: bad object" in capsys.readouterr().err
+
+
+def _apply(commands: list[list[str]], deployed: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """``deployed`` after ``commands``, as mike does it (deploy with ``--update-aliases`` moves its aliases to
+    the version; ``delete`` of an alias removes only the alias), and the front page's default."""
+    state = [{**entry, "aliases": list(entry["aliases"])} for entry in deployed]
+    default = ""
+    for command in commands:
+        verb, rest = command[1], [part for part in command[2:] if not part.startswith("--")]
+        if verb == "deploy":
+            version, aliases = rest[0], rest[1:]
+            for entry in state:
+                entry["aliases"] = [alias for alias in entry["aliases"] if alias not in aliases]
+            state = [entry for entry in state if entry["version"] != version]
+            state.append({"version": version, "title": version, "aliases": aliases})
+        elif verb == "delete":
+            for entry in state:
+                entry["aliases"] = [alias for alias in entry["aliases"] if alias not in rest]
+        elif verb == "set-default":
+            default = "no-stable" if "--template" in command else rest[-1]
+    return state, default
+
+
+def test_a_newer_stable_release_removes_the_pre_release_alias_until_the_next_pre_release() -> None:
+    """Q~3 (b) (Tony, 2026-11-03): 0.0.8a1, 0.0.8b1, 0.0.8, 0.0.9a1. ``pre-release`` follows the newest
+    pre-release; the stable 0.0.8 removes it (rather than pointing it at ``latest``, which would call the
+    stable release a pre-release too) and takes ``latest`` and the front page; 0.0.9a1 brings it back. A
+    pre-release published late, older than the stable release, doesn't take it."""
+    site = _site_versions()
+    deployed: list[dict[str, Any]] = []
+    menus = []
+    for version in ("0.0.8a1", "0.0.8b1", "0.0.8", "0.0.9a1", "0.0.8rc1"):
+        deployed, default = _apply(site.plan(version, deployed), deployed)
+        menus.append(({entry["version"]: entry["aliases"] for entry in deployed}, default))
+    assert menus == [
+        ({"0.0.8a1": ["pre-release"]}, "no-stable"),
+        ({"0.0.8a1": [], "0.0.8b1": ["pre-release"]}, "no-stable"),
+        ({"0.0.8a1": [], "0.0.8b1": [], "0.0.8": ["latest"]}, "latest"),
+        ({"0.0.8a1": [], "0.0.8b1": [], "0.0.8": ["latest"], "0.0.9a1": ["pre-release"]}, "latest"),
+        ({"0.0.8a1": [], "0.0.8b1": [], "0.0.8": ["latest"], "0.0.9a1": ["pre-release"], "0.0.8rc1": []}, "latest")]
+    # A stable release older than the alias's target (0.0.8.1 after 0.0.9a1) leaves it alone.
+    assert ["mike", "delete", "--push", "pre-release"] not in site.plan("0.0.8.1", deployed)

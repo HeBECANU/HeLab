@@ -132,7 +132,7 @@ probe in `PURE`; and the tooltip says the folder was checked in a separate proce
 
 `docs/publish/site_versions.py VERSION [--dry-run]` reads `mike list --json` and runs `plan(version, deployed)`:
 `mike deploy --push --update-aliases VERSION [latest|pre-release]` (the alias when it is the newest stable, or the
-newest PEP 440 pre-release; an older release published late moves no alias), then `mike set-default --push latest`
+newest PEP 440 pre-release newer than every release; an older release published late moves no alias; a stable release newer than `pre-release`'s target also runs `mike delete --push pre-release`, Q~3 (b)), then `mike set-default --push latest`
 once a stable release exists, else `mike set-default --push --template docs/publish/no-stable.html pre-release`
 (the "No stable release yet" page, light and dark, linking to the newest pre-release; "Help › User manual opens the
 manual of the version you run"). `docs-site.yml` runs it (and skips, with its notice, a commit without it).
@@ -191,7 +191,7 @@ and no star count.
 - **`roadmaps/known-issues.md`**: the `test_watch_converts_new_shots_and_stops_on_ctrl_c` item gains CI
   41622979011 (Ubuntu Converter backends, `fdd895c`, `assert -2 == 0`, passed on rerun).
 - **`.ai/DECISIONS_TODO.md`**: Q48.2, Q48.3, Q49.3 (b), Q56.3 built; Q56.1 decided (b) (A~1); Q~3 (Assay's
-  FU-3) for Tony.
+  FU-3) decided (b), built.
 - **`.ai/architecture/plots-and-scripts.md`**, also: `ScriptsManager.skip_folder`, `PROBE_EXIT_SECONDS`.
 
 ## Follow-ups (provisional IDs)
@@ -216,12 +216,17 @@ and no star count.
   process, so a script that hangs or crashes at import can't stop HeLab." **Proposed:** as built.
 - **Q~2** `PROBE_SECONDS` a constant (10 s, from the probe's start of the import) or a Settings › General row.
   **Proposed:** the constant until someone's import is legitimately slower.
-- **Q~3** (= Assay's FU-3; CoCo is asking Tony, nothing built) The `pre-release` alias stays on the newest
-  pre-release even when a newer stable release exists: after 0.0.8a1, 0.0.8b1, 0.0.8 the menu reads `0.0.8
-  [latest]`, `0.0.8b1 [pre-release]` until 0.0.9a1. Options: (a) keep (the brief's "newest alpha or beta");
-  (b) a stable release newer than the alias's target removes it (or points it at `latest`), and the next
-  pre-release brings it back. Assay proposes (b); I'd take (b) too, since "pre-release" on a version older than
-  the stable one reads as a preview of something newer. Either is a few lines in `site_versions.plan`.
+- **Q~3 decided (b)** (= Assay's FU-3; Tony via CoCo, 2026-11-03): a stable release newer than the
+  `pre-release` alias's target removes the alias, and the next pre-release brings it back. Built in the FU-3
+  commit: `site_versions.plan` adds `mike delete --push pre-release` (mike removes only the alias, and its
+  folder on `gh-pages`) after a stable release's deploy when the alias names an older version. **Removed, not
+  pointed at `latest`:** pointing it there would list the stable release as `0.0.8 [latest, pre-release]`,
+  calling it a pre-release too, and a reader following `pre-release/` would land on the stable manual. A
+  pre-release now takes the alias only when it is newer than every release, stable ones included (a late
+  0.0.8rc1 after 0.0.8 doesn't). Tested: `test_a_newer_stable_release_removes_the_pre_release_alias_until_the_next_pre_release`
+  (0.0.8a1 → 0.0.8b1 → 0.0.8 → 0.0.9a1, then a late 0.0.8rc1 and 0.0.8.1); run with mike 2.2.0 against a local
+  bare remote, the same menus: `0.0.8b1 [pre-release]`, then `0.0.8 [latest]` with no `pre-release`, then
+  `0.0.9a1 [pre-release]`.
 - **M~1** Windows lab PC: Load Scripts… of a folder, Reload, and a script with `input()` at import: the panel
   shows "Reload (checking)" then the skip line; no console window flashes; HeLab stays responsive.
 - **M~2** Help › User manual with the network off on a packaged build: the bundled copy opens and its search finds

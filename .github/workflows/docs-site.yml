@@ -6,7 +6,7 @@ name: Docs site
 # published by hand, and an abandoned draft never reaches the site. Never on a push or a PR.
 # Its versions (Q56.3, docs/publish/site_versions.py): every release is in the version menu; "latest" is
 # the newest stable release and the site's front page; "pre-release" the newest alpha, beta or release
-# candidate; until there is a stable release the front page says so and links to the newest pre-release.
+# candidate, removed by a newer stable release until the next pre-release; until there is a stable release the front page says so and links to the newest pre-release.
 # No dev channel: a development manual is built locally (README). Help › User manual opens
 # <owner>.github.io/<repo>/<version>/, the running version's page.
 

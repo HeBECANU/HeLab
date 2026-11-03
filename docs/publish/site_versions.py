@@ -3,7 +3,10 @@
 
 - Every release is a version of its own (``0.0.8``, ``0.0.8a1``), listed in the version menu.
 - ``latest``: the newest stable (final) release. It is the site's front page.
-- ``pre-release``: the newest alpha, beta or release candidate (PEP 440's pre-releases).
+- ``pre-release``: the newest alpha, beta or release candidate (PEP 440's pre-releases), while it is newer than
+  every stable release: a stable release newer than its target removes the alias (``mike delete`` of the alias
+  only, Q~3 (b), Tony 2026-11-03), and the next pre-release brings it back. Removed rather than pointed at
+  ``latest``, which would label the stable release a pre-release too.
 - Until there is a stable release, the front page is a short "No stable release yet" page
   (``no-stable.html``, mike's ``set-default`` template) linking to the newest pre-release.
 - No development channel: a development manual is built locally (the README's User manual section).
@@ -43,19 +46,35 @@ def _versions(deployed: Sequence[dict[str, Any]], other_than: Version) -> List[V
     return found
 
 
+def _alias_target(deployed: Sequence[dict[str, Any]], alias: str) -> Version | None:
+    """The version ``alias`` names in ``deployed`` (None: no such alias, or not a version)."""
+    for entry in deployed:
+        if alias in (entry.get("aliases") or []):
+            try:
+                return Version(str(entry.get("version", "")))
+            except InvalidVersion:
+                return None
+    return None
+
+
 def plan(version: str, deployed: Sequence[dict[str, Any]]) -> List[List[str]]:
     """The mike commands that publish ``version`` (a PEP 440 version, no ``v``) beside ``deployed`` (``mike
-    list --json``): its deploy, with ``latest`` or ``pre-release`` when it is the newest of its kind, then the
-    front page: ``latest`` once a stable release exists, else the "No stable release yet" page."""
+    list --json``): its deploy, with ``latest`` or ``pre-release`` when it is the newest of its kind (a
+    pre-release also newer than every stable release); for a stable release newer than ``pre-release``'s
+    target, that alias's removal; then the front page: ``latest`` once a stable release exists, else the "No
+    stable release yet" page."""
     new = Version(version)
     others = _versions(deployed, new)
     stable = [other for other in others if not other.is_prerelease]
     if new.is_prerelease:
-        newest = all(new > other for other in others if other.is_prerelease)
+        newest = all(new > other for other in others)  # (Newer than every pre-release and stable release.)
         aliases = [PRE_RELEASE_ALIAS] if newest else []
     else:
         aliases = [STABLE_ALIAS] if all(new > other for other in stable) else []
     commands = [["mike", "deploy", "--push", "--update-aliases", version, *aliases]]
+    target = _alias_target(deployed, PRE_RELEASE_ALIAS)
+    if not new.is_prerelease and target is not None and new > target:
+        commands.append(["mike", "delete", "--push", PRE_RELEASE_ALIAS])
     if stable or not new.is_prerelease:
         commands.append(["mike", "set-default", "--push", STABLE_ALIAS])
     else:
