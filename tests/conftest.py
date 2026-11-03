@@ -48,6 +48,23 @@ os.environ["HELAB_DIR_CACHES_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_c
 os.environ["HELAB_APP_DIR_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_app_{_worker_id}_")
 os.environ["HELAB_TEST_VOLUME_ID"] = "test-volume"
 os.environ["HELAB_TEST_LOCAL_MOUNT"] = Path(tempfile.gettempdir()).anchor
+
+
+def _temp_mount() -> str:
+    """The mount holding the temp folder, where every test's folders are: trusted at once, as the system
+    volume is (``data_roots.fixed_mount``'s ``HELAB_TEST_FIXED_MOUNT``), whether the runner's /tmp is on /
+    or a mount of its own (CI 41587336570 and 41570883747 on ubuntu-26.04 20261018.50.1, where the
+    result-cache, lifecycle and offline tests' folders waited for a volume check that never ran).
+    Windows' HELAB_TEST_LOCAL_MOUNT above already stands in for its drives."""
+    import psutil
+    temp = os.path.realpath(tempfile.gettempdir())
+    paths = [part.mountpoint for part in psutil.disk_partitions(all=True)
+             if temp == part.mountpoint or temp.startswith(part.mountpoint.rstrip(os.sep) + os.sep)]
+    return max(paths, key=len) if paths else ""
+
+
+if sys.platform != "win32":
+    os.environ["HELAB_TEST_FIXED_MOUNT"] = _temp_mount()
 # Tests never touch real data (a mounted share, a developer's data folder): helpers, and
 # helab.io_ops' functions called here, refuse such source paths before touching them and note
 # them in this folder, which fails the test (``no_real_data``). New tabs start in an empty folder

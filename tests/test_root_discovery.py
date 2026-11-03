@@ -321,6 +321,33 @@ def test_system_volume_hint_needs_no_verification(tmp_path: Path, monkeypatch: p
     assert not fixed_mount(Mount("/dev/disk4s1", "/Volumes/USB", "apfs"))
 
 
+def test_the_mount_the_tests_name_needs_no_verification_and_only_when_named(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test seam (``HELAB_TEST_FIXED_MOUNT``, set by conftest only) trusts the mount it names, as the
+    system volume is: a runner whose /tmp is a mount of its own (CI 41587336570, 41570883747) left every
+    test folder's cached read waiting for a volume check. Unset, it does nothing."""
+    run, mount, cache = usb_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("HELAB_TEST_FIXED_MOUNT", raising=False)
+    assert not data_roots.fixed_mount(mount)
+    with pytest.raises(data_roots.VolumeUnverified):
+        stores._cache_store(cache["directory"], [str(run)], local_lane=True, verified_volumes=[])
+    monkeypatch.setenv("HELAB_TEST_FIXED_MOUNT", mount.path)
+    assert data_roots.fixed_mount(mount)
+    assert not data_roots.fixed_mount(Mount("/dev/disk5s1", mount.path + "-other", "apfs"))
+    with stores._cache_store(cache["directory"], [str(run)], local_lane=True, verified_volumes=[]) as store:
+        assert store.read_dataset_row(str(run)).value is not None
+
+
+def test_the_tests_folders_are_on_a_mount_that_needs_no_verification(tmp_path: Path) -> None:
+    """Whatever the runner's mount table (/tmp on / or a mount of its own), the mount holding the tests'
+    folders is trusted at once: conftest names it (``HELAB_TEST_FIXED_MOUNT``); Windows' drive is its own."""
+    folder = cache_paths._normal(str(tmp_path.resolve()))
+    holding = [mount for mount in cache_paths.current_mounts()
+               if cache_paths._inside(folder, cache_paths._normal(mount.path))]
+    assert holding, cache_paths.current_mounts()
+    assert data_roots.fixed_mount(max(holding, key=lambda mount: len(cache_paths._normal(mount.path))))
+
+
 def test_verification_reports_checked_volumes_before_visiting_markers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
