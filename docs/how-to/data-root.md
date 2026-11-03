@@ -27,10 +27,10 @@ folder is also shared on its own, so that other computers see it as a top folder
 ## Place it
 
 1. Right-click the folder in the tree and choose **Place .helab-root here…**, or use
-   **File › Place .helab-root in “<folder>”…** for the current tab's selected folder (at first
+   **File › Place .helab-root in “&lt;folder&gt;”…** for the current tab's selected folder (at first
    its top folder, which you can't right-click: for example the top of a drive).
 2. HeLab checks the folder first and warns when it:
-    - isn't the top of its drive or share: it offers **Place at <top>** as well as **Place
+    - isn't the top of its drive or share: it offers **Place at &lt;top&gt;** as well as **Place
       here**;
     - is already inside another data root;
     - is a home folder (such as `/Users`, `/home` or `C:\Users`);

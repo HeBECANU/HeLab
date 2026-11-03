@@ -14,7 +14,7 @@ already in a source folder.
 - **While Live watches a folder**: turn on **Auto-convert**, and each new raw file is converted
   once it has finished being written. See [Follow a folder live](live.md#auto-convert-while-live-is-on).
 - **Any folder, any profile**: right-click the folder › **Convert this folder…**, or **File ›
-  Convert This Folder…** for the tab's selected folder. Pick the profile (built-in or yours) and
+  Convert “&lt;folder&gt;”…** for the tab's selected folder. Pick the profile (built-in or yours) and
   where the TXY go: HeLab's cache, its temp folder, or beside the raw files (on a share, HeLab asks
   first). Only that folder is converted, not its subfolders, and not while Live's Auto-convert is
   converting it.
