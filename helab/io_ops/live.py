@@ -99,14 +99,14 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     helab_key = ""
     helab_state: list[list[Any]] = []
     wanted_hash, wanted_tag = str(txy.get("profile_hash") or ""), str(txy.get("profile_tag") or "")
+    wanted = helab_txy.wanted_key(txy)  # (A mode's [hash, tag]; a list's entries, Q53.2.)
     if txy_sources.wants_helab(txy_source):
         helab_key = _helab_key(path, txy)
         helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), time.time())
     since_helab = helab_since if isinstance(helab_since, dict) else {}
     # (No HeLab folder now nor then: nothing to compare, whatever the profile.)
     helab_same = (helab_txy.state_unchanged(since_helab.get("folders", []), helab_state)
-                  and (not helab_state or (since_helab.get("profile_hash"), since_helab.get("profile_tag", ""))
-                       == (wanted_hash, wanted_tag))) \
+                  and (not helab_state or helab_txy.saved_wanted(since_helab) == wanted)) \
         if txy_sources.wants_helab(txy_source) else True
 
     current_identity = ""
@@ -127,6 +127,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
                 "live_listed_mtime": None if racy else folder.st_mtime_ns,
                 "live_identity_root": current_root,
                 "live_helab": {"folders": helab_state, "profile_hash": wanted_hash, "profile_tag": wanted_tag,
+                               **({"entries": wanted} if txy_sources.is_list(txy_source) else {}),
                                "key": helab_key,
                                "key_asked": bool(txy.get("key_asked")) or (not txy.get("key")
                                                                            and bool(txy.get("cache_directory")))}}
@@ -164,7 +165,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     found: dict[str, set[int]] = {}
     names: dict[int, str] = {}
     raw_entries: dict[int, os.DirEntry[str]] = {}  # For new shots' times (``_raw_mtime``).
-    beside_entries: dict[int, os.DirEntry[str]] = {}  # HeLab's TXY beside the raw files.
+    beside: helab_txy.Beside = {}  # HeLab's TXY beside the raw files, by tag.
     matlab: dict[int, str] = {}
     has_dirs = False
     listed_at = time.time()
@@ -179,35 +180,49 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
                     matlab[shot] = entry.path
                 elif kind is file_kinds.RAW:
                     raw_entries[shot] = entry
-                elif kind is file_kinds.HELAB_TXY and helab_txy.beside_wanted(entry.name, txy):
-                    beside_entries[shot] = entry
+                elif kind is file_kinds.HELAB_TXY:
+                    helab_txy.add_beside(beside, entry.name, shot, entry, txy)
             elif not has_dirs and _is_dir(entry):
                 has_dirs = True
     helab_found: dict[int, helab_txy.HelabShot] = {}
     # Caching v2 stage 3 (store-v4 only: FolderCache says ``on_read``, S3~4): raw files without a current HeLab
-    # TXY are converted when read, whether or not Live also converts them to text.
+    # TXY are converted when read, whether or not Live also converts them to text; with a list, with its first
+    # HeLab entry that can convert, for shots no entry has a TXY file of (Q~1).
     on_read: dict[int, helab_txy.HelabShot] = {}
     definition = txy.get("profile_def")
-    on_read_profile = txy_cache.profile_for(definition if isinstance(definition, dict) else None,
-                                            txy_sources.helab_origin(wanted_hash)) \
-        if txy.get("on_read") and wanted_hash else None
+
+    def profile_of(profile_hash: str) -> Any:
+        return txy_cache.profile_for(definition if isinstance(definition, dict) else None,
+                                     txy_sources.helab_origin(profile_hash))
+    on_read_profile: Any = None
+    helab_chosen: dict[int, helab_txy.HelabShot] = {}
+    unheld: dict[int, tuple[str, str]] = {}  # (Each shot's TXY by the list's order alone.)
+    unheld_shots: dict[int, helab_txy.HelabShot] = {}
+    fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
+    held_kinds = {shot: held_origins.get(shot, "") for shot in held}
     if txy_sources.wants_helab(txy_source):
         trusted = {shot: (*held[shot], origin) for shot, origin in held_origins.items()}
-        could = helab_txy.could_take(txy_source, raw_entries, matlab, held_origins)
-        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
-        if on_read_profile is not None:
-            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy, matlab, held_origins)
-    # Each shot's TXY as the source asks; a held shot keeps its kind while that TXY is there (one held from
-    # MATLAB's too: "" its origin, so a HeLab TXY converted since doesn't replace it).
-    chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found},
-                               {shot: held_origins.get(shot, "") for shot in held})
+        listed_found = helab_txy.find_list(
+            path, txy, helab_key, beside, raw_entries, matlab, trusted, held_origins,
+            can_convert=(lambda profile_hash: profile_of(profile_hash) is not None) if txy.get("on_read") else None)
+        helab_found = listed_found.texts()
+        on_read = listed_found.on_read
+        if listed_found.converting >= 0:
+            on_read_profile = profile_of(str(listed_found.entries[listed_found.converting].get("profile_hash")))
+        # Each shot's TXY as the list asks; a held shot keeps its entry while that TXY is there (one held from
+        # MATLAB's too: "" its origin, so a HeLab TXY converted since doesn't replace it).
+        chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds)
+        unheld, unheld_shots, _ = helab_txy.compose_list(listed_found, matlab)
+    else:
+        chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
     on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}
     origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
 
     def pending_name(shot: int, filename: str, origin: str) -> str:
         # The pending check joins a name to the folder: HeLab's in their own folder are named in full.
+        there = helab_txy.beside_any(beside, shot)
         return filename if origin and os.path.dirname(filename) != os.path.dirname(
-            beside_entries[shot].path if shot in beside_entries else os.path.join(path, "_")) \
+            there.path if there is not None else os.path.join(path, "_")) \
             else os.path.basename(filename)
     for shot, (filename, origin) in chosen.items():
         names[shot] = filename
@@ -216,12 +231,19 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     # converted during Live under HeLab priority: read again from HeLab's like a changed shot, as a HeLab-held
     # shot converted again is, instead of at the folder's next load (A39.2, Q38.2: Tony 2026-10-31). Its MATLAB
     # TXY, written once, still feeds the mismatch rule (``names``) until then.
-    switching: dict[int, str] = {}
+    switching: dict[int, helab_txy.HelabShot] = {}
     for shot in sorted(set(held) - set(held_origins)):
-        if (shot in helab_found and chosen.get(shot, ("", "?"))[1] == ""
-                and txy_sources.choose(txy_source, shot in matlab, True) == txy_sources.HELAB):
-            converted_shot = helab_found[shot]
-            switching[shot] = converted_shot.file
+        if chosen.get(shot, ("", ""))[1] and shot in helab_chosen and shot in matlab:
+            # Held from External as a fallback stage, and an entry of the list's own has it now (Q~2, TP-3):
+            # read again from that entry's TXY, as below; External's TXY feeds the mismatch rule until then.
+            switching[shot] = helab_chosen[shot]
+            names[shot] = matlab[shot]
+            file_names[shot] = pending_name(shot, helab_chosen[shot].file, chosen[shot][1])
+            continue
+        if (chosen.get(shot, ("", "?"))[1] == "" and unheld.get(shot, ("", ""))[1]
+                and helab_found.get(shot) is unheld_shots.get(shot)):
+            converted_shot = unheld_shots[shot]
+            switching[shot] = converted_shot
             origins[shot] = txy_sources.helab_origin(converted_shot.profile_hash)
             file_names[shot] = pending_name(shot, converted_shot.file, origins[shot])
 
@@ -238,7 +260,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     held_on_read: set[int] = set()  # (Held shots made from their raw files when read: the record names them.)
     for shot in sorted(held_helab - set(dropped)):
         origin = origins.get(shot, "")
-        found_shot = helab_found.get(shot)
+        found_shot = helab_chosen.get(shot) if shot not in on_read else None
         raw_now = _raw_stat(raw_entries.get(shot))
         if origin == held_origins[shot] and raw_now is not None and raw_now == held[shot]:
             # Held from its raw file, converted on read (stage 3): a TXY of the same profile converted since is
@@ -257,7 +279,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
             dropped.append(shot)
         elif origin != held_origins[shot] or stat_now != held[shot]:
             helab_rereads.append((shot, *stat_now))
-    helab_rereads += [(shot, helab_found[shot].size, helab_found[shot].mtime_ns) for shot in switching]
+    helab_rereads += [(shot, item.size, item.mtime_ns) for shot, item in switching.items()]
     # Read again because HeLab's TXY of them is new (converted since), not because a writer paused: said apart.
     # Only those read from HeLab's TXY now: one held from HeLab's that falls back to MATLAB's (its HeLab TXY
     # cleared) is not a conversion (IO-R2).
@@ -359,7 +381,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
         shot = item[0]
         again = shot in replacing
         what = "read again" if again else "read"
-        filename = switching.get(shot, names[shot])
+        filename = switching[shot].file if shot in switching else names[shot]
         Pause.checkpoint(send)
         # (Converted from its raw file: no TXY file read, before any is announced, as a load does.)
         converting = shot in on_read and filename == on_read[shot].file and on_read_profile is not None
@@ -469,8 +491,10 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
           "fingerprint": [list(item) for item in fingerprint], "memory_shots": kept,
           "base_signature": "", "modified": summary["modified"], "modified_observed_at": time.time(),
           "signature": str(summary["signature"]),
-          "txy": helab_txy.record(txy_source, data_origins, {**on_read, **helab_found}, txy.get("profiles"), txy,
-                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins}),
+          "txy": helab_txy.record(txy_source, data_origins, {**helab_found, **on_read, **helab_chosen},
+                                  txy.get("profiles"), txy,
+                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins},
+                                  fell_back, {int(item[0]) for item in fingerprint}),
           **state(True, unsettled, True)})
 
 

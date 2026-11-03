@@ -68,6 +68,7 @@ from helab.views.DebugIconsWindow import DebugIconsWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
 
 PLACE_ROOT_MENU = " Place .helab-root…"
+CONVERT_FOLDER_MENU = " Convert This Folder…"
 
 # Work Offline (cache-only browsing; Tony named it, 2026-10-26: D2).
 WORK_OFFLINE_TOOLTIP = ("Browse and analyse cached data only: HeLab reads no source folder and no server until you "
@@ -293,6 +294,31 @@ class HelabMainWindow(QMainWindow):
         self.action_place_root.setEnabled(enabled)
         self.action_place_root.setToolTip(f"{path}\n{tooltip}")
 
+    def update_convert_folder_action(self) -> None:
+        """File › Convert This Folder… (Q~4): named for the tab's selected folder, enabled as its right-click item."""
+        target = self._place_root_target()
+        if target is None:
+            self.action_convert_folder.setText(CONVERT_FOLDER_MENU)
+            self.action_convert_folder.setEnabled(False)
+            self.action_convert_folder.setToolTip("Open a folder tab first")
+            return
+        explorer, path = target
+        name = os.path.basename(path.rstrip("/\\")) or path
+        if len(name) > 40:
+            name = f"{name[:24]}…{name[-15:]}"
+        why = explorer.converter.convert_unavailable(path)
+        self.action_convert_folder.setText(f" Convert “{name}”…")
+        self.action_convert_folder.setEnabled(not why)
+        self.action_convert_folder.setToolTip(f"{path}\n" + (f"Not now: {why}" if why else
+                                              "Its raw files to HeLab's TXY, with a profile you pick (this folder only)"))
+
+    def convert_folder_in_current_tab(self) -> bool:
+        """As the tree's Convert this folder… does, for the current tab's selected folder."""
+        target = self._place_root_target()
+        if target is None or target[0].converter.convert_unavailable(target[1]):
+            return False
+        return target[0].converter.ask_convert(target[1]) is not None
+
     def place_root_in_current_tab(self) -> bool:
         """As the tree's Place .helab-root here… does, for the current tab's selected folder."""
         target = self._place_root_target()
@@ -392,8 +418,14 @@ class HelabMainWindow(QMainWindow):
             self.action_place_root.setEnabled(False)  # Until the menu shows (aboutToShow).
             self.action_place_root.triggered.connect(self.place_root_in_current_tab)
             menu_file.addAction(self.action_place_root)
+            # Q~4: right-click › Convert this folder…, for the tab's selected folder.
+            self.action_convert_folder = QAction(CONVERT_FOLDER_MENU, self)
+            self.action_convert_folder.setEnabled(False)  # Until the menu shows (aboutToShow).
+            self.action_convert_folder.triggered.connect(self.convert_folder_in_current_tab)
+            menu_file.addAction(self.action_convert_folder)
             menu_file.setToolTipsVisible(True)
             menu_file.aboutToShow.connect(self.update_place_root_action)
+            menu_file.aboutToShow.connect(self.update_convert_folder_action)
 
             # Cache-only browsing (D2): no source folder or server is read while it is on.
             self.action_work_offline = QAction(" Work Offline", self)

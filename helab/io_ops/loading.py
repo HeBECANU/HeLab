@@ -120,16 +120,17 @@ def _helab_unchanged(path: str, store: CacheStore | None, txy: dict[str, Any], s
     source = txy_sources.requested_source(txy.get("source"))
     if not saved.get("source"):
         # Made before HeLab's TXY were looked for (MATLAB's alone; no HeLab TXY named so then): as
-        # every source but HeLab only reads it while no HeLab folder or shot has turned up since.
-        if source == txy_sources.HELAB_ONLY:
+        # every source but HeLab only (a list without External) reads it while no HeLab folder or shot has
+        # turned up since.
+        if txy_sources.EXTERNAL not in txy_sources.entries_of(source):
             return False
-    elif txy_sources.normal_source(saved.get("source")) != source:
+    elif txy_sources.source_text(saved.get("source")) != source:
         return False
     if not txy_sources.wants_helab(source):
         return True
     state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_txy.store_key(store, path)), time.time())
-    if (state or saved.get("origins")) and (saved.get("profile_hash", ""), saved.get("profile_tag", "")) != (
-            str(txy.get("profile_hash") or ""), str(txy.get("profile_tag") or "")):
+    if (state or saved.get("origins")) and helab_txy.saved_wanted(saved) != helab_txy.wanted_key(
+            {**txy, "source": source}):
         return False
     return helab_txy.state_unchanged(saved.get("folders") or [], state)
 
@@ -309,7 +310,8 @@ def load(path: str, output: str, send: Emit = emit,
                 choices = store.read_folder_choices([path])[path]
                 if choices.value is not None:
                     send({"kind": "folder_choices", "path": path, "choices": choices.value})
-                    txy = txy_sources.with_choices(txy or {}, choices.value, txy_cache.builtin_for_tag)
+                    # (A tag the app resolved, a user profile's too, stays the app's: TP-1.)
+                    txy = txy_sources.with_choices(txy or {}, choices.value, helab_txy.tag_lookup(txy or {}))
         _load(path, output, send, store, guard, bool(cache_options), memory, base_signature, expected,
               (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
               limits=limits, allow_large=allow_large, no_cache=no_cache, no_cache_reason=no_cache_reason,
@@ -378,8 +380,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     listed_stats: dict[int, tuple[int, int]] = {}
     # Raw files, for shot times: stat'ed later, only for shots whose time isn't known (``raw_time``).
     raw_entries: dict[int, os.DirEntry[str]] = {}
-    # HeLab's TXY beside the raw files (their provenance is in HeLab's folder, ``helab_txy``).
-    beside_entries: dict[int, os.DirEntry[str]] = {}
+    # HeLab's TXY beside the raw files, by tag (their provenance is in HeLab's folder, ``helab_txy``).
+    beside: helab_txy.Beside = {}
     # MATLAB's TXY: file and (size, mtime), by shot.
     matlab: dict[int, str] = {}
     matlab_stats: dict[int, tuple[int, int]] = {}
@@ -395,8 +397,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                     matlab_stats[shot] = (entry_info.st_size, entry_info.st_mtime_ns)
                 elif kind is file_kinds.RAW:
                     raw_entries[shot] = entry
-                elif kind is file_kinds.HELAB_TXY and helab_txy.beside_wanted(entry.name, txy):
-                    beside_entries[shot] = entry
+                elif kind is file_kinds.HELAB_TXY:
+                    helab_txy.add_beside(beside, entry.name, shot, entry, txy)
             elif not has_dirs and _is_dir(entry):
                 has_dirs = True
     # HeLab's current TXY (Q6.6), as the source asks; their folders' state first, for the next quick check.
@@ -405,31 +407,41 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     helab_found: dict[int, helab_txy.HelabShot] = {}
     # Caching v2 stage 3 (store-v4 only, R~1): raw files without a current HeLab TXY, converted on read.
     on_read: dict[int, helab_txy.HelabShot] = {}
+    # The HeLab shots each shot's choice takes (a text, or a raw file converted on read).
+    helab_chosen: dict[int, helab_txy.HelabShot] = {}
+    fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
     if txy_sources.wants_helab(txy_source):
         helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), listed_at)
         trusted = {int(shot): (int(size), int(modified), held_origins[int(shot)])
                    for shot, size, modified in memory or () if int(shot) in held_origins}
-        could = helab_txy.could_take(txy_source, raw_entries, matlab)
-        helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted, could)
-        if (access is not None and access.layered and not no_cache
-                and access.profile_for(txy_sources.helab_origin(str(txy.get("profile_hash") or ""))) is not None):
-            on_read = helab_txy.on_read(raw_entries, helab_found, could, txy, matlab)
-    chosen = helab_txy.compose(txy_source, matlab, {**on_read, **helab_found})
-    # (Those a conversion now serves: the rest of on_read lost to MATLAB's TXY by the source's rule.)
+        convert_here = access is not None and access.layered and not no_cache
+
+        def can_convert(profile_hash: str) -> bool:
+            assert access is not None
+            return access.profile_for(txy_sources.helab_origin(profile_hash)) is not None
+        listed_found = helab_txy.find_list(path, txy, helab_key, beside, raw_entries, matlab, trusted,
+                                           can_convert=can_convert if convert_here else None)
+        helab_found = listed_found.texts()
+        on_read = listed_found.on_read
+        chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab)
+    else:
+        chosen = helab_txy.compose(txy_source, matlab, {})
+    # (Those a conversion now serves: the rest of on_read lost to another entry's TXY by the list's order.)
     on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}
     origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
     for shot, (filename, origin) in chosen.items():
         files.append((shot, filename))
-        helab_shot = helab_found.get(shot) or on_read.get(shot)
+        helab_shot = helab_chosen.get(shot)
         listed_stats[shot] = (matlab_stats[shot] if not origin or helab_shot is None
                               else (helab_shot.size, helab_shot.mtime_ns))
     def matlab_dir(shot: int) -> str:
         """A file of the source folder's listing, as its entries name it (beside TXY are among them)."""
-        entry = beside_entries.get(shot)
+        entry = helab_txy.beside_any(beside, shot)
         return entry.path if entry is not None else os.path.join(path, "_")
 
     if not files:
-        raise ValueError("No current HeLab TXY in this folder" if txy_source == txy_sources.HELAB_ONLY
+        raise ValueError("No current HeLab TXY in this folder"
+                         if txy_sources.EXTERNAL not in txy_sources.entries_of(txy_source)
                          else "No converted TXY files in this folder")
     files.sort()
 
@@ -807,7 +819,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     # HeLab's not beside the raw files are named in full (a quick check's samples join them to the folder).
     names = [filename if shot in origins and os.path.dirname(filename) != os.path.dirname(matlab_dir(shot))
              else os.path.basename(filename) for shot, filename in files]
-    txy_record = helab_txy.record(txy_source, origins, {**on_read, **helab_found}, None, txy, helab_state, on_read)
+    txy_record = helab_txy.record(txy_source, origins, helab_chosen, None, txy, helab_state, on_read, fell_back,
+                                  {shot for shot, _ in files})
     # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
     # cache state is its tab's, never a plot choice's).
     # store-v4: the folder is disk cached when it has any view, this TXY choice's or another's (as listings say,

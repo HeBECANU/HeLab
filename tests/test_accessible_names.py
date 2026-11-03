@@ -253,7 +253,7 @@ def script_button(window: QWidget, name: str) -> QPushButton:
 @pytest.mark.no_auto_data_root  # RAM only: no save left for the quit to wait for (handoff A~5).
 @covers("HelabMainWindow", "FolderTabWidget", "FolderExplorer", "FolderDetailsPanel", "LoadBar", "CentralHint",
         "ClickableLabel", "ElidedLabel", "HoverMenuToolButton", "TreePanelWidget", "PlotSettingsPanel", "PresetBar",
-        "TxySourceRow", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture")
+        "TxySourceRow", "ElidedButton", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture")
 def test_the_main_window_with_a_folder_and_plots(qtbot: QtBot, tmp_path: Path) -> None:
     """The main window empty, then with a synthetic folder loaded, two plots tabbed together, one
     released (its picture and Reload) and one floating (its own settings section)."""
@@ -509,6 +509,20 @@ def memory_usage(cache: FolderCache, path: Path) -> QWidget:
     return MemoryUsageWindow()
 
 
+def txy_list(cache: FolderCache, path: Path) -> QWidget:
+    from helab.views.txy_list import TxyListDialog
+    return TxyListDialog("TXY for this folder", "This folder's tab and Live read:", ("m23v1", "External"), "m19v1",
+                         {"m19v1": "matlab-2019", "m23v1": "matlab-2023-lab-edit"}, "As Settings",
+                         "Conversion (m19v1) › External")
+
+
+def convert_folder(cache: FolderCache, path: Path) -> QWidget:
+    from helab.convert.profile import BUILTIN_PROFILES, file_tag
+    from helab.views.explorer_convert import ConvertFolderDialog
+    return ConvertFolderDialog(None, str(path), {file_tag(p): p for p in BUILTIN_PROFILES.values()}, "m19v1", "cache",
+                               "", lambda profile, where: None)
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
@@ -522,6 +536,8 @@ DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]
     "debug icons": (debug_icons, ("DebugIconsWindow", "_IconGroup")),
     "memory usage": (memory_usage, ("MemoryUsageWindow",)),
     "correlation plot": (correlation_plot, ("CorrelationPlot",)),
+    "txy list": (txy_list, ("TxyListDialog", "TxyListEditor")),
+    "convert folder": (convert_folder, ("ConvertFolderDialog",)),
 }
 COVERED.update({name: f"test_dialog[{case}]" for case, (_, names) in DIALOGS.items() for name in names})
 

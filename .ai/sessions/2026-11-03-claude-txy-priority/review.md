@@ -1,0 +1,279 @@
+# Review: TXY priority lists, External label, manual convert (block 53)
+
+Reviewer: Claude (Opus 5.5), floor TXY Priority, landing review of `agent/txy-priority`, `git diff dcc02d8..cca4649`
+(16 commits, 38 files). Read: brief.md, design.md (with Tony's answers to Q~1–Q~4), handoff.md, and the whole diff.
+
+## Checks rerun
+
+- Full suite: `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review` at `cca4649`:
+  **9217 passed, 673 skipped, no RERUN** (154 s).
+- Type checks, all clean: `mypy helab/ --strict`, `mypy tests --strict`, `pyright helab tests`,
+  `mypy helab/ --strict --platform win32`, `pyright --pythonplatform Windows helab tests`.
+- CI: I did not re-read run 41583803573's logs; the handoff says it read all 12 jobs' logs and found no RERUN.
+
+## Verdict
+
+**One blocker (TP-1, High)**: a folder row that names a user profile loads the wrong profile's TXY in the helper.
+TP-2 (Medium, an I/O-rule breach) and TP-3 (Medium, a test gap on Live) should be fixed before landing too. The
+rest are Low or Nit and can go to AI_TODO or known-issues.
+
+What holds up, checked against the code:
+
+- **The identity rule.** A list equal to a mode goes through `with_list` as exactly that mode. Its payload, `choice_text`,
+  `identity_source`, view key and result key are unchanged, and `Conversion` behaves the same as the explicit tag it
+  resolves to (`test_the_four_modes_keep_their_identities_exactly`, and the session test's `strip` comparison). Any other
+  list's text contains `>`, so it can never collide with a mode or a legacy value. Settings, the folder row and
+  presets keep their old forms for modes.
+- **Q~2's chain** (`chain_of`, `find_list`, `compose_list`): own list → `fallback` (folder's, then Settings') →
+  External → any-HeLab. Each stage looks only at shots no earlier stage has. A one-entry list has no chain. The
+  fallback shots are recorded (`fallback`, `fallback_entries`), and `wanted_key` includes them, so a changed
+  Settings list is never taken as unchanged.
+- **Convert on read (Q~1, Q~2.3).** `on_read` gets every stage's texts and External's shots (External is always in a
+  multi-entry chain). So a shot is converted only when no stage has a file of it, and with the first convertible
+  own HeLab entry. A one-entry list converts as HeLab only did. No stage's TXY is ever lost to a conversion.
+- **store-v3 / v0.0.7a1 with list texts.** `test_txy_priority_v007.py`'s copies match `e03c32a`'s `normal_source`
+  and `read_txy_source` (I diffed them). List texts never read as a 0.0.7 source, and result keys never match.
+  TP-6 covers the one case the analysis predates: the modes' fallback.
+- **Convert this folder… (Q~4).** It runs in the helper through `FolderCache.convert(profile_used=)`, and
+  `convert_lists` is keyed by profile, so another profile's `done` list doesn't skip shots. The helper's convert
+  rules are unchanged (temporary name and rename, never over an existing TXY). Beside on a share asks first
+  (`confirm_beside_on_share`). The beside flag is turned on and left on, as Folder details' offer does (Q~7, open
+  for Tony).
+- **UI.** Every new control is `identify`d: the editor (`txy_list*`), the Converter tab's `tabs_txy_list`, the plot's
+  `txy_source` button and the convert dialog's `convert_folder_*`. Both new dialogs are in
+  `test_accessible_names.py`'s walk. No lambda captures a Qt-made sender.
+
+## Findings (most severe first)
+
+### TP-1 — High — the helper's folder-row step rewrites a user-profile entry to the conversion profile
+
+`helab/io_ops/loading.py:313` and `helab/utils/txy_sources.py:410` (`with_list`).
+
+Under store-v4, `load` reads the folder's row again and calls `with_choices(txy, row, txy_cache.builtin_for_tag)`
+over the options FolderCache already resolved. FolderCache now resolves user profiles (`_profile_for_tag`), and the
+editor offers them (`known_names()`). The helper only knows the built-ins, and `with_list` first overwrites `txy`'s
+profile with `conversion`'s. The result:
+
+- **Mode row** (`helab-only` or `helab-priority`, tag a user profile `u3f`): when `profiles("u3f")` is None, the
+  "keep the profile asked for" fallback keeps the *conversion* profile, not the user profile FolderCache sent.
+  Reproduced:
+  ```
+  app   : helab-only HUSER u3f
+  helper: helab-only H19 m19v1
+  ```
+  So the tab loads m19v1's TXY, records the choice `helab-only@m19v1`, and Folder details says the folder reads `u3f`.
+  Live (`live_check`, which has no row step) reads `u3f`. The load and Live then disagree about the same folder.
+- **List row** (`u3f>m23v1>External`): the helper rebuilds `entries` with `u3f`'s `profile_hash` "". Its beside TXY
+  are skipped (`find` needs a hash beside), and HeLab-folder TXY of an older version of `u3f` count as current.
+
+Before this branch both sides fell back to the conversion profile for a user tag, so they agreed. This is a
+regression of the new user-profile support. The session test uses built-ins only, so it passes.
+
+Fix: have the helper's `profiles` callable also look in `txy["known"]` (FolderCache already sends user profiles by
+tag), and/or keep the entries and profile already in `txy` for a tag the helper can't resolve. Add a test: a
+store-v4 tab load (`loading.load`) of a folder row naming a user profile, as a mode and as a list.
+
+### TP-2 — Medium — a tree tooltip can read the profile folder from disk (I/O rule: rendering reads memory only)
+
+`helab/models/SnapshotFileSystemModel.py:516` → `FolderCache.on_read_shots` → `converts_on_read` →
+`folder_source` → `resolved` → `with_list` → `_profile_for_tag` (`helab/utils/folder_cache.py:1170`).
+
+`_profile_for_tag` reads `ProfileLibrary(profiles_folder()).profiles()` when `_user_profiles` is None. That is true
+until the first load, and again after every Settings save (`set_convert_profile` resets it, line 1007). The tag must
+be one that isn't a built-in or the conversion profile, which is exactly a folder list naming a user profile. The
+folder row tooltip (`_on_read_text`) then reads and parses JSON files on the GUI thread while rendering. It is the
+local app folder, not a source folder, but AGENTS.md says "models, badges, tooltips and summaries read memory only".
+`instance.txy_choice()` (`resolved`) has the same path, outside rendering.
+
+Fix: read the user profiles off the render path (when Settings saves, and at start), and make `_profile_for_tag`
+memory only, as `profile_by_tag` already is.
+
+### TP-3 — Medium — no test of Live's check or `save_held` under a general list or the fallback
+
+`tests/test_txy_priority*.py` never call `live_check` or `save_held`. The existing Live tests exercise those
+functions' new `find_list`/`compose_list` path only for the four modes. Untested:
+
+- the list-specific held-shot rules in `compose_list`: a shot held from a fallback stage taken back when an own entry
+  now has it; a held `helab:<hash>` found in a later stage;
+- `live.py`'s rewritten `switching` (`helab_found.get(shot) is unheld_shots.get(shot)`);
+- `record(..., fell_back, shots)` from Live and from `save_held`;
+- on-read conversion in Live with a list (`listed_found.converting`).
+
+The design's §8 promised "Live: a held shot keeps its entry; a list without the conversion profile". The handoff's
+A~1 covers only the offer's widget. Add at least one `live_check` test under `m23v1 › m19v1 › External` with held
+shots (including one from the fallback), and one `save_held` test checking the record's `fallback`.
+
+### TP-4 — Low — `converts_over_matlab` disagrees with `find_list` for a multi-entry list without External
+
+`helab/utils/txy_sources.py:244`, used by `FolderCache.on_read_shots` (`helab/utils/folder_cache.py:1122`).
+
+For `m23v1>m19v1` it returns True ("External isn't in it"), but Q~2 puts External in the chain, and `find_list`
+then blocks shots External has (`over_matlab` False unless `CONVERT_OVER_MATLAB`). So the folder tooltip's "N
+converted when loaded" counts every raw file instead of `raw - txy`. That is display only, until the first load
+counts. `tests/test_txy_priority.py:118` pins the wrong value. Fix: True only for a one-entry list without External
+(or with the flag, as for HeLab priority), matching `find_list`.
+
+### TP-5 — Low — Live's Auto-convert joins a running Convert this folder… of another profile
+
+`helab/utils/folder_cache.py:2605` (`job_key("convert", path, …)` ignores the payload's profile).
+
+`convert_unavailable` keeps the manual convert from starting while Live converts. The reverse isn't guarded: with a
+manual conversion running with m23v1, Live's tick (`cache.convert(profile_used=m19v1)`) joins that job. Live then
+reports m23v1's results (counts, low-hit notifications) as its own, and converts with m19v1 only on a later tick.
+A~4 covers the other direction only. Fix: have Live skip the tick while `converter.conversions[path]` runs, or key
+convert jobs by profile. Or extend A~4 and list it in known-issues.
+
+### TP-6 — Low — the modes' fallback (Q~6) isn't in design §2's cross-version analysis
+
+Under Q~2, HeLab priority and MATLAB priority datasets can hold fallback shots of other profiles (origins
+`helab:<other hash>`) with `source` still the mode. Two effects, neither covered by `test_txy_priority_v007.py`:
+
+- **v0.0.7a1 on a store-v3 dataset.** Its `_helab_unchanged` sees the same source and profile, so when HeLab's
+  folders are unchanged it takes the dataset as current. It then shows shots its own composition would leave out.
+  They are labelled correctly by origin, so no data is mislabelled, but it is a difference from the "0.0.7 ends with
+  its own choice's data" conclusion.
+- **This build on data saved before the branch.** Such data has no `fallback_entries`, and `wanted_key` matches it
+  when there is no folder list. So the quick check can keep pre-Q~2 data, and the fallback shots appear only after a
+  change or a full check.
+
+Proposed: record both under Q~6 for Tony, and add a line to design §2 / converter.md. No code change needed if Tony
+accepts.
+
+### TP-7 — Low — Live's "Convert with <tag>" choice outlives the folder's list
+
+`helab/views/explorer_live.py:758`, `FolderCache.convert_with`.
+
+`convert_with` isn't cleared when the folder's list changes (`set_folder_list`). After the user changes the list to,
+say, `m19v1 › External`, Auto-convert still converts with m23v1 for the session. The menu still shows the item ticked
+with "(this folder reads m23v1 only)", which is now false. Fix: drop the entry in `set_folder_list`, or show the
+item only while the list is still one entry of that tag.
+
+### TP-8 — Low — `Conversion` plus the tag it resolves to collapses to a one-entry list
+
+`helab/utils/txy_sources.py:140` (`resolve`), `helab/io_ops/helab_txy.py:385` (`chain_of`), the editor in
+`helab/views/txy_list.py`.
+
+The editor accepts `[Conversion, m19v1]` with conversion m19v1. That resolves to `(m19v1,)`: HeLab only, which never
+falls back (Q~2.2), while the summary shows two entries ("Conversion (m19v1) › m19v1"). Similarly, a saved
+`[Conversion, m23v1]` silently turns from a fallback list into a one-entry list when the conversion profile becomes
+m23v1. Proposed: decide fallback on the list as saved (two entries or more), not as resolved, or have the editor
+warn about the duplicate. This is Tony's call if it changes what users see; it could go with Q~6.
+
+### TP-9 — Low — two silent refusals in Convert this folder…
+
+`helab/views/explorer_convert.py:425`, `:445`.
+
+`ask_convert` returns None without a word when another question box is open (`self.box is not None`). The menu
+items are enabled, so the click does nothing. `_convert_answered` only logs when beside became unavailable while
+the dialog was open. The module's rule is "never a silent refusal". Fix: show a one-line message (or disable the
+items while a box is open), and answer the beside case like `ask_after_refusal`.
+
+### TP-10 — Nit — stale summaries
+
+- `ConverterTab.set_txy_entries` (`helab/views/ConverterTab.py:287`): "Conversion (m19v1)" isn't refreshed when the
+  profile combo changes before Save.
+- `FolderDetailsPanel._with_choices` calls `summary(entries)` without the conversion tag, so it shows a bare
+  "Conversion", while the plot row and Settings show "Conversion (m19v1)".
+- `TxySourceRow.set_entries` shows "As the folder's tab (…)" with the folder list as it was when last set. It
+  doesn't follow a later change of the folder's list until the plot updates its row.
+
+## Doc changes the handoff should also propose
+
+- converter.md / io-and-browsing.md: the helper's folder-row step (`with_choices`) and how it treats user profiles
+  (after TP-1's fix).
+- known-issues: the `test_converter_tab.py::test_the_cache_tab_shows_and_clears_converted_txy` failure the handoff
+  saw once (6 tries) should be listed. AGENTS.md lists every RERUN or repeated failure until its cause is found, and
+  the handoff only proposes it conditionally.
+- The Q~6/TP-6 and TP-8 points for DECISIONS_TODO, beside Q~5–Q~8.
+
+## Re-check of the fixes (`41aed17..bf3fb85`)
+
+Reviewer: Claude (Opus 5.5). I read only Prio's fix commits (`35a7007` … `70b6f27`, and the handoff's review table).
+I skipped what the merge `b959de1` brought from dev/v0.0.8 (labcam, Ground's `.ai` lists, known-issues).
+
+**Checks at `bf3fb85`:**
+- Full suite (`pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review -rR`): **9228 passed,
+  673 skipped, no RERUN** (156 s).
+- The five type checks are clean.
+
+| TP | Verdict | Notes |
+|---|---|---|
+| TP-1 (High) | **Closed** | See the note below the table. |
+| TP-2 (Medium) | **Closed** | `_profile_for_tag` reads memory only. The profiles are read once on a request's path (`with_txy` → `read_user_profiles`) or handed over by Settings' Save (`set_user_profiles`). `set_convert_profile` no longer clears them, so the tooltip path (`on_read_shots` → `folder_source` → `resolved`) never reads disk. Before the first request a user tag is simply unresolved there, which only affects a display estimate. |
+| TP-3 (Medium) | **Closed** | See the note below the table. |
+| TP-4 (Low) | **Closed** | `converts_over_matlab` now gives True for a list only with the flag, and only when the list's own External doesn't come first. That matches `find_list`'s `over_matlab` for the first convertible entry. The test now pins the right values. |
+| TP-5 (Low) | **Closed**, one new Low (TP-11) | `FolderCache.convert` refuses to join another profile's job. Live's tick waits. Convert this folder… says which profile is converting. |
+| TP-6 (Low) | **Closed** | The design §2 addendum and `test_a_modes_dataset_with_fallback_shots_across_versions` say it accurately. It is left for Tony under Q~6. |
+| TP-7 (Low) | **Closed** | `taken_convert_with` drops the offer once the list no longer resolves to that one tag. `set_folder_list` drops it at once. |
+| TP-8 (Low) | **Closed for now**: the summary is enough until Tony answers Q~9 | `list_summary` adds "(reads as m19v1 only)", shown in the editor, Settings' row and the plot's button. A Nit: Folder details' "this folder: …" line uses `txy_sources.summary`, so it doesn't carry the note. Worth adding if Q~9 stays as built. |
+| TP-9 (Low) | **Closed** | `convert_unavailable` names an open question, so the menu items are disabled with that reason. Beside becoming unavailable while the dialog was open now gets a non-modal message (`convert_folder_beside_ok`) that says nothing was converted. |
+| TP-10 (Nit) | **Closed** | Settings' summary follows the profile combo. Folder details passes the conversion tag. The plot row refreshes on `folderPrefsChanged` for its own folder, through a bound slot that is disconnected on close. |
+
+**TP-1.** `helab_txy.tag_lookup` resolves a tag in this order: what FolderCache already resolved (the mode's profile,
+the list's and fallback's entries), then `known`, `conversion`, and last the built-ins. I re-ran my reproduction:
+- a `helab-only`/`u3f` row now gives `helab-only u3f HUSER`;
+- the list row keeps `u3f`'s hash;
+- a row newer than FolderCache's memory (the app followed Settings, the row says `u3f`) resolves to `u3f`
+  through `known`.
+
+The new test fails without the fix.
+
+**TP-3.** The real bug is fixed in two places:
+- `live.py`: a shot held from External as a fallback stage, which an own entry now has, is read again as a
+  switching shot, and External's TXY feeds the mismatch rule until then.
+- `save_held`: uses `compose_list(reclaim=False)`, so a save keeps every held shot while its TXY is there.
+
+The new `live_check` and `save_held` tests cover:
+- the reclaim;
+- a shot held from an own entry;
+- a new External-only shot taken from the fallback;
+- on-read conversion with m23v1;
+- the record's `fallback`.
+
+They fail without the fix. The new `live.py` branch also catches a held-External shot whose chosen TXY is HeLab's
+for any other reason, for example a one-entry list. Reading it again is the right answer there too.
+
+### TP-11 — Low (new, from TP-5) — Live compares the running conversion by name, `convert` by the whole profile
+
+`helab/views/explorer_live.py` (the tick: `converting_with(path)` against `profile.name`) and
+`helab/utils/folder_cache.py` (`convert`: `running.payload["profile"] != profile`, a whole-dict compare).
+
+Take a conversion of the folder that runs with the conversion profile (say Folder details'). If that profile's
+*content* changes meanwhile while its name stays (a user profile edited and saved, or a calibration), Live's tick
+passes its name check. `convert` then returns False, and Live sets "the conversion couldn't be queued" and stops
+Auto-convert until Retry. Before TP-5 it would have joined. Rare. Fix: compare the same thing on both sides (have
+`converting_with` return the payload's profile dict, or compare `profile.to_dict()`), so Live waits instead of
+stopping.
+
+**Verdict:** no blocker. TP-1 to TP-10 are closed (TP-8 pending Tony's Q~9; I agree the summary is enough
+meanwhile). TP-11 is a new Low that can go to AI_TODO or known-issues, or get a two-line fix before landing. Landing
+still needs the branch's CI run on `bf3fb85` (or its pushed successor) read job by job for RERUN.
+
+## Re-check of the last fixes (`bf3fb85..d58cfa4`)
+
+Reviewer: Claude (Opus 5.5).
+
+**Checks at `d58cfa4`:**
+- Full suite (`-n 4 --reruns 5 --reruns-delay 1 -rR`): **9229 passed, 673 skipped, no RERUN** (155 s).
+- The five type checks are clean.
+- `test_explorer_convert.py`, `test_convert_folder.py` and the cache-tab test run in one process, in that order:
+  30 passed.
+
+**TP-11 — Closed** (`4bdfa14`). `converting_with(path, profile)` now compares the running job's whole profile
+(`running == profile.to_dict()`), as `convert` does, and Live's tick uses it. So a profile with the same name and
+edited content makes Live wait instead of stopping Auto-convert. The other two callers (`convert_unavailable` and
+a pass that can't be queued, in `explorer_convert`) call it without a profile, so they still see any running
+conversion, which is what they need. `test_lives_tick_waits_for_an_edited_profile_of_the_same_name` uses the real
+FolderCache and a real running job, and checks both sides.
+
+**TP-8 note in Folder details — Closed** (`9de5e4c`). `_with_choices` uses `list_summary`, which reads memory only.
+`test_txy_ui.py` checks "Conversion (m19v1) › m19v1 (reads as m19v1 only)".
+
+**The cache-tab test (`f944a5a`).** `test_the_cache_tab_shows_and_clears_converted_txy` and
+`test_convert_this_folder_with_another_profile_to_temp` now each use their own `DIR_TEMPS`. The stated cause is
+plausible and consistent with the earlier one-off failure in a `-n 4` subset: the test counted TXY that earlier
+tests had converted into the xdist worker's shared temp folder. I didn't reproduce the old failure. The fix is
+right either way. The convert test also gains an assertion that the TXY land in the temp folder with m23v1's tag.
+
+**Nothing new.** No open findings from this review. Landing still needs CI on the pushed head read job by job
+(the handoff's last CI run, 41587970080, is on `bf3fb85`).
