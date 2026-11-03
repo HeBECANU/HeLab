@@ -197,6 +197,7 @@ The [API for script writers](../reference/api/index.md) documents every hook and
   optional hooks, such as `describe_run` (the plot's source lines), `minimum_size` and
   `parameter_warnings`;
 - [the dataset view](../reference/api/dataset-view.md): `DatasetView` and its shot times;
+- [run context and results](../reference/api/results.md): `AnalysisContext` and `AnalysisResult`;
 - [parameters](../reference/api/parameters.md): `ParameterSpec`, including SI units and
   settings that show only under one choice;
 - [shot selection](../reference/api/selection.md): the Shots, View range and newest-shot settings;

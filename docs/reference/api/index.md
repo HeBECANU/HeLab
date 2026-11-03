@@ -8,6 +8,7 @@ first.
 |---|---|
 | [Script contract](script.md) | `DatasetAnalysis`, the class a script derives from, and `ScriptMetadata` |
 | [Dataset view](dataset-view.md) | `DatasetView`, the read-only data a run gets, and its identity |
+| [Run context and results](results.md) | `AnalysisContext`, what `compute` gets, and `AnalysisResult`, what `render` draws |
 | [Parameters](parameters.md) | `ParameterSpec`, the settings a script declares |
 | [Shot selection and view range](selection.md) | The Shots, view range and newest-shot parameters every plot can share |
 | [Fits](fits.md) | Least-squares fits of histograms and the T/X/Y profile fits |

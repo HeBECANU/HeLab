@@ -10,6 +10,7 @@ include = [
     "helab/analysis/selection.py",
     "helab/analysis/fits.py",
     "helab/analysis/profiles.py",
+    "helab/analysis/results.py",
 ]
 
 [lint]

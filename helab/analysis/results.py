@@ -47,13 +47,14 @@ class CoverageDiff:
 
     @property
     def current(self) -> bool:
+        """Whether the view holds exactly the shots the run used, unchanged."""
         return not (self.new or self.changed or self.gone)
 
 
 @dataclass(frozen=True)
 class Coverage:
     """The TXY shots a run used, ascending, with their fingerprints (those the view knew) and, for
-    those read from HeLab's TXY, their origins (Q6.6: ``helab:<profile hash>``)."""
+    those read from HeLab's TXY, their origins (``helab:<profile hash>``)."""
     shots: tuple[int, ...] = ()
     fingerprints: Mapping[int, Fingerprint] = field(default_factory=lambda: MappingProxyType({}))
     origins: Mapping[int, str] = field(default_factory=lambda: MappingProxyType({}))
@@ -76,6 +77,7 @@ class Coverage:
         return CoverageDiff(tuple(sorted(wanted - covered)), tuple(changed), tuple(sorted(covered - wanted)))
 
     def text(self) -> str:
+        """``60 shots (1–60)``, or ``no shots``, for a record."""
         if not self.shots:
             return "no shots"
         count = len(self.shots)
@@ -92,7 +94,33 @@ class Coverage:
 @dataclass(frozen=True)
 class AnalysisContext:
     """Everything a run gets: an immutable dataset view and its effective parameters,
-    never the tab. ``cancelled()`` lets a long computation stop early."""
+    never the tab. ``cancelled()`` lets a long computation stop early.
+
+    ``compute`` receives it as ``context``; it is immutable and holds no Qt object.
+
+    Attributes:
+        job_id: The run's ID.
+        action: The action that runs (one of the script's ``get_actions``).
+        view: The data, a read-only ``DatasetView``.
+        parameters: Every declared parameter's value, checked and clamped, defaults filled in.
+        analysis: The script's identity (its ID, version and file hash).
+        cancel_event: Set when the run is cancelled (read it through ``cancelled`` or ``check``).
+        coverage: The shots the run uses (``DatasetAnalysis.covered_shots``); None: all of the
+            view's (``covered``).
+        constants: The lab and folder layers of the physical constants, as
+            ``{"lab": {key: value}, "folder": {...}}``, taken when the run started.
+        resolved_constants: Those layers with the plot's own values, resolved when the run was
+            submitted, for an analysis that uses constants; None otherwise. ``compute`` reads its
+            constants here.
+        constant_keys: The constants the analysis uses, which the record names.
+        owner: The plot that asked for the run ("" for a run no plot asked for, e.g. a test). An
+            analysis may keep per-plot state under it (dropped in ``DatasetAnalysis.plot_closed``).
+        live: True for a rerun following Live rather than one the user asked for: a costly
+            analysis may do less then and say so.
+        unused: The parameters not in use under ``parameters`` (hidden by their ``when`` or
+            ``shown_with``), left out of the result's reuse key.
+        to_cache: Whether the completed result may be saved in the disk cache.
+    """
     job_id: str
     action: str
     view: DatasetView
@@ -131,9 +159,12 @@ class AnalysisContext:
 
     @property
     def covered(self) -> Coverage:
+        """The shots the run uses, with their fingerprints and origins (``coverage``, else all)."""
         return self.coverage if self.coverage is not None else Coverage.of(self.view)
 
     def cancelled(self) -> bool:
+        """Whether the run was cancelled: a long ``compute`` checks it and returns early (or calls
+        ``check``)."""
         return self.cancel_event.is_set()
 
     def check(self) -> None:
@@ -144,6 +175,36 @@ class AnalysisContext:
 
 @dataclass(frozen=True)
 class AnalysisResult:
+    """A run's outcome and its record: what ``render`` draws and what the plot dock's tooltip shows.
+
+    Attributes:
+        job_id: The run's ID.
+        action: The action that ran.
+        analysis: The script's identity (its ID, version and file hash).
+        input: The view the run used: its identity and revision (``ViewKey``).
+        parameters: Every declared parameter's value as the run used it, defaults filled in.
+        state: "completed", "failed" or "cancelled".
+        data: What ``compute`` returned (None unless completed, and once the plot is released).
+        error: Why the run failed ("" otherwise).
+        started_at: When it started (s since the epoch).
+        finished_at: When it ended (s since the epoch).
+        policy: Where it is kept: in RAM only, or also in the disk cache.
+        coverage: The shots it used, with their fingerprints and origins.
+        input_signature: The signature of the view's revision it ran on.
+        constant_layers: The lab and folder layers of the constants the run got.
+        resolved_constants: What it resolved from them; None for an analysis without constants.
+        constant_keys: The constants it used.
+        found: What it found or used beyond its parameters, as JSON values
+            (``DatasetAnalysis.result_found``): kept in the record after the plot is released.
+            Read-only at the top level only: don't change the lists and dicts inside.
+        owner: The plot that asked for it.
+        unused: The parameters it didn't use, left out of ``reuse_key``.
+        source: "" for a result computed now; "disk" for one read back from the disk cache.
+        outdated: For one read back from the disk cache, what no longer matches the run asked
+            for (empty: an exact match).
+        packed: Its data packed for the disk cache, when it may be saved; None otherwise.
+        packing_error: Why its data couldn't be packed ("" otherwise).
+    """
     job_id: str
     action: str
     analysis: AnalysisIdentity
@@ -183,6 +244,8 @@ class AnalysisResult:
     @classmethod
     def of(cls, context: AnalysisContext, state: State, data: Any = None, error: str = "",
            started_at: float = 0.0, found: Mapping[str, Any] | None = None) -> AnalysisResult:
+        """The result of a run of ``context`` that ended now in ``state``, with ``compute``'s
+        ``data`` or the ``error``, and what it ``found``."""
         return cls(context.job_id, context.action, context.analysis, context.view.key,
                    MappingProxyType(dict(context.parameters)), state, data, error,
                    started_at, time.time(), coverage=context.covered, input_signature=context.view.signature,
@@ -205,8 +268,8 @@ class AnalysisResult:
         return {"layers": layers, **self.resolved_constants.as_record(self.constant_keys or None)}
 
     def reuse_key(self) -> dict[str, Any]:
-        """What a later reuse of this result must match (result caching rule 5), as JSON values: a
-        saved result's lookup key (R2, ``result_cache.lookup_key``). What the run decided beyond its parameters and input, which a
+        """What a later reuse of this result must match, as JSON values: a saved result's lookup
+        key (``result_cache.lookup_key``). What the run decided beyond its parameters and input, which a
         reuse must match too, comes from ``found["reuse"]`` when the script gives it
         (``DatasetAnalysis.result_found``; e.g. a box kept from an earlier run of the plot). The
         parameters are those in use (not ``unused``: a hidden setting never changes the key)."""
@@ -268,6 +331,7 @@ class RamResults:
         self._lock = threading.Lock()
 
     def add(self, result: AnalysisResult) -> None:
+        """Keep ``result``, dropping the least recently used unpinned ones beyond ``limit``."""
         with self._lock:
             self._results[result.job_id] = result
             self._results.move_to_end(result.job_id)
@@ -277,6 +341,7 @@ class RamResults:
                 del self._results[job_id]
 
     def get(self, job_id: str) -> AnalysisResult | None:
+        """The result of ``job_id``, if kept, made the most recently used."""
         with self._lock:
             result = self._results.get(job_id)
             if result is not None:
@@ -295,14 +360,17 @@ class RamResults:
             self._results.pop(job_id, None)
 
     def for_input(self, key: ViewKey) -> list[AnalysisResult]:
+        """The kept results of runs on the view revision ``key``."""
         with self._lock:
             return [result for result in self._results.values() if result.input == key]
 
     def pin(self, job_id: str) -> None:
+        """Never drop ``job_id``'s result (a plot dock shows it)."""
         with self._lock:
             self._pinned.add(job_id)
 
     def unpin(self, job_id: str) -> None:
+        """Let ``job_id``'s result be dropped again."""
         with self._lock:
             self._pinned.discard(job_id)
 

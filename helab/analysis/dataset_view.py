@@ -87,8 +87,8 @@ class ViewIdentity:
         signature: The loaded dataset's signature (a hash of its TXY files' fingerprints); ""
             when it has none (e.g. a resumed partial load).
         source: Which TXY source the data is made of: "" for the two priority modes (the
-            shots' ``DatasetView.origins`` tell their data apart), else the mode's name
-            (``txy_sources.identity_source``).
+            shots' ``DatasetView.origins`` tell their data apart), else the mode's name or the TXY
+            priority list's text (``txy_sources.identity_source``).
         chain: The token of this chain of revisions ("" for a placeholder view). Not part of a
             result's reuse key, which compares the data itself.
     """
@@ -175,6 +175,9 @@ class DatasetView:
         txy_profiles: Profile hash → its name, version and whether it is calibrated, for the
             HeLab TXY in the view.
         on_read: The HeLab shots converted from their raw files when they were read.
+        fallback: The shots read from beyond the TXY choice's own list, because none of its
+            entries had them: from its fallback (the folder's or Settings' list, External, then
+            any HeLab TXY). ``origins`` says which TXY each is.
         txy_choice: The TXY choice the data was loaded with ("": none named, MATLAB's TXY
             alone). Views of two choices are never revisions of each other.
     """

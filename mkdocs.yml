@@ -110,6 +110,7 @@ nav:
           - reference/api/index.md
           - reference/api/script.md
           - reference/api/dataset-view.md
+          - reference/api/results.md
           - reference/api/parameters.md
           - reference/api/selection.md
           - reference/api/fits.md
