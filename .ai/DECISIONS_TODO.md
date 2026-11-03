@@ -294,19 +294,12 @@ Tony in Chat, 2026-11-03 evening (via CoCo), on the remaining questions:
   otherwise falls back to HeLab's folder with a warning ("i thought instead of --yes we decided
   beside-forced? ... still show a warning in cli anyways but skips confirmation").
 - **Q49.1, Q49.2** as built ("ok").
+- **Q56.1 Zensical:** the manual moves from Material for MkDocs (end of life 2027-05-05) to Zensical, keeping
+  offline search in the bundled copy, the version menu, dark mode and the rest ("ok use Zensical then, I want
+  offline search, version menu, dark mode, and other things"); checked on the Follow-ups floor before switching.
 - **Q49.3 (b):** before importing a script folder (at start and on reload), HeLab try-imports it in a helper
   process with a time limit and skips, with a message, one that hangs; the real import stays on the GUI
-  thread ("do b?").
-
-## Documentation follow-ups (block 56)
-
-From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (landed `b0e3aac`).
-
-- **Q56.1 Material for MkDocs reaches end of life on 2027-05-05.** Tony (2026-11-03): "use zensical", then
-  asked about plain MkDocs "for simple looks". Plain MkDocs loses Material's offline plugin (search in the copy
-  bundled in the app), its built-in version menu (mike can inject a simpler one), dark mode, code copy buttons
-  and collapsible sections; Zensical keeps them and reads `mkdocs.yml`, but is new. **Proposed:** a quick trial
-  of both on a branch (what works, screenshots), then Tony picks.
+  thread ("do b?", then "ok proceed 49.3b").
 
 ## Documentation (block 54)
 
