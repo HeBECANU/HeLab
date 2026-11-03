@@ -221,3 +221,12 @@ mount the image inside the checkout: the real-data guard refuses a basetemp unde
   - `--basetemp` on another mount (the image mounted inside the checkout), `-n 8`.
 - **Type checks:** all five clean.
 - **CI:** below.
+
+## CI 41608759890 (`f987747`): success, all 15 job logs read, no RERUN
+
+- **Jobs:** Tests 1/3, 2/3 and 3/3, Converter backends and Build all succeeded on macOS, Windows and
+  Ubuntu. No log has a RERUN, a rerun reason or a crashed worker.
+- **New and changed tests:** they passed on macOS and Ubuntu (4 each). On Windows 3 passed; the
+  naming test skips there by design (`os.name == "nt"`: a fake POSIX mount table).
+- **Image:** Ubuntu again ran image 20261025.179.1.
+- **Windows pytest per group:** 9.5, 10.3 and 9.2 min.
