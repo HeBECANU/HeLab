@@ -2152,17 +2152,19 @@ def test_a_typed_output_cache_asks_before_writing_a_dont_cache_folder_to_the_cac
     assert Path(plan["folder"], "d_txy_helab_m19v1_1.txt").is_file()
 
 
-@pytest.mark.parametrize("share, yes, terminal, answer, beside", [
-    ("//labserver/data", False, True, True, True), ("//labserver/data", False, True, False, False),
-    ("//labserver/data", False, False, None, False), ("//labserver/data", True, False, None, True),
-    ("//labserver/data", True, True, None, True), ("", False, True, None, True)],
-    ids=["terminal-y", "terminal-N", "no-terminal", "yes", "yes-on-terminal", "not-a-share"])
+@pytest.mark.parametrize("share, output, terminal, answer, beside", [
+    ("//labserver/data", "beside", True, True, True), ("//labserver/data", "beside", True, False, False),
+    ("//labserver/data", "beside", False, None, False), ("//labserver/data", "beside-forced", False, None, True),
+    ("//labserver/data", "beside-forced", True, None, True), ("", "beside", True, None, True),
+    ("", "beside-forced", True, None, True)],
+    ids=["terminal-y", "terminal-N", "no-terminal", "forced", "forced-on-terminal", "not-a-share", "forced-not-a-share"])
 def test_a_typed_output_beside_on_a_share_warns_and_asks_first(
         source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-        share: str, yes: bool, terminal: bool, answer: bool | None, beside: bool) -> None:
+        share: str, output: str, terminal: bool, answer: bool | None, beside: bool) -> None:
     """A39.5 (Q39.2): ``--output beside`` on a network share warns once (the share named, the converter
     belongs on the acquisition PC) and asks on a terminal, no by default; without one it converts to HeLab's
-    folder and names ``--yes``; ``--yes`` asks nothing. Detection is patched: no real share."""
+    folder and names ``--output beside-forced``. Q48.3: ``beside-forced`` asks nothing and still warns.
+    Detection is patched: no real share."""
     from helab.utils import cache_location
     write_raw(source, 1, raw_bytes(10_000))
     resolved: list[bool] = []
@@ -2172,19 +2174,33 @@ def test_a_typed_output_beside_on_a_share_warns_and_asks_first(
         return share if path == str(source) else ""
     monkeypatch.setattr(cache_location, "share_of", share_of)
     with caplog.at_level("WARNING", logger="helab.convert"):
-        request, asked = typed(source, tmp_path, private_store, monkeypatch, "--output", "beside",
-                               *(["--yes"] if yes else []), terminal=terminal, answer=answer)
+        request, asked = typed(source, tmp_path, private_store, monkeypatch, "--output", output,
+                               terminal=terminal, answer=answer)
     assert resolved == [True]  # (The command line may resolve the source path; the GUI never does.)
     assert asked == (["Write the TXY beside the raw files on the share anyway? [y/N] "] if answer is not None else [])
     warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
     assert bool(warnings) == bool(share)
     if share:
         assert "//labserver/data" in warnings[0] and "acquisition PC" in warnings[0]
-        assert any("--yes" in warning for warning in warnings) == (not beside or yes)
+        assert any("beside-forced" in warning for warning in warnings) == (not beside or output == "beside-forced")
+        assert not any("--yes" in warning for warning in warnings)
     assert bool(request.get("beside_confirmed")) is beside
     [plan] = of(run(source, request), "convert_plan")
     assert plan["output"] == ("beside" if beside else "cache")
     assert (source / "d_txy_helab_m19v1_1.txt").is_file() is beside
+
+
+def test_yes_is_gone_and_names_beside_forced(capsys: pytest.CaptureFixture[str]) -> None:
+    """Q48.3: ``--yes`` was replaced by ``--output beside-forced``; passing it is a usage error naming it,
+    and the help lists ``beside-forced`` but not ``--yes``."""
+    from helab import convert_cli
+    with pytest.raises(SystemExit) as exit_:
+        convert_cli._arguments(["--watch", "folder", "--output", "beside", "--yes"])
+    assert exit_.value.code == 2 and "--output beside-forced" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        convert_cli._arguments(["--help"])
+    shown = capsys.readouterr().out
+    assert "beside-forced" in shown and "--yes" not in shown
 
 
 @pytest.mark.parametrize("argv", [(), ("--output", "temp")], ids=["setting", "temp"])

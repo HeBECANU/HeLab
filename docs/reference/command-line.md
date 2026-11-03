@@ -35,7 +35,7 @@ code 1. `helab convert` and `helab cache` don't count: they run beside the app.
 
 ```text
 helab convert --watch FOLDER [--once] [--profile NAME|FILE.json] [--backend NAME]
-              [--output temp|cache|cache-forced|beside] [--yes]
+              [--output temp|cache|cache-forced|beside|beside-forced]
               [--workers N] [--interval SECONDS] [--again]
 ```
 
@@ -58,8 +58,8 @@ renamed, so none is left half-written.
 | `--output temp` | Write the TXY to HeLab's temp folder. |
 | `--output cache` | Write them to HeLab's cache folder. For a folder set to Don't cache, it warns and asks `Write to the cache folder anyway? [y/N]`; without a terminal, or on no, the temp folder. |
 | `--output cache-forced` | The cache folder, even for a folder set to Don't cache, without asking. |
-| `--output beside` | Write the TXY next to the raw files, for this run, whatever the folder's own setting. |
-| `--yes` | With `--output beside` on a network share: write beside the raw files without asking. |
+| `--output beside` | Write the TXY next to the raw files, for this run, whatever the folder's own setting. On a network share it asks first (below). |
+| `--output beside-forced` | Beside the raw files even on a network share, without asking. The share's warning is still logged. |
 | `--workers N` | Processes converting at once. Default: half the computer's cores, at most 4 (1 in the packaged app). |
 | `--interval SECONDS` | Seconds between checks of the folder. Default 3. |
 | `--again` | Convert every shot once more, current ones too (cache and temp folders only). |
@@ -70,7 +70,8 @@ to the temp folder.
 
 **Beside the raw files on a network share**, `--output beside` warns once and asks
 `Write the TXY beside the raw files on the share anyway? [y/N]`. No, or no terminal, converts to
-HeLab's own folder instead; `--yes` skips the question.
+HeLab's own folder instead, and the log names `--output beside-forced`, which writes beside without
+asking. (Older versions had `--yes` for this; it is now a usage error naming `beside-forced`.)
 
 **If the share can't take a file safely** (its file system can't add a file without risking
 replacing one), it asks
