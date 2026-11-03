@@ -139,6 +139,32 @@ jobs:
           fi
           pytest -n 4 --verbose --reruns 5 --reruns-delay 5 --timeout=120 --timeout-method=thread
 
+      # The user manual for offline reading, which HeLab.spec bundles from build/manual (Help › User
+      # manual opens it when the site can't be reached). Its tools get their own venv in build/ (ignored
+      # by Git, so the build stamp stays clean), never the app's. Python 3.13 only: the docs lock is
+      # 3.13's, and only those builds are released. A recovery build of a tag from before the manual
+      # builds without it, as that tag did.
+      - name: Build the user manual for the app
+        if: inputs.python-minor == '13'
+        shell: bash
+        env:
+          HELAB_DOCS_OFFLINE: 'true'
+          HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [ ! -f mkdocs.yml ] || [ ! -f requirements-docs.lock ]; then
+            echo "No user manual at this commit: building without it."
+            exit 0
+          fi
+          python -m venv build/docs-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source build/docs-venv/Scripts/activate
+          else
+            source build/docs-venv/bin/activate
+          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements-docs.lock
+          mkdocs build --strict -d build/manual
+
       - name: Build with PyInstaller
         shell: bash
         run: |
@@ -168,6 +194,25 @@ jobs:
           esac
           python native/check_build.py --frozen "$app" --require "$HELAB_REQUIRE_BACKENDS"
           du -sh dist/HeLab
+
+      - name: Check the packaged app has the user manual
+        if: inputs.python-minor == '13'
+        shell: bash
+        run: |
+          if [ ! -f mkdocs.yml ]; then
+            echo "No user manual at this commit."
+            exit 0
+          fi
+          case "$RUNNER_OS" in
+            macOS) app=dist/HeLab.app ;;
+            *) app=dist/HeLab ;;
+          esac
+          found=$(find "$app" -path "*/helab/manual/index.html" | head -n 1)
+          if [ -z "$found" ]; then
+            echo "::error::The packaged app has no helab/manual/index.html"
+            exit 1
+          fi
+          echo "User manual in the app: $found"
 
       # Ship only HeLab.app on macOS (dist/HeLab is the same app again), zipped here
       # so the Qt framework symlinks survive: upload-artifact would replace each
