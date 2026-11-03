@@ -606,6 +606,7 @@ class TreePanelWidget(QWidget):
         folders, answers, then = self._answered
         listed = {folder for folder in folders if self._is_remembered(folder) or
                   any(os.path.normcase(known) == os.path.normcase(folder) for known in self.script_manager.folders())}
+        self._listen()  # (Before counting: a run ending meanwhile still reaches ``_run_ended``, C4-2.)
         busy = self._busy(listed)
         if busy:
             for instance in self._plots_of(listed):
@@ -828,8 +829,12 @@ class TreePanelWidget(QWidget):
             if not self._probing:
                 self._stop_waiting()  # (L2: the folder it waited for was removed meanwhile.)
             return
+        if self._answered is not None:
+            self._end_round()  # (Answered, waiting for runs: count them again; this reload follows it.)
+            return
         if self._probing:
             return  # (A round of test imports runs: this reload's round follows it, ``_probe_then``.)
+        self._listen()  # (Before counting: a run ending meanwhile still reaches ``_run_ended``, C4-2.)
         busy = self._busy(self._pending)
         if busy:
             self._wait_for_runs(busy)
@@ -900,12 +905,17 @@ class TreePanelWidget(QWidget):
         return os.path.normcase(path) == os.path.normcase(folder) or \
             os.path.normcase(os.path.dirname(path)) == os.path.normcase(folder)
 
-    def _wait_for_runs(self, busy: int) -> None:
-        """Wait (never blocking) for ``busy`` runs to end: each runner's ``finished`` checks again."""
+    def _listen(self) -> None:
+        """Each runner's ``finished`` checks again (``_run_ended``); connected before the runs are counted, since
+        Qt queues a signal only to the receivers connected when it is emitted (``_stop_waiting`` disconnects)."""
         for runner in self._runners():
             if runner not in self._waiting_on:
                 runner.finished.connect(self._run_ended)
                 self._waiting_on.append(runner)
+
+    def _wait_for_runs(self, busy: int) -> None:
+        """Wait (never blocking) for ``busy`` runs to end: each runner's ``finished`` checks again."""
+        self._listen()
         self.reload_button.setText("Reload (waiting)")
         self.reload_button.setToolTip(f"The reload waits for {busy:,} run{'' if busy == 1 else 's'} of these "
                                       "scripts to end (cancelled)")

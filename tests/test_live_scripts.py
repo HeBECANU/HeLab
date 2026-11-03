@@ -10,14 +10,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pytest
 from typing import Iterator
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QEvent
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt
 from PyQt6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
@@ -551,6 +552,47 @@ def test_the_import_waits_for_a_run_that_started_while_its_folder_was_tested(
     answer({folder_: None for folder_ in folders})
     assert seen == [0, 0] and scripts.reload_button.text() == "Reload" and not scripts._probing
     qtbot.waitUntil(lambda: instance.shown is not None and shown_tag(instance) == "new", timeout=10_000)
+
+
+def test_a_run_ending_as_the_reload_counts_it_doesnt_leave_the_reload_waiting(
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """C4-2 (PR #11, round 2): the run the answered round counts ends, its ``finished`` emitted, before the
+    count returns. The panel listens before it counts, so that ``finished`` reaches it and the import goes on
+    (it never stays "Reload (waiting)" with nothing left to wait for)."""
+    window = new_window(qtbot, cache, windows)
+    scripts = window.scripts
+    write_script(tmp_path, "lab_live_t", "old", wait=BLOCKS.format(helper="lab_live_t"))
+    scripts.add_folder(str(tmp_path))
+    gate, started = sys.modules["lab_live_t"].GATE, sys.modules["lab_live_t"].STARTED
+    gate.set()
+    instance = open_plot(qtbot, window, cache)
+    gate.clear()
+    started.clear()
+    rounds, seen = fake_probes(monkeypatch, scripts), imports_seen(monkeypatch, scripts)
+    scripts.reload_scripts()
+    instance.runner.submit(type(instance.script)(), instance.metadata, "Plot", instance.view)
+    qtbot.waitUntil(started.is_set, timeout=10_000)
+    ended = threading.Event()
+    # (Direct: called on the worker thread as it emits. PyQt6's stubs lack connect's type argument.)
+    instance.runner.finished.connect(lambda _result: ended.set(), Qt.ConnectionType.DirectConnection)  # type: ignore[call-arg]
+    busy = scripts._busy
+    counts: List[int] = []
+
+    def counting(folders: Set[str]) -> int:
+        count = busy(folders)
+        if not counts:
+            counts.append(count)
+            gate.set()
+            assert ended.wait(10)  # (The run ended and said so on the worker thread, before this count returns.)
+        return count
+    monkeypatch.setattr(scripts, "_busy", counting)
+    write_script(tmp_path, "lab_live_t", "new")
+    folders, answer = rounds[0]
+    answer({folder_: None for folder_ in folders})
+    assert counts == [1]
+    qtbot.waitUntil(lambda: seen == [0] and scripts.reload_button.text() == "Reload", timeout=10_000)
+    qtbot.waitUntil(lambda: instance.shown is not None and shown_tag(instance) == "new", timeout=10_000)
+    assert len(rounds) == 1 and not scripts._probing
 
 
 def test_removing_the_folder_a_tested_reload_waits_for_lets_it_go_on(
