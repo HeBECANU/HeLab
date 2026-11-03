@@ -3,7 +3,7 @@
 <title>Lab camera</title>
 <script src="plotly.min.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#111;--fg:#ddd;--dim:#888;--ok:#50c850;--off:#ffa028;--unknown:#aaa;--line:#333}
+:root{color-scheme:dark;--bg:#111;--fg:#ddd;--dim:#888;--ok:#50c850;--off:#ffa028;--unknown:#aaa;--people:#288cff;--line:#333}
 body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.35 -apple-system,system-ui,sans-serif}
 #view{position:relative;max-width:1280px;margin:0 auto}
 details{border-top:1px solid var(--line);margin:4px 0}
@@ -20,7 +20,7 @@ button:hover{border-color:#777}
 table{border-collapse:collapse;width:100%}
 td,th{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
 th{color:var(--dim);font-weight:normal}
-.ok{color:var(--ok)}.off{color:var(--off)}.unknown{color:var(--unknown)}
+.ok{color:var(--ok)}.off{color:var(--off)}.unknown{color:var(--unknown)}.people{color:var(--people)}
 .values{color:var(--dim);font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
 #log{height:260px;overflow:auto;background:#000;border:1px solid var(--line);padding:4px;font:12px ui-monospace,monospace;white-space:pre-wrap}
 .WARNING{color:var(--off)}.ERROR,.CRITICAL{color:#f55}.DEBUG{color:#777}
@@ -234,7 +234,7 @@ async function refresh() {
     $("src").textContent = src.connected ? `connected, frame ${src.last_frame_age ?? "–"} s old` : `not connected: ${src.error}`;
     $("src").className = src.connected ? "ok" : "off";
     const a = s.alignment;
-    $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}` : a.note;
+    $("align").textContent = a.ok ? `${a.inliers} matches, shift ${a.shift.join(", ")} px${a.note ? " · " + a.note : ""}${a.paused ? " · paused: " + a.paused : ""}` : a.note;
     $("align").className = a.ok ? (a.note.startsWith("camera moved") ? "off" : "ok") : "off";
     if (s.ocr && document.activeElement !== $("ocrfast")) { $("ocrfast").checked = s.ocr.every_check; $("ocrcores").textContent = ` (${s.ocr.workers} cores)`; }
     if (s.power) {
@@ -254,7 +254,7 @@ async function refresh() {
       const details = `${esc(values)}${r.note ? "<br>" + esc(r.note) : ""}<br>corners ${i.corners.map(p => p.map(Math.round).join(",")).join(" ")}`;
       const buttons = sep => `<button onclick="edit('${name}')">Edit region</button>${["trace", "dot", "needle"].includes(i.kind) ? `${sep}<button onclick="snapCurrent('${name}')" title="Snap the box's sides to the screen's edges near them, and preview it before using it">Snap</button>` : ""}`;
       return `<tr class="main"><td>${esc(i.label)}<br><span class="values">${name} · ${i.kind}</span></td>
-        <td class="${r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
+        <td class="${i.kind === "motion" && r.status === "off" ? "people" : r.status}">${r.status}</td><td>${esc(r.text)}${age > 5 ? ` <span class="values">(${duration(age)} ago)</span>` : ""}</td>
         <td>${Math.round((r.confidence || 0) * 100)}%<br><span class="values">${sure10(i.sure_10s).trim()}</span></td>
         <td class="values wide">${details}</td>
         <td class="wide">${buttons("<br>")}</td></tr>
@@ -297,6 +297,10 @@ const PANELS = [
   {title: "Locks", kind: "state", about: "Each laser's lock state: green locked, orange lost, grey can't tell.<br>" +
     "The fainter a square, the less sure labcam was. He3: the left middle scope shows a flat thin line.<br>" +
     "He4: the left top scope is flat, the scope dot still and the lock-in needle in the middle."},
+  {title: "People: movement (% of the view)", match: k => k.endsWith(".moved"), kind: "bars", scale: 100, sure: true,
+    about: "How much of the view changed (outside the instruments' screens), in %: bright blue while it counts as someone<br>" +
+      "moving (until 5 s after the last movement), dark otherwise. Right axis: how sure the camera check was.<br>" +
+      "A loss seen while someone moves reads unknown, and lost once it's quiet."},
   {title: "Wavemeter", match: k => k === "wavemeter.value", about: "The wavemeter's reading (nm or GHz), read from its display.<br>" +
     "Grey points had digits it couldn't read for sure."},
   {title: "Power (µW)", match: k => k === "wavemeter_power.value", about: "The power under the wavemeter's reading, read from its display."},
@@ -312,8 +316,6 @@ const PANELS = [
   {title: "Dot movement (px)", match: k => k.endsWith(".spread_px"),
     about: "How far the scope dot moved over the last few seconds, in pixels of the camera frame.<br>" +
       "It counts as moving past a tenth of the screen's width."},
-  {title: "People", match: k => k.endsWith(".present"), kind: "bars", range: [0, 1.05],
-    about: "1 when labcam saw someone moving in the room. Readings behind a person are held, not counted as lost."},
 ];
 let historyDrawn = false, PANEL_ABOUT = {};
 
@@ -366,10 +368,11 @@ const LINE_COLOURS = ["#4fc3f7", "#ba68c8", "#fff176", "#f06292"];
 function valueTraces(c, panel, axis) {
   return Object.keys(c).filter(panel.match).map((col, n) => {
     const name = col.split(".")[0], status = c[name + ".status"] || [], sure = c[name + ".sure"] || [], shape = c[name + ".shape"] || [];
-    const bars = panel.kind === "bars";
+    const bars = panel.kind === "bars", present = c[name + ".present"] || [];
+    const y = panel.scale ? c[col].map(v => typeof v === "number" ? v * panel.scale : null) : c[col];
     return {
-      type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y: c[col], yaxis: axis,
-      marker: bars ? {color: "#ffa028"} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
+      type: bars ? "bar" : "scatter", mode: bars ? undefined : "lines+markers", name: col, x: c.time, y, yaxis: axis,
+      marker: bars ? {color: present.map(v => v === 1 ? "#288cff" : "#1d3f6e")} : {size: 4, color: status.map(s => STATE_COLOUR[s] || "#4fc3f7")},
       line: {width: 1, color: LINE_COLOURS[n % LINE_COLOURS.length]}, connectgaps: false, showlegend: false,
       customdata: c.time.map((_, i) => [status[i] ?? "", shape[i] ? ", " + shape[i] : "",
                                         sure[i] == null ? "" : ` (sure ${Math.round(100 * sure[i])}%)`]),
@@ -419,10 +422,11 @@ async function refreshHistory() {
                                xanchor: "left", yanchor: "bottom", showarrow: false, font: {size: 11, color: "#bbb"},
                                hovertext: p.about, captureevents: true, name: p.title});
       layout[key] = {domain: [top - h, top], gridcolor: "#222", zeroline: false,
-                     ...(p.kind === "state" ? {type: "category"} : {range: p.range || robustRange(p.traces)})};
+                     ...(p.kind === "state" ? {type: "category"} : p.kind === "bars" ? {rangemode: "tozero", ticksuffix: "%"}
+                         : {range: p.range || robustRange(p.traces)})};
       layout[key].fixedrange = !zoom;
       p.traces.forEach(t => traces.push({...t, yaxis: axis}));
-      if (!sure || p.kind === "state") return;  // the Locks panel shows how sure by its squares' opacity
+      if (!(sure || p.sure) || p.kind === "state") return;  // the Locks panel shows how sure by its squares' opacity
       // How sure, on a 0–100 % axis of its own over the panel: per laser for the locks, per instrument otherwise.
       const cols = [...new Set(p.traces.map(t => t.name.split(".")[0] + ".sure"))];
       const sureAxis = "y" + (shown.length + n), sureKey = "yaxis" + (shown.length + n);
@@ -434,7 +438,7 @@ async function refreshHistory() {
         hovertemplate: `<b>${col.replace(/[._]sure$/, "")}</b> sure %{y:.0f}%<br>%{x}<extra></extra>`,
       }));
     });
-    if (sure) layout.margin.r = 36;
+    if (sure || shown.some(p => p.sure)) layout.margin.r = 36;
     const lockAt = shown.findIndex(p => p.kind === "state");
     if (lockAt >= 0 && shown.length > 1) {
       // The Locks panel gets its own time axis (the same times as the others'), and a label at each lock change.

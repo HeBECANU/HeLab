@@ -15,6 +15,7 @@ from .detectors import Image, Reading
 # BGR
 COLOURS = {"ok": (80, 200, 80), "off": (40, 160, 255), "unknown": (170, 170, 170)}
 MARK = (255, 0, 255)
+PEOPLE = (255, 140, 40)  # blue: someone moving (Tony, 2026-11-03), not a fault
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -76,6 +77,8 @@ def draw(frame: Image, items: list[Item], header: str, style: Style = Style()) -
     taken: list[tuple[int, int, int, int]] = []
     for item in items:
         colour = COLOURS.get(item.reading.status, COLOURS["unknown"])
+        if item.kind == "motion" and item.reading.status == "off":
+            colour = PEOPLE
         if item.kind != "motion":
             cv2.polylines(out, [_poly(item.corners)], True, colour, style.line, cv2.LINE_AA)
         for mark in item.marks:

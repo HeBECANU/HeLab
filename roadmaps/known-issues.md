@@ -14,6 +14,12 @@ How to use it:
 
 ## App
 
+- [ ] **A user script with `from __future__ import annotations` and a `@dataclass` fails to load**
+  (`AttributeError` from `dataclasses._is_type`): `ScriptsManager._load_script_file` runs the module without
+  registering it in `sys.modules`. Found by Quill writing the manual (2026-11-03); being fixed on the Docs floor
+  (register it under `helab.scripts.dynamic.<name>` before `exec_module`).
+- [ ] `helab cache --help` prints a person's name ("(Tony, 2026-10-31)"): `helab/cache_cli.py` builds argparse's
+  description from its docstring. Public CLI output; being fixed on the Docs floor with the other CLIs' help.
 - [ ] **The RAM budget box clips its text** (Settings → Cache): Qt's `QAbstractSpinBox.sizeHint`
   measures at most 18 characters, and "16.0 GiB (1/8 of 128 GiB)" is 25 (it was 23 as "17.2 GB (1/8
   of 137 GB)", clipped too; widths 131 and 135 px offscreen). A `sizeHint` override on
@@ -121,6 +127,11 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second` reran once on Windows,
+  Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
+  quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
+  `92f9d1a`); "Disk cache inventory: Cancelled" was logged just after. Unchecked whether store-v4's quit path
+  (the inventory, `raw_fill`) adds the time or the runner was busy.
 - [ ] `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots` reran once on
   Windows CI 41561765280 (Tests 3/3, job 125673863803, `agent/v4-switch-on` `23134c0`, 2026-11-03):
   `assert took < 5.0` failed at 5.52 s (the load with the converted-TXY index held by another writer, which must

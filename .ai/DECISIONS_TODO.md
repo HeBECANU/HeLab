@@ -255,6 +255,19 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
   `dev/v0.0.8`; Q50.18's check still comes before the PR. Block 53 is built on this Mac ("you are the dev
   computer (M4M)").
 
+## Documentation (block 54)
+
+- **Q54.1** before the v0.0.8 PR: (a) a docstring pass on the script-facing API with a check that keeps it
+  (A54.1), and (b) a user manual with MkDocs Material, an API reference from the docstrings (mkdocstrings) and
+  Help › User manual (A54.2) (Tony in Chat, 2026-11-03).
+- **Q54.2** the manual is published on GitHub Pages from `TonyXTYan/HeLab` (public, naming no person or lab
+  machine), one version per release (`mike`); `HeBECANU/HeLab` gets its own site when it is pushed there (Q54.4)
+  (Tony, 2026-11-03: "ok").
+- **Q54.3** the built manual is bundled in HeLab.app and the Windows zip, opened in the system browser when the
+  site can't be reached (Tony, 2026-11-03: "yes").
+- **Q54.4** Help › User manual opens the site of the repo the build came from (a release from `HeBECANU/HeLab`
+  opens `hebecanu.github.io/HeLab`), and the bundled copy when it can't be reached (Tony, 2026-11-03: "a").
+
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 
 - **Q53.1** MATLAB's `d_txy_forc<N>.txt` is labelled "External (MATLAB converter)" in the UI (the label only; files keep their names) (Tony, 2026-11-03).
