@@ -88,6 +88,9 @@ def complete_scan(explorer: FolderExplorer, qtbot: QtBot, path: str,
     # (store-v4, the shipped default: a raw file without a TXY is converted when the folder is loaded, so it is
     # data to cache, S3~5.)
     ("raw", "1 raw found · converted when loaded · Not loaded", "No cached data"),
+    # (The hidden fallback, store-v3, V~2 and SO-3: a raw file alone is no data to cache, as before the switch-on.)
+    pytest.param("raw", "1 raw shot found · No converted TXY files", "No data to cache", marks=pytest.mark.store_v3,
+                 id="raw-store-v3"),
 ])
 def test_non_data_folder_summary(
     browser: FolderExplorer, qtbot: QtBot, tmp_path: Path, contents: str, expected: str, cache_line: str,

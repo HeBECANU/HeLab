@@ -187,9 +187,27 @@ CASES: dict[str, tuple[Case, list[str]]] = {
 STAMPED = time.time()  # When CASES' ages were taken.
 
 
+# The hidden fallback, store-v3 (V~2, SO-3): a raw file without a TXY is not converted when loaded, so the
+# tooltips carry no on-read count, as before the switch-on.
+STORE_V3_CASES: dict[str, tuple[Case, list[str]]] = {
+    "fixable": (CASES["fixable"][0], HEAD + ["Here: 2 of 3 shots converted", "Subfolders: none"] + CHECKED_LINES),
+    "raw only": (CASES["raw only"][0], HEAD + ["Here: 2 shots, none converted", "Subfolders: none"] + CHECKED_LINES),
+}
+
+
 @pytest.mark.parametrize("case", CASES)
 def test_row_tooltip(model: SnapshotFileSystemModel, case: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    build, expected = CASES[case]
+    check_tooltip(model, *CASES[case], monkeypatch)
+
+
+@pytest.mark.store_v3
+@pytest.mark.parametrize("case", STORE_V3_CASES)
+def test_row_tooltip_on_store_v3(model: SnapshotFileSystemModel, case: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    check_tooltip(model, *STORE_V3_CASES[case], monkeypatch)
+
+
+def check_tooltip(model: SnapshotFileSystemModel, build: Case, expected: list[str],
+                  monkeypatch: pytest.MonkeyPatch) -> None:
     # CASES' ages were stamped at import: the tooltip takes its ages then too, however late this runs
     # (AFTER's "1h ago" reads "2h ago" from 10 minutes on: Windows CI runs this module that late).
     monkeypatch.setattr(time, "time", lambda: STAMPED)
