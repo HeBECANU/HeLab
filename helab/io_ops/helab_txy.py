@@ -382,6 +382,34 @@ def entry_options(txy: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, 
 ANY = "any"  # Q~2's last stage: any current HeLab TXY of the folder, the newest first (an entry ``{"any": True}``).
 
 
+def tag_lookup(txy: Mapping[str, Any]) -> Callable[[str], dict[str, Any] | None]:
+    """A tag → profile options lookup (``profile_hash``, ``profile_tag``, ``profile``) for applying a folder's row
+    in the helper (``txy_sources.with_choices``; TP-1): what FolderCache already resolved (the mode's profile, the
+    list's and fallback's entries), the profiles it knows by tag (``known``: the user's and the conversion
+    profile), then the built-ins. So a row naming a user profile resolves to it, as FolderCache did."""
+    from helab.io_ops.txy_cache import builtin_for_tag
+    given: dict[str, dict[str, Any]] = {}
+
+    def keep(tag: Any, profile_hash: Any, profile: Any) -> None:
+        if isinstance(tag, str) and tag and profile_hash:
+            given.setdefault(tag, {"profile_hash": str(profile_hash), "profile_tag": tag,
+                                   "profile": dict(profile) if isinstance(profile, Mapping) else {"name": tag}})
+    keep(txy.get("profile_tag"), txy.get("profile_hash"), txy.get("profile"))
+    for field in ("entries", "fallback"):
+        items = txy.get(field)
+        for item in items if isinstance(items, list) else ():
+            if isinstance(item, Mapping):
+                keep(item.get("tag"), item.get("profile_hash"), item.get("profile"))
+    known = txy.get("known")
+    for tag, item in (known.items() if isinstance(known, Mapping) else ()):
+        if isinstance(item, Mapping):
+            keep(tag, item.get("profile_hash"), item.get("profile"))
+    conversion = txy.get("conversion")
+    if isinstance(conversion, Mapping):
+        keep(conversion.get("profile_tag"), conversion.get("profile_hash"), conversion.get("profile"))
+    return lambda tag: given.get(tag) or builtin_for_tag(tag)
+
+
 def chain_of(txy: Mapping[str, Any]) -> tuple[list[dict[str, Any]], int]:
     """A load's entries and how many are the list's own (Q~2): a list of one entry, only it; a list of several,
     then its ``fallback`` (FolderCache's: the folder's list for a plot, then Settings'), External, and any

@@ -310,7 +310,8 @@ def load(path: str, output: str, send: Emit = emit,
                 choices = store.read_folder_choices([path])[path]
                 if choices.value is not None:
                     send({"kind": "folder_choices", "path": path, "choices": choices.value})
-                    txy = txy_sources.with_choices(txy or {}, choices.value, txy_cache.builtin_for_tag)
+                    # (A tag the app resolved, a user profile's too, stays the app's: TP-1.)
+                    txy = txy_sources.with_choices(txy or {}, choices.value, helab_txy.tag_lookup(txy or {}))
         _load(path, output, send, store, guard, bool(cache_options), memory, base_signature, expected,
               (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
               limits=limits, allow_large=allow_large, no_cache=no_cache, no_cache_reason=no_cache_reason,

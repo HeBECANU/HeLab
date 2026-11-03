@@ -414,3 +414,39 @@ def test_a_one_entry_folder_offers_its_profile_to_auto_convert(monkeypatch: pyte
         assert cache.auto_convert_offer(path) is None
     finally:
         service.shutdown()
+
+
+# --- review fixes (TP-1 …) ----------------------------------------------------------------------------------
+
+MINE = MATLAB_2019.replace(name="mine", search_depth=40)
+UTAG, HUSER = file_tag(MINE), MINE.content_hash()
+
+
+def app_payload(entries: tuple[str, ...]) -> dict[str, Any]:
+    """A tab load's options as FolderCache sends them, the user's profile ``mine`` known by its tag."""
+    user = {"profile_hash": HUSER, "profile_tag": UTAG, "profile": {"name": "mine", "version": 1, "calibrated": False}}
+    base = {**conversion(), "conversion": conversion(), "tab": True,
+            "known": {UTAG: {"profile_hash": HUSER, "profile": user["profile"]}}}
+    return txy_sources.with_list(base, entries, lambda tag: user if tag == UTAG else builtin_for_tag(tag))
+
+
+@pytest.mark.parametrize("row", [("helab-only", UTAG), (f"{UTAG}>m23v1>External", "")], ids=["mode", "list"])
+def test_a_folder_row_naming_a_user_profile_stays_that_profile_in_the_helper(tmp_path: Path,
+                                                                           row: tuple[str, str]) -> None:
+    """TP-1: the helper applies the folder's row (store-v4) over the app's options; a user profile's tag resolves
+    to that profile (``known``), never to the conversion profile."""
+    from test_txy_loading import data_folder  # noqa: F401  (the store's data root, as a load records it)
+    source = mixed_folder(tmp_path)
+    write_text(source, f"d_txy_helab_{UTAG}_2.txt", 2.77, OLD + 60)
+    options = v4_options(tmp_path)
+    with opened(options, source) as store:
+        store.set_txy_source_pref(str(source), row[0], row[1], 5.0)
+    entries = txy_sources.parse_list(row[0], row[1])
+    assert entries is not None
+    loaded = first(run_load(source, tmp_path, options, txy=app_payload(entries)), "loaded")
+    record = loaded["txy"]
+    assert record["origins"]["2"] == "helab:" + HUSER
+    if row[1]:
+        assert (record["source"], record["profile_hash"], record["profile_tag"]) == ("helab-only", HUSER, UTAG)
+    else:
+        assert record["entries"][0] == [UTAG, HUSER]
