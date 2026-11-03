@@ -42,8 +42,12 @@ read: **one RERUN**, Ubuntu Converter backends (job in that run, `test_convert_h
 "rerun reasons": `AssertionError: assert -2 == 0` from `wait(20)`: `helab convert --watch` killed by the SIGINT),
 passed on rerun. That is the open known-issues item from CI 41561765280; this branch didn't touch the watch loop or
 its signal handling (Q48.3 changed only argument parsing). Every other job: 0 RERUN (macOS 3,143 + 3,069 + 3,056
-and 869; Ubuntu 3,142 + 3,067 + 3,056 and 869; Windows 3,135 + 3,052 + 3,045 and 867 passed). CI for `2eac45a`
-(the shim, the probe step): **see the summary line I send CoCo** (running at writing).
+and 869; Ubuntu 3,142 + 3,067 + 3,056 and 869; Windows 3,135 + 3,052 + 3,045 and 867 passed). CI **41626693781**
+(at `2eac45a`, the shim and the probe step): **success**, every job; each Tests, Converter backends, Build and
+Docs job's log read: **0 RERUN** (macOS 3,144 + 3,072 + 3,059 and 869; Ubuntu 3,143 + 3,070 + 3,059 and 869;
+Windows 3,136 + 3,055 + 3,048 and 867 passed). The probe step on each OS: `ready` with `application: offscreen`,
+`done`, `frozen: True`, `gui: False`. The Docs job: "18 pages, every script a file of the site". This line's
+commit is local only (a docs-only push would run CI again).
 
 Frozen app (local PyInstaller build of `fdd895c` on macOS, `.ai/temp/dist`): `libqoffscreen.dylib` bundled;
 `HeLab --helab-script-probe` answers `ready` (`application: offscreen`) and `done`, `sys.frozen` true, no GUI
