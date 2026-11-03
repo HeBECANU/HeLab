@@ -31,7 +31,12 @@ failed, and a load reads it again ("Some cached shots are gone") and saves the v
 A view an earlier build saved (five items, `txy_cache.saved_key`): a MATLAB shot's key is its own TXY fingerprint
 (Q45.3: MATLAB entries are always keyed by their TXY file), so it is still served; a HeLab shot's key is unknown, so
 it is read again once (from the raw layer or its text) and the next save writes the key. That costs one re-read per
-HeLab view saved by a pre-fix v0.0.8 dev build; no shipped release has store-v4 on.
+HeLab view saved by a pre-fix v0.0.8 dev build; no shipped release has store-v4 on. In detail (the landing review's
+PR-1, accepted as is by CoCo): until that load, such a view serves no cached read (a HeLab-only view's raises "No
+cached data for this folder"; a priority view's HeLab shots count as failed). Its first load reads its HeLab shots
+again under **"Cached dataset invalid"** (not "Some cached shots are gone": `loading`'s `elif unpacked:` takes the
+empty data as falsy; no change to `loading.py`), from the share where no raw layer is filled. After that save the view
+has keys and the next load is `cached`, reading nothing.
 
 **Tests** (`tests/test_txy_loading.py`):
 - `test_a_view_leaves_out_a_shot_another_views_save_replaced_in_the_layer`: External-only view saved; shot 2's
@@ -39,6 +44,10 @@ HeLab view saved by a pre-fix v0.0.8 dev build; no shipped release has store-v4 
   view. Before the fix it sent shot 2 (5 rows) under the old fingerprint; now only shot 1, `failed_files == 1`.
 - `test_a_view_saved_before_entry_keys_serves_its_matlab_shots`: five-item view items still serve MATLAB shots, the
   quick path still reads nothing, and the next save writes six-item items.
+- `test_old_helab_view_is_read_again_once_then_keyed` (PR-1's regression test, Probe2's scratch test, `f90217c`): a
+  five-item HeLab-only view: `read_cached` raises "No cached data for this folder"; the next load is not cached,
+  reads both shots under "Cached dataset invalid" and saves six-item items; the load after it is cached, reading
+  nothing.
 
 ## C-2: confirmed
 
@@ -121,7 +130,30 @@ shot 1 in the layer.
   `raw_layer.not_done` passes for the profile's trigger channel (`raw_fill` can't check it); otherwise the file is
   judged as `convert_raw_file` judges it (C-3, `eafc3fc`)."
 
-`roadmaps/known-issues.md`: nothing new, beyond any RERUN listed under Checks.
+From the landing review's PR-4 (Probe2, `review.md`):
+- `.ai/architecture/io-and-browsing.md`, "Loads with TXY layers": in loading-order step (1) "its layer, with the
+  current fingerprint (Q45.3's kind included)", add "and the entry key the view saved (C-1)"; change "Every v4 listing
+  marks its sources seen (`mark_txy_seen`)" to "… each layer against its own source (C-2)"; add to step (2): "only if
+  `raw_layer.not_done` passes for the profile (C-3)".
+- `.ai/architecture/cache-store.md`, the `raw_fill` paragraph ("`raw.not_done`'s checks that need no profile;
+  C3-2"): add "the trigger check runs when a load converts from the layer (C-3)".
+- `.ai/architecture/cache-store.md`, the `txy_views` bullet (PR-1 accepted): add "a five-item view's HeLab shots
+  serve no cached read and are read again once by its next load ("Cached dataset invalid"), which saves the keys".
+
+`roadmaps/known-issues.md`: nothing new (no RERUN locally or in CI).
+
+## The landing review (Probe2, `review.md`, `e25426b`)
+
+No blocker; one Low, three Info:
+- **PR-1 (Low)**, an old five-item HeLab view: accepted as is (CoCo); its regression test is `f90217c`, and the
+  C-1 note above says what the user sees.
+- **PR-2 (Info)**, `_view_row`'s `rows` / `ram_bytes` count a replaced entry's rows rather than the view's: accepted,
+  no change. It is cosmetic (`_too_large` estimates from the fingerprint, and data is never served by it).
+- **PR-3 (Info)**, C-2's safe side: a HeLab layer's TXY-keyed entries (rare) become an only copy under any listing
+  that didn't find that profile's TXY, so it survives `purge_cached` and a folder's Clear, and Make room names it in
+  group 5. Accepted, no change; it is the conservative direction (C-2 note above). MATLAB presence by shot number,
+  not (size, mtime_ns), predates the fix (A~1 below).
+- **PR-4 (Info)**, doc proposals: added under "Proposed doc changes" above.
 
 ## Replies CoCo can post to the Codex comments
 
