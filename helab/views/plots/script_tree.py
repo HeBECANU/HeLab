@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING, Union
 
 from PyQt6 import sip
-from PyQt6.QtCore import QFileSystemWatcher, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import (QCoreApplication, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment, Qt, QTimer,
+                          pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import QAction, QBrush, QColor, QPalette
 from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
                              QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -19,7 +24,7 @@ from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, Q
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.presets import SavedPlot, ScriptRef, waiting_view
 from helab.analysis.runner import AnalysisRunner, get_analysis_runner
-from helab.scripts import dld, standard
+from helab.scripts import dld, probe, standard
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.scripts_manager import LoadError, ScriptsManager
 from helab.utils.accessible import id_part, identify, identify_buttons
@@ -44,6 +49,18 @@ RESTORE_DELAY_MS = 200
 # In the app folder while a script folder loads (written before, removed after): found at start, the last
 # load never ended (a script that blocks or crashes at import), so the remembered folders aren't loaded.
 LOADING_MARKER = "scripts-loading.json"
+# Q49.3 (b): before HeLab imports a user script folder, it test-imports it in a process of its own
+# (``helab.scripts.probe``, ``FolderProbes``). A folder whose test import hasn't finished this many seconds
+# after it began (the probe's ``ready``: its own start doesn't count) isn't imported ...
+PROBE_SECONDS = 10.0
+# ... nor one whose probe isn't ready within this (Python, NumPy and Qt starting; a cold frozen app is slow).
+PROBE_START_SECONDS = 60.0
+PROBES_AT_ONCE = 2
+PROBE_POLL_MS = 100  # How often a running probe's answers are read (only while one runs).
+# Whether folders are test-imported first: tests that aren't about it turn it off (folders then import at once).
+PROBING = True
+PROBED_NOTE = ("HeLab first test-imports each script folder in a separate process, so a script that hangs or "
+               "crashes at import can't stop HeLab.")
 # File systems that are network shares (as ``cache_paths``' mounts name them).
 NETWORK_TYPES = ("smbfs", "cifs", "smb", "smb2", "smb3", "afpfs", "nfs", "nfs4", "webdav", "davfs", "remote")
 
@@ -100,6 +117,187 @@ def read_script_folders() -> List[str]:
     return [folder for folder in folders if isinstance(folder, str) and folder] if isinstance(folders, list) else []
 
 
+@dataclass(frozen=True)
+class ProbeFailure:
+    """Why a folder's test import failed (``reason``: a few words, after "didn't load: "), and what the probe
+    wrote to stderr (``details``; "" if nothing)."""
+    reason: str
+    details: str = ""
+
+
+@dataclass
+class _Probe:
+    folder: str
+    process: Optional[QProcess] = None
+    output: str = ""  # Its private temp folder (the response, stdout and stderr files).
+    response: str = ""
+    read: int = 0  # Bytes of the response read so far.
+    started: float = 0.0  # monotonic
+    ready: Optional[float] = None  # monotonic: when it began importing the folder.
+    done: bool = False
+    application: str = ""  # What the probe ran its import under (``probe.OFFSCREEN``, or none and why).
+    killed: str = ""  # Why it was killed ("": it wasn't).
+
+
+class FolderProbes(QObject):
+    """Q49.3 (b): test-import user script folders, each in a process of its own (``helab.scripts.probe``), at
+    most ``PROBES_AT_ONCE`` at a time. ``probe(folders, answer)`` calls ``answer({folder: failure})`` on the
+    GUI thread once each folder's probe has ended, its exit confirmed (``finished``): failure None when its
+    import finished, or when the probe couldn't start at all (imported anyway, logged: Q49.3 P4); else why
+    not. One probe per folder at a time: a folder asked for again while its probe runs gets that probe's
+    answer. Nothing waits: ``QProcess`` signals and one poll timer, running only while probes do. Killed
+    probes (time limit, ``stop``) end asynchronously."""
+
+    def __init__(self, parent: QObject) -> None:
+        super().__init__(parent)
+        self._queue: List[_Probe] = []
+        self._running: Dict[int, _Probe] = {}  # id(process) -> probe
+        self._rounds: List[Tuple[Dict[str, Optional[ProbeFailure]], Set[str],
+                                 Callable[[Dict[str, Optional[ProbeFailure]]], None]]] = []
+        self._timer = QTimer(self)
+        self._timer.setInterval(PROBE_POLL_MS)
+        self._timer.timeout.connect(self._poll)
+        application = QCoreApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.stop)
+
+    def busy(self) -> bool:
+        return bool(self._queue or self._running)
+
+    def probe(self, folders: List[str], answer: Callable[[Dict[str, Optional[ProbeFailure]]], None]) -> None:
+        if not folders:
+            answer({})
+            return
+        self._rounds.append(({}, set(folders), answer))
+        known = {probe.folder for probe in (*self._queue, *self._running.values())}
+        self._queue.extend(_Probe(folder) for folder in folders if folder not in known)
+        self._start_more()
+
+    @pyqtSlot()
+    def stop(self) -> None:
+        """Kill every probe and forget the rounds (HeLab quits): no answer comes."""
+        self._rounds.clear()
+        self._queue.clear()
+        for item in list(self._running.values()):
+            if item.process is not None and not sip.isdeleted(item.process):
+                item.killed = "HeLab stopped it"
+                item.process.kill()
+
+    def _start_more(self) -> None:
+        while self._queue and len(self._running) < PROBES_AT_ONCE:
+            self._start(self._queue.pop(0))
+
+    def _start(self, item: _Probe) -> None:
+        item.output = tempfile.mkdtemp(prefix="helab_probe_")
+        item.response = os.path.join(item.output, "response.jsonl")
+        Path(item.response).touch()
+        process = QProcess(self)
+        environment = QProcessEnvironment.systemEnvironment()
+        package_root = str(Path(__file__).resolve().parents[3])
+        environment.insert("PYTHONPATH", os.pathsep.join(filter(None, (package_root, environment.value("PYTHONPATH")))))
+        process.setProcessEnvironment(environment)
+        # (A script's prints go to files; stdin stays an open pipe never written, so input() at import waits
+        # there as it would in HeLab started from a terminal, and meets the time limit.)
+        process.setStandardOutputFile(os.path.join(item.output, "stdout.txt"))
+        process.setStandardErrorFile(os.path.join(item.output, "stderr.txt"))
+        process.finished.connect(self._finished)
+        process.errorOccurred.connect(self._failed)
+        item.process, item.started = process, time.monotonic()
+        self._running[id(process)] = item
+        program, arguments = probe.command(item.folder, item.response)
+        process.start(program, arguments)
+        self._timer.start()
+
+    def _read(self, item: _Probe) -> None:
+        """The response's new complete lines: ``ready`` starts the time limit, ``done`` says it finished."""
+        try:
+            with open(item.response, "rb") as handle:
+                handle.seek(item.read)
+                text = handle.read()
+        except OSError:
+            return
+        end = text.rfind(b"\n") + 1
+        item.read += end
+        for line in text[:end].splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("kind") == probe.READY and item.ready is None:
+                item.ready, item.application = time.monotonic(), str(event.get("application", ""))
+            elif isinstance(event, dict) and event.get("kind") == probe.DONE:
+                item.done = True
+
+    @pyqtSlot()
+    def _poll(self) -> None:
+        now = time.monotonic()
+        for item in list(self._running.values()):
+            self._read(item)
+            if item.killed or item.done or item.process is None:
+                continue
+            if item.ready is None and now - item.started > PROBE_START_SECONDS:
+                item.killed = f"HeLab's test import didn't start within {PROBE_START_SECONDS:g} s"
+            elif item.ready is not None and now - item.ready > PROBE_SECONDS:
+                item.killed = f"its import didn't finish within {PROBE_SECONDS:g} s"
+            if item.killed:
+                item.process.kill()  # (Its ``finished`` ends it: a probe holds its folder until its exit.)
+        if not self._running:
+            self._timer.stop()
+
+    def _item(self) -> Optional[_Probe]:
+        sender = self.sender()
+        return self._running.get(id(sender)) if isinstance(sender, QProcess) else None
+
+    @pyqtSlot(QProcess.ProcessError)
+    def _failed(self, error: QProcess.ProcessError) -> None:
+        item = self._item()
+        if item is None or error != QProcess.ProcessError.FailedToStart:
+            return  # (Any other error: ``finished`` follows.)
+        logging.warning("Script folder %s: HeLab's test import couldn't start (%s); imported without it", item.folder,
+                        item.process.errorString() if item.process is not None else error)
+        self._ended(item, None)
+
+    @pyqtSlot(int, QProcess.ExitStatus)
+    def _finished(self, code: int, status: QProcess.ExitStatus) -> None:
+        item = self._item()
+        if item is None:
+            return
+        self._read(item)
+        failure: Optional[ProbeFailure] = None
+        if item.killed or not item.done:
+            try:
+                details = Path(item.output, "stderr.txt").read_text(encoding="utf-8", errors="replace")[-4000:]
+            except OSError:
+                details = ""
+            reason = item.killed or ("its import crashed HeLab's test import"
+                                     if status == QProcess.ExitStatus.CrashExit
+                                     else f"its import stopped HeLab's test import (exit code {code})")
+            failure = ProbeFailure(reason, details.strip())
+        seconds = time.monotonic() - item.started
+        logging.info("Script folder %s test-imported in a separate process (QApplication: %s) in %.1f s: %s",
+                     item.folder, item.application or "not started", seconds,
+                     "finished" if failure is None else failure.reason)
+        self._ended(item, failure)
+
+    def _ended(self, item: _Probe, failure: Optional[ProbeFailure]) -> None:
+        if item.process is not None:
+            self._running.pop(id(item.process), None)
+            if not sip.isdeleted(item.process):
+                item.process.deleteLater()
+        shutil.rmtree(item.output, ignore_errors=True)
+        for round_ in list(self._rounds):
+            answers, waiting, answer = round_
+            if item.folder in waiting:
+                answers[item.folder] = failure
+                waiting.discard(item.folder)
+                if not waiting:
+                    self._rounds.remove(round_)
+                    answer(answers)
+        self._start_more()
+        if not self._running:
+            self._timer.stop()
+
+
 class TreePanelWidget(QWidget):
     """The Scripts panel: a group selector, Load Scripts… and the selected group's scripts, each
     with up to two run buttons (its first actions).
@@ -123,6 +321,14 @@ class TreePanelWidget(QWidget):
     (``AnalysisInstance.adopt_script``) or, its script gone or failing, keeps its old code and says
     so (``keep_script``). Files that didn't load are listed at the tree's end, whatever the group,
     with their traceback in the tooltip and, on a double-click, a details window.
+
+    **The try-import** (Q49.3 (b)): every import of a user folder (at start, Reload, auto-reload, Load
+    Scripts…) is first a test import in a separate process (``FolderProbes``, ``helab.scripts.probe``), one
+    round at a time (Reload reads "Reload (checking)"; a reload asked meanwhile follows in its own round).
+    Folders whose test import finished are imported here, as before; one that didn't finish within
+    ``PROBE_SECONDS`` of its start, or ended the process, isn't: at start it waits for Reload (the start
+    note), else it is listed as not loaded (``ScriptsManager.skip_folder``) and its plots keep their code.
+    The loading marker stays the backstop for what the test can't catch.
     """
 
     plotsChanged = pyqtSignal()
@@ -232,6 +438,13 @@ class TreePanelWidget(QWidget):
         self._settle.timeout.connect(self._check_changes)
         self._details: Optional[QMessageBox] = None
         self.tree_widget.itemDoubleClicked.connect(self._show_error_details)
+        # Q49.3 (b): folders are test-imported in a separate process first, one round at a time (a reload asked
+        # meanwhile waits for it); the folders added by Load Scripts… in that round (their own notice); those
+        # whose last test import failed (the start note's tooltip says how they were checked).
+        self._probes = FolderProbes(self)
+        self._probing = False
+        self._adding: Set[str] = set()
+        self._probe_failed: Set[str] = set()
 
         # HeLab's bundled analyses now; the user's remembered folders once the window has shown (M3)
         self._load_default_scripts()
@@ -302,6 +515,7 @@ class TreePanelWidget(QWidget):
             # (It names no remembered folder: a new folder Load Scripts… was loading. Not loaded at start: R1.)
             self._unmark()
             stuck = None
+        chosen: List[str] = []
         for folder in self._remembered:
             if stuck is not None:
                 self._skipped[folder] = (f"HeLab stopped while loading {stuck} last time" if stuck else
@@ -309,11 +523,52 @@ class TreePanelWidget(QWidget):
             elif on_network(folder):
                 self._skipped[folder] = "on a network share"
             else:
+                chosen.append(folder)
+        self._probe_then(chosen, lambda answers: self._restored(chosen, answers))
+
+    def _restored(self, chosen: List[str], answers: Dict[str, Optional[ProbeFailure]]) -> None:
+        """The start's folders tested: those whose test import finished load, in the remembered order; the
+        others wait for Reload with the reason (Q49.3 (b))."""
+        for folder in chosen:
+            if not self._is_remembered(folder):
+                continue  # (Removed from the list while it was tested.)
+            failure = answers.get(folder)
+            if failure is None:
+                self._probe_failed.discard(folder)
                 self._load_folder(folder)
+            else:
+                self._probe_failed.add(folder)
+                self._skipped[folder] = failure.reason
+                logging.warning("Script folder %s not loaded at start: %s", folder, failure.reason)
         self._refresh()
         self._show_start_note()
         self._watch(self.auto_reload_action.isChecked())
         self.foldersRestored.emit()
+
+    def _is_remembered(self, folder: str) -> bool:
+        return any(os.path.normcase(known) == os.path.normcase(folder) for known in self._remembered)
+
+    def _probe_then(self, folders: List[str],
+                    then: Callable[[Dict[str, Optional[ProbeFailure]]], None]) -> None:
+        """Test-import ``folders`` in separate processes (``FolderProbes``), then ``then(answers)``; at once
+        (all passed) when there are none or ``PROBING`` is off. A reload asked meanwhile runs after it."""
+        if not folders or not PROBING:
+            then({folder: None for folder in folders})
+            return
+        self._probing = True
+        self.reload_button.setText("Reload (checking)")
+        self.reload_button.setToolTip(f"Test-importing {len(folders):,} script folder{'' if len(folders) == 1 else 's'} "
+                                      "in a separate process first")
+
+        def answered(answers: Dict[str, Optional[ProbeFailure]]) -> None:
+            if sip.isdeleted(self):
+                return
+            self._probing = False
+            self._stop_waiting()
+            then(answers)
+            if self._pending:
+                self._try_reload()
+        self._probes.probe(folders, answered)
 
     def _show_start_note(self) -> None:
         """One line while remembered folders wait for Reload; their reasons in its tooltip."""
@@ -327,7 +582,10 @@ class TreePanelWidget(QWidget):
         self.start_note.setText(f"⚠ {count:,} script folder{'' if count == 1 else 's'} not loaded at start "
                                 f"({reasons[0]}{'; …' if len(reasons) > 1 else ''}): Reload to load "
                                 f"{'it' if count == 1 else 'them'}")
-        self.start_note.setToolTip("\n".join(f"{folder}: {why}" for folder, why in sorted(skipped.items())))
+        tip = "\n".join(f"{folder}: {why}" for folder, why in sorted(skipped.items()))
+        if any(folder in self._probe_failed for folder in skipped):
+            tip += f"\n\n{PROBED_NOTE}"
+        self.start_note.setToolTip(tip)
         self.start_note.show()
 
     def _load_folder(self, folder: str) -> bool:
@@ -388,11 +646,9 @@ class TreePanelWidget(QWidget):
             return
         self._unmark()  # (The user's load: a marker left by a load that never ended goes, R1.)
         self._remembered.append(folder)
-        self._load_folder(folder)
         self._save_folders()
-        self._refresh()
-        self._sync_watch()
-        self._say_errors(folder)
+        self._adding.add(folder)
+        self.reload_scripts([folder])  # (Test-imported first, then loaded: Q49.3 (b).)
 
     def remove_folder(self, folder: str) -> None:
         """Remove from the list: its scripts go from the panel (its files stay); its open plots keep
@@ -401,6 +657,8 @@ class TreePanelWidget(QWidget):
         for instance in self._plots_of({folder}):
             instance.keep_script("its folder was removed from the Scripts list")
         self._pending.discard(folder)
+        self._adding.discard(folder)
+        self._probe_failed.discard(folder)
         self.script_manager.remove_folder(folder)
         self._remembered = [known for known in self._remembered if os.path.normcase(known) != os.path.normcase(folder)]
         self._skipped.pop(folder, None)
@@ -505,8 +763,11 @@ class TreePanelWidget(QWidget):
 
     def _try_reload(self) -> None:
         if not self._pending:
-            self._stop_waiting()  # (L2: the folder it waited for was removed meanwhile.)
+            if not self._probing:
+                self._stop_waiting()  # (L2: the folder it waited for was removed meanwhile.)
             return
+        if self._probing:
+            return  # (A round of test imports runs: this reload's round follows it, ``_probe_then``.)
         busy = self._busy(self._pending)
         if busy:
             for runner in self._runners():
@@ -522,16 +783,34 @@ class TreePanelWidget(QWidget):
         deliberate, self._pending_deliberate = self._pending_deliberate, False
         if deliberate:
             self._unmark()  # (The user's reload: a marker left by a load that never ended goes, R1.)
+        self._probe_then(sorted(folders), lambda answers: self._finish_reload(folders, answers))
+
+    def _finish_reload(self, asked: Set[str], answers: Dict[str, Optional[ProbeFailure]]) -> None:
+        """The folders tested (Q49.3 (b)): those whose test import finished load, the others are listed as not
+        loaded with the reason; then the plots take the new code or keep theirs, and the notice says so."""
+        folders = {folder for folder in asked if self._is_remembered(folder) or
+                   any(os.path.normcase(known) == os.path.normcase(folder) for known in self.script_manager.folders())}
+        adding, self._adding = self._adding & folders, self._adding - asked
         for folder in sorted(folders):
-            self._load_folder(folder)
+            failure = answers.get(folder)
+            if failure is None:
+                self._probe_failed.discard(folder)
+                self._load_folder(folder)
+            else:
+                self._skip_folder(folder, failure)
         self._refresh()
         self._show_start_note()
         self._sync_watch()
         adopted, kept = self._adopt(folders)
         self.plotsChanged.emit()  # (Their records name the new code.)
+        reloaded = folders - adding
+        if not reloaded:
+            for folder in sorted(adding):
+                self._say_errors(folder)
+            return
         errors = [error for error in self.script_manager.errors()
                   if any(self._in_folder(error.path, folder) for folder in folders)]
-        parts = [f"Reloaded {len(folders):,} script folder{'' if len(folders) == 1 else 's'}"]
+        parts = [f"Reloaded {len(reloaded):,} script folder{'' if len(reloaded) == 1 else 's'}"]
         if adopted:
             parts.append(f"{adopted:,} plot{'' if adopted == 1 else 's'} rerun")
         if kept:
@@ -540,6 +819,25 @@ class TreePanelWidget(QWidget):
             parts.append(f"⚠ {len(errors):,} file{'' if len(errors) == 1 else 's'} didn't load (listed in Scripts)")
         if self.workspace is not None:
             self.workspace.notice(" · ".join(parts))
+
+    def _skip_folder(self, folder: str, failure: ProbeFailure) -> None:
+        """A folder whose test import hung or crashed (Q49.3 (b)): not imported; listed as not loaded, with how
+        it was checked in its tooltip and details; its plots keep their code (``_adopt``). Stamped, so a save
+        reloads (and tests) it again."""
+        logging.warning("Script folder %s not imported: %s", folder, failure.reason)
+        details = (f"{PROBED_NOTE} This folder's test import failed ({failure.reason}), so it wasn't imported. "
+                   "Fix its scripts and Reload.")
+        if failure.details:
+            details += f"\n\n{failure.details}"
+        self.script_manager.skip_folder(folder, f"didn't load: {failure.reason}", details)
+        self._probe_failed.add(folder)
+        self._skipped.pop(folder, None)
+        if on_network(folder):
+            self._remote.add(folder)
+        else:
+            self._remote.discard(folder)
+        self._stamps[folder] = self._stamp_of(folder)
+        self._stamped_at[folder] = time.time_ns()
 
     @staticmethod
     def _in_folder(path: str, folder: str) -> bool:

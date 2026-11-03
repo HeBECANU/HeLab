@@ -97,6 +97,8 @@ def test_load_scripts_adds_a_working_group(qtbot: QtBot, script_folder: Path,
     qtbot.addWidget(widget)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args, **kwargs: str(script_folder))
     widget.load_dir_button.click()
+    # (Test-imported in a separate process first, then loaded: Q49.3 (b).)
+    qtbot.waitUntil(lambda: widget.group_selector.count() == 3, timeout=60_000)
     assert sorted(widget.group_selector.itemText(i) for i in range(widget.group_selector.count())) == [
         "Basic plots v1", "DLD Front Panel Port", "Lab"]
     widget.group_selector.setCurrentText("Lab")

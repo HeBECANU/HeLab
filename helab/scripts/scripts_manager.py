@@ -302,6 +302,17 @@ class ScriptsManager:
             return False
         return True
 
+    def skip_folder(self, directory: str, message: str, details: str = "") -> None:
+        """Record a user folder that isn't imported now (Q49.3 (b): its test import in a separate process hung
+        or crashed): its scripts leave the lists, its errors become this one (``message``, ``details``); its
+        helper modules and place on ``sys.path`` stay as they were (nothing of it was imported)."""
+        directory = _normal(directory)
+        if not any(_same(folder, directory) for folder in self._folders):
+            self._folders.append(directory)
+        self._clear_directory_scripts(directory)
+        self._clear_errors(directory)
+        self._errors[directory] = LoadError(directory, message, details)
+
     def reload(self, folders: Optional[List[str]] = None) -> List[str]:
         """Load every user folder again (or those of ``folders``); the folders that loaded."""
         chosen = list(self._folders) if folders is None else [_normal(folder) for folder in folders]
