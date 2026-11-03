@@ -15,6 +15,16 @@ or Dash: `multiprocessing.freeze_support()` (frozen only, so the converter's wor
 A12.1), the I/O helper (`--helab-io-helper`), the headless converter (`convert`, [converter](converter.md)),
 `--version`, then the GUI.
 
+**The bundled manual** (Q54.3; Docs floor, landed `b0e3aac`): the Python 3.13 Build jobs build the user
+manual offline (`HELAB_DOCS_OFFLINE=true`, Material's offline plugin) into `build/manual`, in their own
+`build/docs-venv` (both ignored by Git, so the build stamp stays clean; never the app's venv). `HeLab.spec`'s
+`user_manual()` bundles it as `helab/manual` (from `HELAB_MANUAL_DIR`, else `build/manual`), appended to
+`a.datas` after `Analysis` so `datas=` stays the plain list `test_spec_datas.py` reads; without it the spec says
+so and builds without it. "Check the packaged app has the user manual" fails a build that lacks it, so a
+strict-build warning in the manual fails the release builds too. A commit from before the manual (a recovery
+build of an older tag) builds without it. Compatibility builds ship without it. The source package never holds
+`helab/manual` (`test_source_package_has_no_bundled_manual`).
+
 ## Versioning
 
 **Versioning:** `helab/_version.py` is the only editable version source (PEP 440,
@@ -25,6 +35,11 @@ own checkout, never the launch directory. Help → About HeLab shows provenance.
 CI stamps record the explicit source branch/build ref (`HELAB_BUILD_BRANCH`,
 `HELAB_BUILD_REF`, set by `ci-build.yml`; else GitHub's own ref variables) without
 replacing Git HEAD.
+`BuildInfo.repository` ("owner/name") is stamped by `write_build_info` at build time only: from
+`HELAB_BUILD_REPOSITORY`, else `GITHUB_REPOSITORY` in Actions, else the checkout's GitHub `origin`
+(`build_repository`). It is never read from Git at runtime, so a source run has "unknown", and an older or
+malformed stamp reads as "unknown". About shows it; Help › User manual uses it to find the build's site
+([app-runtime-and-ui](app-runtime-and-ui.md#ui)).
 Put a release-version bump on the PR branch before final approval. A squash merge
 to `main` with a new version triggers CI tagging and a draft release after required
 checks pass; publication remains manual. An existing tag with an incomplete draft
@@ -87,6 +102,31 @@ artifact's copies do; skipped when `build-sha` isn't `github.sha` (a recovery bu
 the release job still validates). Build jobs may target an older tagged SHA during recovery;
 the normal test jobs still check the current workflow commit, and recovery builds
 add Python 3.13 tests of the tagged commit on each OS.
+
+**The Docs job** (A54.1, A54.2; landed `b0e3aac`): one Ubuntu job in `dev-cicd.yml` (10 min), beside the
+tests; it needs only `get-version`, nothing needs it, and it is not in the release gate (it does block a
+floor's landing, which needs every job green). It installs `requirements-docs.lock` (developer tools only:
+ruff, mkdocs-material, mkdocstrings[python], mike; compiled with `-c requirements.lock`, never in the app's
+requirements or its PyInstaller build), runs `ruff check` (D1 on the modules `ruff.toml` lists), then
+`mkdocs build --strict` into `$RUNNER_TEMP/site`, and checks the install page links the building repo's
+releases. It publishes nothing.
+
+## The manual's site
+
+`.github/workflows/docs-site.yml` (Q54.2; DM-1 (a), Tony 2026-11-03) is the only workflow that runs mike or
+touches `gh-pages` (`tests/test_docs_workflows.py`). It runs only on `release: published`: the release job makes
+a draft, which stays private until it is published by hand, so the site follows publishing and an abandoned draft
+never deploys. It checks out `refs/tags/<tag>`, and mike deploys `<version>` (the tag without `v`, so
+`BuildInfo.version`) with the alias `latest`, set as the default, to the running repo's `gh-pages`
+(`github.repository`, so `HeBECANU/HeLab` publishes its own site). A commit without `mkdocs.yml` or
+`requirements-docs.lock` skips with a notice and stays green. Concurrency group `helab-docs-site`, not
+cancelling; 15 min; `contents: write`. A `release` event runs the workflow file of the released tag's commit, so
+the first release whose tag contains `docs-site.yml` is the first to deploy. GitHub Pages must be turned on in
+the repo's settings, source `gh-pages` (M56.2).
+
+The pages link their own repository: `{repo_url}` in a page becomes `repo_url` (`HELAB_DOCS_REPO_URL`, set to the
+building repo in CI; `mkdocs.yml`'s fallback for local builds), through `docs/hooks/repo_links.py`, which
+`exclude_docs` keeps out of the site.
 
 ## Dependency graph
 

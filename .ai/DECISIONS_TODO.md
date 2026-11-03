@@ -279,6 +279,22 @@ Tony in Chat, 2026-11-03 afternoon (via CoCo; "yes" to Q55.1, Q55.3 and Q55.4, t
   (as Folder details' offer does), said in the dialog's tooltip.
 - **Q55.8** Settings stores a mode with a pinned tag as `helab-only@m23v1`; v0.0.7a1 reads it as its default.
 
+## Documentation follow-ups (block 56)
+
+From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (landed `b0e3aac`). All open.
+
+- **Q56.1 Material for MkDocs reaches end of life on 2027-05-05.** Every build says so. Zensical, by the same
+  team, reads `mkdocs.yml`. Options: (a) stay on Material for v0.0.8 and try Zensical in 2027; (b) move to
+  Zensical now. **Proposed:** (a).
+- **Q56.2 Which GitHub page a source run opens.** A source run can't know its repository (no build stamp, and
+  HeLab never asks Git at runtime), so Help › User manual opens `DEFAULT_REPOSITORY`'s page, `TonyXTYan/HeLab`,
+  while the lab's PCs run clones of `HeBECANU/HeLab`. Options: (a) keep `TonyXTYan/HeLab`, the site's home;
+  (b) let source runs name their repository through an environment variable later. **Proposed:** (a), with (b)
+  only if it is asked for.
+- **Q56.3 `latest` follows every published release, pre-releases too.** Every release so far is an alpha, so
+  otherwise the site would have no front page. Options: (a) yes until the first final release, then only final
+  releases; (b) always every release; (c) only final releases from now. **Proposed:** (a).
+
 ## TXY priority lists (block 55)
 
 From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/handoff.md) and its
@@ -304,6 +320,8 @@ From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/
   site can't be reached (Tony, 2026-11-03: "yes").
 - **Q54.4** Help › User manual opens the site of the repo the build came from (a release from `HeBECANU/HeLab`
   opens `hebecanu.github.io/HeLab`), and the bundled copy when it can't be reached (Tony, 2026-11-03: "a").
+- **DM-1 (a)** the Pages deploy runs only on a published release (`docs-site.yml`, `release: published`), so an
+  abandoned draft never reaches the site (Tony, 2026-11-03; from the Docs floor's review).
 
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 

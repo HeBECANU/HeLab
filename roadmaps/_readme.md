@@ -31,6 +31,8 @@ the switch-on (Q50.18, with Q51.1's extra listing on the share), the open questi
 (Converter UX's Q48.1–Q48.6; Live Scripts' Q49.1–Q49.3; Q50.1, Q50.2 and Q51.1 decided 2026-11-03), (`agent/v4-switch-on` landed `92f9d1a`: store-v4 on), the version bump, and the PR to `main` once CI is
 green (Q47.5: 0.0.8a1).
 Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (block 55; Q55.9 open).
+Added 2026-11-03 (Tony, Q54.1): the script API's docstrings and the user manual below, landed `b0e3aac` (block 56;
+Q56.1–Q56.3 open).
 
 **Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
 
@@ -63,6 +65,10 @@ Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (
   and per plot, replacing the four fixed sources (old modes keep their identities) ([plan](txy-priority.md)).
   TXY Priority floor, landed `9bf99ff` (block 55): a per-shot fallback (Q55.2), the `Conversion` entry, Live's
   "Convert with <tag>" offer and Convert this folder… (Q55.4); Q55.1–Q55.8 decided, Q55.9 open; M55.1–M55.4.
+- [x] Documentation (Q54.1–Q54.4; Tony, 2026-11-03): docstrings for the script-facing API kept by ruff's D1 (A54.1),
+  and a user manual in `docs/` with MkDocs Material and an API reference by mkdocstrings (A54.2), built in CI,
+  bundled in the app and opened by Help › User manual; its site deploys per published release (DM-1 (a)). Docs
+  floor, landed `b0e3aac` (block 56): Q56.1–Q56.3 open, A56.2–A56.8, M56.1–M56.3 (GitHub Pages to turn on).
 - [x] Say when a raw file's reading stops early (A37.1, Q37.1; Tony, 2026-10-31): the parser stops at
   the first unreadable token as MATLAB's `textscan` does, and now says where (the Live line, Folder details,
   `helab convert`, the raw layer's `stop_line`). Converter UX, landed `ed7bcf9`; wording Q48.1, a

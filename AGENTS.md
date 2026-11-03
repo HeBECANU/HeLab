@@ -97,6 +97,7 @@ mypy helab/ --strict && mypy tests --strict && pyright helab tests
 mypy helab/ --strict --platform win32 && pyright --pythonplatform Windows helab tests   # as on Windows
 python native/build.py                    # optional: the cython converter backend (C compiler)
 pyinstaller HeLab.spec --clean -y          # HeLab.app on macOS (bundle ID au.edu.anu.he-bec-lab)
+uv pip install -r requirements-docs.lock && ruff check && mkdocs build --strict -d .ai/temp/site   # the manual (developer only; preview: mkdocs serve)
 ```
 
 Pass pyright explicit paths: bare `pyright` also scans `dev/`, `dist/` and `side_projects/`.
@@ -230,6 +231,9 @@ store-v3 for one release (Q50.14).
   `PlotDataItem`s. Avoid PyVista and VisPy.
 - The DLD port shows T in ms and X/Y in mm with "," grouping whatever the locale; Basic plots v1
   keeps s and m with SI prefixes. Never rotate XY.
+- The script-facing API's public names have Google-style docstrings: ruff's D1 checks the modules
+  `ruff.toml` lists (`ruff check`, CI's Docs job), and a module the manual's API reference renders is
+  added there. Docstrings are public text: no person's name, internal ID or `.ai/`/`roadmaps/` path.
 
 **The converter** ([converter](.ai/architecture/converter.md)): `helab/convert/` is Qt-free (its
 modules are listed by hand in `PURE`; a new one is added there). Every converter backend gives
@@ -274,6 +278,7 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | `helab/scripts/standard/`, `helab/scripts/dld/` | Basic plots v1; the DLD Front Panel Port | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
 | `helab/utils/settings_store.py`, `settings_defaults.py`, `lab_parameters.py` | settings | [settings](.ai/architecture/settings.md) |
 | `helab/utils/app_log.py`, `gui_watchdog.py`, `events.py`, `dash_server.py` | logging, stall dumps, notifications, the Plotly server | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
+| `docs/`, `mkdocs.yml`; `helab/utils/user_manual.py` | the user manual (MkDocs Material, API reference by mkdocstrings); Help › User manual's targets | [release-and-ci](.ai/architecture/release-and-ci.md), [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md) |
 | `tests/conftest.py` | isolation: data guard, private store, settings, folders | [testing](.ai/architecture/testing.md) |
 | `.github/workflows/` | CI: 3.13 on macOS, Windows, Ubuntu; compat 3.11/3.12/3.14 on PRs | [release-and-ci](.ai/architecture/release-and-ci.md) |
 | `legacy/` | MATLAB references: tdc_autoconverter (submodule); Momentum_Bells_test, DLD_front_panel (cloned by hand, README) | [dld-analyses](.ai/architecture/dld-analyses.md) |

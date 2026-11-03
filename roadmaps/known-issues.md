@@ -14,12 +14,6 @@ How to use it:
 
 ## App
 
-- [ ] **A user script with `from __future__ import annotations` and a `@dataclass` fails to load**
-  (`AttributeError` from `dataclasses._is_type`): `ScriptsManager._load_script_file` runs the module without
-  registering it in `sys.modules`. Found by Quill writing the manual (2026-11-03); being fixed on the Docs floor
-  (register it under `helab.scripts.dynamic.<name>` before `exec_module`).
-- [ ] `helab cache --help` prints a person's name ("(Tony, 2026-10-31)"): `helab/cache_cli.py` builds argparse's
-  description from its docstring. Public CLI output; being fixed on the Docs floor with the other CLIs' help.
 - [ ] **The RAM budget box clips its text** (Settings → Cache): Qt's `QAbstractSpinBox.sizeHint`
   measures at most 18 characters, and "16.0 GiB (1/8 of 128 GiB)" is 25 (it was 23 as "17.2 GB (1/8
   of 137 GB)", clipped too; widths 131 and 135 px offscreen). A `sizeHint` override on
@@ -140,7 +134,12 @@ How to use it:
   Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
   quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
   `92f9d1a`); "Disk cache inventory: Cancelled" was logged just after. Unchecked whether store-v4's quit path
-  (the inventory, `raw_fill`) adds the time or the runner was busy.
+  (the inventory, `raw_fill`) adds the time or the runner was busy. Again on Windows, Ground CI 41597667363
+  (Tests 2/3, job 125788785096, `413b2a0`, 2026-11-03): reran twice, `assert (674.56 - 671.49) < 1.0`, quitting
+  took 3.07 s; passed on the second rerun.
+- [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
+  CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
+  passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
 - [ ] `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots` reran once on
   Windows CI 41561765280 (Tests 3/3, job 125673863803, `agent/v4-switch-on` `23134c0`, 2026-11-03):
   `assert took < 5.0` failed at 5.52 s (the load with the converted-TXY index held by another writer, which must
@@ -377,6 +376,14 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
 
+- [x] **A user script with `from __future__ import annotations` and a `@dataclass` failed to load**
+  (`AttributeError` from `dataclasses._is_type`; found writing the manual, 2026-11-03):
+  `ScriptsManager._load_script_file` ran the module without registering it in `sys.modules`. **Fixed** (`c8d400c`,
+  Docs floor, landed `b0e3aac`): the module is in `sys.modules` as `helab.scripts.dynamic.<file name>` only while
+  its file runs (`scripts_manager._importing`), then whatever held the name is put back; `test_script_modules.py`.
+- [x] `helab cache --help` printed a person's name: `helab/cache_cli.py` built argparse's description from its
+  docstring. Public CLI output. **Fixed** (`0ab9c87`, Docs floor, landed `b0e3aac`): an explicit `DESCRIPTION`;
+  `tests/test_cli_help.py` keeps the user commands' help free of names and item IDs.
 - [x] **A shot held from a fallback External stopped Live** (found by the TXY Priority floor's tests for review
   TP-3, 2026-11-03): under a list such as `m23v1 › m19v1`, a shot Live held from External (the fallback) that an
   entry of the list then had made `live_check` and `save_held` stop with "changed". **Fixed** (`8f250df`, landed

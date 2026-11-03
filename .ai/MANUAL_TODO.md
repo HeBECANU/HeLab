@@ -287,6 +287,18 @@ Live session).
   origins in a plot's record, and Folder details' "· N fallback" when the list misses some shots. Also the
   timing on a large folder (A55.3).
 
+## Documentation (added 2026-11-03, block 56)
+
+- [ ] **M56.1 Read the manual's first pages** (`mkdocs serve`, with `requirements-docs.lock` installed): install, data root, Live,
+  converting TXY, writing a script, command line, settings, cache. Their labels and numbers were checked against
+  the code; the wording, the order and what is left out are yours.
+- [ ] **M56.2 Turn on GitHub Pages** on TonyXTYan/HeLab (Settings › Pages › Deploy from a branch: `gh-pages`, `/`)
+  once the first published release's Docs site run has made the branch; the same on HeBECANU/HeLab when releases
+  are made there.
+- [ ] **M56.3 Help › User manual in a release build**: on a networked computer (the site's version page opens in
+  the browser), offline or on a lab PC (the bundled copy opens, and its search works), and from a source run (the
+  GitHub page).
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

@@ -538,14 +538,14 @@ Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f
 
 ## Documentation (block 54; Q54.1, Tony 2026-11-03, before the v0.0.8 PR)
 
-- [ ] **A54.1 Docstrings for the script-facing API.** Every public name in `helab/scripts/base.py`,
+- [x] **A54.1 Docstrings for the script-facing API.** (done in `4c47227`, review fixes `9631294`, `results.py` in `aafcb9d`, Docs floor, landed `b0e3aac`) Every public name in `helab/scripts/base.py`,
   `helab/analysis/dataset_view.py` (the `DatasetView` class itself, `name`, `short`, `key`, `shot_numbers`,
   `event_count`, `ViewIdentity`, `Provenance`), `parameters.py`, `selection.py` and the fit helpers scripts use
   gets a docstring, with Google-style `Args:`/`Returns:` where they add something the types don't. A check keeps
   it: ruff's pydocstyle rules (`D1`) on those modules only, in CI. Counts on 2026-11-03: `base.py` 35/37,
   `DatasetView`'s module 21/30; all of `helab/` 60 % of public functions. These docstrings feed PyCharm's Quick
   Documentation and the manual's API reference (A54.2).
-- [ ] **A54.2 The user manual's frame.** MkDocs with the Material theme in `docs/` (beside `hlb-format.md`),
+- [x] **A54.2 The user manual's frame.** (done in `9507d02`, `3462828`, `662a287`, review fixes `d0128ae`, `17239e0`, `ee6df99`, `ec9defd`, Docs floor, landed `b0e3aac`; the deploy on a published release only, DM-1 (a)) MkDocs with the Material theme in `docs/` (beside `hlb-format.md`),
   Diátaxis sections (getting started, how-to, reference, explanations), an API reference for script writers built
   by mkdocstrings from A54.1's docstrings, a CI job that builds it with warnings as errors, and Help › User
   manual. First pages: install and first folder, `.helab-root`, Live, converting TXY, writing a script, the cache,
@@ -570,6 +570,32 @@ TP-1–TP-11 fixed on the floor; landed `9bf99ff`).
 - **A55.4 A manual convert beside Live's**: Convert this folder… is disabled while Live's Auto-convert converts
   that folder (TP-5). A manual convert with another profile could queue after Live's conversion instead; that
   needs FolderCache's convert jobs keyed by profile.
+
+## Documentation follow-ups (block 56)
+
+From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (reviews D-1–D-3 and DM-1–DM-4
+fixed on the floor; landed `b0e3aac`). Each runs on a floor or Ground; the manual's pages are public text, naming no
+person, lab machine or internal ID.
+
+- [x] **A56.1 `results.py`'s docstrings and its API page** (done in `aafcb9d`, Docs floor, landed `b0e3aac`).
+- **A56.2 `dataset_view.py`'s module docstring, public-safe**: it names Q6.6, plots-1 and plots-3, and
+  `root_key`'s docstring names a person and a review finding. Then `docs/reference/api/dataset-view.md` may render
+  the module instead of naming its classes one by one.
+- **A56.3 `docs/.ai-generated/`**: three old planning files in the public `docs/` folder (MkDocs skips dot-folders,
+  so the site doesn't show them). Move them to `.ai/sessions/` or delete them.
+- **A56.4 The built-in profiles' notes** shown in Settings › TXY converter carry internal IDs ("stage 3", "Q6.11"):
+  make them user-facing text.
+- **A56.5 Stale docs found while writing the manual**: `data-roots.md`, `cache-store.md` and `live.md` were
+  corrected in the landing's docs pass; left: the comment above `STORE_V4_SETTING` in
+  `helab/utils/settings_defaults.py` still says "off until stage 2", while its row is on from v0.0.8.
+- **A56.6 Grow `ruff.toml`'s scope** to the rest of what scripts import (`follow.py`, `backends.py`'s panes,
+  `stats.py`), each with an API page.
+- **A56.7 `helab --help` starts the GUI**: `helab/main.py` handles `--version`, `convert` and `cache` before the
+  GUI, but not `--help`/`-h`. Print a short usage (the app, `--version`, `--geometry`, `convert`, `cache`, each
+  with `--help`) and exit 0, before anything starts.
+- **A56.8 The manual's "Which TXY HeLab reads" section** (now a short note): the ordered TXY list (Settings › TXY
+  converter › Edit…, a folder's and a plot's own lists, the fallback shots and how a plot's record names them),
+  and the External label.
 
 ## Not AI work (stays in MANUAL_TODO)
 
