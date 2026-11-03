@@ -409,6 +409,10 @@ class FolderCache(QObject):
         self._tab_source: str | None = None  # The ``txy_source`` setting, read when first needed.
         # User profiles by tag (Q53.2: a list may name one), read from the profile folder when first needed.
         self._user_profiles: dict[str, dict[str, Any]] | None = None
+        self._user_profile_objects: dict[str, DetectorProfile] = {}  # (The same, as profiles.)
+        # Folders whose Auto-convert converts with their one-entry TXY list's profile, taken from Live's offer
+        # (Q~2.2; this session only).
+        self.convert_with: dict[str, DetectorProfile] = {}
         self._live_helab: dict[str, dict[str, Any]] = {}
         # The RAM budget for datasets no tab shows (Settings → Cache; ``set_ram_budget``).
         self.max_data_bytes = DEFAULT_RAM_STEPS * ram_step_bytes()
@@ -1179,6 +1183,7 @@ class FolderCache(QObject):
                 library = ProfileLibrary(profiles_folder()).profiles()
             except OSError:
                 library = {}
+            self._user_profile_objects = {file_tag(profile): profile for profile in library.values()}
             for profile in library.values():
                 self._user_profiles[file_tag(profile)] = {
                     "profile_hash": profile.content_hash(), "profile_tag": file_tag(profile),
@@ -1514,10 +1519,37 @@ class FolderCache(QObject):
             self.folderPrefsChanged.emit(path)
 
     def auto_convert_profile(self, path: str) -> DetectorProfile:
-        """The profile Live's Auto-convert converts ``path`` with: Settings' conversion profile. The seam for
-        Q~2 (Q53.2: what a folder whose TXY list doesn't read the conversion profile converts with; Tony's
-        direction, being confirmed: a one-entry list offers its own profile). Memory only."""
-        return self.convert_profile()
+        """The profile Live's Auto-convert converts ``path`` with: the one its Live line's offer set this session
+        (``convert_with``, Q~2.2), else Settings' conversion profile. Memory only."""
+        return self.convert_with.get(self.key(path)) or self.convert_profile()
+
+    def auto_convert_offer(self, path: str) -> DetectorProfile | None:
+        """The profile Live's line offers to convert ``path`` with (Q~2.2): its TXY list's one entry, when that
+        is a HeLab profile Auto-convert doesn't convert with now and HeLab knows it; else None. A list of
+        several entries falls back to the conversion profile's TXY (Q~2.1), so it offers nothing."""
+        entries = txy_sources.resolve(self.folder_list(path), self.convert_profile_tag())
+        if len(entries) != 1 or entries[0] == txy_sources.EXTERNAL:
+            return None
+        from helab.convert.profile import file_tag
+        if file_tag(self.auto_convert_profile(path)) == entries[0]:
+            return None
+        return self.profile_by_tag(entries[0])
+
+    def set_convert_with(self, path: str, profile: DetectorProfile | None) -> None:
+        """Live's offer taken (``profile``) or undone (None): this session's Auto-convert profile for ``path``."""
+        if profile is None:
+            self.convert_with.pop(self.key(path), None)
+        else:
+            self.convert_with[self.key(path)] = profile
+
+    def profile_by_tag(self, tag: str) -> DetectorProfile | None:
+        """The conversion profile, a built-in or a user profile whose TXY carry ``tag`` (``file_tag``). Memory
+        only: the user's as a load last read them (``_profile_for_tag``); a Live line renders with it."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return profile
+        return self._user_profile_objects.get(tag)
 
     def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
                 profile_used: DetectorProfile | None = None) -> bool:

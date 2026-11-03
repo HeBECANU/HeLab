@@ -16,6 +16,7 @@ import weakref
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
+from helab.convert.profile import file_tag
 from helab.convert.raw import ReadStop
 from helab.utils import app_log, cache_location, events
 from helab.utils import folder_cache
@@ -753,6 +754,19 @@ class LiveController:
             action.setToolTip(f"Turn Live on in {name} to start watching it and auto-converting its new raw "
                               "files (d<N>.txt) to HeLab's TXY. Remembered for this session.")
         action.toggled.connect(self.set_auto_convert)
+        # Q~2.2: a folder whose TXY list is one profile Auto-convert doesn't convert with offers that profile.
+        offer = cache.auto_convert_offer(path)
+        taken = cache.convert_with.get(FolderCache.key(path))
+        if (shown := offer or taken) is not None:
+            tag = file_tag(shown)
+            action = menu.addAction(f"Convert with {tag} (this folder reads {tag} only)")
+            assert action is not None
+            action.setCheckable(True)
+            action.setChecked(taken is not None)
+            action.setToolTip(f"This session, Auto-convert converts {name} with {tag}, the one profile its TXY list "
+                              f"reads (right-click › TXY for this folder…), instead of Settings' "
+                              f"{cache.convert_profile_tag()}.")
+            action.toggled.connect(lambda on: self._convert_with(path, offer if on else None))
         action = menu.addAction("Write TXY beside the raw files in this folder…")
         assert action is not None
         action.setCheckable(True)
@@ -779,6 +793,11 @@ class LiveController:
         assert action is not None
         action.setToolTip("A system notification, once per shot (0: never)")
         action.triggered.connect(self._ask_low_hits)
+
+    def _convert_with(self, path: str, profile: Any) -> None:
+        """Live's offer (Q~2.2) taken or undone: the next conversion uses it."""
+        self.explorer.model.cache.set_convert_with(path, profile)
+        self._live_changed()
 
     def _set_write_beside(self, path: str, on: bool) -> None:
         explorer = self.explorer
@@ -1041,6 +1060,8 @@ class LiveController:
                 parts.append(empty_text)
             if others := len(convert.unconvertible) - len(convert.damaged):
                 parts.append(f"{others:,} unconvertible")
+            if (offer := self.explorer.model.cache.auto_convert_offer(session.path)) is not None:
+                parts.append(f"not read here: convert with {file_tag(offer)}?")
             text = "auto-convert " + (", ".join(parts) if parts else "on")
         started = datetime.fromtimestamp(convert.started_at).astimezone()
         lines = [f"Auto-convert on since {started:%H:%M:%S} (this session): each check also converts the folder's "
@@ -1060,6 +1081,10 @@ class LiveController:
             + (f"; notified below {threshold:,} hits: {convert.low:,}" if threshold else "; low-count notifications off"))
         if empty_line:
             lines.append(empty_line)
+        if (offer := self.explorer.model.cache.auto_convert_offer(session.path)) is not None:
+            lines.append(f"This folder reads {file_tag(offer)} only (its TXY list), so the TXY Auto-convert writes "
+                         f"with {self.explorer.model.cache.convert_profile_tag()} aren't read here. Auto-convert's "
+                         f"menu › Convert with {file_tag(offer)}, for this session.")
         if convert.stopped:
             lines.append(f"Read stopped early ({len(convert.stopped):,}): " + "; ".join(
                 f"{name}: {stop.detail()}" for name, stop in sorted(convert.stopped.items())[:8])

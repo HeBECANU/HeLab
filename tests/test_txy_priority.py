@@ -388,3 +388,29 @@ def test_the_fallback_is_said_in_the_plots_line_and_folder_details() -> None:
                     "profile_tag": "", "fallback": [3, 4]}}
     row, tip = FolderDetailsPanel._txy_row(meta)
     assert row.endswith("· 2 fallback") and "(External, matlab-2019 v1)" in tip
+
+
+def test_a_one_entry_folder_offers_its_profile_to_auto_convert(monkeypatch: pytest.MonkeyPatch,
+                                                                tmp_path: Path) -> None:
+    """Q~2.2: a folder whose list is one profile Auto-convert doesn't convert with offers it (this session);
+    a list of several entries offers nothing (it falls back to the conversion profile's TXY)."""
+    from test_raw_fill import frozen
+    service, cache = frozen(monkeypatch)
+    try:
+        path = str(tmp_path)
+        cache.set_convert_profile(MATLAB_2019)
+        assert cache.auto_convert_offer(path) is None  # (Settings' [Conversion, External].)
+        cache.remember_choices(path, {"policy": "", "source": "helab-only", "tag": M23, "source_set_at": 2.0})
+        offer = cache.auto_convert_offer(path)
+        assert offer is not None and offer.name == "matlab-2023-lab-edit"
+        assert cache.auto_convert_profile(path).name == "matlab-2019"
+        cache.set_convert_with(path, offer)
+        assert cache.auto_convert_profile(path) is offer and cache.auto_convert_offer(path) is None
+        assert cache.convert("live", path, profile_used=cache.auto_convert_profile(path))
+        [request] = [r for r in service.pending if r.operation == "convert"]
+        assert request.payload["profile"]["name"] == "matlab-2023-lab-edit"
+        cache.set_convert_with(path, None)
+        cache.remember_choices(path, {"source": "m23v1>m19v1", "tag": "", "source_set_at": 3.0})
+        assert cache.auto_convert_offer(path) is None
+    finally:
+        service.shutdown()
