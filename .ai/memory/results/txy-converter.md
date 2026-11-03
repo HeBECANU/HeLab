@@ -121,3 +121,8 @@ Q25.4).
 
 - Samples (Q8.6): a fixed set copied once from X to `~/HeLab-samples/txy-v1/`; floors read only
   that, never X. Backend floors' packages only in their own venvs (Q8.5).
+
+## TXY priority lists (Q53.1–Q53.3, Tony in the terminal, 2026-11-03)
+
+- MATLAB's `d_txy_forc<N>.txt` is **"External (MATLAB converter)"** in the UI; the files keep their names.
+- Instead of the four fixed sources, "we can select any profile priority too": an ordered list of profiles' TXY and External, with "a global default and per folder default and a per plot settings too for maximum creative freedom". Old modes keep their identities. In v0.0.8 ("I want this in v0.0.8"). Plan: `roadmaps/txy-priority.md`.
