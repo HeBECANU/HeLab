@@ -297,6 +297,9 @@ Tony in Chat, 2026-11-03 evening (via CoCo), on the remaining questions:
 - **Q56.1 Zensical:** the manual moves from Material for MkDocs (end of life 2027-05-05) to Zensical, keeping
   offline search in the bundled copy, the version menu, dark mode and the rest ("ok use Zensical then, I want
   offline search, version menu, dark mode, and other things"); checked on the Follow-ups floor before switching.
+  The check found Zensical's version menu works only through a mike fork not on PyPI, so Tony chose **(b)**
+  ("ok b"): Material for v0.0.8, with the search shim vendored so the bundled copy searches offline, and
+  Zensical once its versioning is native or on PyPI, before 2027-05-05.
 - **Q49.3 (b):** before importing a script folder (at start and on reload), HeLab try-imports it in a helper
   process with a time limit and skips, with a message, one that hangs; the real import stays on the GUI
   thread ("do b?", then "ok proceed 49.3b").
