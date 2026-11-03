@@ -492,6 +492,31 @@ def test_a_plot_opened_while_its_folder_is_tested_waits_for_the_reload(
     assert scripts.reload_button.text() == "Reload"
 
 
+@pytest.mark.parametrize("kept", ["test import failed", "folder removed"])
+def test_a_plot_held_from_its_start_whose_folder_keeps_its_code_runs_it(
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        kept: str) -> None:
+    """C4-1 (PR #11, round 2): a plot opened during the round is held before its first run; when the round
+    keeps its folder's code (its test import failed, or the folder was removed meanwhile), it runs that code
+    then (``keep_script``) and draws, saying why it kept it."""
+    window = new_window(qtbot, cache, windows)
+    scripts = window.scripts
+    write_script(tmp_path, "lab_live_s", "old")
+    scripts.add_folder(str(tmp_path))
+    rounds = fake_probes(monkeypatch, scripts)
+    window.view = view_of(dataset("run", range(1, 4)), cache.root_of(folder("run")))
+    scripts.reload_scripts()
+    instance = scripts.run_analysis(*lab_script(scripts), "Plot")
+    assert instance is not None and instance.status_label.text() == "Waiting for its script to reload…"
+    folders, answer = rounds[0]
+    if kept == "folder removed":
+        scripts.remove_folder(str(tmp_path))
+    answer({folder_: ProbeFailure("it hung") for folder_ in folders})
+    qtbot.waitUntil(lambda: instance.shown is not None, timeout=10_000)
+    assert shown_tag(instance) == "old" and "⚠ Script didn't reload" in instance._script_note
+    assert not scripts._probing and len(rounds) == 1
+
+
 def test_the_import_waits_for_a_run_that_started_while_its_folder_was_tested(
         qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C-4 (PR #11): a run of the folder's scripts queued during the round (any way) still computing when the
