@@ -1,8 +1,8 @@
 # TXY priority lists
 
 Horizon: v0.0.8 (Tony, 2026-11-03, Q53.3). Added: 2026-11-03, from Tony in the terminal (block 53:
-Q53.1–Q53.3, decided). **Status:** planned; to be built on the dev computer as one floor from
-`dev/v0.0.8`. Priority and completion: [overview](_readme.md). Related: [TXY converter](txy-converter.md),
+Q53.1–Q53.3, decided). **Status:** built and landed (`9bf99ff`, the TXY Priority floor from `dcc02d8`; CI
+41590741400 green), with Q55.1–Q55.8 decided (Tony, 2026-11-03) and Q55.9 open; see "As built" below. Priority and completion: [overview](_readme.md). Related: [TXY converter](txy-converter.md),
 [caching v2](caching-v2.md); how sources work today: `helab/utils/txy_sources.py` and
 [converter.md](../.ai/architecture/converter.md).
 
@@ -29,7 +29,32 @@ maximum creative freedom" (Q53.2).
   - **per plot** (each plot's TXY row, `helab/views/plots/txy_source.py`; "As the tab" stays).
 - **Q53.3:** in v0.0.8, before the PR to `main` (0.0.8a1, Q47.5).
 
-## Design notes (for the floor; propose, Ground decides)
+## As built (landed `9bf99ff`; block 55)
+
+The floor's [handoff](../.ai/sessions/2026-11-03-claude-txy-priority/handoff.md) and
+[design](../.ai/sessions/2026-11-03-claude-txy-priority/design.md); mechanics in
+[converter.md](../.ai/architecture/converter.md#txy-priority-lists).
+
+- **The label** (Q53.1): "External (MATLAB converter)", "External" in short; only the labels changed.
+- **Lists** (Q53.2): entries `External`, a profile's tag, or `Conversion` (Settings' conversion profile, resolved
+  when a load is asked for; Q55.3). Set in Settings › TXY converter, right-click › TXY for this folder… and each
+  plot's TXY button, with one editor (`helab/views/txy_list.py`).
+- **The identity rule:** a list that is one of the four modes is saved, sent and identified exactly as that
+  mode; any other list is its own identity, its text (`m23v1>m19v1>External`). No schema change; v0.0.7a1 reads
+  what this saves without mistaking it (`tests/test_txy_priority_v007.py`).
+- **Fallback** (Q55.2, Q55.5, Q55.6): a list of several entries continues per shot with the folder's list (for a
+  plot), Settings' list, External, then the most recently converted HeLab TXY of any profile; a one-entry list
+  never falls back. Datasets record the fallback shots; Folder details and the plot's line say so.
+- **Convert on read** (Q55.1): only when nothing in the chain has a file, with the own list's first HeLab entry
+  that can convert.
+- **Live's offer** (Q55.2): a folder whose list is one profile that Auto-convert doesn't convert with offers
+  "Convert with <tag>" for the session.
+- **Convert this folder…** (Q55.4, Q55.7): right-click and File › Convert "<folder>"…, any profile, to HeLab's
+  cache, its temp folder or beside the raw files (beside turns the folder's beside setting on).
+- **Open:** Q55.9 (a list that resolves to one entry reads as one and doesn't fall back). Follow-ups A55.1–A55.4;
+  checks M55.1–M55.4.
+
+## Design notes (as planned; the floor's answers are above)
 
 - **The four modes are lists:** HeLab priority = [HeLab <conversion tag>, External]; MATLAB priority =
   [External, HeLab <tag>]; HeLab only = [HeLab <tag>]; MATLAB only = [External]. A list equal to one of

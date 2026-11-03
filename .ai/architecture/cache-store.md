@@ -194,9 +194,15 @@ raw file is listed; the two priority modes share one view; whole rows in Make ro
     two priority modes share one), holding no data: each shot's layer and fingerprint, `problematic`,
     `raw_times`, and the folder facts `datasets.info` held (listing, signature, TXY record). A view whose
     layer entry is gone or doesn't match is incomplete, and those shots come from the next step of the
-    loading order. Removing a layer deletes its folder's views (derived rows).
+    loading order. Removing a layer deletes its folder's views (derived rows). A TXY list that isn't a mode
+    (Q53.2) has its own view, keyed by its text and its HeLab entries' profile hashes joined by `>`
+    (`txy_cache.view_key`). The view's TXY record of a list adds `entries`, `fallback_entries` and
+    `fallback` (the shots taken beyond the own list, Q55.2); `wanted_key`/`saved_wanted` include the
+    fallback, so a change to Settings' list is never taken as unchanged.
   - `cache_policy` (`raw+used` | `raw` | `txy`, Q45.1) and `txy_source_prefs` (`source`, `tag`, Q45.2): the
     folder's own choices, the user's state (Clear folder preferences resets them; Clear all keeps them).
+    `txy_source_prefs` holds a mode + tag or a list's text with tag "" (`txy_sources.folder_row`); no schema
+    change, and `set_txy_source_pref` refuses what is neither.
   - `pending_saves.parts` (Q45.8) and `meta.gen_txy`; epochs `txy:<key>`.
 - **Saves** (`save_txy`, after `start_txy_job`): one unit per job, one transaction and one fit check: a new
   segment per layer touched holding only its new or changed shots, the layer rows, the view. A shot's entry is
@@ -284,11 +290,12 @@ Store-v4 only, the switch off (`912f928`, `4e86094`, `0cd133f`, `4e14535`, revie
 Live check whose source reads HeLab's TXY converts in the helper a shot that has a raw file and no current HeLab
 text of the profile asked for, and saves only a TXY layer entry, kind `raw` (keyed by the raw file); a load alone
 never writes text or a raw row (R~1, R~2: `raw_fill` still fills the raw layer after it). The order per shot is its
-TXY layer, the raw layer, a current HeLab text, then converting the raw file (Q50.5). Under HeLab priority only
-the shots MATLAB's TXY lacks convert on read (Q50.1's option (a), CoCo's call pending Tony, `ced04aa`;
-`txy_sources.converts_over_matlab`: HeLab only always converts, MATLAB's sources never; `CONVERT_OVER_MATLAB =
-True` would bring back converting over MATLAB's TXY), and Live keeps a shot it converted on read as HeLab's (SQ-1,
-`9be3e12`). Mechanics:
+TXY layer, the raw layer, a current HeLab text, then converting the raw file (Q50.5). A shot converts on read
+only when nothing in its list's chain has a TXY file of it, with the own list's first HeLab entry that can
+convert (Q55.1, Q55.2; landed `9bf99ff`). For the modes this is Q50.1 (a) (`ced04aa`): under HeLab priority only
+the shots MATLAB's TXY lacks; HeLab only always converts, MATLAB's sources never
+(`txy_sources.converts_over_matlab`; `CONVERT_OVER_MATLAB = True` would bring back converting over MATLAB's TXY).
+Live keeps a shot it converted on read as HeLab's (SQ-1, `9be3e12`). Mechanics:
 [io-and-browsing](io-and-browsing.md#loads-with-txy-layers), [converter](converter.md), [live](live.md).
 `tests/test_caching_v2_session.py`'s stage 3 session checks it with the switch on, beside store-v3
 ([testing](testing.md)).

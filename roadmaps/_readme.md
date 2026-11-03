@@ -30,7 +30,7 @@ switched on in that PR, after Tony's check (Q47.4).
 the switch-on (Q50.18, with Q51.1's extra listing on the share), the open questions of v0.0.8's floors
 (Converter UX's Q48.1–Q48.6; Live Scripts' Q49.1–Q49.3; Q50.1, Q50.2 and Q51.1 decided 2026-11-03), (`agent/v4-switch-on` landed `92f9d1a`: store-v4 on), the version bump, and the PR to `main` once CI is
 green (Q47.5: 0.0.8a1).
-Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, built on the dev computer before that PR.
+Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (block 55; Q55.9 open).
 
 **Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
 
@@ -58,9 +58,11 @@ Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, built on the dev c
   Tony's check (Q47.4, Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC). Decided 2026-11-03:
   Q50.1 (a) (HeLab priority converts only the shots MATLAB's TXY lacks), Q50.2 (Auto-convert keeps its label),
   Q51.1 (a) (`raw_fill`'s extra listing kept; Tony checks it on the share with M47.2).
-- [ ] TXY priority lists (Q53.1–Q53.3; Tony, 2026-11-03): MATLAB's `d_txy_forc<N>.txt` labelled
+- [x] TXY priority lists (Q53.1–Q53.3; Tony, 2026-11-03): MATLAB's `d_txy_forc<N>.txt` labelled
   "External (MATLAB converter)"; any ordered list of profiles' TXY and External, set globally, per folder
   and per plot, replacing the four fixed sources (old modes keep their identities) ([plan](txy-priority.md)).
+  TXY Priority floor, landed `9bf99ff` (block 55): a per-shot fallback (Q55.2), the `Conversion` entry, Live's
+  "Convert with <tag>" offer and Convert this folder… (Q55.4); Q55.1–Q55.8 decided, Q55.9 open; M55.1–M55.4.
 - [x] Say when a raw file's reading stops early (A37.1, Q37.1; Tony, 2026-10-31): the parser stops at
   the first unreadable token as MATLAB's `textscan` does, and now says where (the Live line, Folder details,
   `helab convert`, the raw layer's `stop_line`). Converter UX, landed `ed7bcf9`; wording Q48.1, a

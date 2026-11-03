@@ -236,7 +236,8 @@ modules are listed by hand in `PURE`; a new one is added there). Every converter
 `reference`'s output byte for byte (the cases in `tests/data/convert/`, and
 `dev/txy/check_samples.py` on the sample set). Fixtures compared byte for byte sit under a
 `.gitattributes` `* -text`, or Windows CI's autocrlf rewrites them
-([testing](.ai/architecture/testing.md)).
+([testing](.ai/architecture/testing.md)). A TXY choice is a priority list (`txy_sources`); a list
+that is one of the four modes keeps that mode's saved form and identity exactly.
 
 **UI** ([app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md)): keep Qt's normal
 main-window resize and repaint handling (no `setUpdatesEnabled(False)` on the window).
@@ -266,7 +267,7 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | `helab/utils/cache_store.py`, `cache_paths.py`, `data_roots.py`, `cache_move.py`; `store_v4.py`, `legacy_store.py`, `hlb.py` | the store, location keys, markers, cache-folder move; store-v4 (on from v0.0.8; `store_v4=false` falls back to store-v3 for one release), store-v3 read only, the `.hlb` container | [cache-store](.ai/architecture/cache-store.md), [data-roots](.ai/architecture/data-roots.md) |
 | `helab/utils/file_kinds.py` | `FILE_KINDS`: raw `d<N>.txt`, TXY `d_txy_forc<N>.txt`, HeLab's `d_txy_helab_<tag>_<N>.txt` (a new format is a new entry) | [cache-store](.ai/architecture/cache-store.md) |
 | `helab/models/SnapshotFileSystemModel.py` | the tree model (memory only) | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md) |
-| `helab/views/` | main window, `FolderExplorer` and `explorer_live.py` (Live, auto-convert), `explorer_convert.py` (conversions from Folder details, the converter's share and Q38.1 questions), `live_launch.py` (one launch folder), Folder details, Settings tabs (`ConverterTab.py`: TXY converter), dialogs | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [live](.ai/architecture/live.md), [converter](.ai/architecture/converter.md) |
+| `helab/views/` | main window, `FolderExplorer` and `explorer_live.py` (Live, auto-convert), `explorer_convert.py` (conversions from Folder details and Convert this folder…, the converter's share and Q38.1 questions), `txy_list.py` (the TXY list editor), `live_launch.py` (one launch folder), Folder details, Settings tabs (`ConverterTab.py`: TXY converter), dialogs | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [live](.ai/architecture/live.md), [converter](.ai/architecture/converter.md) |
 | `helab/views/plots/` | `PlotWorkspace`, docks, settings panel, presets, arrangements, cached results, each plot's TXY row (`txy_source.py`) | [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
 | `helab/analysis/` | analysis core, mostly Qt-free (`QT` in `tests/test_headless_imports.py` lists the rest): `DatasetView`, runner, parameters, selection, fits and other numerics, presets, result cache | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
 | `helab/convert/`, `native/` | the TXY converter (Qt-free): `raw`, `profile`, `reconstruct` and `backends/` (numpy the default; cython ships; reference; rust, numba, mlx for developers only, A9.1), `txy`, `fastio`, `split`, `pipeline`, `provenance` (the converted-TXY index), `raw_layer` and `txy_layer` (caching v2: raw pulses; TXY segments, `.hlb` kind `txy`), `user_profiles`, built-in profiles as JSON; harness `samples`, `check`, `timing` (scripts in `dev/txy/`); compiled backends' sources in `native/`; TXY sources' four modes `helab/utils/txy_sources.py` | [converter](.ai/architecture/converter.md) |

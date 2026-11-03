@@ -273,6 +273,20 @@ Live session).
 - [ ] **M49.2 A lab session**: a Live plot of a user script, edited mid-run with a typo, then fixed: the plot
   keeps following on the old code with the amber line, then takes the fixed code.
 
+## TXY priority lists (added 2026-11-03, block 55)
+
+- [ ] **M55.1 The TXY list editor in its three places**: Settings › TXY converter's Edit…; right-click › TXY for
+  this folder… ("As Settings"); a plot's TXY button ("As the folder's tab"). Check ticking, dragging and Move up /
+  Move down, the summary, and OK off with nothing ticked.
+- [ ] **M55.2 Convert this folder…** (right-click, and File › Convert "<folder>"…): pick m23v1, then each
+  destination (HeLab's cache, its temp folder, beside the raw files). On a share, beside asks first. Folder
+  details' row shows the progress "with m23v1".
+- [ ] **M55.3 Live's offer**: Live in a folder whose list is "m23v1 only" with Auto-convert on m19v1: the line's
+  "not read here: convert with m23v1?" and the menu item; taking it converts with m23v1.
+- [ ] **M55.4 A real folder under `m23v1 › m19v1 › External`** with External, m19v1 and m23v1 TXY: the shots'
+  origins in a plot's record, and Folder details' "· N fallback" when the list misses some shots. Also the
+  timing on a large folder (A55.3).
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

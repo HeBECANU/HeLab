@@ -126,3 +126,13 @@ Q25.4).
 
 - MATLAB's `d_txy_forc<N>.txt` is **"External (MATLAB converter)"** in the UI; the files keep their names.
 - Instead of the four fixed sources, "we can select any profile priority too": an ordered list of profiles' TXY and External, with "a global default and per folder default and a per plot settings too for maximum creative freedom". Old modes keep their identities. In v0.0.8 ("I want this in v0.0.8"). Plan: `roadmaps/txy-priority.md`.
+- **As built** (landed `9bf99ff`; Q55.1–Q55.8, Tony in Chat 2026-11-03): entries are External, a profile's tag, or
+  `Conversion` (Settings' conversion profile; the default list is `[Conversion, External]`). A list equal to one of
+  the four modes keeps that mode's saved form and identity exactly; any other list is identified by its text.
+- **Fallback** (Q55.2): a list of several entries goes on per shot to the folder's list (for a plot), Settings'
+  list, then any TXY (External, then the most recently converted HeLab TXY of any profile, Q55.5). A one-entry list
+  never falls back; Live offers "Convert with <tag>" when Auto-convert's profile isn't its entry. The two priority
+  modes fall back too (Q55.6).
+- **Convert on read** (Q55.1) only when nothing in the chain has a file, with the own list's first HeLab entry.
+- **Convert this folder…** (Q55.4): any profile, to HeLab's cache, its temp folder or beside the raw files (beside
+  turns the folder's beside setting on, Q55.7). Open: Q55.9 (a list that resolves to one entry).

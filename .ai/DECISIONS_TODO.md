@@ -255,6 +255,43 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
   `dev/v0.0.8`; Q50.18's check still comes before the PR. Block 53 is built on this Mac ("you are the dev
   computer (M4M)").
 
+Tony in Chat, 2026-11-03 afternoon (via CoCo; "yes" to Q55.1, Q55.3 and Q55.4, the fallback rule for Q55.2,
+"ok" to Q55.5–Q55.8), on the TXY Priority floor's questions (block 55; its
+[handoff](sessions/2026-11-03-claude-txy-priority/handoff.md); landed `9bf99ff`). Q55.9 is open (below).
+
+- **Q55.1** convert on read only when no entry has a TXY file of the shot, with the own list's first HeLab entry
+  that can convert; it generalises Q50.1 (a), and the four modes behave as before.
+- **Q55.2** a list of several entries falls back per shot: its own list → the folder's list (for a plot) →
+  Settings' list → External → the newest current HeLab TXY of any profile. A one-entry list never falls back;
+  Live then offers "Convert with <tag>" when Auto-convert's profile isn't its entry. Convert on read only when
+  nothing in the chain has a file; origins record each shot's entry, the identity stays the list's.
+- **Q55.3** keep the `Conversion` entry, which follows Settings' conversion profile (the default list is
+  `[Conversion, External]`).
+- **Q55.4** Convert this folder… (right-click and File › Convert "<folder>"…): any profile, to HeLab's cache, its
+  temp folder or beside the raw files; the folder only.
+- **Q55.5** the fallback's "newest first" is the most recently converted TXY of each shot, not a fixed profile
+  order.
+- **Q55.6** HeLab priority and MATLAB priority are lists of two, so they fall back too (identities and saved
+  results' keys unchanged). Addendum (review TP-6): v0.0.7a1 may keep such a store-v3 dataset on a quick check
+  until HeLab's folders change or a full check, and this build keeps data saved before Q55.2 the same way;
+  nothing is mislabelled.
+- **Q55.7** Convert this folder… beside the raw files turns the folder's beside setting on and leaves it on
+  (as Folder details' offer does), said in the dialog's tooltip.
+- **Q55.8** Settings stores a mode with a pinned tag as `helab-only@m23v1`; v0.0.7a1 reads it as its default.
+
+## TXY priority lists (block 55)
+
+From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/handoff.md) and its
+[review](sessions/2026-11-03-claude-txy-priority/review.md) (TP-8; landed `9bf99ff`). Q55.1–Q55.8 are decided
+(Recently decided).
+
+- **Q55.9 A list that resolves to one entry.** `[Conversion, m19v1]` with the conversion profile m19v1 resolves
+  to `m19v1` alone: a one-entry list, which never falls back (Q55.2). A saved `[Conversion, m23v1]` likewise
+  turns into one entry if the conversion profile becomes m23v1. Built: the identity follows what is read, and
+  the summaries say so ("Conversion (m19v1) › m19v1 (reads as m19v1 only)", in the editor, Settings' row, the
+  plot's button and Folder details). Options: (a) keep as built; (b) decide fallback on the list as saved (two
+  entries or more fall back even when they resolve to one), which needs the payload to say so. **Proposed:** (a).
+
 ## Documentation (block 54)
 
 - **Q54.1** before the v0.0.8 PR: (a) a docstring pass on the script-facing API with a check that keeps it
@@ -273,6 +310,8 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
 - **Q53.1** MATLAB's `d_txy_forc<N>.txt` is labelled "External (MATLAB converter)" in the UI (the label only; files keep their names) (Tony, 2026-11-03).
 - **Q53.2** a TXY choice is any ordered list of HeLab profiles' TXY and External, set globally, per folder and per plot ("for maximum creative freedom"); the four sources become lists ([plan](../roadmaps/txy-priority.md)).
 - **Q53.3** in v0.0.8, before the PR to `main`; built on the dev computer.
+
+Built by the TXY Priority floor, landed `9bf99ff`; its questions are block 55.
 
 ## Live Scripts (block 49)
 

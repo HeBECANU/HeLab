@@ -552,6 +552,25 @@ Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f
   `helab convert` / `helab cache`, the settings. Written for users from `.ai/architecture/` and the memory
   notes; names no person or lab machine. Published on GitHub Pages per release (Q54.2), bundled in the app as an offline copy (Q54.3); the deploy workflow publishes from whichever repo it runs in, so `HeBECANU/HeLab` gets its own site; Help opens the site of the repo the build came from, else the bundled copy (Q54.4).
 
+## TXY priority lists (block 55)
+
+From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/handoff.md) (design
+[note](sessions/2026-11-03-claude-txy-priority/design.md); [review](sessions/2026-11-03-claude-txy-priority/review.md),
+TP-1–TP-11 fixed on the floor; landed `9bf99ff`).
+
+- **A55.1 A widget test of Live's offer**: the Live line's "not read here: convert with m23v1?" and the menu's
+  "Convert with m23v1 (this folder reads m23v1 only)" have only FolderCache-level tests
+  (`test_a_one_entry_folder_offers_its_profile_to_auto_convert`); add one in `test_live_convert.py`'s style.
+- **A55.2 Retire the old composition**: `txy_sources.choose`, `helab_txy.compose` and `could_take` are kept for
+  their tests and for MATLAB only (`compose(source, matlab, {})`); they can go once their tests move to
+  `compose_list`.
+- **A55.3 Time the any-HeLab stage**: the fallback's last stage reads provenance records of every tag in HeLab's
+  folders for the shots no earlier stage has, so a large folder converted with several profiles reads more rows
+  than before. Time it on a lab folder with M55.4.
+- **A55.4 A manual convert beside Live's**: Convert this folder… is disabled while Live's Auto-convert converts
+  that folder (TP-5). A manual convert with another profile could queue after Live's conversion instead; that
+  needs FolderCache's convert jobs keyed by profile.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

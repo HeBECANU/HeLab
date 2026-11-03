@@ -284,9 +284,11 @@ heartbeat, outside the ticker, so a read that stalls times out (S3R-1); then `no
 `_Ticker` with `compute_budget`, before any `file_started`. Late, damaged (unmodified for a minute) and failed
 are judged as `helab convert --once` judges them. No TXY text and no raw row is written (Q19.1, Q50.3; `raw_fill`
 keeps filling the raw layer). The array equals the text's (`txy_cache.txy_array`). Which shots are candidates
-under each source is `txy_sources.converts_over_matlab` (Q50.1, open; option (a) built, `ced04aa`): under HeLab
+under each source is `txy_sources.converts_over_matlab` (Q50.1 (a), `ced04aa`): under HeLab
 priority only shots MATLAB's TXY lacks, so a raw file that can't be converted yet never costs a shot its MATLAB
-TXY; HeLab only converts every raw shot without HeLab text.
+TXY; HeLab only converts every raw shot without HeLab text. Under a TXY list (Q55.1, Q55.2) a shot converts on
+read only when nothing in its chain has a TXY file of it, with the own list's first HeLab entry that can convert
+(External blocks, except with `CONVERT_OVER_MATLAB`; TP-4); for the four modes this is the rule above.
 
 #### Events (`helab/io_ops/events.py`)
 
@@ -422,10 +424,11 @@ and lab scripts that glob `d*.txt` in a raw folder now also see them: such scrip
 
 #### TXY sources (Q6.6, Q18.2; `agent/txy-ui` `475c6a6`, `agent/txy-followups` `c718c71`)
 
-Four modes (`helab/utils/txy_sources.py`): `helab-priority` (the default for tabs and Live: HeLab's
+Since `9bf99ff` a choice is a priority list (next section); the four modes are lists and keep everything this
+section says. Four modes (`helab/utils/txy_sources.py`): `helab-priority` (the default for tabs and Live: HeLab's
 current TXY of the chosen profile where they exist, MATLAB's `d_txy_forc` for the rest),
 `matlab-priority` (MATLAB's, HeLab's filling shots MATLAB lacks), `helab-only` and `matlab-only`
-(the setting `txy_source`, Settings → TXY converter "Tabs and Live read", [settings](settings.md);
+(the setting `txy_source`, Settings → TXY converter "TXY priority", [settings](settings.md);
 old `matlab`/`helab` values read as the priority modes). A choice is a mode plus
 a profile tag (`DatasetView.txy_choice`, `source@tag`); both priority modes share the identity `""`
 (per-shot origins tell them apart where the data differs), so data of MATLAB's TXY alone keeps its
@@ -454,6 +457,48 @@ plot loads itself through FolderCache (RAM only, job key `load:<source>`), reloa
 revision; Reload of a released plot loads its own source. Live finds the root key itself when the app
 has none (asked once per folder per session, `key_asked`).
 
+#### TXY priority lists
+
+Q53.1, Q53.2, Q55.1–Q55.9; `agent/txy-priority`, landed `9bf99ff`.
+
+**The label** (Q53.1): the UI calls MATLAB's `d_txy_forc` "External (MATLAB converter)", "External" in short
+(`txy_sources.EXTERNAL_LABEL`, `EXTERNAL_SHORT`); files and HeLab's `matlab-*` profiles keep their names.
+
+**Entries and text:** a list is an ordered tuple of distinct entries: `External`, a profile's tag (lowercase,
+so never one of the two words), or `Conversion` (Settings' conversion profile, resolved when a load is asked
+for; Q55.3). Its text joins them with `>` (`m23v1>m19v1>External`); summaries use ` › ` and short names
+(`summary`, "m23v1 only"), and a list that resolves to fewer entries says so ("(reads as m19v1 only)", Q55.9).
+The modes are lists: `helab-priority` @T = `[T, External]`, `matlab-priority` @T = `[External, T]`,
+`helab-only` @T = `[T]`, `matlab-only` = `[External]` (`list_of`, `mode_of`). `parse_list` reads a mode,
+`mode@tag`, or a list text of at least two entries; a lone word reads as none (an old junk value such as `both`
+would otherwise be a tag). List texts are accepted wherever a mode is (`source_text`, `requested_source`,
+`source_of`, `source_of_choice`, `choice_tag`, `converts_over_matlab`).
+
+**The identity rule:** identities are computed on the resolved list (`Conversion` replaced by its tag,
+duplicates dropped). A resolved list that is a mode is saved, sent and identified exactly as that mode, so
+caches, views, presets and saved results stay valid; any other list's identity is its text (choice, dataset
+key, `identity_source`, results' `txy_source`). **Saved forms:** the setting holds the mode, `mode@tag` when the
+tag is pinned (`helab-only@m23v1`, Q55.8) or the list text (`setting_text`); store-v4's folder row the mode + tag
+or the list text with tag "" (`folder_row`); presets a `TxyChoice` with `entries`
+([plots-and-scripts](plots-and-scripts.md#presets-and-reopening)). Loads carry the list in their options
+(`with_list`, `items_of`; read back by `payload_entries`). v0.0.7a1 reads all of this without mistaking it
+(the session's design.md §2; `tests/test_txy_priority_v007.py`).
+
+**Each shot takes the first entry with a usable TXY**, then the fallback (Q55.2): a list of several entries
+continues per shot with the folder's list (for a plot), Settings' list, External, then the newest current HeLab
+TXY of any profile (the most recently converted, Q55.5); a one-entry list never falls back. The modes of two
+entries fall back too (Q55.6). A file still being written never falls through to a later entry. Mechanics
+([io-and-browsing](io-and-browsing.md#loads-with-txy-layers)): `helab_txy.chain_of`, `find_list` (each stage
+narrowed to shots no earlier stage has), `compose_list`. Origins record each shot's entry; the dataset's
+`txy` record adds `entries`, `fallback_entries` and `fallback`, and `describe` and Folder details name the
+fallback shots ("· 3 fallback"). Convert on read: Q55.1 (above, under the operation).
+
+**Where it is set**, one editor (`helab/views/txy_list.py`: `TxyListEditor`, `TxyListDialog`, `ask_txy_list`):
+Settings › TXY converter's "TXY priority" (Edit…), right-click › TXY for this folder… ("As Settings"; the folder
+only), and each plot's TXY button ("As the folder's tab"). FolderCache resolves lists (`tab_list`,
+`folder_list`, `folder_own_list`, `resolved`, `set_folder_list`) and `with_txy` sends `fallback`, `known` and
+`conversion`.
+
 #### Profiles in the app
 
 Built-ins: `matlab-2019` (default), `matlab-2023-lab-edit`, and the plate profiles `plates-2017`,
@@ -467,6 +512,21 @@ definitions; in `setup.py`'s package data and `HeLab.spec`'s datas). User profil
 the hash shown, import, export; delete asks, and deleting the profile in use resets the setting;
 edits save at once). Names sharing a hash are all shown. Each plot's settings suggest the plate profile
 for the folder's date (`PLATE_SWAPS`, `suggested_plates`, Q6.10), never applied.
+
+#### Convert this folder…
+
+Q55.4, Q55.7; landed `9bf99ff`.
+
+Right-click › Convert this folder… and File › Convert "<folder>"… (`HelabMainWindow`, the menu item only) open
+`explorer_convert.ConvertFolderDialog`: any profile (built-in or user, by tag) and HeLab's cache, its temp folder
+or beside the raw files; the folder only. It runs in a helper through `ExplorerConverter.ask_convert` /
+`start(…, profile)` and `FolderCache.convert(…, profile_used=)`, by the helper's usual rules (temporary name and
+rename, never over a TXY); beside on a share asks first (`confirm_beside_on_share`). Beside turns the folder's
+beside setting on and leaves it on (Q55.7, as Folder details' offer; the tooltip says so), so Live's
+Auto-convert there then writes beside too. A conversion of another profile is never joined: `converting_with`
+and `convert` refuse, the dialog names the profile converting, and the items are disabled with the reason while
+Live's Auto-convert converts that folder or a converter question is open (`convert_unavailable`; TP-5, TP-9;
+A55.4).
 
 #### `helab convert --watch FOLDER` (`helab/convert_cli.py`, Q9.5)
 

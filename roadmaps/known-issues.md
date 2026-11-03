@@ -236,7 +236,8 @@ How to use it:
   123847075029) and `agent/smoke-ready` CI 40990082872 (job 123850152612), both passed on retry; Ground
   CI 41072414259 (job 124119750861, `2960680`); `agent/caching-v2` CI 41375836115 (`84ccaeb`, job
   125055805809) and CI 41379212072 (`6b0f998`, job 125066159186); `agent/v4-switch-on` CI 41490797588
-  (`d3b4931`, 2026-11-03).
+  (`d3b4931`, 2026-11-03); `agent/txy-priority` CI 41587970080 (Windows Tests 1/3, job 125757887948,
+  `bf3fb85`, 2026-11-03).
 - [ ] `test_gui_responsiveness.py::test_stalled_process_keeps_heartbeat_and_shutdown_responsive`:
   `assert 0.2199… < 0.2` (line 228) on macOS CI (run 40764414177), passed on retry.
 - [ ] Tests that `chdir` while helpers can start: a helper inherits the working folder, which its
@@ -364,6 +365,19 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 
 Landed in `dev/v0.0.8` (`dev/v0.0.7`'s were dropped at the v0.0.7a1 tidy-up; their release-notes
 lines are in TonyXTYan/HeLab#10):
+
+- [x] **A shot held from a fallback External stopped Live** (found by the TXY Priority floor's tests for review
+  TP-3, 2026-11-03): under a list such as `m23v1 › m19v1`, a shot Live held from External (the fallback) that an
+  entry of the list then had made `live_check` and `save_held` stop with "changed". **Fixed** (`8f250df`, landed
+  `9bf99ff`): Live reads such a shot again, as A39.2's switch does (External feeding the mismatch rule meanwhile),
+  and `save_held` composes with `reclaim=False`; tests of `live_check` and `save_held` under the list fail without
+  the fix.
+- [x] `test_converter_tab.py::test_the_cache_tab_shows_and_clears_converted_txy` failed all 6 tries in two `-n 4`
+  runs on the TXY Priority floor (2026-11-03); it passed alone. **Cause:** it counted converted TXY in the xdist
+  worker's temp folder (conftest's `DIR_TEMPS`, one per session), so any test that converted to "temp" earlier on
+  the same worker (`test_explorer_convert`'s `[temp]` case, the floor's `test_convert_folder`) left files there,
+  and each retry then hit `FileExistsError` on its own folder; reproduced in one process with either test first.
+  **Fixed** (`f944a5a`, landed `9bf99ff`): each of those tests has its own temp folder. CI 41590741400: no RERUN.
 
 - [x] **Plotly worker deaths** in `test_plot_backends.py::test_2d_plots_draw_with_every_library`'s Plotly cases
   (`[values0-Plotly-CountsPerShot]`, `[values0-Plotly-TxyHistograms]`, `[values1-…]`, `[values2-…]`): an xdist worker
