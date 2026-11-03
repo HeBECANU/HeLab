@@ -299,6 +299,16 @@ Live session).
   the browser), offline or on a lab PC (the bundled copy opens, and its search works), and from a source run (the
   GitHub page).
 
+## v0.0.8 follow-ups (added 2026-11-03, block 58)
+
+- [ ] **M58.1 The try-import on Windows** (a lab PC): Load Scripts… of a folder, Reload, and a script with
+  `input()` at import. The panel shows "Reload (checking)", then the folder's "didn't load" line; no console
+  window flashes, and HeLab stays responsive.
+- [ ] **M58.2 The bundled manual offline**: Help › User manual with the network off, on a packaged build. The
+  bundled copy opens and its search finds results.
+- [ ] **M58.3 The site after the first published pre-release**: the site's root shows "No stable release yet",
+  linking to `pre-release/`, and the version menu lists the pre-release.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

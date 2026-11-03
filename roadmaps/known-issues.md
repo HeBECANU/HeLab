@@ -26,13 +26,16 @@ How to use it:
   `20260722-tight-trap-1000Hzsampling`, shot 183) lost bytes too (line 465 holds 4 values; 7 hits are
   missing): `tests/test_convert_testdata.py` lists it in `FAULTS` as an archive fault, which must still
   differ (Side's `ffe346c`). A fault in MATLAB's archive, not HeLab.
-- [ ] **A user script that blocks at import freezes HeLab once** (`input()`, a network call, a long loop at
-  module level): script folders import on the GUI thread, as Load Scripts… always did, and since Live scripts
-  the remembered folders load at every start, after the window shows. A share is never loaded at start, and the
-  loading marker (`<app folder>/scripts-loading.json`) makes the next start skip the folders with an amber line
-  and Reload, so a start that works always follows; a slow cloud folder the mount table calls local (iCloud,
-  Dropbox or OneDrive placeholders) is still loaded. Importing off the GUI thread isn't thought safe (Q49.3,
-  open; Prismo's M3, Live Scripts, 2026-11-03).
+- [ ] **A user script that blocks only in HeLab's own process can still freeze HeLab once**: one that acts on
+  the GUI's `QApplication` or widgets, deadlocks against the GUI thread's import lock, or changed between its test
+  import and the import. Script folders import on the GUI thread, and the remembered folders load at every start.
+  Since Q49.3 (b) (`fdd895c`, Follow-ups, landed `72ab47a`), each folder is first test-imported in a separate
+  process, which skips a folder that hangs (`input()`, a network call, a long loop at module level) or crashes at
+  import. A share is never loaded at start, and the loading marker (`<app folder>/scripts-loading.json`) makes
+  the next start skip the folders with an amber line and Reload, so a start that works always follows. A slow
+  cloud folder the mount table calls local (iCloud, Dropbox or OneDrive placeholders) is still loaded, now with
+  the test import first, so a placeholder that stalls the import meets its 10 s limit (Prismo's M3, Live
+  Scripts, 2026-11-03).
 
 - [ ] **A cached dataset over ~2.1 GB can't be saved.** `pack_dataset` (`helab/utils/cache_store.py:459`)
   compresses a whole folder in one Blosc call, and python-blosc 1.11.4 caps a call at 2,147,483,631
@@ -144,7 +147,9 @@ How to use it:
   by the SIGINT) instead of 0 ("Stopped"); passed on rerun. The SIGINT reached the process when Python's default
   handler wasn't the converter's (before it was set, or after it was reset); unchecked. Vault: the loop catches
   `KeyboardInterrupt` around `convert_folder` and the sleep, nothing in helab resets SIGINT, 15/15 local passes,
-  none in dev's last 8 runs; the watcher's cache options carry `store_v4`, so the switch-on can reach it. Next
+  none in dev's last 8 runs; the watcher's cache options carry `store_v4`, so the switch-on can reach it. Again
+  on Ubuntu CI 41622979011 (Converter backends, `agent/followups` `fdd895c`, "rerun reasons": `AssertionError:
+  assert -2 == 0` from `wait(20)`), passed on rerun; that branch changed only `--output`'s parsing. Next
   step: put the watcher's stderr in the assertion message.
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a

@@ -612,6 +612,35 @@ person, lab machine or internal ID.
   the shell or by a parent process, so that mount stays trusted for the run. Clear it at import before naming
   the temp folder's mount.
 
+## v0.0.8 follow-ups (block 58)
+
+From the Follow-ups floor's [handoff](sessions/2026-11-03-claude-followups/handoff.md) (Mend; Assay's review FU-1,
+FU-2 and FU-4 fixed on the floor, FU-3 decided as Q58.3; landed `72ab47a`). Q48.2, Q48.3, Q49.3 (b), Q56.3 and
+Q56.1 (b)'s shim are done.
+
+- **A58.1 Zensical, later** (Q56.1 (b), Tony 2026-11-03). Move the manual from Material for MkDocs to Zensical
+  once Zensical's versioning is native or mike's Zensical fork is on PyPI, before Material's end of life
+  (2027-05-05). The switch needs:
+  1. the version menu: native versioning, or the fork (`git+https://github.com/squidfunk/mike.git`, pinned by
+     commit in `requirements-docs.lock`), first proven in a CI dry run; `docs/publish/site_versions.py` only calls
+     `mike deploy`, `set-default` and `list`;
+  2. `docs/hooks/repo_links.py` doesn't run under Zensical: use its built-in `macros` with `{{ config.repo_url }}`
+     in the two pages that use `{repo_url}` (checked: a fork's URL comes out right);
+  3. `zensical build` has no `-d`: set `site_dir: !ENV [HELAB_DOCS_SITE_DIR, site]` and the variable in CI; keep
+     `mkdocs.yml` (Zensical reads it, and `!ENV` needs YAML);
+  4. `ci-build.yml`'s manual step (`mkdocs build --strict -d build/manual`), the Docs job and `docs-site.yml` move
+     to `zensical build --strict`;
+  5. the vendored search shim: Zensical takes the same `extra.polyfills` entry (checked offline).
+
+  Also: Zensical doesn't warn about pages missing from `nav`. The check is the floor's
+  [zensical.md](sessions/2026-11-03-claude-followups/zensical.md).
+- **A58.2 Folder details' conversion and a read stopped early**: `explorer_convert.ExplorerConverter` neither names
+  a read stopped early nor notifies; Live's auto-convert does both (Q48.1, Q48.2). Route its `shot_converted`
+  through the same stop handling.
+- **A58.3 The try-import's cost**: the probe adds about 0.2–1 s per script folder at start and on each reload (two
+  at once, `PROBES_AT_ONCE`). If a lab PC's cold frozen start makes it slow, reuse one probe process per round for
+  several folders (a protocol change).
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

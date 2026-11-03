@@ -303,6 +303,28 @@ Tony in Chat, 2026-11-03 evening (via CoCo), on the remaining questions:
 - **Q49.3 (b):** before importing a script folder (at start and on reload), HeLab try-imports it in a helper
   process with a time limit and skips, with a message, one that hangs; the real import stays on the GUI
   thread ("do b?", then "ok proceed 49.3b").
+- **Q58.3 (b)** (the Follow-ups review's FU-3): a stable release newer than the `pre-release` alias's target
+  removes the alias from the site's version menu, and the next pre-release brings it back; the alias isn't
+  pointed at `latest`, which would call the stable release a pre-release too ("b ok to land").
+
+Built by the Follow-ups floor, landed `72ab47a`
+([handoff](sessions/2026-11-03-claude-followups/handoff.md)): Q48.2, Q48.3, Q49.3 (b), Q56.3 with Q58.3, and
+Q56.1 (b) (Zensical later, A58.1). Its open questions are block 58.
+
+## v0.0.8 follow-ups (block 58)
+
+From the Follow-ups floor's [handoff](sessions/2026-11-03-claude-followups/handoff.md) (landed `72ab47a`). Both
+are about the try-import of a script folder (Q49.3 (b)), and neither blocks the v0.0.8 PR.
+
+- **Q58.1 The try-import's wording** in the Scripts panel. While a folder is checked, the Reload button reads
+  "Reload (checking)". A skipped folder's line reads "<folder>: didn't load: " and then one of: "its import
+  didn't finish within 10 s", "HeLab's test import didn't start within 60 s", "its import stopped HeLab's test
+  import (exit code N)" or "its import crashed HeLab's test import". Its tooltip adds: "HeLab first test-imports
+  each script folder in a separate process, so a script that hangs or crashes at import can't stop HeLab."
+  Options: (a) as built; (b) other words. **Proposed:** (a), as built.
+- **Q58.2 The try-import's time limit** (`PROBE_SECONDS`, 10 s, counted from when the test process starts the
+  import, so a slow start doesn't count). Options: (a) a constant; (b) a Settings › General row.
+  **Proposed:** (a), the constant, until someone's script folder legitimately takes longer to import.
 
 ## Documentation (block 54)
 

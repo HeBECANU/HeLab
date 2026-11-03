@@ -25,7 +25,7 @@ no Qt, plotting library or `helab.utils.constants`: every module below but `back
 
 | Module | What |
 |---|---|
-| `raw` | `parse_raw`/`read_raw` → `RawPulses` (float64 channels and times in file order), as MATLAB's `textscan` reads them; the fast path is `fastio.parse_strict` for uniform `\r\n` or uniform `\n` plain `int,int` files (acceptance tested equal to `_STRICT_CRLF`/`_STRICT_LF`; a field over 16 digits takes the general reader, so one over 309 digits reads as Inf, as textscan does), the general reader for everything else. `RawPulses.stop` (`ReadStop`: line, offset, text, unread; None when the read reached the end, a file cut mid-line included) says where the general reader's read stopped at a token it can't read, lines counted as the read counts them (`\r\n` as one); the arrays are unchanged, and the strict path never stops (it reads only files with nothing unreadable). `ReadStop.summary()` ("read stopped at line N") and `detail()` are the wording the Live line, Folder details and `helab convert` share (A37.1, `a37deb1`, Converter UX, landed `ed7bcf9`). The done-writing checks: `settled_by_age`, `not_done` and their codes (the settle rules are below). |
+| `raw` | `parse_raw`/`read_raw` → `RawPulses` (float64 channels and times in file order), as MATLAB's `textscan` reads them; the fast path is `fastio.parse_strict` for uniform `\r\n` or uniform `\n` plain `int,int` files (acceptance tested equal to `_STRICT_CRLF`/`_STRICT_LF`; a field over 16 digits takes the general reader, so one over 309 digits reads as Inf, as textscan does), the general reader for everything else. `RawPulses.stop` (`ReadStop`: line, offset, text, unread; None when the read reached the end, a file cut mid-line included) says where the general reader's read stopped at a token it can't read, lines counted as the read counts them (`\r\n` as one); the arrays are unchanged, and the strict path never stops (it reads only files with nothing unreadable). `ReadStop.summary()` ("read stopped at line N") and `detail()` are the wording the Live line, Folder details and `helab convert` share (A37.1, `a37deb1`, Converter UX, landed `ed7bcf9`); Live's auto-convert also sends a system notification once per file, `events.READ_STOPPED_RAW` (Q48.2, `2da8d5a`, Follow-ups, landed `72ab47a`). The done-writing checks: `settled_by_age`, `not_done` and their codes (the settle rules are below). |
 | `profile` | `DetectorProfile` (frozen, `kw_only`): every constant MATLAB hard-codes; JSON (`SCHEMA`, `_MIGRATIONS`); `content_hash`; the five built-ins in `BUILTIN_PROFILES` ([Profiles in the app](#profiles-in-the-app)). |
 | `reconstruct` | `reconstruct(pulses, profile, backend="reference")`; the registry (`register_backend`, `get_backend`, `available_backends`, `Backend.unavailable(profile)`, `releases_gil`, `_MODULES`); `NoRowsError`. |
 | `backends/reference` | The port, loop for loop, with the MATLAB line numbers (`L…` 2019, `L2023:…`); `MatchStats` for the x2 report. Readable, not fast. |
@@ -532,7 +532,7 @@ A55.4).
 
 Headless, dispatched in `helab/main.py` before any Qt (frozen: `HeLab convert …`; on Windows the
 windowed exe has no console, so lines go only to the log). Options: `--once` (one check: files
-unmodified for 60 s, to be read and to be called damaged), `--profile`, `--backend`, `--output temp|cache|beside` (beside for that run
+unmodified for 60 s, to be read and to be called damaged), `--profile`, `--backend`, `--output temp|cache|cache-forced|beside|beside-forced` (beside for that run
 without the folder's flag, saving none; Q12.4), `--workers`, `--interval`, `--again` (convert even
 current shots: each shot once more, in `--watch` too, at the pass after the recording pass; convert-1,
 `f592519`). The same `convert_folder` as the helper operation; `--watch`'s first pass only
@@ -542,7 +542,9 @@ store like a helper, logs, stops cleanly on Ctrl-C; exit 0; 1 when `--once`'s co
 and goes on); 2 for usage. `--output beside` on a share asks once per run, before the first check: a warning
 naming the share and the acquisition PC, then on a terminal `Write the TXY beside the raw files on the share
 anyway? [y/N]`; no, or no terminal, converts to the setting's output (HeLab's cache unless changed) with a line
-naming `--yes`, which writes beside without asking (A39.5, Q48.3). A beside write refused for want of a safe
+naming `--output beside-forced`, which writes beside without asking and still logs the share's warning
+(`BESIDE_FORCED`, beside `CACHE_FORCED`; A39.5, Q48.3); `--yes` is gone, and passing it is a usage error naming
+`--output beside-forced` (exit 2). A beside write refused for want of a safe
 rename (`beside_refused`) asks on a terminal `[r]etry, write to HeLab's [c]ache or [t]emp folder instead, or
 [q]uit? [r/c/t/Q]` (cache or temp for the rest of the run); without a terminal the refusal stands (`--once`
 exits 1) with a line naming `--output cache` and `--output temp` (Q38.1). A read stopped early (A37.1) is logged

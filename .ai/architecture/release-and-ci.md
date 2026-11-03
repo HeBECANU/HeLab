@@ -12,8 +12,10 @@ The `.spec` file produces `HeLab.app` on macOS (bundle ID `au.edu.anu.he-bec-lab
 
 `helab/main.py` dispatches in this order, each before anything that starts GUI services, caches
 or Dash: `multiprocessing.freeze_support()` (frozen only, so the converter's worker pool can spawn,
-A12.1), the I/O helper (`--helab-io-helper`), the headless converter (`convert`, [converter](converter.md)),
-`--version`, then the GUI.
+A12.1), the I/O helper (`--helab-io-helper`), the script folder probe (`--helab-script-probe FOLDER RESPONSE`,
+`helab.scripts.probe`, Q49.3 (b); [plots-and-scripts](plots-and-scripts.md#script-system)), the headless
+converter (`convert`, [converter](converter.md)), `--version`, then the GUI. Neither helper entry takes
+`running.lock`, since `main()` isn't reached.
 
 **The bundled manual** (Q54.3; Docs floor, landed `b0e3aac`): the Python 3.13 Build jobs build the user
 manual offline (`HELAB_DOCS_OFFLINE=true`, Material's offline plugin) into `build/manual`, in their own
@@ -23,7 +25,18 @@ manual offline (`HELAB_DOCS_OFFLINE=true`, Material's offline plugin) into `buil
 so and builds without it. "Check the packaged app has the user manual" fails a build that lacks it, so a
 strict-build warning in the manual fails the release builds too. A commit from before the manual (a recovery
 build of an older tag) builds without it. Compatibility builds ship without it. The source package never holds
-`helab/manual` (`test_source_package_has_no_bundled_manual`).
+`helab/manual` (`test_source_package_has_no_bundled_manual`). **Its search works offline** (`c942613`, Follow-ups,
+landed `72ab47a`): Material's offline plugin would load iframe-worker's `file://` shim from unpkg.com, so offline
+the search stayed at "Initializing search"; `docs/js/iframe-worker-shim.js` is iframe-worker 1.0.4's
+`shim/index.js`, vendored byte for byte after a one-line header naming its source (MIT, `docs/js/LICENSE-iframe-worker.txt`,
+copied into the site beside it), and `mkdocs.yml`'s `extra.polyfills` lists it (over http it does nothing). Google
+Fonts and the repo badge's GitHub API call stay: offline, the pages use system fonts and no star count.
+
+**The frozen probe step** (`2eac45a`): every Build job, after the backend check and with no `if:`, runs the
+packaged app's `--helab-script-probe` on a one-file folder whose script makes a `QLabel` at import, and asserts
+exit 0, `ready` (with `application: offscreen`, so the offscreen platform plugin was collected) then `done`,
+`sys.frozen` true and no GUI module imported (about 1 s). A commit without `helab/scripts/probe.py` (a recovery
+build of an older tag) passes with a line. `tests/test_script_probe.py` checks the step's text.
 
 ## Versioning
 
@@ -109,17 +122,30 @@ floor's landing, which needs every job green). It installs `requirements-docs.lo
 ruff, mkdocs-material, mkdocstrings[python], mike; compiled with `-c requirements.lock`, never in the app's
 requirements or its PyInstaller build), runs `ruff check` (D1 on the modules `ruff.toml` lists), then
 `mkdocs build --strict` into `$RUNNER_TEMP/site`, and checks the install page links the building repo's
-releases. It publishes nothing.
+releases. Then it builds the offline copy (`HELAB_DOCS_OFFLINE=true`) and runs `docs/publish/check_offline.py`
+on it, which fails on any page loading a script from elsewhere (static `<script src>` only). It publishes
+nothing.
 
 ## The manual's site
 
 `.github/workflows/docs-site.yml` (Q54.2; DM-1 (a), Tony 2026-11-03) is the only workflow that runs mike or
 touches `gh-pages` (`tests/test_docs_workflows.py`). It runs only on `release: published`: the release job makes
 a draft, which stays private until it is published by hand, so the site follows publishing and an abandoned draft
-never deploys. It checks out `refs/tags/<tag>`, and mike deploys `<version>` (the tag without `v`, so
-`BuildInfo.version`) with the alias `latest`, set as the default, to the running repo's `gh-pages`
-(`github.repository`, so `HeBECANU/HeLab` publishes its own site). A commit without `mkdocs.yml` or
-`requirements-docs.lock` skips with a notice and stays green. Concurrency group `helab-docs-site`, not
+never deploys. It checks out `refs/tags/<tag>` and runs `docs/publish/site_versions.py <version>` (the tag
+without `v`, so `BuildInfo.version`), which publishes to the running repo's `gh-pages` (`github.repository`, so
+`HeBECANU/HeLab` publishes its own site). **The versions** (Q56.3, Q58.3; `53ec411`, `e100872`, Follow-ups,
+landed `72ab47a`): `site_versions.plan(version, deployed)` reads `mike list --json` (a failing list stops the
+deploy, exit 1; no `gh-pages` yet lists `[]`) and runs `mike deploy --push --update-aliases <version>` with
+`latest` when it is the newest stable release, or `pre-release` when it is a PEP 440 pre-release newer than
+every release, stable ones included; an older release published late gets its version and moves no alias. A
+stable release newer than `pre-release`'s target then runs `mike delete --push pre-release` (the alias only;
+the next pre-release brings it back). The front page: `mike set-default --push latest` once a stable release
+exists, else `mike set-default --push --template docs/publish/no-stable.html pre-release` (the "No stable release
+yet" page, light and dark, linking to the newest pre-release). No dev channel: a dev manual is built locally
+(`mkdocs serve`, the README's User manual section). `mkdocs.yml` excludes `publish/`. Help › User manual opens
+`<owner>.github.io/<repo>/<version>/`, a pre-release's own page included ([app-runtime-and-ui](app-runtime-and-ui.md)).
+`--dry-run` prints the commands. A commit without `mkdocs.yml`, `requirements-docs.lock` or
+`docs/publish/site_versions.py` skips with a notice and stays green. Concurrency group `helab-docs-site`, not
 cancelling; 15 min; `contents: write`. A `release` event runs the workflow file of the released tag's commit, so
 the first release whose tag contains `docs-site.yml` is the first to deploy. GitHub Pages must be turned on in
 the repo's settings, source `gh-pages` (M56.2).

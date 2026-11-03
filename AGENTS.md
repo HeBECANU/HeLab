@@ -163,8 +163,9 @@ Each rule names the area file with the detail.
   called as `module.name` from other modules, never imported by value (list in the area file).
 - Helper events are the typed contract in `helab/io_ops/events.py` (standard library only);
   add a kind there, and `tests/test_helper_events.py` checks both sides.
-- The frozen helper entry point in `helab/main.py` (after `freeze_support()`, before the `convert`
-  dispatch) runs before imports that start GUI services, caches or Dash.
+- The frozen helper entry points in `helab/main.py` (`--helab-io-helper`, then `--helab-script-probe`;
+  after `freeze_support()`, before the `convert` dispatch) run before imports that start GUI services,
+  caches or Dash; neither imports them.
 - One HeLab app per computer: `main()` takes `running.lock` in the app folder
   (`cache_locks.take_running`) before anything opens; a second start says so and exits 1 (Q39.1,
   A39.3; [app-runtime](.ai/architecture/app-runtime-and-ui.md)). `helab convert` doesn't take it.
@@ -226,6 +227,8 @@ store-v3 for one release (Q50.14).
   raises is logged and HeLab goes on.
 - A reload of the user's scripts never runs while a `compute` of them is queued or running
   (`AnalysisRunner.in_flight`), and never touches HeLab's bundled analyses or installed modules.
+- A user script folder is test-imported in a separate process before each import (`helab.scripts.probe`,
+  `script_tree.FolderProbes`, Q49.3 (b)); the real import stays on the GUI thread.
 - Saved results are NumPy arrays plus JSON (`result_codec`), never a pickle.
 - Matplotlib uses `matplotlib.figure.Figure`, never `pyplot`. A PyQtGraph log axis takes
   `PlotDataItem`s. Avoid PyVista and VisPy.

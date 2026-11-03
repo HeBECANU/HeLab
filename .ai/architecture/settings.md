@@ -31,4 +31,6 @@ folders added with Load Scripts…, loaded at start after the window shows; remo
 a folder skipped at start stays listed) and `script_auto_reload` (`SCRIPT_AUTO_RELOAD_SETTING`, bool, default
 off: Reload when a script is saved, in Load Scripts…'s menu)
 ([plots-and-scripts](plots-and-scripts.md#script-system)). The loading marker `<app folder>/scripts-loading.json`
-is a file, not a setting.
+is a file, not a setting. Before each folder load the folder is test-imported in a separate process (Q49.3 (b),
+[plots-and-scripts](plots-and-scripts.md#script-system)); the marker is the backstop for what that can't catch. The
+try-import's time limit is a constant, `PROBE_SECONDS`, not a setting (Q58.2, open).

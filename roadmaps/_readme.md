@@ -28,11 +28,14 @@ switched on in that PR, after Tony's check (Q47.4).
 
 **Left for v0.0.8** (2026-11-03): every planned floor has landed. What remains is Tony's: the checks before
 the switch-on (Q50.18, with Q51.1's extra listing on the share), the open questions of v0.0.8's floors
-(Converter UX's Q48.1–Q48.6; Live Scripts' Q49.1–Q49.3; Q50.1, Q50.2 and Q51.1 decided 2026-11-03), (`agent/v4-switch-on` landed `92f9d1a`: store-v4 on), the version bump, and the PR to `main` once CI is
+(Converter UX's Q48.1–Q48.6, Live Scripts' Q49.1–Q49.3, Q50.1, Q50.2 and Q51.1 decided 2026-11-03; the follow-ups' Q58.1 and Q58.2 open), (`agent/v4-switch-on` landed `92f9d1a`: store-v4 on), the version bump, and the PR to `main` once CI is
 green (Q47.5: 0.0.8a1).
-Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (block 55; Q55.9 open).
+Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (block 55; Q55.9 decided that evening).
 Added 2026-11-03 (Tony, Q54.1): the script API's docstrings and the user manual below, landed `b0e3aac` (block 56;
-Q56.1–Q56.3 open).
+Q56.1–Q56.3 decided that evening).
+The follow-ups (Tony, 2026-11-03 evening) landed `72ab47a`: Q48.2, Q48.3 (`--output beside-forced`), Q49.3 (b)
+(the try-import of script folders), Q56.3 with Q58.3 (the site's versions) and Q56.1 (b) (Material for v0.0.8,
+its search offline; Zensical later, A58.1). Block 58; Q58.1 and Q58.2 open.
 
 **Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
 
