@@ -251,6 +251,12 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
 - **Q50.2** keep the "Auto-convert" label; its store-v4 tooltip explains.
 - **Q50.18:** the pre-switch-on check is on Tony's list (MANUAL_TODO, "Before store-v4 is switched on").
 
+## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
+
+- **Q53.1** MATLAB's `d_txy_forc<N>.txt` is labelled "External (MATLAB converter)" in the UI (the label only; files keep their names) (Tony, 2026-11-03).
+- **Q53.2** a TXY choice is any ordered list of HeLab profiles' TXY and External, set globally, per folder and per plot ("for maximum creative freedom"); the four sources become lists ([plan](../roadmaps/txy-priority.md)).
+- **Q53.3** in v0.0.8, before the PR to `main`; built on the dev computer.
+
 ## Live Scripts (block 49)
 
 From the Live Scripts floor's [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md) (Lumen; landed
