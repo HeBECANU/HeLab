@@ -182,3 +182,13 @@ def test_a_probe_that_cant_start_imports_the_folder_anyway(
         qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=60_000)
     assert any("test import couldn't start" in record.getMessage() for record in caplog.records)
     assert scripts.error_items() == []
+
+
+def test_the_packaged_app_is_checked_to_probe_under_an_offscreen_application() -> None:
+    """ci-build.yml runs the frozen app's probe on each OS after the build (the offscreen platform plugin
+    collected, the dispatch before any GUI import), as the source tests can't."""
+    text = (ROOT / ".github" / "workflows" / "ci-build.yml").read_text(encoding="utf-8")
+    step = text[text.index("- name: Check the script folder probe in the packaged app"):]
+    step = step[:step.index("\n      - name: ", 1)]
+    assert '"--helab-script-probe"' in step and 'events[0]["application"] == "offscreen"' in step
+    assert 'seen == {"frozen": True, "gui": False}' in step and "if:" not in step.split("run:")[0]

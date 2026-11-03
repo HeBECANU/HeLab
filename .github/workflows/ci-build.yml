@@ -195,6 +195,52 @@ jobs:
           python native/check_build.py --frozen "$app" --require "$HELAB_REQUIRE_BACKENDS"
           du -sh dist/HeLab
 
+      # Q49.3 (b): the try-import of a script folder in the packaged app, as HeLab starts it
+      # (`HeLab --helab-script-probe FOLDER RESPONSE`, helab/main.py's dispatch before any GUI import): on a
+      # tiny folder whose script makes a Qt widget at import, it answers ready (under an offscreen
+      # QApplication, so the platform plugin was collected) and done, frozen, with no GUI module imported.
+      - name: Check the script folder probe in the packaged app
+        shell: bash
+        run: |
+          if [ ! -f helab/scripts/probe.py ]; then
+            echo "No script probe at this commit."
+            exit 0
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source venv/Scripts/activate
+          else
+            source venv/bin/activate
+          fi
+          case "$RUNNER_OS" in
+            macOS) app=dist/HeLab.app/Contents/MacOS/HeLab ;;
+            Windows) app=dist/HeLab/HeLab.exe ;;
+            *) app=dist/HeLab/HeLab ;;
+          esac
+          HELAB_FROZEN_APP="$app" python - <<'EOF'
+          import json, os, subprocess, sys, tempfile
+          from pathlib import Path
+          work = Path(tempfile.mkdtemp(prefix="helab-probe-check-"))
+          folder, response = work / "scripts", work / "response.jsonl"
+          folder.mkdir()
+          (folder / "widget.py").write_text(
+              "import json, os, sys\n"
+              "from PyQt6.QtWidgets import QLabel\n"
+              "LABEL = QLabel('made at import')\n"
+              "with open(os.path.join(os.path.dirname(__file__), 'seen.json'), 'w') as handle:\n"
+              "    json.dump({'frozen': bool(getattr(sys, 'frozen', False)),\n"
+              "               'gui': 'helab.views.HelabMainWindow' in sys.modules}, handle)\n")
+          done = subprocess.run([os.environ["HELAB_FROZEN_APP"], "--helab-script-probe", str(folder), str(response)],
+                                capture_output=True, text=True, timeout=300)
+          print(done.stderr[-2000:])
+          events = [json.loads(line) for line in response.read_text().splitlines()]
+          seen = json.loads((folder / "seen.json").read_text())
+          print("exit", done.returncode, "events", events, "seen", seen)
+          assert done.returncode == 0, done.returncode
+          assert [event["kind"] for event in events] == ["ready", "done"], events
+          assert events[0]["application"] == "offscreen", events[0]
+          assert seen == {"frozen": True, "gui": False}, seen
+          EOF
+
       - name: Check the packaged app has the user manual
         if: inputs.python-minor == '13'
         shell: bash
