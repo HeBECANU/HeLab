@@ -192,3 +192,159 @@ def test_the_packaged_app_is_checked_to_probe_under_an_offscreen_application() -
     step = step[:step.index("\n      - name: ", 1)]
     assert '"--helab-script-probe"' in step and 'events[0]["application"] == "offscreen"' in step
     assert 'seen == {"frozen": True, "gui": False}' in step and "if:" not in step.split("run:")[0]
+
+
+# Run in the probe only (its QApplication's name), never in the test's process: an endless task on Qt's global
+# thread pool, which ~QCoreApplication would wait for (review FU-1).
+POOL_TASK = '''
+import time
+from PyQt6.QtCore import QCoreApplication, QRunnable, QThreadPool
+
+class Forever(QRunnable):
+    def run(self) -> None:
+        time.sleep(120)
+
+if QCoreApplication.applicationName() == "HeLab script probe":
+    TASK = Forever()
+    TASK.setAutoDelete(False)
+    QThreadPool.globalInstance().start(TASK)
+'''
+
+
+def python_command(code: str) -> Any:
+    """A ``probe.command`` replacement: this interpreter running ``code`` with the folder and response as
+    ``sys.argv[1:3]``."""
+    return lambda folder, response: (sys.executable, ["-c", code, folder, response])
+
+
+def test_a_script_leaving_a_thread_pool_task_running_doesnt_hold_its_probe(
+        qtbot: QtBot, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """FU-1: a script that starts an endless task on Qt's global thread pool at import: the probe answers
+    ``done`` and exits at once (its QApplication is never torn down, which would wait for the task), so the
+    folder loads within the limit and no probe had to be ended."""
+    write_script(tmp_path, "lab_probe_e", "one")
+    (tmp_path / "pool.py").write_text(POOL_TASK)
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    with caplog.at_level(logging.INFO):
+        scripts.add_folder(str(tmp_path))
+        qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=30_000)
+    assert not scripts._probes.busy() and scripts.reload_button.text() == "Reload"
+    assert not any("didn't exit" in record.getMessage() for record in caplog.records)
+
+
+def test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """FU-1: whatever holds a probe open after ``done``, it is killed ``PROBE_EXIT_SECONDS`` later and its
+    folder still passes (it finished), so no round waits on it."""
+    monkeypatch.setattr(script_tree, "PROBE_EXIT_SECONDS", 1.0)
+    monkeypatch.setattr(probe, "command", python_command(
+        "import json, sys, time\n"
+        "with open(sys.argv[2], 'a') as handle:\n"
+        "    handle.write(json.dumps({'kind': 'ready', 'application': 'offscreen'}) + '\\n')\n"
+        "    handle.write(json.dumps({'kind': 'done', 'loaded': True, 'seconds': 0}) + '\\n')\n"
+        "time.sleep(120)\n"))
+    write_script(tmp_path, "lab_probe_f", "one")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    with caplog.at_level(logging.WARNING):
+        scripts.add_folder(str(tmp_path))
+        qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=30_000)
+    assert scripts.error_items() == [] and not scripts._probes.busy()
+    assert any("finished but its process didn't exit within 1 s" in record.getMessage() for record in caplog.records)
+
+
+def test_without_the_offscreen_plugin_the_probe_runs_without_an_application(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """P3's fallback: no offscreen platform plugin, no QApplication (a missing plugin would abort the probe),
+    said in ``ready`` and the log; a script making a widget at import then ends the probe and is skipped."""
+    monkeypatch.setattr(probe, "_plugin_folders", lambda: [])
+    assert probe._application() == (None, f"{probe.NO_APPLICATION} (no offscreen platform plugin)")
+    monkeypatch.setattr(probe, "command", python_command(
+        "import sys\nimport helab.scripts.probe as p\np._plugin_folders = lambda: []\nsys.exit(p.main(sys.argv[1:3]))\n"))
+    folder = tmp_path / "widget"
+    hangs(folder, "from PyQt6.QtWidgets import QLabel\nLABEL = QLabel('made at import')\n")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    with caplog.at_level(logging.INFO):
+        scripts.add_folder(str(folder))
+        qtbot.waitUntil(lambda: bool(scripts.error_items()), timeout=60_000)
+    [line] = scripts.error_items()
+    assert line.text(0).startswith("widget: didn't load: its import ")
+    assert "crashed" in line.text(0) or "exit code" in line.text(0)
+    assert any("QApplication: none (no offscreen platform plugin)" in record.getMessage() for record in caplog.records)
+
+
+def test_a_probe_not_ready_within_the_start_limit_is_ended(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``PROBE_START_SECONDS``: a probe that never begins the folder's import (here it only sleeps) is killed
+    and the folder skipped with its own reason."""
+    monkeypatch.setattr(script_tree, "PROBE_START_SECONDS", 1.0)
+    monkeypatch.setattr(probe, "command", python_command("import time\ntime.sleep(120)\n"))
+    write_script(tmp_path, "lab_probe_g", "one")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.add_folder(str(tmp_path))
+    qtbot.waitUntil(lambda: bool(scripts.error_items()), timeout=30_000)
+    [line] = scripts.error_items()
+    assert line.text(0).endswith(": didn't load: HeLab's test import didn't start within 1 s")
+    assert "Lab" not in scripts.groups and not scripts._probes.busy()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_a_script_killing_its_process_by_a_signal_is_a_crash(qtbot: QtBot, tmp_path: Path) -> None:
+    folder = tmp_path / "signal"
+    hangs(folder, "import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n")
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    scripts.add_folder(str(folder))
+    qtbot.waitUntil(lambda: bool(scripts.error_items()), timeout=60_000)
+    [line] = scripts.error_items()
+    assert line.text(0) == "signal: didn't load: its import crashed HeLab's test import"
+
+
+def test_stop_kills_the_probes_and_answers_nothing(qtbot: QtBot, tmp_path: Path) -> None:
+    """At quit (``aboutToQuit``): running probes are killed, queued ones dropped, and no round answers."""
+    from PyQt6.QtCore import QObject, QProcess
+    owner = QObject()
+    probes = script_tree.FolderProbes(owner)
+    folders = []
+    for name in ("one", "two", "three"):
+        hangs(tmp_path / name, "import time\ntime.sleep(120)\n")
+        folders.append(str(tmp_path / name))
+    answered: List[Any] = []
+    probes.probe(folders, answered.append)
+    assert len(probes._running) == script_tree.PROBES_AT_ONCE and len(probes._queue) == 1
+    qtbot.waitUntil(lambda: all(item.ready is not None for item in probes._running.values()), timeout=60_000)
+    ended: List[Any] = []
+    for item in probes._running.values():
+        assert item.process is not None
+        item.process.finished.connect(lambda _code, status: ended.append(status))
+    probes.stop()
+    qtbot.waitUntil(lambda: not probes.busy(), timeout=30_000)
+    assert answered == [] and not probes._queue and not probes._rounds
+    assert ended == [QProcess.ExitStatus.CrashExit] * script_tree.PROBES_AT_ONCE  # (Killed, their exits seen.)
+
+
+def test_auto_reload_tests_the_folder_before_reloading_it(
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
+    """Reload when a script is saved goes through the probe too: a save that makes the import hang leaves
+    the plot on its code and lists the folder; the next save that fixes it reloads."""
+    window = new_window(qtbot, cache, windows)
+    scripts = window.scripts
+    write_script(tmp_path, "lab_probe_h", "old")
+    scripts.add_folder(str(tmp_path))
+    qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=60_000)
+    scripts.set_auto_reload(True)
+    instance = open_plot(qtbot, window, cache)
+    (tmp_path / "lab_probe_h.py").write_text("import time\ntime.sleep(120)\nTAG = 'hung'\n")
+    scripts._check_changes()  # (What the settle timer runs after a save.)
+    assert scripts._probing and scripts.reload_button.text() == "Reload (checking)"
+    qtbot.waitUntil(lambda: "didn't finish within 2 s" in instance._script_note, timeout=60_000)
+    qtbot.waitUntil(lambda: not scripts._probing, timeout=30_000)
+    [line] = scripts.error_items()
+    assert line.text(0).endswith(": didn't load: its import didn't finish within 2 s")
+    write_script(tmp_path, "lab_probe_h", "fixed")
+    scripts._check_changes()
+    qtbot.waitUntil(lambda: instance.shown is not None and shown_tag(instance) == "fixed", timeout=60_000)
+    assert scripts.error_items() == []

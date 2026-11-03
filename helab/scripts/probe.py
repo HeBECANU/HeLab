@@ -35,6 +35,8 @@ PROGRAM_NAME = "HeLab script probe"
 # What the ``ready`` line says ran.
 OFFSCREEN = "offscreen"
 NO_APPLICATION = "none"
+# The probe's QApplication, never deleted (see ``main``).
+_KEPT: List[Optional[object]] = []
 
 
 def command(folder: str, response: str) -> tuple[str, List[str]]:
@@ -86,7 +88,10 @@ def main(argv: List[str]) -> int:
         started = time.monotonic()
         loaded = ScriptsManager().add_folder(folder)
         _say(handle, kind=DONE, loaded=loaded, seconds=round(time.monotonic() - started, 3))
-    del application
+    # Never torn down: ~QCoreApplication waits for the global QThreadPool, so a script that started an endless
+    # task at import would hold the probe open after ``done`` (review FU-1). Kept referenced until ``os._exit``,
+    # which ends the process at once.
+    _KEPT.append(application)
     os._exit(0)
 
 

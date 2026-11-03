@@ -55,6 +55,9 @@ LOADING_MARKER = "scripts-loading.json"
 PROBE_SECONDS = 10.0
 # ... nor one whose probe isn't ready within this (Python, NumPy and Qt starting; a cold frozen app is slow).
 PROBE_START_SECONDS = 60.0
+# A probe that answered ``done`` but hasn't exited this long after is killed, its folder still passed (it
+# finished): no exit path can hold a round (review FU-1).
+PROBE_EXIT_SECONDS = 5.0
 PROBES_AT_ONCE = 2
 PROBE_POLL_MS = 100  # How often a running probe's answers are read (only while one runs).
 # Whether folders are test-imported first: tests that aren't about it turn it off (folders then import at once).
@@ -135,6 +138,8 @@ class _Probe:
     started: float = 0.0  # monotonic
     ready: Optional[float] = None  # monotonic: when it began importing the folder.
     done: bool = False
+    done_at: float = 0.0  # monotonic: when ``done`` was read.
+    lingered: bool = False  # Killed for not exiting after ``done`` (still passed).
     application: str = ""  # What the probe ran its import under (``probe.OFFSCREEN``, or none and why).
     killed: str = ""  # Why it was killed ("": it wasn't).
 
@@ -146,7 +151,8 @@ class FolderProbes(QObject):
     import finished, or when the probe couldn't start at all (imported anyway, logged: Q49.3 P4); else why
     not. One probe per folder at a time: a folder asked for again while its probe runs gets that probe's
     answer. Nothing waits: ``QProcess`` signals and one poll timer, running only while probes do. Killed
-    probes (time limit, ``stop``) end asynchronously."""
+    probes (time limit, ``stop``) end asynchronously. One that answered ``done`` but hasn't exited
+    ``PROBE_EXIT_SECONDS`` later is killed and still passes."""
 
     def __init__(self, parent: QObject) -> None:
         super().__init__(parent)
@@ -225,15 +231,22 @@ class FolderProbes(QObject):
                 continue
             if isinstance(event, dict) and event.get("kind") == probe.READY and item.ready is None:
                 item.ready, item.application = time.monotonic(), str(event.get("application", ""))
-            elif isinstance(event, dict) and event.get("kind") == probe.DONE:
-                item.done = True
+            elif isinstance(event, dict) and event.get("kind") == probe.DONE and not item.done:
+                item.done, item.done_at = True, time.monotonic()
 
     @pyqtSlot()
     def _poll(self) -> None:
         now = time.monotonic()
         for item in list(self._running.values()):
             self._read(item)
-            if item.killed or item.done or item.process is None:
+            if item.killed or item.lingered or item.process is None:
+                continue
+            if item.done:
+                if now - item.done_at > PROBE_EXIT_SECONDS:
+                    logging.warning("Script folder %s: HeLab's test import finished but its process didn't exit "
+                                    "within %g s; ended", item.folder, PROBE_EXIT_SECONDS)
+                    item.lingered = True
+                    item.process.kill()  # (Passed all the same: ``finished`` answers.)
                 continue
             if item.ready is None and now - item.started > PROBE_START_SECONDS:
                 item.killed = f"HeLab's test import didn't start within {PROBE_START_SECONDS:g} s"
@@ -265,10 +278,7 @@ class FolderProbes(QObject):
         self._read(item)
         failure: Optional[ProbeFailure] = None
         if item.killed or not item.done:
-            try:
-                details = Path(item.output, "stderr.txt").read_text(encoding="utf-8", errors="replace")[-4000:]
-            except OSError:
-                details = ""
+            details = self._stderr_tail(item)
             reason = item.killed or ("its import crashed HeLab's test import"
                                      if status == QProcess.ExitStatus.CrashExit
                                      else f"its import stopped HeLab's test import (exit code {code})")
@@ -278,6 +288,17 @@ class FolderProbes(QObject):
                      item.folder, item.application or "not started", seconds,
                      "finished" if failure is None else failure.reason)
         self._ended(item, failure)
+
+    @staticmethod
+    def _stderr_tail(item: _Probe, size: int = 4000) -> str:
+        """The last ``size`` bytes the probe wrote to stderr (a script may have written a lot)."""
+        try:
+            with open(os.path.join(item.output, "stderr.txt"), "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - size))
+                return handle.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
 
     def _ended(self, item: _Probe, failure: Optional[ProbeFailure]) -> None:
         if item.process is not None:
