@@ -257,7 +257,7 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
 
 Tony in Chat, 2026-11-03 afternoon (via CoCo; "yes" to Q55.1, Q55.3 and Q55.4, the fallback rule for Q55.2,
 "ok" to Q55.5–Q55.8), on the TXY Priority floor's questions (block 55; its
-[handoff](sessions/2026-11-03-claude-txy-priority/handoff.md); landed `9bf99ff`). Q55.9 is open (below).
+[handoff](sessions/2026-11-03-claude-txy-priority/handoff.md); landed `9bf99ff`). Q55.9 was decided that evening (below).
 
 - **Q55.1** convert on read only when no entry has a TXY file of the shot, with the own list's first HeLab entry
   that can convert; it generalises Q50.1 (a), and the four modes behave as before.
@@ -279,34 +279,34 @@ Tony in Chat, 2026-11-03 afternoon (via CoCo; "yes" to Q55.1, Q55.3 and Q55.4, t
   (as Folder details' offer does), said in the dialog's tooltip.
 - **Q55.8** Settings stores a mode with a pinned tag as `helab-only@m23v1`; v0.0.7a1 reads it as its default.
 
+Tony in Chat, 2026-11-03 evening (via CoCo), on the remaining questions:
+
+- **Q55.9 (a):** a list is counted after `Conversion` is filled in, so `[Conversion, m19v1]` with m19v1 as the
+  conversion profile reads as m19v1 only and doesn't fall back ("ok").
+- **Q56.2 (a):** a source run's Help opens `TonyXTYan/HeLab`'s manual ("ok").
+- **Q56.3:** the site's front page is the newest stable release, with a "no stable release yet" page until
+  there is one, and the pre-releases in the version menu; no dev channel (a dev manual is built locally,
+  `mkdocs serve`) ("just stable and pre-releases, dev we can just local compiled").
+- **Q48.1, Q48.4, Q48.5, Q48.6** as built ("ok").
+- **Q48.2 yes:** a raw read stopped early also sends a system notification, once per file.
+- **Q48.3:** `--yes` is replaced by `--output beside-forced` (like `cache-forced`): it writes beside even on a
+  share, skips the question and still logs a warning; plain `beside` on a share asks on a terminal and
+  otherwise falls back to HeLab's folder with a warning ("i thought instead of --yes we decided
+  beside-forced? ... still show a warning in cli anyways but skips confirmation").
+- **Q49.1, Q49.2** as built ("ok").
+- **Q49.3 (b):** before importing a script folder (at start and on reload), HeLab try-imports it in a helper
+  process with a time limit and skips, with a message, one that hangs; the real import stays on the GUI
+  thread ("do b?").
+
 ## Documentation follow-ups (block 56)
 
-From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (landed `b0e3aac`). All open.
+From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (landed `b0e3aac`).
 
-- **Q56.1 Material for MkDocs reaches end of life on 2027-05-05.** Every build says so. Zensical, by the same
-  team, reads `mkdocs.yml`. Options: (a) stay on Material for v0.0.8 and try Zensical in 2027; (b) move to
-  Zensical now. **Proposed:** (a).
-- **Q56.2 Which GitHub page a source run opens.** A source run can't know its repository (no build stamp, and
-  HeLab never asks Git at runtime), so Help › User manual opens `DEFAULT_REPOSITORY`'s page, `TonyXTYan/HeLab`,
-  while the lab's PCs run clones of `HeBECANU/HeLab`. Options: (a) keep `TonyXTYan/HeLab`, the site's home;
-  (b) let source runs name their repository through an environment variable later. **Proposed:** (a), with (b)
-  only if it is asked for.
-- **Q56.3 `latest` follows every published release, pre-releases too.** Every release so far is an alpha, so
-  otherwise the site would have no front page. Options: (a) yes until the first final release, then only final
-  releases; (b) always every release; (c) only final releases from now. **Proposed:** (a).
-
-## TXY priority lists (block 55)
-
-From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/handoff.md) and its
-[review](sessions/2026-11-03-claude-txy-priority/review.md) (TP-8; landed `9bf99ff`). Q55.1–Q55.8 are decided
-(Recently decided).
-
-- **Q55.9 A list that resolves to one entry.** `[Conversion, m19v1]` with the conversion profile m19v1 resolves
-  to `m19v1` alone: a one-entry list, which never falls back (Q55.2). A saved `[Conversion, m23v1]` likewise
-  turns into one entry if the conversion profile becomes m23v1. Built: the identity follows what is read, and
-  the summaries say so ("Conversion (m19v1) › m19v1 (reads as m19v1 only)", in the editor, Settings' row, the
-  plot's button and Folder details). Options: (a) keep as built; (b) decide fallback on the list as saved (two
-  entries or more fall back even when they resolve to one), which needs the payload to say so. **Proposed:** (a).
+- **Q56.1 Material for MkDocs reaches end of life on 2027-05-05.** Tony (2026-11-03): "use zensical", then
+  asked about plain MkDocs "for simple looks". Plain MkDocs loses Material's offline plugin (search in the copy
+  bundled in the app), its built-in version menu (mike can inject a simpler one), dark mode, code copy buttons
+  and collapsible sections; Zensical keeps them and reads `mkdocs.yml`, but is new. **Proposed:** a quick trial
+  of both on a branch (what works, screenshots), then Tony picks.
 
 ## Documentation (block 54)
 
@@ -330,57 +330,6 @@ From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/
 - **Q53.3** in v0.0.8, before the PR to `main`; built on the dev computer.
 
 Built by the TXY Priority floor, landed `9bf99ff`; its questions are block 55.
-
-## Live Scripts (block 49)
-
-From the Live Scripts floor's [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md) (Lumen; landed
-`971f4af`).
-
-- **Q49.1** (Q~1, the design's D6) **The wording**: "Reload" (while waiting "Reload (waiting)"); "Load
-  Scripts…" with its menu "Script folders" / "Reload" / "Remove from the list" / "Reload when a script is
-  saved"; "⚠ N script files didn't load"; "⚠ Script didn't reload (…): still running the code loaded at
-  HH:MM"; "Reloaded · ⚠ N settings at the script's defaults: …"; the TXY row's box **"Keep"** (accessible name
-  and tooltip "Keep this plot's TXY choice"), since the full text would widen the Settings panel (Q33.2).
-  **Proposed:** as built.
-- **Q49.2** (Q~2) A TXY choice not applied on reopen is said as "⚠ 1 setting at the script's defaults: TXY
-  profile", where "at the script's defaults" means "as the folder's tab". **Proposed:** fine as is; else a
-  TXY-specific wording.
-- **Q49.3** (Q~3, the rest of Prismo's M3) **Script imports stay on the GUI thread.** Remembered local script
-  folders import after the window shows; a script that blocks at import (`input()`, a network call) still
-  freezes that session once, as Load Scripts… always could, and the loading marker
-  (`<app folder>/scripts-loading.json`) makes the next start skip the folders, so HeLab always gets a start
-  that works. Shares are never loaded at start; a slow cloud folder the mount table calls local (iCloud,
-  Dropbox, OneDrive placeholders) is. Importing off the GUI thread isn't safe (scripts define Qt and
-  PyQtGraph classes at import; the import lock against the GUI thread's own imports). **Proposed:** keep it as
-  built, the marker as the way out; add cloud-folder kinds to "not at start" only if Tony sees it happen.
-
-## Converter UX (block 48)
-
-From the Converter UX floor's [handoff](sessions/2026-11-02-claude-converter-ux/handoff.md) (Ember; landed
-`ed7bcf9`).
-
-- **Q48.1** (Q~1) **A read stopped early, the wording**: the Live line and Folder details say `d3.txt read
-  stopped at line 1010` (one) or `3 reads stopped early` (several), amber; the tooltip and `helab convert`:
-  `read stopped at line 1010, at "not,a,number", which isn't a number: as MATLAB's converter reads the file,
-  its TXY holds only the hits of what was read before it (34,336 bytes not read)`. Line numbers ungrouped (as
-  editors show them). **Proposed:** as built.
-- **Q48.2** (Q~2) Should a read stopped early also send a system notification, once per file, like a damaged
-  file? Built: a log warning and amber text only. **Proposed:** notify once per file (it means lost hits).
-- **Q48.3** (Q~3) `helab convert --output beside` on a share without a terminal and without `--yes`: built as
-  Q30.2 (converts to HeLab's folder; a warning names `--yes`). Alternative: refuse (exit 2) so a script
-  expecting TXY beside notices. **Proposed:** as built.
-- **Q48.4** (Q~4) **"Once per folder"**: the share's confirmation lasts the session per folder
-  (`explorer_convert.beside_confirmed`), the folder's beside flag being the lasting record. Alternative: save
-  it with the folder's flag (store `convert_prefs`, a new column). **Proposed:** session only.
-- **Q48.5** (Q~5) The questions' defaults and how long a choice holds: Live's share question defaults to
-  Convert to HeLab's cache instead, and closing it turns auto-convert off; Q38.1's question defaults to
-  HeLab's cache folder, and closing it is Not now. A choice of HeLab's cache or temp folder instead (either
-  question, Live or Folder details) is the folder's for the session, followed by both, the beside flag
-  unchanged; choosing beside again in Folder details clears it (Strata's finding 3). Alternatives: per
-  conversion only, or saved with the folder. **Proposed:** as built.
-- **Q48.6** (Q~6) Folder details' offer: the row `No TXY · on a share · Convert…`; the buttons "Convert to
-  HeLab's cache (recommended)", "Convert to HeLab's temp folder", "Convert beside on the share…".
-  **Proposed:** as built.
 
 ## Caching v2 stage 2 (block 47)
 
