@@ -127,6 +127,15 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] **Ground CI went red once after the switch-on: a worker stuck through every rerun.** Ground CI 41587336570
+  (`a51176f`, docs only on top of the switch-on landing `92f9d1a`), Ubuntu Tests 3/3, job 125755838908: 4 failed,
+  3 errors, 30 reruns. On gw0 `test_result_cache_plots.py`'s `test_a_reopened_plot_shows_its_exact_saved_result_without_computing`,
+  `test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_ends[data]` and
+  `test_clear_cached_analysis_leaves_the_plot_but_its_record_says_ram_only` timed out (30 s, line 409) on every
+  attempt; on gw1 `test_preset_folder_live.py::test_offline_a_folder_never_listed_is_named_as_such[at_once]` saw
+  "The volume of /tmp/… is not yet verified". Both look like state a test earlier on the same worker left behind
+  (store-v4 on by default since `92f9d1a`?). The next Ground runs (41594686581 `9bf99ff`, 41595342227 `dc86412`)
+  were green. Not yet investigated (CoCo read this run late, 2026-11-03).
 - [ ] `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second` reran once on Windows,
   Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
   quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
@@ -332,7 +341,9 @@ How to use it:
   2026-11-03).
 - [ ] `test_live_io.py::test_a_live_check_pauses_background_work_only_while_it_reads`: `waitUntil` timed out
   (10 s) at line 136, once in a local full run under a load average of ~37 (Ground, Quick Fixes 9, 2026-11-02,
-  before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into.
+  before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into. Again on Windows CI, same line:
+  `agent/docs-a54-1` 41587185042 (Tests 2/3, job 125755380835, `9631294`) and Ground 41595342227 (`dc86412`),
+  both passed on rerun (2026-11-03).
 - [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
   `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
   retry and 5 of 5 alone. Cause not looked into.
