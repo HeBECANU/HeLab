@@ -54,25 +54,60 @@ class TxyChoice:
     """A plot's TXY choice as saved (Q14.2 = Q23.4): its source ("" as the folder's tab, else one of
     ``txy_sources.SOURCES``) and, for HeLab's TXY, the profile whose files it reads: its name ("" the
     conversion profile's) and its file tag, to find it again if renamed. A record without one
-    (saved before, or with "Keep this plot's TXY choice" off) holds None."""
+    (saved before, or with "Keep this plot's TXY choice" off) holds None.
+
+    A priority list (Q53.2) that is a mode is saved as that mode (``of_list``), as before; any other has its
+    text as ``source`` (which older HeLab reports as no longer a source, and doesn't apply) and ``entries``:
+    each (``External``, ``Conversion`` or a tag, the profile's name then: "" for the first two)."""
     source: str = ""
     profile: str = ""
     tag: str = ""
+    entries: tuple[tuple[str, str], ...] = ()
 
-    def to_json(self) -> dict[str, str]:
-        return {"source": self.source, "profile": self.profile, "tag": self.tag}
+    @classmethod
+    def of_list(cls, entries: Sequence[str] | None, names: Mapping[str, str] | None = None) -> TxyChoice:
+        """A plot's list as saved (None: as the tab); ``names``: tag → profile name."""
+        if not entries:
+            return cls()
+        mode = txy_sources.mode_of(entries)
+        names = names or {}
+        if mode is not None:
+            tag = "" if mode[1] in ("", txy_sources.CONVERSION) else mode[1]
+            return cls(mode[0], names.get(tag, "") if tag else "", tag)
+        return cls(txy_sources.list_text(entries), "", "",
+                   tuple((token, names.get(token, "") if txy_sources.is_entry(token)
+                          and token not in (txy_sources.EXTERNAL, txy_sources.CONVERSION) else "")
+                         for token in entries))
+
+    def tokens(self) -> txy_sources.Entries | None:
+        """The list this choice is (None: as the tab, or one that names nothing valid)."""
+        if not self.source:
+            return None
+        if self.entries:
+            return txy_sources.parse_list(txy_sources.list_text([token for token, _ in self.entries]))
+        return txy_sources.parse_list(self.source, self.tag)
+
+    def to_json(self) -> dict[str, Any]:
+        return {"source": self.source, "profile": self.profile, "tag": self.tag,
+                **({"entries": [{"entry": token, "profile": name} for token, name in self.entries]}
+                   if self.entries else {})}
 
     @classmethod
     def from_json(cls, data: Any) -> TxyChoice | None:
         """The choice ``data`` holds; None if it isn't one (the record then holds none)."""
         if not isinstance(data, dict):
             return None
-        return cls(_text(data.get("source")), _text(data.get("profile")), _text(data.get("tag")))
+        given = data.get("entries")
+        entries = tuple((_text(item.get("entry")), _text(item.get("profile"))) for item in given
+                        if isinstance(item, dict)) if isinstance(given, list) else ()
+        return cls(_text(data.get("source")), _text(data.get("profile")), _text(data.get("tag")), entries)
 
     def label(self) -> str:
-        """"HeLab's only (p22v1)", "As the folder's tab"."""
+        """"HeLab's only (p22v1)", "As the folder's tab", "m23v1 › m19v1 › External"."""
         if not self.source:
             return "As the folder's tab"
+        if self.entries:
+            return txy_sources.summary([token for token, _ in self.entries])
         text = txy_sources.LABELS.get(self.source, self.source)
         return text + (f" ({self.tag or self.profile})" if (self.tag or self.profile)
                        and self.source != txy_sources.MATLAB_ONLY else "")
@@ -362,6 +397,8 @@ def check_txy(saved: TxyChoice | None, profiles: Mapping[str, str] | None) -> tu
     unknown source, the choice isn't applied (the plot is as the folder's tab), never replaced."""
     if saved is None:
         return None, None, ""
+    if saved.entries:
+        return _check_list(saved, profiles)
     if saved.source and saved.source not in txy_sources.SOURCES:
         return None, Problem(TXY, TXY, f"saved “{saved.source}” is no longer a source "
                                        f"({', '.join(txy_sources.LABELS[s] for s in txy_sources.SOURCES)})"), ""
@@ -376,6 +413,32 @@ def check_txy(saved: TxyChoice | None, profiles: Mapping[str, str] | None) -> tu
                 f"TXY profile “{saved.profile}” is now “{by_tag[0]}” (the same tag, {saved.tag})")
     tag = f" (tag {saved.tag})" if saved.tag else ""
     return None, Problem(TXY, f"{TXY} profile", f"saved “{saved.profile}”{tag} isn't a known profile now"), ""
+
+
+def _check_list(saved: TxyChoice, profiles: Mapping[str, str] | None) -> tuple[TxyChoice | None, Problem | None,
+                                                                             str]:
+    """A saved priority list (Q53.2): each profile entry found by its name, else its tag (renamed: a note), as
+    one choice's profile is; a list that names nothing valid, or an entry known by neither, isn't applied."""
+    tokens = saved.tokens()
+    if tokens is None:
+        return None, Problem(TXY, TXY, f"saved “{saved.source}” is no longer a TXY list"), ""
+    if profiles is None:
+        return saved, None, ""
+    entries: list[tuple[str, str]] = []
+    notes: list[str] = []
+    for token, name in saved.entries:
+        if token in (txy_sources.EXTERNAL, txy_sources.CONVERSION):
+            entries.append((token, ""))
+        elif name in profiles and profiles[name] == token or not name and token in profiles.values():
+            entries.append((token, name))
+        elif found := sorted(known for known, tag in profiles.items() if tag == token):
+            entries.append((token, found[0]))
+            if name:
+                notes.append(f"TXY profile “{name}” is now “{found[0]}” (the same tag, {token})")
+        else:
+            label = f"“{name}” (tag {token})" if name else f"tag {token}"
+            return None, Problem(TXY, f"{TXY} profile", f"saved list entry {label} isn't a known profile now"), ""
+    return TxyChoice(saved.source, "", "", tuple(entries)), None, "; ".join(notes)
 
 
 def check_plot(saved: SavedPlot | ScriptPreset, identity: AnalysisIdentity, specs: Sequence[ParameterSpec],

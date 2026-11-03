@@ -92,13 +92,21 @@ def list_of(source: str, tag: str = "") -> Entries:
 
 def parse_list(value: Any, tag: str = "") -> Entries | None:
     """A saved or sent choice as a list: a mode (an old name too) with its HeLab entry ``tag`` ("": the
-    conversion profile's), or a list text; None if it names neither (repeated or unknown entries)."""
+    conversion profile's), a mode and its tag as one text (``helab-priority@m23v1``, ``choice_text``'s form),
+    or a list text of two entries or more; None if it names none of them (a lone word, repeated or unknown
+    entries)."""
     mode = normal_source(value)
     if mode is not None:
         return list_of(mode, tag)
     if not isinstance(value, str) or not value:
         return None
+    if _CHOICE_SEPARATOR in value:
+        named, _, given = value.partition(_CHOICE_SEPARATOR)
+        mode = normal_source(named)
+        return list_of(mode, given) if mode is not None and _TAG.match(given) else None
     entries = tuple(value.split(LIST_SEPARATOR))
+    if len(entries) < 2:
+        return None
     if len(set(entries)) != len(entries) or not all(is_entry(token) for token in entries):
         return None
     return entries
@@ -128,9 +136,12 @@ def resolve(entries: Sequence[str], conversion_tag: str) -> Entries:
 
 def setting_text(entries: Sequence[str]) -> str:
     """A list as the ``txy_source`` setting holds it (no tag of its own: a mode follows the conversion
-    profile): the mode when the list is one whose HeLab entry is ``Conversion`` (or none), else its text."""
+    profile): the mode when the list is one whose HeLab entry is ``Conversion`` (or none), the mode and its
+    tag (``helab-only@m23v1``) when it names another, else its text."""
     mode = mode_of(entries)
-    return mode[0] if mode is not None and mode[1] in ("", CONVERSION) else list_text(entries)
+    if mode is None:
+        return list_text(entries)
+    return mode[0] if mode[1] in ("", CONVERSION) else f"{mode[0]}{_CHOICE_SEPARATOR}{mode[1]}"
 
 
 def folder_row(entries: Sequence[str]) -> tuple[str, str]:
@@ -370,7 +381,12 @@ def with_list(txy: Mapping[str, Any], entries: Sequence[str],
     (None for one it doesn't know). A list that is a mode is sent as the mode, as before: its HeLab entry's
     profile (a tag it doesn't know keeps the profile asked for). Any other list: its text as ``source`` and
     ``entries``, each ``{"external": True}`` or ``{"tag", "profile_hash", "profile"}`` (a tag it doesn't know
-    with hash "", whose TXY in HeLab's folders are taken whatever made them, as a load of no profile does)."""
+    with hash "", whose TXY in HeLab's folders are taken whatever made them, as a load of no profile does).
+    ``txy``'s ``conversion`` (FolderCache sends it), when there, is ``Conversion``'s instead: a helper applying a
+    folder's row over options already resolved."""
+    conversion = txy.get("conversion")
+    if isinstance(conversion, Mapping) and conversion.get("profile_tag"):
+        txy = {**txy, **{key: conversion[key] for key in ("profile_hash", "profile_tag", "profile") if key in conversion}}
     conversion_tag = str(txy.get("profile_tag") or "")
     resolved = resolve(entries, conversion_tag) if conversion_tag else tuple(entries)
     found = {key: value for key, value in txy.items() if key != "entries"}

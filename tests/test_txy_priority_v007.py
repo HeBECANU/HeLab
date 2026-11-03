@@ -129,3 +129,5 @@ def test_the_setting_holding_a_list_reads_as_v007s_default() -> None:
         assert read_txy_source(txy_sources.setting_text(entries)) == DEFAULT_SOURCE
     assert read_txy_source(txy_sources.setting_text((CONVERSION, EXTERNAL))) == HELAB_PRIORITY
     assert read_txy_source(txy_sources.setting_text((EXTERNAL, CONVERSION))) == MATLAB_PRIORITY
+    # A mode with a pinned tag (``helab-only@m23v1``): 0.0.7 reads its default too.
+    assert read_txy_source(txy_sources.setting_text((M23,))) == DEFAULT_SOURCE

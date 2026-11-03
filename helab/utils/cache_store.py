@@ -3901,6 +3901,9 @@ class CacheStore:
         """Set a folder's TXY source (Q18.2's mode and a tag; "" follows the global one, Q45.2) unless a later
         choice is saved; the choice now saved."""
         self._needs_v4()
+        from helab.utils.txy_sources import parse_list
+        if source and parse_list(source, tag) is None:
+            raise ValueError(f"Not a TXY source or priority list: {source!r}")  # (Q53.2: a mode, or a list's text.)
         return self._set_folder_choice("txy_source_prefs", path, {"source": source, "tag": tag if source else ""},
                                        set_at)
 

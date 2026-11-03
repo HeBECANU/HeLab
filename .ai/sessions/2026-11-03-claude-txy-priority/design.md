@@ -39,7 +39,7 @@ changes, and an older v0.0.8 dev build reads what it can:
 
 | Place | Today | A list equal to an old mode | Any other list |
 |---|---|---|---|
-| `txy_source` setting (no tag; follows the conversion profile) | `helab-priority` … | the mode, when its HeLab entry is `Conversion` | the list text (`m23v1>External`, `m23v1>m19v1>External`) |
+| `txy_source` setting (no tag; follows the conversion profile) | `helab-priority` … | the mode, when its HeLab entry is `Conversion`; else the mode and its tag, `helab-priority@m23v1` (`choice_text`'s form) | the list text (`m23v1>m19v1>External`) |
 | store-v4 `txy_source_prefs` (`source`, `tag`; tag "" follows) | mode + tag | mode + tag (`Conversion` ↔ tag "") | `source` = list text, `tag` = "" |
 | `TxyChoice` in presets, arrangements, reopened plots (`source`, `profile`, `tag`) | mode + profile name + tag | as today | `source` = list text, plus a new `entries` field: `[{"tag", "profile"}…]`, External as `{"external": true}` (each HeLab entry keeps its profile name, so `check_txy` can find a renamed profile by tag as it does now) |
 
@@ -54,8 +54,11 @@ The mode ↔ list map (`txy_sources.mode_of` / `list_of`), with `T` a tag or `Co
 
 Every list of one or two entries with at most one HeLab entry is a mode, so **a list text that isn't a mode
 always contains `>`**: it never collides with a mode name or the legacy `matlab`/`helab` values. Parsing:
-legacy name → mode → list; else split on `>` and check each token; a text that parses to nothing is "none"
-(falls back to the default, as an unknown mode does today).
+legacy name → mode; `mode@tag` → that mode with that tag; else split on `>`, **at least two entries**, each
+token checked; a text that parses to nothing is "none" (falls back to the default, as an unknown mode does
+today). *(Changed while building, `@`-form added:* a lone word such as an old junk value `both` matches the tag
+pattern, so a one-entry list text would have read it as "HeLab only, tag both"; a one-entry list is always a
+mode, and the setting writes a pinned one as `helab-only@m23v1`.)
 
 **No schema change.** `txy_source_prefs.source` is `TEXT`; the list text fits it. So `store_v4.migrate` gains
 nothing, and the "added column through `migrate`" rule isn't triggered. (If CoCo prefers a dedicated column,
@@ -261,6 +264,16 @@ per Q53.1 (step 2), e.g. "TXY: HeLab's (m23v1 v1) for 3 of 10 shots, External fo
   `set_tab_source` takes the text, which is my plan.
 - Step 2's label may touch strings in `helab/views/CacheTab.py`/`FolderSummary`/tooltip builders if they say
   "MATLAB's"; I'll list them before editing.
+
+## Tony's answers (via CoCo, 2026-11-03)
+
+- **Q~1:** yes, as proposed (built).
+- **Q~3:** yes, keep the `Conversion` entry (built).
+- **Q~2:** not (a). Direction (exact rule being confirmed): if Auto-convert wrote m19v1 and the folder's list
+  is `m23v1 › External`, the folder still reads the m19v1; only a one-entry list (m23v1 only) offers to
+  convert with m23v1. Not built yet; the seam is `FolderCache.auto_convert_profile(path)` (today Settings'
+  conversion profile) and `FolderCache.convert(…, profile_used=)`, which Live's Auto-convert goes through
+  and the coming "Convert this folder…" can use.
 
 ## Questions (provisional)
 

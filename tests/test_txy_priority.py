@@ -40,7 +40,8 @@ def test_modes_and_lists_read_and_write_in_their_old_form() -> None:
     assert txy_sources.parse_list("helab") == (CONVERSION, EXTERNAL)  # (A legacy value.)
     assert txy_sources.parse_list("matlab-only", "m23v1") == (EXTERNAL,)
     assert txy_sources.parse_list("m23v1>m19v1>External") == ("m23v1", "m19v1", EXTERNAL)
-    for junk in ("", "m23v1>m23v1", "External>External", "Matlab>m19v1", "M23v1>External", "m23v1>>External", None, 3):
+    assert txy_sources.parse_list("helab-only@m23v1") == ("m23v1",)
+    for junk in ("", "both", "m23v1", "helab-only@", "helab-only@M2", "nope@m23v1", "m23v1>m23v1", "External>External", "Matlab>m19v1", "M23v1>External", "m23v1>>External", None, 3):
         assert txy_sources.parse_list(junk) is None
     # Every list of one or two entries with at most one HeLab entry is a mode; any other has a ">".
     for source in txy_sources.SOURCES:
@@ -49,7 +50,8 @@ def test_modes_and_lists_read_and_write_in_their_old_form() -> None:
             assert txy_sources.mode_of(entries) == (source, "" if source == txy_sources.MATLAB_ONLY else tag or CONVERSION)
             assert txy_sources.folder_row(entries) == (source, "" if source == txy_sources.MATLAB_ONLY else tag)
             assert txy_sources.setting_text(entries) == (source if not tag or source == txy_sources.MATLAB_ONLY
-                                                         else txy_sources.list_text(entries))
+                                                         else f"{source}@{tag}")
+            assert txy_sources.parse_list(txy_sources.setting_text(entries)) == entries
     general = ("m23v1", "m19v1", EXTERNAL)
     assert txy_sources.mode_of(general) is None and txy_sources.mode_of(("m23v1", "m19v1")) is None
     assert txy_sources.setting_text(general) == "m23v1>m19v1>External"
@@ -231,3 +233,72 @@ def test_profiles_of_one_output_share_an_origin() -> None:
     assert PLATES_2022.content_hash() == H19
     payload = txy_sources.with_list(conversion(), (file_tag(PLATES_2022), M19, EXTERNAL), builtin_for_tag)
     assert [item["profile_hash"] for item in payload["entries"] if "tag" in item] == [H19, H19]
+
+
+# --- the app's side: Settings, a folder's row, a plot's list -------------------------------------------------
+
+def test_folder_cache_resolves_the_settings_the_folders_and_a_plots_list(monkeypatch: pytest.MonkeyPatch,
+                                                                         tmp_path: Path) -> None:
+    from test_raw_fill import frozen
+    service, cache = frozen(monkeypatch)
+    try:
+        path = str(tmp_path)
+        cache.set_convert_profile(MATLAB_2019)
+        # The default list, [Conversion, External]: HeLab priority with the conversion profile, as before.
+        cache.set_tab_source("helab-priority")
+        assert cache.tab_list() == (CONVERSION, EXTERNAL)
+        tab = cache.with_txy(path, {})["txy"]
+        assert (tab["source"], tab["profile_tag"], tab["tab"]) == (txy_sources.HELAB_PRIORITY, M19, True)
+        assert "entries" not in tab and tab["conversion"]["profile_tag"] == M19
+        assert cache.tab_choice() == f"helab-priority@{M19}"
+        # Settings holding a list.
+        cache.set_tab_source("m23v1>Conversion>External")
+        tab = cache.with_txy(path, {})["txy"]
+        assert tab["source"] == "m23v1>m19v1>External" and [item.get("tag") for item in tab["entries"]] == [M23, M19, None]
+        assert cache.tab_choice() == "m23v1>m19v1>External" and cache.tab_source() == "m23v1>m19v1>External"
+        # Settings pinning a tag of a mode: saved as mode@tag, sent as the mode with that profile.
+        cache.set_tab_source(txy_sources.setting_text((M23,)))
+        assert cache._tab_source == "helab-only@m23v1"
+        tab = cache.with_txy(path, {})["txy"]
+        assert (tab["source"], tab["profile_hash"]) == (txy_sources.HELAB_ONLY, H23)
+        # A folder's own list wins for the tab's loads only.
+        cache.set_tab_source("helab-priority")
+        cache.remember_choices(path, {"policy": "", "source": "m23v1>m19v1", "tag": "", "source_set_at": 2.0})
+        assert cache.folder_list(path) == (M23, M19) and cache.folder_source(path) == "m23v1>m19v1"
+        assert cache.with_txy(path, {})["txy"]["source"] == "m23v1>m19v1"
+        # A plot's own list ("list", Conversion among it), not the tab's.
+        plot = cache.with_txy(path, {"txy": {"list": [EXTERNAL, CONVERSION]}})["txy"]
+        assert (plot["source"], plot["profile_tag"], plot["tab"]) == (txy_sources.MATLAB_PRIORITY, M19, False)
+        plot = cache.with_txy(path, {"txy": {"list": [M23, CONVERSION]}})["txy"]
+        assert plot["source"] == "m23v1>m19v1" and plot["tab"] is False
+        # The folder's row as the store keeps it.
+        assert txy_sources.folder_row((CONVERSION, EXTERNAL)) == (txy_sources.HELAB_PRIORITY, "")
+    finally:
+        service.shutdown()
+
+
+def test_a_folders_row_holds_a_list_and_refuses_junk(tmp_path: Path) -> None:
+    from test_txy_loading import data_folder
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    with opened(options, source) as store:
+        store.set_txy_source_pref(str(source), "m23v1>m19v1>External", "", 5.0)
+        row = store.read_folder_choices([str(source)])[str(source)].value
+        assert row is not None and row["source"] == "m23v1>m19v1>External"
+        with pytest.raises(ValueError):
+            store.set_txy_source_pref(str(source), "both", "", 6.0)
+    # A tab load follows it.
+    events = run_load(source, tmp_path, options, txy={**conversion(), "source": "", "tab": True,
+                                                       "conversion": conversion()})
+    assert first(events, "loaded")["txy"]["source"] == "m23v1>m19v1>External"
+
+
+def test_the_setting_reads_lists_old_values_and_junk(tmp_path: Path) -> None:
+    from PyQt6.QtCore import QSettings
+    from helab.utils import constants
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    for value, read in (("helab", "helab-priority"), ("matlab-only", "matlab-only"), ("both", "helab-priority"),
+                        ("m23v1>m19v1>External", "m23v1>m19v1>External"), ("helab-only@m23v1", "helab-only@m23v1"),
+                        ("m23v1", "helab-priority"), ("", "helab-priority")):
+        settings.setValue(constants.TXY_SOURCE_SETTING, value)
+        assert constants.read_txy_source(settings) == read, value

@@ -229,10 +229,12 @@ def read_convert_output(settings: QSettings) -> str:
 
 
 def read_txy_source(settings: QSettings) -> str:
-    """Which TXY tabs and Live load (Q18.2, ``helab.utils.txy_sources``): the setting when it names a
-    source (an old name too), else ``helab-priority``."""
-    from helab.utils.txy_sources import DEFAULT_SOURCE, normal_source
-    return normal_source(read_setting(settings, TXY_SOURCE_SETTING, typed=True)) or DEFAULT_SOURCE
+    """Which TXY tabs and Live load (Q18.2, Q53.2, ``helab.utils.txy_sources``): the setting when it names a
+    source (an old name too) or a priority list (its text), as ``setting_text`` writes it; else
+    ``helab-priority``."""
+    from helab.utils.txy_sources import DEFAULT_SOURCE, parse_list, setting_text
+    entries = parse_list(read_setting(settings, TXY_SOURCE_SETTING, typed=True))
+    return setting_text(entries) if entries is not None else DEFAULT_SOURCE
 
 
 def profiles_folder() -> str:

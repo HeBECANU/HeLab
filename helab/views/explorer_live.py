@@ -844,7 +844,8 @@ class LiveController:
                 self.explorer, path, share, lambda choice: self._share_answered(path, choice))
             return
         if not cache.convert(self.explorer.live_owner, session.path, destination=destination,
-                             beside=None if destination is None else False):
+                             beside=None if destination is None else False,
+                             profile_used=cache.auto_convert_profile(session.path)):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
             return
