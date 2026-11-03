@@ -65,7 +65,12 @@ Worker: Claude (Opus 5.5), floor TXY Priority, branch `agent/txy-priority` from 
 One commit each, every one with a test. TP-1 and TP-3 were checked to fail without their fix.
 
 After the fixes, dev/v0.0.8 was merged (`b959de1`: record-only commits and labcam). Full suite at `b959de1`:
-**9228 passed, 673 skipped, no RERUN**. The five type checks are clean. CI: CI_AFTER_REVIEW.
+**9228 passed, 673 skipped, no RERUN**. The five type checks are clean. CI: run **41587970080** on `bf3fb85`, green on all three OSes. I read every Tests and Converter backends job's
+log: **one RERUN**, Windows Tests (1/3) (job 125757887948):
+`tests/test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`, the known
+collection error in pathlib `lstat` on Windows. It passed on retry. It is the same signature as the open
+known-issues entry; add this sighting there (CI 41587970080, job 125757887948, `bf3fb85`). It is unrelated
+to this branch. The other 11 job logs have no RERUN.
 
 | Finding | Commit | Fix |
 |---|---|---|
