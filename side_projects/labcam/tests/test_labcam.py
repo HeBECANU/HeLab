@@ -414,3 +414,35 @@ def test_drawn_box_snaps_to_the_screen_near_it() -> None:
     snapped = screens.snap_drawn(frame, drawn)
     assert all(snapped.sides)
     assert max(np.hypot(*(np.array(a) - b)) for a, b in zip(snapped.corners, screen)) < 3  # the screen, not the rim
+
+
+def test_align_boxes_follow_their_own_surroundings() -> None:
+    """A bump that shifts the near part of the view more than the far part (parallax): each box follows what's
+    around it, a new place is taken once two checks agree, and storing back gives the same place."""
+    import cv2
+    import numpy as np
+
+    from labcam.align import Aligner
+
+    rng = np.random.default_rng(3)
+    ref = cv2.GaussianBlur(rng.integers(0, 256, (480, 640, 3), dtype=np.uint8), (0, 0), 1.2)
+    far = np.float32([[1, 0, 4], [0, 1, 3]])
+    near = np.float32([[1, 0, 24], [0, 1, 15]])
+    cur = cv2.warpAffine(ref, far, (640, 480), borderMode=cv2.BORDER_REFLECT)
+    cur[:, :260] = cv2.warpAffine(ref, near, (640, 480), borderMode=cv2.BORDER_REFLECT)[:, :260]
+    left = [(80.0, 200.0), (140.0, 200.0), (140.0, 250.0), (80.0, 250.0)]
+    right = [(440.0, 200.0), (500.0, 200.0), (500.0, 250.0), (440.0, 250.0)]
+    a = Aligner()
+    a.set_reference(ref)
+    for frame in (ref, cur, cur):
+        a.update(frame)
+        a.refine("left", left)
+        a.refine("right", right)
+        if frame is ref:
+            assert np.allclose(a.for_box("left").move(left), left, atol=1.0)
+    shift_l = np.mean(np.array(a.for_box("left").move(left)) - left, axis=0)
+    shift_r = np.mean(np.array(a.for_box("right").move(right)) - right, axis=0)
+    assert np.allclose(shift_l, (24, 15), atol=1.5), shift_l
+    assert np.allclose(shift_r, (4, 3), atol=1.5), shift_r
+    moved = a.for_box("left").move(left)
+    assert np.allclose(a.for_box("left").back(moved), left, atol=1e-6)

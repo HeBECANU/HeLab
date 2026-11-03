@@ -179,7 +179,7 @@ class Engine:
 
     def set_corners(self, name: str, corners: Corners) -> None:
         """`corners` in the current frame; stored in the reference frame's coordinates."""
-        stored = self.aligner.current.back(corners)
+        stored = self.aligner.for_box(name).back(corners)
         self.config.set_corners(name, stored)
         self.detectors[name].reset()
         # Its surroundings and anchor were the old box's.
@@ -366,11 +366,15 @@ class Engine:
         if now - self._last_align >= ALIGN_EVERY:
             self._last_align = now
             self.aligner.update(frame)
+            with self.config.lock:
+                for name, inst in self.config.instruments.items():
+                    self.aligner.refine(name, inst.corners)
             self.timings["align_ms"] = (time.monotonic() - t0) * 1000
         alignment = self.aligner.current
         with self.config.lock:
             instruments = dict(self.config.instruments)
-        self.regions = {name: regions.make(alignment.move(inst.corners)) for name, inst in instruments.items()}
+        self.regions = {name: regions.make(self.aligner.for_box(name).move(inst.corners))
+                        for name, inst in instruments.items()}
         for name, detector in self.detectors.items():
             if isinstance(detector, Motion):
                 own = self.regions[name]
@@ -384,7 +388,7 @@ class Engine:
                 saved = relocate.load(path) if inst.kind != "motion" and path.exists() else None
                 if saved is not None:
                     self._relocate(frame, name, now, saved, startup=True)
-            self.regions = {name: regions.make(alignment.move(inst.corners))
+            self.regions = {name: regions.make(self.aligner.for_box(name).move(inst.corners))
                             for name, inst in self.config.instruments.items()}
         # Movement first: the other instruments use it to tell when someone is in front of them.
         order = sorted(self.detectors.items(), key=lambda item: not isinstance(item[1], Motion))
