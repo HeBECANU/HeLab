@@ -36,7 +36,7 @@ from helab.utils.cache_freshness import CacheFreshness, data_as_of, freshness_to
 from helab.utils.scan_history import history_tooltip
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.explorer_convert import ExplorerConverter
-from helab.views.explorer_live import LiveController, LiveSession
+from helab.views.explorer_live import ARM_AUTO_CONVERT, LiveController, LiveSession
 from helab.views.explorer_text import large_text, plural
 
 # Where a load's data came from, as the cache summary and Folder details name it.
@@ -334,7 +334,7 @@ class FolderExplorer(QWidget):
         self.folder_cache_label = identify(ElidedLabel("Cache not checked", self.summary_widget), "summary_cache")
         self.folder_freshness_label = identify(ElidedLabel("Live updates off", self.summary_widget),
                                                "summary_freshness")
-        # Shown at the Live line's end once Live is on (Q6.8): auto-convert on or off, and its menu.
+        # At the Live line's end (Q6.8): auto-convert on or off while Live is on, armed before it starts; its menu.
         self.live_row = QWidget(self.summary_widget)
         self.auto_convert_button = identify(QToolButton(self.live_row), "auto_convert",
                                             description="Convert new shots' raw files to TXY while Live watches")
@@ -416,7 +416,7 @@ class FolderExplorer(QWidget):
             QToolButton:pressed, QToolButton:checked { background: palette(mid); }
             QToolButton::menu-button { width: 12px; border-left: 1px solid palette(mid); }
         """)
-        self.auto_convert_button.setFixedWidth(QFontMetrics(small_font).horizontalAdvance("Auto-convert") + 24)
+        self.auto_convert_button.setFixedWidth(QFontMetrics(small_font).horizontalAdvance(ARM_AUTO_CONVERT) + 24)
         self._summary_button_width = max(button.sizeHint().width() for button in self.summary_buttons)
         for button in self.summary_buttons:
             button.setFixedWidth(self._summary_button_width)
@@ -1981,15 +1981,26 @@ class FolderExplorer(QWidget):
         self._update_auto_convert_button(path)
 
     def _update_auto_convert_button(self, path: str) -> None:
-        """The Live line's Auto-convert: shown while Live watches the selected folder."""
+        """The Live line's Auto-convert while Live watches the selected folder; before Live starts,
+        Arm auto-convert (Live started there then converts at once)."""
         button = self.auto_convert_button
         watching = self.live is not None and self.live.path == path
-        if button.isHidden() == watching:
-            button.setVisible(watching)
-        on = self.live_control.auto_converting(path)
+        shown = bool(path) and (watching or self.live is None)
+        if button.isHidden() == shown:
+            button.setVisible(shown)
+        on = self.live_control.auto_converting(path) if watching else self.live_control.auto_convert_armed(path)
         if button.isChecked() != on:
             button.setChecked(on)
-        if "policy" in folder_cache.store_options():
+        text = "Auto-convert" if watching else ARM_AUTO_CONVERT
+        if button.text() != text:
+            button.setText(text)
+        if not watching:
+            tooltip = (("Auto-convert is armed: turn Live on to start watching this folder and converting its new "
+                        "raw files (d<N>.txt) to HeLab's TXY. Click to disarm; the arrow has its choices.") if on else
+                       ("Arm auto-convert: when you turn Live on here, it also converts the folder's new raw files "
+                        "(d<N>.txt) to HeLab's TXY once written. Remembered for this session; the arrow has its "
+                        "choices."))
+        elif "policy" in folder_cache.store_options():
             # store-v4 (stage 3, S3~4): Live converts new shots when it reads them anyway; this adds the text.
             tooltip = ("Auto-convert is on: Live converts each new shot when it reads it, and also writes HeLab's "
                        "TXY files of the folder's new raw files (d<N>.txt) once written (Settings › TXY converter "

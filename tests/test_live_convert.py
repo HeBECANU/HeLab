@@ -15,6 +15,7 @@ import time
 from typing import Any, Iterator
 
 import pytest
+from PyQt6.QtWidgets import QMenu
 from pytestqt.qtbot import QtBot
 
 from helab.convert.profile import MATLAB_2019, MATLAB_2023_LAB_EDIT
@@ -33,7 +34,7 @@ from helab.utils.settings_store import app_settings
 from helab.views import live_launch
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderExplorer import FolderExplorer
-from helab.views.explorer_live import no_hits_text as live_no_hits
+from helab.views.explorer_live import ARM_AUTO_CONVERT, no_hits_text as live_no_hits
 from test_convert_helab import raw_bytes
 from test_live import age_folder, deliver, job_of, next_request, producer, replay, service, write_shot  # noqa: F401
 
@@ -274,17 +275,48 @@ def test_turning_auto_convert_off_stops_new_conversions(qtbot: QtBot, service: I
     explorer.close_cleanup()
 
 
-def test_auto_convert_is_remembered_for_the_session_and_shown_only_while_live(
+def test_auto_convert_is_remembered_for_the_session_and_stays_armed_after_live(
         qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
     explorer, path = watching_raw_folder(qtbot, tmp_path)
+    assert explorer.auto_convert_button.text() == "Auto-convert"
     explorer.stop_live(save=False)
     explorer._update_activity()
-    assert explorer.auto_convert_button.isHidden()
+    # Live off: the button arms the folder's next Live (still armed, as it was on).
+    assert explorer.auto_convert_button.text() == ARM_AUTO_CONVERT and explorer.auto_convert_button.isChecked()
+    assert explorer.live_control.auto_convert_armed(path)
     assert explorer.start_live()
     explorer._update_activity()
     assert explorer.live is not None and explorer.live.convert is not None
-    assert explorer.auto_convert_button.isChecked()
+    assert explorer.auto_convert_button.isChecked() and not explorer.live_control.auto_convert_armed(path)
     explorer.stop_live(save=False)
+    explorer.model.cache.auto_convert.discard(path)
+    explorer.close_cleanup()
+
+
+def test_arming_auto_convert_before_live_converts_once_live_starts(
+        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+    explorer, path = watching_raw_folder(qtbot, tmp_path, auto_convert=False)
+    cache = explorer.model.cache
+    explorer.stop_live(save=False)
+    explorer._update_activity()
+    button = explorer.auto_convert_button
+    assert button.text() == ARM_AUTO_CONVERT and not button.isChecked()
+    assert not button.isHidden() or explorer.isHidden()
+    button.click()  # Armed: nothing converts until Live starts.
+    assert path in cache.auto_convert and button.isChecked() and "armed" in button.toolTip()
+    assert ("convert", path) not in cache.jobs
+    menu = QMenu()
+    explorer.live_control.fill_convert_menu(menu)
+    first = menu.actions()[0]
+    assert first.text().startswith(ARM_AUTO_CONVERT) and first.isChecked()
+    first.setChecked(False)  # The menu disarms it too.
+    assert path not in cache.auto_convert and not button.isChecked()
+    button.click()
+    assert explorer.start_live()
+    assert explorer.live is not None and explorer.live.convert is not None
+    assert button.text() == "Auto-convert" and button.isChecked()
+    explorer.stop_live(save=False)
+    cache.auto_convert.discard(path)
     explorer.close_cleanup()
 
 
@@ -754,6 +786,16 @@ def test_the_launch_folder_opens_alone_and_starts_live_with_auto_convert(
     # Live on collapses the file explorer panel; an error stopping its checks (Retry is there) and Live
     # off restore it.
     assert main.splitter.sizes()[0] == 0
+    # The toolbar's Auto-convert stays at hand with the panel collapsed, and turns it off and on.
+    action = main.action_tab_auto_convert
+    assert action.isEnabled() and action.isChecked() and action.text() == "Auto-convert"
+    assert not main.auto_convert_tool_button.isHidden() and main.auto_convert_scope_button.isEnabled()
+    action.trigger()
+    assert explorer.live.convert is None and not action.isChecked()
+    action.trigger()
+    assert explorer.live.convert is not None and action.isChecked()
+    main._fill_auto_convert_menu()
+    assert main.auto_convert_menu.actions()[0].isChecked()
     explorer.live.error = "test"
     explorer.liveChanged.emit()
     assert main.splitter.sizes()[0] > 0
@@ -762,6 +804,7 @@ def test_the_launch_folder_opens_alone_and_starts_live_with_auto_convert(
     assert main.splitter.sizes()[0] == 0
     explorer.stop_live(save=False)
     assert main.splitter.sizes()[0] > 0 and not main._live_collapsed_panel
+    assert action.isChecked() and action.text() == ARM_AUTO_CONVERT  # Armed for the next Live.
     # A panel the user collapsed stays so after Live.
     main.toggle_left_panel(False)
     assert explorer.start_live()

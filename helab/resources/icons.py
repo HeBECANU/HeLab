@@ -436,6 +436,7 @@ class ToolIcons:
     ICON_ZOOM_SCAN = QIcon()
     ICON_ZOOM_REPLACE = QIcon()
     ICON_LIVE = QIcon()
+    ICON_AUTO_CONVERT = QIcon()
 
 
     @staticmethod
@@ -472,6 +473,7 @@ class ToolIcons:
         ToolIcons.ICON_ZOOM_REPLACE = tablerIcon(OutlineIcon.ZOOM_REPLACE, '#000000')
 
         ToolIcons.ICON_LIVE = tablerIcon(OutlineIcon.SCAN_EYE, '#000000')
+        ToolIcons.ICON_AUTO_CONVERT = tablerIcon(OutlineIcon.TRANSFORM, '#000000')
 
 
 
