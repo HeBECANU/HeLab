@@ -13,7 +13,7 @@ from helab.utils.io_service import IORequest, delete_io_traces, get_io_service, 
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, get_folder_cache, set_disk_budget, store_options
 from helab.utils.gui_watchdog import GUIWatchdog
 from helab.utils.lab_parameters import read_lab_constants
-from helab.utils import app_log, events
+from helab.utils import app_log, events, user_manual
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -565,6 +565,11 @@ class HelabMainWindow(QMainWindow):
 
         menu_help = self.menu_bar.addMenu("Help")
         if menu_help is not None:
+            action_manual = QAction("User manual", self)
+            action_manual.setObjectName("help_user_manual")
+            action_manual.setToolTip("Open HeLab's user manual in your web browser")
+            action_manual.triggered.connect(self.open_user_manual)
+            menu_help.addAction(action_manual)
             action_about = QAction("About HeLab", self)
             action_about.triggered.connect(self.show_about_dialog)
             menu_help.addAction(action_about)
@@ -842,6 +847,48 @@ class HelabMainWindow(QMainWindow):
 
     def show_about_dialog(self) -> None:
         QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description())
+
+    # Help › User manual's site check under way: its reply and the targets it chooses between.
+    _manual_check: tuple[Any, user_manual.ManualTargets] | None = None
+    _manual_network: Any = None
+
+    def open_user_manual(self) -> None:
+        """Help › User manual, in the system browser (``user_manual``): the build's site for this
+        version once a HEAD request finds it, else the bundled copy (or GitHub's page). The check is
+        asynchronous (Qt's network access, no thread) with a short timeout, so the click never waits;
+        a click while a check is under way adds none (that check opens the manual)."""
+        if self._manual_check is not None:
+            return
+        found = user_manual.targets(APP_BUILD_INFO)
+        if found.site is None:
+            self._open_manual(found.fallback)
+            return
+        from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+        if self._manual_network is None:
+            self._manual_network = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(found.site))
+        request.setTransferTimeout(user_manual.SITE_CHECK_TIMEOUT_MS)
+        reply = self._manual_network.head(request)
+        self._manual_check = (reply, found)
+        reply.finished.connect(self._manual_checked)
+
+    def _manual_checked(self) -> None:
+        """The site check ended: the site if it answered, else the fallback."""
+        from PyQt6.QtNetwork import QNetworkReply, QNetworkRequest
+        check, self._manual_check = self._manual_check, None
+        if check is None:
+            return
+        reply, found = check
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        reached = (reply.error() == QNetworkReply.NetworkError.NoError and isinstance(status, int)
+                   and 200 <= status < 400)
+        reply.deleteLater()
+        self._open_manual(found.site if reached and found.site is not None else found.fallback)
+
+    def _open_manual(self, url: str) -> None:
+        from PyQt6.QtGui import QDesktopServices
+        if not QDesktopServices.openUrl(QUrl(url)):
+            logging.warning("Help › User manual: couldn't open %s", url)
 
     def _toggle_io_trace(self, on: bool) -> None:
         """Help › Record I/O trace (this session): a new recording folder in the temp folder's io-traces

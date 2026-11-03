@@ -16,6 +16,7 @@ from helab.analysis.stats import AXES, DEFAULT_KEEP, UNITS, CropBox
 
 ALL, LAST_N, RANGE = "all", "last N", "range"
 SHOTS_GROUP = "Shots"
+"""The settings section of the Shots parameters."""
 SHOTS = ParameterSpec("shots", "Shots", "choice", ALL, choices=(ALL, LAST_N, RANGE), group=SHOTS_GROUP,
                       tip="Which of the loaded shots the plot uses: all of them, the last N by shot "
                           "number, or a range of shot numbers.")
@@ -27,6 +28,8 @@ FIRST_SHOT = ParameterSpec("first_shot", "From shot (0 = first)", "int", 0, (0, 
 LAST_SHOT = ParameterSpec("last_shot", "To shot (0 = last)", "int", 0, (0, 1_000_000_000), group=SHOTS_GROUP,
                           when=(SHOTS.name, RANGE), tip="The last shot number to include; 0 means up to the last one.")
 SHOT_SPECS: tuple[ParameterSpec, ...] = (SHOTS, FIRST_SHOT, LAST_SHOTS, LAST_SHOT)
+"""The Shots parameters (all, the last N or a range, from a first shot): add them to an
+analysis's ``parameters`` and read the choice with ``select_shots``."""
 
 
 def select_shots(view: DatasetView, values: Mapping[str, Any]) -> tuple[int, ...]:
@@ -89,8 +92,11 @@ def shots_text(selected: Sequence[int], total: int) -> str:
 # Colours a plot may draw the newest shot's events in (RGB); the rest keep the plot's own.
 NEWEST_COLOURS = {"red": (214, 39, 40), "orange": (255, 127, 14), "magenta": (200, 30, 180),
                   "green": (44, 160, 44), "black": (0, 0, 0)}
+"""The colours a plot may draw the newest shot's events in, by name (RGB, 0–255)."""
 HIGHLIGHT = "highlight_newest"
+"""The name of the parameter that turns highlighting the newest shot on."""
 NEWEST_COLOUR = "newest_colour"
+"""The name of the parameter that picks the newest shot's colour."""
 
 
 def newest_specs(group: str) -> tuple[ParameterSpec, ParameterSpec]:
@@ -114,6 +120,7 @@ def newest_events(view: DatasetView, shot: int | None) -> Events:
 
 
 def newest_colour(values: Mapping[str, Any]) -> tuple[int, int, int]:
+    """The newest shot's colour (RGB, 0–255) chosen in ``values``; red when unset or unknown."""
     return NEWEST_COLOURS.get(str(values.get(NEWEST_COLOUR, "red")), NEWEST_COLOURS["red"])
 
 
@@ -126,10 +133,12 @@ def newest_brief(values: Mapping[str, Any]) -> str:
 
 AUTO, MANUAL = "auto-crop", "manual"
 RANGE_GROUP = "View range"
+"""The settings section of the view range parameters."""
 RANGE_MODE = ParameterSpec("range_mode", "Range", "choice", AUTO, choices=(AUTO, MANUAL), group=RANGE_GROUP,
                            tip="Auto-crop finds the range holding most events; manual uses the T, X "
                                "and Y bounds below.")
 Bounds = tuple[tuple[ParameterSpec, ParameterSpec], ...]
+"""Per axis (T, X, Y), its (min, max) parameters."""
 
 
 def bounds_specs(unit_prefix: str | None) -> Bounds:
@@ -149,7 +158,9 @@ def bounds_specs(unit_prefix: str | None) -> Bounds:
 # The same parameters (names, values in s and m) either way: "Basic plots v1" shows them with SI
 # prefixes, the DLD front panel port in ms and mm (``fixed``).
 BOUNDS: Bounds = bounds_specs(None)
+"""The manual bounds shown with the prefix that suits each value ("Basic plots v1")."""
 FIXED_BOUNDS: Bounds = bounds_specs("m")
+"""The manual bounds shown in ms and mm (the DLD port's plots)."""
 
 
 def keep_spec(tip: str) -> ParameterSpec:
@@ -165,10 +176,12 @@ def range_specs(keep_tip: str, fixed: bool = False) -> tuple[ParameterSpec, ...]
 
 
 def manual(values: Mapping[str, Any]) -> bool:
+    """Whether ``values`` choose the manual view range (else auto-crop)."""
     return values.get(RANGE_MODE.name) == MANUAL
 
 
 def keep_fraction(values: Mapping[str, Any]) -> float:
+    """The share of events auto-crop keeps, as a fraction (0.99 for 99 %)."""
     return float(values.get("keep_percent", DEFAULT_KEEP * 100)) / 100
 
 
@@ -183,6 +196,7 @@ def manual_bounds(values: Mapping[str, Any]) -> tuple[tuple[float, float] | None
 
 
 SI_PREFIXES = ((1.0, ""), (1e-3, "m"), (1e-6, "µ"), (1e-9, "n"))
+"""(factor, prefix) pairs ``range_text`` picks from, largest first."""
 
 
 def range_text(axis: int, low: float, high: float) -> str:

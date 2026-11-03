@@ -1,4 +1,4 @@
-"""Bounded least-squares fits of 1D histograms, for the T/X/Y fits of the DLD port (D1, D4).
+"""Bounded least-squares fits of 1D histograms, for the T/X/Y fits of the DLD port.
 
 ``fit_histogram(centres, counts, model)`` fits one of the registered ``MODELS`` with
 ``scipy.optimize.curve_fit`` and returns a ``FitResult``: each parameter's value ± SE (from
@@ -36,14 +36,14 @@ How a fit runs:
   part's amplitude as its ``gate``. When the amplitude is consistent with 0 (within 2 SE)
   the fit says so in a note and the parameter's SE is nan, instead of failing.
 
-Models are derived from the physics, not copied from the MATLAB code (which has bugs:
-roadmaps/dld-front-panel-port.md). Registered now: Gaussian + offset, the Thomas–Fermi
+Models are derived from the physics, not copied from the MATLAB code (which has bugs).
+Registered now: Gaussian + offset, the Thomas–Fermi
 projection (1 − u²)^p + offset, bimodal TF^p + Gaussian with a shared centre, and the exact
-arrival-time ("Yavin") thermal profile on T (``arrival_time_model``: D1), and (D4) the
+arrival-time ("Yavin") thermal profile on T (``arrival_time_model``), and the
 Bose-enhanced thermal profiles g_{5/2} and g_2 (``bose_model``, with ``polylog``) and the bimodal
 TF² + g_{5/2} and TF^{3/2} + g_2 (fugacity 1). ``condensate_fraction`` and ``component_areas`` give
 N0/N and the parts' areas ± SE from a fit's covariance; ``helab/analysis/bec.py`` turns them into
-BEC properties (D14) and sets the R/σ_th cap per axis. Pure NumPy/SciPy, no Qt. Fits run in the
+BEC properties and sets the R/σ_th cap per axis. Pure NumPy/SciPy, no Qt. Fits run in the
 analysis worker thread, so nothing here changes warning filters per call
 (``warnings.catch_warnings`` isn't thread-safe).
 """
@@ -91,6 +91,16 @@ warnings.filterwarnings("ignore", category=OptimizeWarning, module=r"scipy\.opti
 
 @dataclass(frozen=True)
 class ModelParameter:
+    """One parameter of a ``FitModel``.
+
+    Attributes:
+        name: The key of its estimate in a ``FitResult``.
+        title: What a plot calls it.
+        role: How it scales with x and the counts: "position" and "width" with x, "height"
+            with the counts, "shape" not at all.
+        gates: Amplitudes of the parts this parameter shapes: when any is consistent with 0,
+            this one is undetermined by design (nan SE and a note, not a failure).
+    """
     name: str
     title: str
     role: Role  # how it scales with x and the counts: position and width with x, height with counts
@@ -115,7 +125,7 @@ class FitModel:
 
     ``guesses`` gets the cleaned (centres, counts, errors) and ``bounds`` (centres, counts);
     both work in data units. ``areas`` gives each component's integral over x (counts × x
-    units: divide by the bin width for counts), without the offset; D4's condensate fraction
+    units: divide by the bin width for counts), without the offset; the condensate fraction
     comes from these. ``extras`` are reported in the result's estimates too."""
     key: str
     title: str
@@ -135,13 +145,16 @@ class FitModel:
 
     @property
     def names(self) -> tuple[str, ...]:
+        """The parameters' names, in the order ``function`` takes them."""
         return tuple(parameter.name for parameter in self.parameters)
 
     def __call__(self, x: npt.ArrayLike, values: Sequence[float] | Array) -> Array:
+        """The model at ``x`` with the parameters ``values`` (in ``names`` order)."""
         return self.function(np.asarray(x, dtype=np.float64), *np.asarray(values, dtype=np.float64))
 
 
 MODELS: dict[str, FitModel] = {}
+"""The registered fit models by key (``register``); ``fit_histogram`` takes a key of one."""
 
 
 def register(model: FitModel) -> FitModel:
@@ -178,10 +191,12 @@ class FitResult:
 
     @property
     def ok(self) -> bool:
+        """Whether the fit worked (``failure`` is "")."""
         return not self.failure
 
     @property
     def reduced_chi2(self) -> float:
+        """χ² per degree of freedom; nan without a degree of freedom."""
         return self.chi2 / self.dof if self.dof > 0 else math.nan
 
     @property
@@ -190,6 +205,7 @@ class FitResult:
         return np.array([self.estimates[name].value for name in self.model.names])
 
     def __getitem__(self, name: str) -> Estimate:
+        """The estimate (value ± SE) of the parameter or extra ``name``."""
         return self.estimates[name]
 
     def evaluate(self, x: npt.ArrayLike) -> Array:
@@ -258,6 +274,7 @@ def bin_means(function: Callable[..., Array], lower: Array, upper: Array, values
 
 
 def bin_centres(edges: npt.ArrayLike) -> Array:
+    """The centres of the bins between consecutive ``edges`` (one fewer than the edges)."""
     edges = np.asarray(edges, dtype=np.float64)
     return cast(Array, (edges[:-1] + edges[1:]) / 2)
 
@@ -551,6 +568,7 @@ def _extent(x: Array) -> tuple[float, float, float, float]:
 
 
 def gaussian(x: Array, amplitude: float, centre: float, sigma: float, offset: float) -> Array:
+    """A exp(−(x − centre)²/2σ²) + offset: the "gaussian" model's function."""
     return amplitude * np.exp(-0.5 * ((x - centre) / sigma) ** 2) + offset
 
 
@@ -597,11 +615,14 @@ register(FitModel(
 
 def thomas_fermi(x: Array, amplitude: float, centre: float, radius: float, offset: float, power: float = 2.0
                  ) -> Array:
+    """A (1 − u²)₊^power + offset with u = (x − centre)/radius: the Thomas–Fermi profile
+    integrated over the other axes (power 2 for a full projection, 3/2 for a thin slice)."""
     inside = np.clip(1 - ((x - centre) / radius) ** 2, 0, None)
     return amplitude * inside ** power + offset
 
 
 def thomas_fermi_area(amplitude: float, radius: float, power: float = 2.0) -> float:
+    """∫ A (1 − u²)₊^p dx = A R √π Γ(p + 1) / Γ(p + 3/2) (16/15 A R at p = 2), without the offset."""
     return amplitude * abs(radius) * math.sqrt(math.pi) * math.exp(gammaln(power + 1) - gammaln(power + 1.5))
 
 
@@ -1078,6 +1099,9 @@ def fit_condensate(centres: npt.ArrayLike, counts: npt.ArrayLike, power: float =
 
 def arrival_time(x: Array, amplitude: float, centre: float, sigma: float, offset: float, fall_distance: float,
                  g: float) -> Array:
+    """The arrival-time thermal profile at times ``x`` for atoms falling ``fall_distance`` under
+    ``g`` (derived in the comment above it in the source); ``sigma`` is σ_v/g. Where
+    t = x − centre + t_f ≤ 0 it is the offset alone."""
     t_f = math.sqrt(2 * fall_distance / g)
     t = x - centre + t_f
     positive = t > 0

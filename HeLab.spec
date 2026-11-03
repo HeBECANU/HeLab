@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 import sys
 
 import importlib.util
 
 from packaging.version import Version
+from PyInstaller.building.datastruct import Tree
 from PyInstaller.config import CONF
 
 ROOT = Path(SPECPATH).resolve()
@@ -43,6 +45,24 @@ def converter_backends():
 
 backend_imports = converter_backends()
 
+
+def user_manual():
+    """The user manual built for offline reading (Q54.3; ``HELAB_DOCS_OFFLINE=true mkdocs build
+    --strict -d build/manual``, which ci-build.yml runs), as the app's ``helab/manual``: Help ›
+    User manual opens it when the site can't be reached (``helab.utils.user_manual``). From
+    ``HELAB_MANUAL_DIR``, else ``build/manual``; never from or into the source package. Without
+    it the app ships without the copy and opens GitHub's page instead. Returns its entries for
+    ``a.datas`` (a ``Tree``: added after ``Analysis``, whose ``datas`` list stays plain entries that
+    tests/test_spec_datas.py reads)."""
+    folder = Path(os.environ.get("HELAB_MANUAL_DIR") or ROOT / "build" / "manual").resolve()
+    if not (folder / "index.html").is_file():
+        print(f"HeLab.spec: the app ships without the user manual (no {folder / 'index.html'})")
+        return []
+    return list(Tree(str(folder), prefix="helab/manual"))
+
+
+manual_datas = user_manual()
+
 metadata_path = Path(CONF['workpath']) / BUILD_INFO_FILENAME
 build_info = write_build_info(ROOT, metadata_path)
 APP_VERSION = __version__
@@ -72,6 +92,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+a.datas += manual_datas
 pyz = PYZ(a.pure)
 
 exe = EXE(

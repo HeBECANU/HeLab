@@ -69,6 +69,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python -m helab.release
 
+  # The user manual and the script-facing API's docstrings (A54.1, A54.2): ruff's D1 on the modules
+  # ruff.toml lists, and the manual built with any warning failing it. One OS, beside the test jobs,
+  # with the developer-only requirements-docs.lock (not the app's). Nothing is published here: the
+  # site is deployed only when a release is published (docs-site.yml).
+  docs:
+    name: Docs
+    needs: get-version
+    if: needs.get-version.outputs.covered_by_pr != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the docs tools
+        run: pip install -r requirements-docs.lock
+
+      - name: Check the script API's docstrings (ruff D1, ruff.toml)
+        run: ruff check --output-format github
+
+      - name: Build the user manual (mkdocs --strict)
+        env:
+          HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          mkdocs build --strict -d "$RUNNER_TEMP/site"
+          # Its links follow the repository it is built from (docs/hooks/repo_links.py), not a fixed one.
+          grep -q "$HELAB_DOCS_REPO_URL/releases" "$RUNNER_TEMP/site/getting-started/install/index.html"
+
   # Required coverage runs to completion on every OS, even after a failure.
   required-tests:
     name: ${{ matrix.os }} + py3.13
@@ -253,4 +286,3 @@ jobs:
 
       - name: Create or resume the draft and its verified assets
         run: python -m helab.release_draft --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_SHA" --prerelease "$RELEASE_PRERELEASE" --artifacts dist/release --body dist/release-body.md
-
