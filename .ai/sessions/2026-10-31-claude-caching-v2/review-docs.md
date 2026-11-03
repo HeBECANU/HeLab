@@ -248,3 +248,104 @@ I rendered every help on the export. None names a person or carries an item ID:
 - **CI run 41589115583:** all jobs green, no RERUN in any log (above).
 
 Scratch, not committed: the site scan, the help renderings and the job logs, in `.ai/temp/assay/`.
+
+## Re-check of the fixes (`git diff 9acc055..eb2f485`, the merge `1bb993b`'s dev content skipped)
+
+**DM-1, DM-2 and DM-3: closed. One new finding, DM-4 (Low), open.**
+
+- **The merge.** `1bb993b` merges `origin/dev/v0.0.8` (`9bf99ff`, TXY Priority). `git diff-tree --cc` shows no
+  hand-resolved hunk: it is the two sides only, and I reviewed only the Docs floor's own commits around it.
+
+### The three fixes
+
+- **DM-1: closed** (`d0128ae`, option (a)).
+  - The deploy moved to `.github/workflows/docs-site.yml`, which runs only on `release: types: [published]`.
+  - It checks out `refs/tags/<tag>` and deploys `<tag without v>` with `latest`, using mike on the running
+    repo's `gh-pages`. It has `contents: write` and its own `concurrency` group.
+  - No other workflow runs mike or touches `gh-pages`: grep, and `tests/test_docs_workflows.py`.
+  - Releases go up as drafts (CI's token) and are published by hand, and the publish starts the workflow. So the
+    site now follows publishing, and an abandoned draft never reaches it.
+  - **Note:** a `release` run uses the workflow file of the released tag's commit. So the first release whose
+    tag contains `docs-site.yml` is the first to deploy.
+- **DM-2: closed** (`17239e0`). A "Check this commit has the manual" step sets `present` only when `mkdocs.yml`
+  and `requirements-docs.lock` exist. Setup, install and deploy are all `if: present`; otherwise there is a
+  `::notice::` and the job stays green.
+- **DM-3: closed** (`ee6df99`).
+  - The hook `docs/hooks/repo_links.py` replaces `{repo_url}` with `config["repo_url"]`, which is
+    `HELAB_DOCS_REPO_URL` in CI. The folder is kept out of the site by `exclude_docs`.
+  - The install page's clone URL and releases link both use it.
+  - The Docs job greps the built page for `$HELAB_DOCS_REPO_URL/releases`.
+  - My build with `HELAB_DOCS_REPO_URL=https://github.com/HeBECANU/HeLab` links only HeBECANU's repo, `.git` and
+    `/releases`.
+  - **Note for Tony, not a finding:** TonyXTYan's own site now tells readers to clone `TonyXTYan/HeLab`. Before,
+    the page named the lab's `HeBECANU/HeLab`. This follows from Q54.2 (each repo's site is its own).
+
+### The docstrings, against the code
+
+`aafcb9d`'s two files have the same syntax trees as their parent once bare strings are removed: docstrings only.
+
+**`results.py`**
+- `AnalysisContext`'s attributes match the fields and their comments: `coverage` None means all
+  (`covered`), the constants' layers, `owner`, `live`, `unused`, `to_cache`.
+- `AnalysisResult`'s attributes:
+  - `state` is `State`'s three values.
+  - `data` is None unless completed: `runner_core` passes data only when `state == "completed"`. It is also None
+    once released (`RamResults.released`: `replace(result, data=None)`).
+  - `policy` is `RAM_ONLY`/`DISK_CACHED`, and `source` is `COMPUTED` ""/`FROM_DISK` "disk".
+  - `outdated`, `packed` and `packing_error` match their comments.
+- `Coverage.text` gives "60 shots (1–60)" or "no shots".
+- `RamResults.add` drops the least recently used unpinned results beyond `limit`; `get`, `for_input`, `pin` and
+  `unpin` hold.
+- Coverage's and `reuse_key`'s docstrings lost their internal IDs (Q6.6, R2, "rule 5").
+
+**`dataset_view.py`, against Prio's code**
+- `ViewIdentity.source`: "" for the two priority modes, else the mode's name or the list's text. This is
+  `txy_sources.identity_source` after Q53.2.
+- `DatasetView.fallback`: the shots read from beyond the list's own entries. The order it gives (the folder's or
+  Settings' list, External, then any HeLab TXY) is the helper's chain:
+  - `helab_txy.chain_of`: the list's own entries, then `fallback` (FolderCache's above-levels:
+    `folder_cache.py:1029-1044`), then `{"external": True}`, then `{ANY: True}`.
+  - Set by `build_view`/`revise` from `txy_sources.fallback_of`.
+
+**`ruff.toml`** now lists `results.py`. `ruff check` (0.17.3) passes on the 7 files, and `--show-files` lists
+exactly them.
+
+### The pages' TXY text (`40754fe`)
+
+- "Convert this folder…" (right-click; `FolderExplorer.py:2314`) and "External (MATLAB converter)"
+  (`txy_sources.EXTERNAL_LABEL`) exist.
+- So does Settings' "Edit…" on the TXY row (`ConverterTab.py:226`).
+- "not while Live's Auto-convert is converting it" matches `explorer_convert.py:34`.
+- The `#which-txy-helab-reads` anchor exists.
+- The new API page `reference/api/results.md` renders. The built site (18 pages) still has no name, host, path or
+  item ID (`Q6.6`, `R2`, "rule 5" included).
+
+### DM-4 · Low · The convert page names "File › Convert This Folder…", but the menu item reads Convert “<folder>”…
+
+- **Where:** `docs/how-to/convert-txy.md` ("**File › Convert This Folder…** for the tab's selected folder").
+- **Scenario.** A user with a folder selected opens File. `HelabMainWindow.update_convert_folder_action`
+  (`:296-312`) renames the item `Convert “<folder name>”…`. It shows "Convert This Folder…" only while disabled,
+  with no folder tab.
+  - The same page's neighbour item is written the right way in `data-root.md` (**File › Place .helab-root in
+    “<folder>”…**).
+- **Fix:** "**File › Convert “<folder>”…**".
+- **How verified:** by reading `update_convert_folder_action` and `CONVERT_FOLDER_MENU`.
+
+### Checks (re-check)
+
+On an export of `eb2f485`:
+- `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-assay`: **9252 passed, 674 skipped, 2
+  warnings, 3 failed, 15 rerun in 182.58 s.**
+  - All 3 failures and all 15 RERUNs are the three git-provenance tests (no `.git` in the export, 5 reruns each).
+  - No other RERUN.
+  - `tests/test_docs_workflows.py`: 4 passed.
+- **Type checks:**
+  - `mypy --strict` of `results.py`, `dataset_view.py` and `test_docs_workflows.py`: no issues;
+  - `pyright` of those files and `docs/hooks/repo_links.py`: 0 errors.
+- **Docs tools:**
+  - `ruff check`: passes;
+  - `mkdocs build --strict` with the unchanged `requirements-docs.lock`: passes.
+- **CI run 41595281987 at `eb2f485`:** all 17 jobs that ran are green (the compatibility jobs are skipped on
+  pushes).
+  - I read every log: 9 Tests, 3 Converter backends, 3 Build and Docs. **No RERUN in any.**
+  - The three Build jobs found the manual in the app.
