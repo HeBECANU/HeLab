@@ -248,3 +248,32 @@ stopping.
 **Verdict:** no blocker. TP-1 to TP-10 are closed (TP-8 pending Tony's Q~9; I agree the summary is enough
 meanwhile). TP-11 is a new Low that can go to AI_TODO or known-issues, or get a two-line fix before landing. Landing
 still needs the branch's CI run on `bf3fb85` (or its pushed successor) read job by job for RERUN.
+
+## Re-check of the last fixes (`bf3fb85..d58cfa4`)
+
+Reviewer: Claude (Opus 5.5).
+
+**Checks at `d58cfa4`:**
+- Full suite (`-n 4 --reruns 5 --reruns-delay 1 -rR`): **9229 passed, 673 skipped, no RERUN** (155 s).
+- The five type checks are clean.
+- `test_explorer_convert.py`, `test_convert_folder.py` and the cache-tab test run in one process, in that order:
+  30 passed.
+
+**TP-11 — Closed** (`4bdfa14`). `converting_with(path, profile)` now compares the running job's whole profile
+(`running == profile.to_dict()`), as `convert` does, and Live's tick uses it. So a profile with the same name and
+edited content makes Live wait instead of stopping Auto-convert. The other two callers (`convert_unavailable` and
+a pass that can't be queued, in `explorer_convert`) call it without a profile, so they still see any running
+conversion, which is what they need. `test_lives_tick_waits_for_an_edited_profile_of_the_same_name` uses the real
+FolderCache and a real running job, and checks both sides.
+
+**TP-8 note in Folder details — Closed** (`9de5e4c`). `_with_choices` uses `list_summary`, which reads memory only.
+`test_txy_ui.py` checks "Conversion (m19v1) › m19v1 (reads as m19v1 only)".
+
+**The cache-tab test (`f944a5a`).** `test_the_cache_tab_shows_and_clears_converted_txy` and
+`test_convert_this_folder_with_another_profile_to_temp` now each use their own `DIR_TEMPS`. The stated cause is
+plausible and consistent with the earlier one-off failure in a `-n 4` subset: the test counted TXY that earlier
+tests had converted into the xdist worker's shared temp folder. I didn't reproduce the old failure. The fix is
+right either way. The convert test also gains an assertion that the TXY land in the temp folder with m23v1's tag.
+
+**Nothing new.** No open findings from this review. Landing still needs CI on the pushed head read job by job
+(the handoff's last CI run, 41587970080, is on `bf3fb85`).
