@@ -413,3 +413,56 @@ def test_lives_autosaves_append_a_segment_each_and_compact_when_they_pile_up(tmp
     with opened(options, source) as store:
         data = store.read_txy_shots(str(source), "matlab").value or {}
     assert sorted(data) == list(range(1, COMPACT_SEGMENTS + 3)) and np.array_equal(data[5], [[5.0, 2, 3], [5.1, 2, 3]])
+
+
+# PR #11's review (C-1): a view's shots are its layer entries' as it saved them
+
+def test_a_view_leaves_out_a_shot_another_views_save_replaced_in_the_layer(tmp_path: Path) -> None:
+    """Two views share the MATLAB layer. Shot 2's TXY changes and the priority view's load saves it again, which
+    replaces the layer's entry; the External-only view, saved before, no longer has its data: a cached read of
+    it leaves shot 2 out rather than sending the new arrays under the old fingerprint."""
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    old = first(run_load(source, tmp_path, options, txy={"source": "matlab-only"}), "loaded")
+    old_print = {int(entry[0]): list(entry) for entry in old["fingerprint"]}
+    write_shot(source, 2, rows=5)  # (Its TXY rewritten: another size and date.)
+    later = time.time() - 300
+    os.utime(source / "d_txy_forc2.txt", (later, later))
+    assert first(run_load(source, tmp_path, options), "loaded")["load_counts"]["read"] >= 1  # (The priority view.)
+    with opened(options, source) as store:
+        entry = (store.txy_layers(str(source)).value or {})["matlab"].entries[2]
+        assert [entry.size, entry.mtime_ns] != old_print[2][1:]  # (The layer holds the new shot 2.)
+    output = tmp_path / "cached"
+    output.mkdir()
+    events: list[dict[str, Any]] = []
+    read_cached(str(source), str(output), events.append, options, txy={"source": "matlab-only"})  # type: ignore[arg-type]
+    sent = {event["shot"]: event for event in events if event["kind"] == "shot"}
+    assert sorted(sent) == [1] and first(events, "loaded")["failed_files"] == 1
+    assert sent[1]["fingerprint"] == old_print[1] and len(np.load(sent[1]["artifact"])) == 2
+
+
+def test_a_view_saved_before_entry_keys_serves_its_matlab_shots(tmp_path: Path) -> None:
+    """A view an earlier build saved (five items a shot, no entry key): a MATLAB shot's key is its TXY file's
+    fingerprint, so it is served as before; the next save gives the view its keys."""
+    source = data_folder(tmp_path)
+    options = v4_options(tmp_path)
+    run_load(source, tmp_path, options)
+    with opened(options, source) as store:
+        key = store._path_key(str(source))
+        with store.transaction():
+            (text,) = store._conn.execute("SELECT fingerprint FROM txy_views WHERE path = ?", (key,)).fetchone()
+            assert all(len(item) == 6 for item in json.loads(text))
+            store._conn.execute("UPDATE txy_views SET fingerprint = ? WHERE path = ?",
+                                (json.dumps([item[:5] for item in json.loads(text)]), key))
+    output = tmp_path / "cached"
+    output.mkdir()
+    events: list[dict[str, Any]] = []
+    read_cached(str(source), str(output), events.append, options)  # type: ignore[arg-type]
+    assert sorted(event["shot"] for event in events if event["kind"] == "shot") == [1, 2]
+    again = first(run_load(source, tmp_path, options), "loaded")
+    assert again["cached"] and again["load_counts"]["read"] == 0
+    write_shot(source, 3)
+    run_load(source, tmp_path, options)
+    with opened(options, source) as store:
+        view = store.read_view(str(source), "", "").value
+        assert view is not None and all(len(item) == 6 for item in view.fingerprint)

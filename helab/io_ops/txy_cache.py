@@ -158,6 +158,19 @@ def entry_keys(fingerprint: Sequence[Sequence[int]], origins: Mapping[int, str],
     return keys
 
 
+def saved_key(item: Sequence[Any]) -> tuple[int, int, str] | None:
+    """The layer entry key a view item was saved with (C-1): its sixth item; for a view saved before views
+    kept it, a MATLAB shot's is its TXY file's fingerprint (the item's own, Q45.3), a HeLab shot's unknown
+    (None: its data is read again, once, and the view saved with keys)."""
+    if len(item) > 5 and isinstance(item[5], (list, tuple)) and len(item[5]) == 3:
+        size, mtime_ns, kind = item[5]
+        return int(size), int(mtime_ns), str(kind)
+    from helab.convert import txy_layer
+    if len(item) > 4 and str(item[4]) == txy_layer.MATLAB:
+        return int(item[1]), int(item[2]), "txy"
+    return None
+
+
 class Access:
     """One load's (or Live save's) disk cache: a store-v3 folder's dataset, or a store-v4 view and its layers."""
 
@@ -172,6 +185,9 @@ class Access:
         definition = txy.get("profile_def")
         self.profile_def: Mapping[str, Any] | None = definition if isinstance(definition, Mapping) else None
         self.layers: dict[int, str] = {}  # (The last view read: each shot's layer.)
+        # (And each shot's item as it was saved, and the layer entry's key it was saved with; None: unknown.)
+        self.items: dict[int, list[Any]] = {}
+        self.entry_keys: dict[int, tuple[int, int, str] | None] = {}
         self.info: dict[str, Any] = {}
         # Where the row came from when the folder has no view yet (store-v4): "datasets" (its own, from stage
         # 1, Q45.4) or "legacy" (store-v3's under Keep, Q45.5). A load then copies its shots into the layers.
@@ -234,6 +250,8 @@ class Access:
             return _error(layers.error)
         held = layers.value or {}
         self.layers = {int(entry[0]): str(entry[4]) for entry in view.fingerprint}
+        self.items = {int(entry[0]): list(entry) for entry in view.fingerprint}
+        self.entry_keys = {int(entry[0]): saved_key(entry) for entry in view.fingerprint}
         rows = sum(held[layer].entries[shot].rows for shot, layer in self.layers.items()
                    if layer in held and shot in held[layer].entries)
         self.info = dict(view.info)
@@ -259,13 +277,18 @@ class Access:
 
     def _read_data(self, path: str, row: Mapping[str, Any]) -> dict[int, Any] | None:
         """The view's shots from their layers; the shots a layer no longer holds are left out (a policy
-        that writes no HeLab layer, a Make room since). None when a layer can't be read."""
+        that writes no HeLab layer, a Make room since), and so are those whose layer entry isn't the one the
+        view was saved with (C-1: another view's save replaced it, so its data isn't this fingerprint's; a
+        HeLab shot of a view saved before views kept the key, which can't be checked). None when a layer
+        can't be read."""
         by_layer: dict[str, list[int]] = {}
         for shot, layer in self.layers.items():
-            by_layer.setdefault(layer, []).append(shot)
+            if self.entry_keys.get(shot) is not None:
+                by_layer.setdefault(layer, []).append(shot)
         data: dict[int, Any] = {}
         for layer, shots in by_layer.items():
-            read = self.store.read_txy_shots(path, layer, shots)
+            keys = {shot: key for shot in shots if (key := self.entry_keys.get(shot)) is not None}
+            read = self.store.read_txy_shots(path, layer, shots, keys=keys)
             if read.failed:
                 return None
             data.update(read.value or {})
@@ -327,8 +350,14 @@ class Access:
                 txy_sources.TXY_FIELD: dict(txy_record)}
         if folder_mtime_ns is not None or "folder_mtime_ns" not in info:
             info["folder_mtime_ns"] = folder_mtime_ns
-        view = [[int(shot), int(size), int(modified), "txy", self.layers.get(int(shot), layer_of(""))]
-                for shot, size, modified in fingerprint]
+        # (Each shot's item as the view has it, its layer entry's key included: the view is only confirmed
+        # while its fingerprint is this one.)
+        view = []
+        for shot, size, modified in fingerprint:
+            item = [int(shot), int(size), int(modified)]
+            stored = self.items.get(int(shot))
+            view.append(stored if stored is not None and stored[:3] == item else
+                        [*item, "txy", self.layers.get(int(shot), layer_of(""))])
         self.store.confirm_view(path, *self.key, view, info, txy_guard, raw_times=raw_times)
 
     def lacking(self, path: str, shots: set[int], keys: Mapping[int, tuple[int, int, str]],
@@ -397,8 +426,10 @@ class Access:
                 for shot, array in sorted(shots.items())), tags, precision))
         saved_info = {**info, "format": LAYERED_FORMAT}
         view: ViewRecord = {
-            "fingerprint": [[int(shot), int(size), int(modified), "txy", layer_of(origins.get(int(shot), ""))]
-                            for shot, size, modified in fingerprint],
+            # (With each shot's layer entry key, so a later save of another view that replaces the entry
+            # can't hand this view's fingerprint other data: C-1.)
+            "fingerprint": [[int(shot), int(size), int(modified), "txy", layer_of(origins.get(int(shot), "")),
+                             list(keys[int(shot)])] for shot, size, modified in fingerprint],
             "problematic": sorted(flagged), "info": saved_info, "raw_times": raw_times}
         result = self.store.save_txy(path, *self.key, parts, view, txy_guard,
                                      budget=cache_options.get("budget"),

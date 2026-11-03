@@ -658,8 +658,9 @@ class TxyLayerRow:
 
 class ViewRecord(TypedDict):
     """What a save keeps of a composition (``txy_views``): ``fingerprint`` ``[shot, size, mtime_ns, kind,
-    layer]`` of each shot, ``problematic``, ``info`` (today's ``datasets.info``: listing, signature, the TXY
-    record) and ``raw_times``."""
+    layer, [entry size, entry mtime_ns, entry kind]]`` of each shot (the last: the layer entry's key the view
+    was saved with; a view saved before it has five items), ``problematic``, ``info`` (today's
+    ``datasets.info``: listing, signature, the TXY record) and ``raw_times``."""
     fingerprint: list[list[Any]]
     problematic: list[int]
     info: dict[str, Any]
@@ -3538,10 +3539,12 @@ class CacheStore:
         except (sqlite3.Error, StoreError):
             return []
 
-    def read_txy_shots(self, path: str, layer: str,
-                       shots: Iterable[int] | None = None) -> Read[dict[int, Any]]:
+    def read_txy_shots(self, path: str, layer: str, shots: Iterable[int] | None = None, *,
+                       keys: Mapping[int, tuple[int, int, str]] | None = None) -> Read[dict[int, Any]]:
         """Shots of a layer (every one, or ``shots`` it holds) as read-only float64 (n, 3) arrays, each from
-        the segment its entry names; a segment replaced meanwhile (compaction) is looked up once more."""
+        the segment its entry names; a segment replaced meanwhile (compaction) is looked up once more. With
+        ``keys`` (shot → the entry's (size, mtime_ns, kind) a view saved), a shot whose entry now has another
+        key (another view's save replaced it, C-1) is left out, checked on the row its segments are read by."""
         from helab.convert import txy_layer
         from helab.utils import hlb
         if self.layout < store_v4.LAYOUT:
@@ -3556,6 +3559,8 @@ class CacheStore:
                 return _missing()
             by_seq: dict[int, list[int]] = {}
             for shot, entry in row.entries.items():
+                if keys is not None and keys.get(shot) != (entry.size, entry.mtime_ns, entry.kind):
+                    continue
                 if wanted is None or shot in wanted:
                     by_seq.setdefault(entry.seq, []).append(shot)
             found: dict[int, Any] = {}
