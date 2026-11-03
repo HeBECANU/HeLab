@@ -66,7 +66,8 @@ One commit each, every one with a test. TP-1 and TP-3 were checked to fail witho
 
 After the fixes, dev/v0.0.8 was merged (`b959de1`: record-only commits and labcam). Full suite at `b959de1`:
 **9228 passed, 673 skipped, no RERUN**. The five type checks are clean. After TP-11 and the test fix (`f944a5a`):
-**9229 passed, 673 skipped, no RERUN**; the type checks are clean. CI: run **41587970080** on `bf3fb85`, green on all three OSes. I read every Tests and Converter backends job's
+**9229 passed, 673 skipped, no RERUN**; the type checks are clean. CI run **41590741400** on `d58cfa4`: green on all three OSes, all 12 Tests and Converter
+backends logs read, **no RERUN**. CI: run **41587970080** on `bf3fb85`, green on all three OSes. I read every Tests and Converter backends job's
 log: **one RERUN**, Windows Tests (1/3) (job 125757887948):
 `tests/test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`, the known
 collection error in pathlib `lstat` on Windows. It passed on retry. It is the same signature as the open
