@@ -535,3 +535,39 @@ def test_a_raw_layer_not_starting_on_the_trigger_is_rejected_as_its_file_is(tmp_
     assert results["from-file"]["problematic"] == [2]
     assert results["from-layer"]["problematic"] == results["from-file"]["problematic"]
     assert results["from-layer"]["files"] == results["from-file"]["files"]
+
+
+def test_old_helab_view_is_read_again_once_then_keyed(tmp_path: Path) -> None:
+    """PR-1 (the landing review of C-1): a HeLab view an earlier build saved (five items a shot) can't say which
+    layer entries it saved. It serves no cached read; its next load reads its HeLab shots again ("Cached dataset
+    invalid"), once, and saves the view with keys; the load after it is served from the layers."""
+    from helab.convert.profile import MATLAB_2019
+    from helab.io_ops.txy_cache import view_key
+    from test_convert_helab import raw_bytes, write_raw
+    source = tmp_path / "data" / "run"
+    source.mkdir(parents=True)
+    for shot in (1, 2):
+        write_raw(source, shot, raw_bytes(*(10_000 * k for k in range(1, shot + 2))))
+    options = v4_options(tmp_path)
+    txy = {"source": "helab-only", "profile_hash": MATLAB_2019.content_hash(), "profile_tag": "m19v1",
+           "cache_base": str(tmp_path / "caches"), "temps": str(tmp_path / "temps"),
+           "profile_def": MATLAB_2019.to_dict()}
+    assert first(run_load(source, tmp_path, options, txy=txy), "loaded")["load_counts"]["converted"] == 2
+    with opened(options, source) as store:
+        key = store._path_key(str(source))
+        with store.transaction():
+            (text,) = store._conn.execute("SELECT fingerprint FROM txy_views WHERE path = ?", (key,)).fetchone()
+            store._conn.execute("UPDATE txy_views SET fingerprint = ? WHERE path = ?",
+                                (json.dumps([item[:5] for item in json.loads(text)]), key))
+    output = tmp_path / "cached"
+    output.mkdir()
+    with pytest.raises(ValueError, match="No cached data for this folder"):
+        read_cached(str(source), str(output), lambda event: None, options, txy=txy)
+    again = first(run_load(source, tmp_path, options, txy=txy), "loaded")
+    assert not again["cached"] and again["load_counts"]["read"] == 2
+    assert again["cache_reason"] == "Cached dataset invalid"
+    with opened(options, source) as store:
+        view = store.read_view(str(source), *view_key("helab-only", txy)).value
+        assert view is not None and all(len(item) == 6 for item in view.fingerprint)
+    last = first(run_load(source, tmp_path, options, txy=txy), "loaded")
+    assert last["cached"] and last["load_counts"]["read"] == 0
