@@ -469,14 +469,83 @@ def test_resolving_a_list_for_a_tooltip_never_reads_the_profile_folder(monkeypat
         path = str(tmp_path)
         cache.set_convert_profile(MATLAB_2019)
         cache.remember_choices(path, {"policy": "", "source": f"{UTAG}>m19v1", "tag": "", "source_set_at": 2.0})
-        cache.folder_source(path), cache.converts_on_read(path), cache.on_read_shots(path, 3, 1)  # (A tooltip's.)
+        for asked in (cache.folder_source, cache.converts_on_read):  # (A tooltip's.)
+            asked(path)
+        cache.on_read_shots(path, 3, 1)
         assert reads == [] and cache.profile_by_tag(UTAG) is None  # (Not read yet: unknown, never read here.)
         txy = cache.with_txy(path, {})["txy"]
         assert reads == ["read"] and txy["entries"][0]["profile_hash"] == HUSER and UTAG in txy["known"]
-        cache.with_txy(path, {}), cache.folder_source(path)
+        cache.with_txy(path, {})
+        cache.folder_source(path)
         cache.set_convert_profile(MATLAB_2023_LAB_EDIT)  # (Settings' Save: no read either.)
         cache.set_user_profiles([MINE])
         cache.with_txy(path, {})
         assert reads == ["read"] and cache.profile_by_tag(UTAG) is MINE
     finally:
         service.shutdown()
+
+
+def live_events(source: Path, tmp_path: Path, txy: dict[str, Any], memory: list[Any], origins: dict[str, str],
+                **kwargs: Any) -> list[dict[str, Any]]:
+    from helab.io_ops.live import live_check
+    output = tmp_path / f"live-{time.monotonic_ns()}"
+    output.mkdir()
+    events: list[dict[str, Any]] = []
+    live_check(str(source), str(output), events.append, memory, txy=txy,  # type: ignore[arg-type]
+               memory_origins=origins, check_level="full", **kwargs)
+    return events
+
+
+def test_live_under_a_list_reclaims_fallback_shots_converts_and_records_the_fallback(tmp_path: Path) -> None:
+    """TP-3: Live under m23v1 › m19v1 (its fallback External, then any HeLab TXY): a shot held from External as a
+    fallback is read again once m23v1 has it (never a mismatch); a shot held from m19v1 (an own entry) keeps
+    it; a new External-only shot comes from the fallback and the record says so; a new raw-only shot is
+    converted on read with m23v1."""
+    source = mixed_folder(tmp_path)
+    txy = {**txy_sources.with_list(conversion(), (M23, M19), builtin_for_tag), "on_read": True}
+    first_load = first(run_load(source, tmp_path, v4_options(tmp_path), txy=txy), "loaded")
+    memory = first_load["fingerprint"]
+    origins = first_load["txy"]["origins"]
+    assert first_load["txy"]["fallback"] == [3] and "3" not in origins and origins["2"] == "helab:" + H19
+    newer = OLD + 120
+    write_text(source, f"d_txy_helab_{M23}_3.txt", 3.23, newer)  # (m23v1 has shot 3 now: reclaimed.)
+    write_text(source, f"d_txy_helab_{M23}_2.txt", 2.23, newer)  # (Held from m19v1, an own entry: kept.)
+    write_text(source, "d_txy_forc7.txt", 7.1, OLD)  # (External only: the fallback.)
+    write_raw(source, 7, RAW[1])
+    write_raw(source, 8, RAW[2])  # (Raw only: converted on read.)
+    look = live_events(source, tmp_path, txy, memory, origins)
+    assert not [event for event in look if event["kind"] == "shots_missing"]
+    seen = [event for event in look if event["kind"] == "live_unchanged"][-1]["live_seen"]
+    assert sorted(entry[0] for entry in seen) == [3, 7, 8]
+    events = live_events(source, tmp_path, txy, memory, origins, seen=seen)
+    assert not [event for event in events if event["kind"] == "shots_missing"]
+    result = first(events, "loaded")
+    shots = {event["shot"]: np.load(event["artifact"]) for event in events if event["kind"] == "shot"}
+    assert [entry["shot"] for entry in result["live_reread"]] == [3] and float(shots[3][0][0]) == 3.23
+    assert float(shots[7][0][0]) == 7.1 and np.array_equal(shots[8], converted(2, MATLAB_2023_LAB_EDIT))
+    record = result["txy"]
+    assert record["origins"]["3"] == "helab:" + H23 and record["origins"]["2"] == "helab:" + H19
+    assert record["origins"]["8"] == "helab:" + H23 and 8 in record["on_read"]
+    assert record["fallback"] == [7] and record["source"] == "m23v1>m19v1"
+
+
+def test_lives_save_under_a_list_keeps_held_shots_and_records_the_fallback(tmp_path: Path) -> None:
+    """TP-3: ``save_held`` under a list keeps each held shot's TXY while it is there (a shot held from the
+    fallback isn't a change when an own entry has it now: Live reads it again, not the save), and its record
+    keeps the fallback shots."""
+    from helab.io_ops.save_held import save_held
+    source = mixed_folder(tmp_path)
+    txy = txy_sources.with_list(conversion(), (M23, M19), builtin_for_tag)
+    events = run_load(source, tmp_path, v4_options(tmp_path), txy=txy)
+    first_load = first(events, "loaded")
+    held_dir = tmp_path / "held"
+    held_dir.mkdir()
+    for shot, array in shots_of(events).items():
+        np.save(held_dir / f"{shot}.npy", array)
+    write_text(source, f"d_txy_helab_{M23}_3.txt", 3.23, OLD + 120)
+    saved: list[dict[str, Any]] = []
+    save_held(str(source), saved.append, v4_options(tmp_path), first_load["fingerprint"], [],  # type: ignore[arg-type]
+              str(held_dir), txy=txy, held_txy=first_load["txy"])
+    assert not [event for event in saved if event["kind"] in ("shots_missing", "error")]
+    record = first(saved, "loaded")["txy"]
+    assert record["fallback"] == [3] and record["origins"] == first_load["txy"]["origins"]

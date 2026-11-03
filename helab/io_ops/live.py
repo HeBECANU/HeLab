@@ -233,6 +233,13 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     # TXY, written once, still feeds the mismatch rule (``names``) until then.
     switching: dict[int, helab_txy.HelabShot] = {}
     for shot in sorted(set(held) - set(held_origins)):
+        if chosen.get(shot, ("", ""))[1] and shot in helab_chosen and shot in matlab:
+            # Held from External as a fallback stage, and an entry of the list's own has it now (Q~2, TP-3):
+            # read again from that entry's TXY, as below; External's TXY feeds the mismatch rule until then.
+            switching[shot] = helab_chosen[shot]
+            names[shot] = matlab[shot]
+            file_names[shot] = pending_name(shot, helab_chosen[shot].file, chosen[shot][1])
+            continue
         if (chosen.get(shot, ("", "?"))[1] == "" and unheld.get(shot, ("", ""))[1]
                 and helab_found.get(shot) is unheld_shots.get(shot)):
             converted_shot = unheld_shots[shot]

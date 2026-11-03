@@ -509,13 +509,15 @@ def find_list(path: str, txy: Mapping[str, Any], key: str, beside: Beside, raw: 
     return result
 
 
-def compose_list(found: Found, matlab: Mapping[int, str], held: Mapping[int, str] | None = None
-                 ) -> tuple[dict[int, tuple[str, str]], dict[int, HelabShot], set[int]]:
+def compose_list(found: Found, matlab: Mapping[int, str], held: Mapping[int, str] | None = None,
+                 reclaim: bool = True) -> tuple[dict[int, tuple[str, str]], dict[int, HelabShot], set[int]]:
     """Each shot's TXY for a list (Q53.2): the first stage of its chain with a TXY for it, shot → (file,
     origin), the HeLab shot taken where it is HeLab's, and the shots taken from the fallback (beyond the list's
     own entries, Q~2). ``held``: the origin of shots the caller holds, kept while that stage is in the chain and
     its TXY is there (``""`` External's; ``helab:<hash>`` the first HeLab stage with that profile's, or the
-    list's one HeLab entry): the four modes' ``choose(held=…)`` exactly."""
+    list's one HeLab entry): the four modes' ``choose(held=…)`` exactly. ``reclaim``: a shot held from a fallback
+    stage goes to an entry of the list's own that has it now (loads, Live: read again); off (Live's save), every
+    held shot keeps its stage while that TXY is there."""
     from helab.utils.txy_sources import helab_origin, is_helab
     entries, by_entry = found.entries, found.by_entry
     own = found.own if found.own >= 0 else len(entries)
@@ -542,7 +544,7 @@ def compose_list(found: Found, matlab: Mapping[int, str], held: Mapping[int, str
                          and by_entry[index][shot].profile_hash == wanted), None)
             if pick is None and len(own_helab) == 1 and has(own_helab[0], shot):
                 pick = own_helab[0]
-        if pick is not None and pick >= own and any(has(index, shot) for index in range(own)):
+        if reclaim and pick is not None and pick >= own and any(has(index, shot) for index in range(own)):
             pick = None  # (Held from a fallback stage while an entry of the list's own has it now: the list's.)
         if pick is None:
             pick = next((index for index in range(len(entries)) if has(index, shot)), None)

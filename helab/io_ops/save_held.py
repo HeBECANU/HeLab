@@ -115,7 +115,9 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         helab_chosen: dict[int, helab_txy.HelabShot] = {}
         fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
         if listed_found is not None:
-            chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds)
+            # (A save keeps every held shot's TXY while it is there; Live reads a reclaimed one again, TP-3.)
+            chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds,
+                                                                     reclaim=False)
         else:
             chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
         origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
