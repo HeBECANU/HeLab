@@ -124,12 +124,18 @@ How to use it:
 - [ ] `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots` reran once on
   Windows CI 41561765280 (Tests 3/3, job 125673863803, `agent/v4-switch-on` `23134c0`, 2026-11-03):
   `assert took < 5.0` failed at 5.52 s (the load with the converted-TXY index held by another writer, which must
-  not wait out the index's 10 s busy timeout); passed on rerun. The 5 s bound has little room on a busy Windows
-  runner, or part of the load waits on the held index; unchecked which.
+  not wait out the index's 10 s busy timeout); passed on rerun. **Not timing slack:** dev/v0.0.8's own CI at
+  `9f92daf` (run 41490153371, job 125430855984, switch off) reran it at 10.408 s, the index's 10 s busy timeout
+  rather than the 200 ms wait the test pins (found by Vault, 2026-11-03; that run's RERUN wasn't recorded at the
+  time). So on Windows some open of the converted-TXY index during a load isn't bounded by the 200 ms wait, and a
+  load can stall ~10 s while a conversion holds the index: `helab_txy`/`provenance`, not caching v2's code.
 - [ ] `test_convert_helab.py::test_watch_converts_new_shots_and_stops_on_ctrl_c` reran once on macOS CI
   41561765280 (Converter backends, job 125673863875, `23134c0`): `helab convert --watch` ended with -2 (killed
   by the SIGINT) instead of 0 ("Stopped"); passed on rerun. The SIGINT reached the process when Python's default
-  handler wasn't the converter's (before it was set, or after it was reset); unchecked.
+  handler wasn't the converter's (before it was set, or after it was reset); unchecked. Vault: the loop catches
+  `KeyboardInterrupt` around `convert_folder` and the sleep, nothing in helab resets SIGINT, 15/15 local passes,
+  none in dev's last 8 runs; the watcher's cache options carry `store_v4`, so the switch-on can reach it. Next
+  step: put the watcher's stderr in the assertion message.
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
