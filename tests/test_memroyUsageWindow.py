@@ -10,16 +10,9 @@ from unittest.mock import MagicMock
 # test_memoryUsageWindow.py
 
 @pytest.fixture(scope="session")
-def app() -> Any:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-
-    yield app
-    try:
-        app.quit()
-    except Exception:
-        pass
+def app(qapp: QApplication) -> Any:
+    # pytest-qt's, never QApplication([]): QtWebEngine needs the program name (conftest.qt_application).
+    return qapp
 
 @patch('helab.views.MemoryUsageWindow.muppy.get_objects')
 @patch('helab.views.MemoryUsageWindow.summary.summarize')

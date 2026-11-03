@@ -26,6 +26,11 @@ version bump on that branch. **v0.0.8 ships as the 0.0.8a1 alpha pre-release** (
 PR to `main` opens when everything below has landed and CI is green, and the merge is Tony's. Store-v4 is
 switched on in that PR, after Tony's check (Q47.4).
 
+**Left for v0.0.8** (2026-11-03): every planned floor has landed. What remains is Tony's: the checks before
+the switch-on (Q50.18, with Q51.1's extra listing on the share), the open questions of v0.0.8's floors
+(Converter UX's Q48.1–Q48.6; Live Scripts' Q49.1–Q49.3; Q50.1, Q50.2 and Q51.1 decided 2026-11-03), merging `agent/v4-switch-on`, the version bump, and the PR to `main` once CI is
+green (Q47.5: 0.0.8a1).
+
 **Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
 
 - [ ] Caching v2 first: the raw d files as the cached source (a raw layer of pulses plus TXY layers
@@ -44,11 +49,14 @@ switched on in that PR, after Tony's check (Q47.4).
   V-2–V-5 as Q50.3–Q50.17 and Q47.3). The A47 checkpoint landed `1d91897` (the purge per kind plus
   Everything, A47.4; A47.2; A47.6). **Stage 3 done, the switch off** (landed `d4f28f3`: loads and Live
   convert on read in store-v4, user profiles too (A47.1), A40.2, "converted when loaded" and "converted from
-  raw"; no text written by a load, Q19.1). **Stage 4** (the policy UI's rest) is under review; its first
-  commit, TXY only's offer to remove HeLab's cached raw pulses (S4-1, `1ad31a9`), came in with stage 3. The
-  switch stays off until the v0.0.8 PR, where it is switched on after Tony's check (Q47.4, Q50.18: M44.1 and
-  M47.1 on screen, M47.2 and M42.1 on a lab PC). Open: Q50.1 (HeLab priority converts every raw shot without
-  HeLab text), Q50.2 (Auto-convert's label).
+  raw"; no text written by a load, Q19.1). **Stage 4 done, the switch off** (landed `8071c04`, with `9f92daf`:
+  TXY only's offer to remove HeLab's cached raw pulses, S4-1; and what the switch-on run found: a new store
+  opened by several helpers at once, store-v4's listings, scans and adopt reading views, Q50.1's option (a)).
+  **Caching v2 is done behind the switch** (stages 0–4; stage 5 waits for MATLAB's retirement). The switch-on is
+  ready on `agent/v4-switch-on` (V-2, V-3's version gate, V-5's release notes) and goes into the v0.0.8 PR after
+  Tony's check (Q47.4, Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC). Decided 2026-11-03:
+  Q50.1 (a) (HeLab priority converts only the shots MATLAB's TXY lacks), Q50.2 (Auto-convert keeps its label),
+  Q51.1 (a) (`raw_fill`'s extra listing kept; Tony checks it on the share with M47.2).
 - [x] Say when a raw file's reading stops early (A37.1, Q37.1; Tony, 2026-10-31): the parser stops at
   the first unreadable token as MATLAB's `textscan` does, and now says where (the Live line, Folder details,
   `helab convert`, the raw layer's `stop_line`). Converter UX, landed `ed7bcf9`; wording Q48.1, a
@@ -64,13 +72,17 @@ switched on in that PR, after Tony's check (Q47.4).
   `helab/views/plots/script_tree.py`, the workspace). With A47.5 (Q14.2 = Q23.4: a plot's TXY source and
   profile saved with presets, arrangements and reopened plots, with a Keep box to turn that off). Live
   Scripts, landed `971f4af`; open: wording Q49.1, Q49.2, imports on the GUI thread Q49.3; A49.1–A49.5; Tony's
-  checks M49.1, M49.2 ([design](../.ai/sessions/2026-11-02-claude-live-scripts/design.md)).
+  checks M49.1, M49.2 ([design](../.ai/sessions/2026-11-02-claude-live-scripts/design.md)). Follow-ups landed
+  2026-11-03: the reload-wait tests' race (`f534ede`), a test-only crash from the Scripts panel's polish
+  (`823589a`; users can't hit it), the arrangement preset hang in a test's simulated restart (`566eed6`);
+  A52.1–A52.4.
 - [x] One running HeLab per computer, from source or a build (Q39.1, A39.3; `0335768`, Quick Fixes 8).
 - [ ] The v0.0.7a1 area review's findings (`.ai/sessions/2026-10-31-claude-area-review/`): io by IO Fixes
   (landed `471966b`, with A39.2), plots by Plot Identity (`e3f94d9`), cache by Caching v2's stage 0
   (`ad86bd3`), app-1, app-2 and convert-1 by Quick Fixes 8 on Ground, with A39.1 (the archive check on PR
   builds, `c201c01`); convert-2 (`9d2a866`) and A39.4 (`915aff5`) by Quick Fixes 8 too;
-  left: building Q43.1's Reset popup (A43.3) and Q43.4's refusal wording (Q43.2–Q43.4 decided 2026-10-31).
+  Q43.1's Reset popup (A43.3, `c9e64e6`) and Q43.4's refusal wording (A43.4, `4940a81`) built since (Q43.2–Q43.4
+  decided 2026-10-31).
 - [ ] Quick Fixes 7's open items (block 38): Q38.1–Q38.3 (beside conversion without a no-replace
   rename, Live switching a held shot to HeLab's TXY, Folder details' wording), A38.1, A38.2 and M38.1
   (whether the lab share can add a file without replacing one). Q38.2 is built (A39.2, `471966b`);

@@ -239,23 +239,17 @@ anywhere, we could easily rebuild in minutes", so V-2–V-5 need no extra rollba
 - **Overnight landings** when the landing rules hold (Converter UX, caching v2's A47 checkpoint and stage 3,
   Live Scripts landed that night).
 
-## Caching v2 stage 3 (block 50)
+Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I should check", "50.2 ok",
+"4. ok todo", "6. wait": the v0.0.8 PR waits for his word), on the morning summary:
 
-From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 3", Vault;
-landed `d4f28f3`, the switch off). For Tony's morning.
-
-- **Q50.1** (Q~16) **HeLab priority converts every raw shot without HeLab text.** Under the default source
-  ("HeLab priority"), store-v4 now converts on read every shot that has a raw file and no current HeLab text,
-  in place of reading MATLAB's TXY, as the stage 3 design said and CoCo accepted. Users will see it: a first
-  load is slower (each shot converted once, then served from its layer), and the data is HeLab's, not
-  MATLAB's. "Converted when loaded" counts follow the same rule (S3R-2). **Proposed:** as built, since that is
-  what HeLab priority means once loads convert on read. **Alternative:** convert on read only shots without
-  MATLAB's TXY, so HeLab priority prefers HeLab text where there is one but never converts over MATLAB's (the
-  load and the count would change together).
-- **Q50.2** (the S3-4 label) **Auto-convert keeps its label.** S3-4 said the toggle's label and tooltip say
-  "Also write TXY files"; the button has a fixed width, so the label stays "Auto-convert" and only its
-  store-v4 tooltip says it ("Live converts new shots when it reads them; this also writes HeLab's TXY text to
-  <destination>"; CoCo agreed, 2026-11-03). **Proposed:** keep the label, the tooltip explains.
+- **Q50.1 (a):** under HeLab priority, store-v4 converts on read only the shots MATLAB's TXY lacks; HeLab only
+  converts every raw shot (built, `ced04aa`, SQ-1 `9be3e12`). (b), HeLab's conversion over MATLAB's with a
+  fallback, only if Tony asks later.
+- **Q51.1 (a):** with store-v4 on, each load's `raw_fill` lists the folder once more, as built for v0.0.8; Tony
+  checks it on the share with M47.2 before the switch-on, and (c) (the load hands `raw_fill` its listing)
+  follows only if that is slow.
+- **Q50.2** keep the "Auto-convert" label; its store-v4 tooltip explains.
+- **Q50.18:** the pre-switch-on check is on Tony's list (MANUAL_TODO, "Before store-v4 is switched on").
 
 ## Live Scripts (block 49)
 

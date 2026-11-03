@@ -537,3 +537,63 @@ def test_a_deliberate_load_clears_a_marker_it_didnt_make(qtbot: QtBot, tmp_path:
     else:
         scripts.add_folder(str(other))
     assert loading_marker() is None
+
+
+# A Scripts panel the garbage collector frees during its first polish (tests drop theirs at once)
+
+# A pytest plugin for the nested run: a collection at the worst moment, whenever ElidedLabel sees a change.
+COLLECT_IN_CHANGES = """
+import gc
+
+
+def pytest_configure(config):
+    from helab.views.ElidedLabel import ElidedLabel
+    change = ElidedLabel.changeEvent
+
+    def collecting(self, event):
+        change(self, event)
+        gc.collect()
+
+    ElidedLabel.changeEvent = collecting
+"""
+
+
+def test_a_dropped_scripts_panel_survives_a_collection_in_its_first_polish(tmp_path: Path) -> None:
+    """The crash of CI 41471378031 (test_live_plots, its worker's SIGSEGV in QWidgetPrivate::updateIsOpaque):
+    the panel test_live_plots' ``plot`` makes is Python's (no Qt parent) and cyclic garbage at once; the
+    collector freed it while Qt polished it, inside the PaletteChange its note's style sheet sent to
+    ElidedLabel's Python changeEvent. That test, run here with a collection forced in every ElidedLabel
+    change, crashed every time before the note lost its style sheet. Nested (its own process): a crash can't
+    take this worker with it."""
+    import subprocess
+    (tmp_path / "collect_in_changes.py").write_text(COLLECT_IN_CHANGES)
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(tmp_path), os.environ.get("PYTHONPATH"))))}
+    done = subprocess.run([sys.executable, "-X", "faulthandler", "-m", "pytest", "-q", "-p", "collect_in_changes",
+                           "-p", "no:randomly", "-p", "no:cacheprovider", "-p", "no:xdist", "-p", "no:rerunfailures",
+                           f"--basetemp={tmp_path / 'nested'}",
+                           "tests/test_live_plots.py::test_transfer_fractions_highlight_follows_lives_newest_shot"],
+                          capture_output=True, text=True, timeout=300, cwd=str(root), env=env)
+    assert done.returncode == 0, (done.returncode, done.stdout[-1500:], done.stderr[-1500:])
+
+
+def test_the_panels_polish_runs_no_python_code(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing in the Scripts panel reaches Python while Qt polishes it: its amber note is coloured by its
+    palette, not a style sheet (whose polish sets the palette, a PaletteChange for ElidedLabel)."""
+    from PyQt6.QtGui import QPalette
+    from helab.utils.colours import AMBER
+    from helab.views.ElidedLabel import ElidedLabel
+    seen: List[QEvent.Type] = []
+    change = ElidedLabel.changeEvent
+
+    def spying(self: ElidedLabel, event: Optional[QEvent]) -> None:
+        if event is not None:
+            seen.append(event.type())
+        change(self, event)
+
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    monkeypatch.setattr(ElidedLabel, "changeEvent", spying)
+    scripts.ensurePolished()
+    assert QEvent.Type.PaletteChange not in seen and QEvent.Type.StyleChange not in seen
+    assert scripts.start_note.palette().color(QPalette.ColorRole.WindowText).name().lower() == AMBER.lower()

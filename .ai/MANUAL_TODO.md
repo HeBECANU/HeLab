@@ -243,10 +243,14 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   plot's TXY line (Q50.7, Q50.8).
 - [ ] **M47.2 A load from the raw layer on the lab share** (S3-2's cost note): time a large shot's load from
   the raw layer against reading its HeLab TXY text over the share. Locally the raw step costs more (0.48 s
-  against 0.004 s for a 3.25 MB shot on an M4); its gain should be on a slow share and offline.
+  against 0.004 s for a 3.25 MB shot on an M4); its gain should be on a slow share and offline. Also
+  (Q51.1, Tony 2026-11-03): after a folder load on the share, the background raw fill lists the folder once
+  more (Folder details' activity, or the I/O trace in the log); note whether it slows browsing or the next
+  load. If it does, Q51.1 (c) follows.
 
 **Before store-v4 is switched on in the v0.0.8 PR** (Q50.18, Tony 2026-11-02, about 15 minutes): M44.1 and
-M47.1 on screen, then M47.2 and M42.1 on a lab PC with the switch on (one Live session).
+M47.1 on screen, then M47.2 (with Q51.1's extra listing) and M42.1 on a lab PC with the switch on (one
+Live session).
 
 ## Converter UX (added 2026-11-03, block 48)
 

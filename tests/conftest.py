@@ -311,6 +311,24 @@ def this_tests(fake: Callable[..., Any], real: Callable[..., Any]) -> Callable[.
     return call
 
 
+_QT_APP: list[Any] = []
+
+
+def qt_application() -> Any:
+    """The worker's QApplication, made as pytest-qt's ``qapp`` makes it (with a program name) if no test has
+    made it yet, and kept for the session. For unittest-style tests, which can't take ``qapp``; a pytest test
+    takes ``qapp``. Never ``QApplication([])``: QtWebEngine needs the program name, and with an empty argument
+    list it ends the process at the worker's first web view ("Argument list is empty, the program name is not
+    passed to QCoreApplication", a qFatal in ``WebContentsAdapter``): a Plotly test aborted its xdist worker
+    whenever such a test had been the worker's first Qt test (known-issues 139, 162)."""
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(["pytest-qt-qapp"])
+        _QT_APP.append(app)
+    return app
+
+
 def store_free(*services: "IOService") -> bool:
     """Whether no helper of these IOServices, nor of the app-wide one, has the disk cache open (every
     exit confirmed): only then may a test delete the store, which Windows refuses while a helper has
@@ -534,3 +552,17 @@ def no_selection_settle(monkeypatch: pytest.MonkeyPatch) -> None:
     selection to settle (Finish, Cancel) has its own tests, which set ``SETTLE_MAX`` again."""
     from helab.views.FolderExplorer import FolderExplorer
     monkeypatch.setattr(FolderExplorer, "SETTLE_MAX", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An arrangement preset's warning (``helab.views.plots.presets.warning_box``) is a modal no test closes:
+    a worker hung on one until killed (CI 41484277419). Here it fails the test with its text instead. A test
+    that expects a warning sets the presets' ``warn`` (as ``test_presets_plots.py`` does), or patches
+    ``warning_box`` itself."""
+    from helab.views.plots import presets
+
+    def fail(parent: Any, title: str, text: str) -> None:
+        raise AssertionError(f"a modal warning would wait here: {title}: {text}")
+
+    monkeypatch.setattr(presets, "warning_box", fail)

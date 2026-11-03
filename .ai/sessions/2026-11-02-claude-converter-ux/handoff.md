@@ -227,6 +227,52 @@ connections) and one owner check in `_io_event`. It wasn't seen in the branch's 
 timed out once on Windows CI (41457940413, `agent/converter-ux`), passed on rerun in 8 s; a slow runner's real
 helpers, cause not found. If it recurs: log `service.pending/active/retired` and `_deliveries` on timeout."
 
+## After landing: the switch-on CI's RERUN (CoCo, 2026-11-03)
+
+CI **41482722171** (`agent/v4-switch-on`, macOS Tests 1/2, job 125405134241): one RERUN,
+`test_explorer_convert.py::test_auto_convert_beside_on_a_share_once_confirmed_or_turned_off[off]`,
+`waitUntil timed out in 5000 milliseconds` at line 114 (Live's share question never came); passed on rerun.
+
+**Why (a race in the tests, not the app).** The tests set the folder's beside flag (`beside_flag`, the store's
+answer as memory) right after `test_live_convert.cycle`, which ends by answering a Live check. On a slow runner
+Live's next tick can run more than a check interval (20 ms) after `cycle`'s conversion ended *while `cycle`
+still waits for that check*, before the flag is set: it queues the next conversion (beside False: the flag not
+known yet, correctly) with its check. `cycle` answers the check; nothing ever runs that conversion, so
+auto-convert stays "requested", every later tick returns early, and the question never opens. The same race
+gave a second failure shape under load: `test_a_refused_beside_write_in_live_asks_retry_or_hellabs_folders[retry]`
+read that stale conversion's payload after Retry (`assert False is (None is None)`, line 199). The app is right
+both ways: a conversion queued before the flag was known converts as the store said then, and the helper checks
+the store again before writing beside.
+
+**Fix** (tests only, `tests/test_explorer_convert.py`): `beside_flag_in_live`, used by the six tests that set
+the flag after `cycle`. It sets the flag, then runs a conversion still queued from before it (asserting its
+payload is not beside, so a conversion queued *after* the flag would fail the test), answers a pending check,
+and sets `ended_at` back, so Live's next tick asks at once.
+
+**Seen failing, then passing**, with `store_v4` on (a local, uncommitted default flip, as on the switch-on
+branch) and 14 busy-loop processes on the 16 cores, `-n 16`, no reruns, each round 48 to 200 runs of these
+tests: the old tests failed in 4 of 13 rounds (`[off]` timing out at line 114 as in CI, with the state printed:
+auto-convert requested, a conversion queued with `beside` False, the flag on; `…asks_once_and_cache_instead…`
+timing out the same way; Retry's stale payload); the fixed ones passed 1,200 of 1,200 (six rounds of 200).
+
+Checks after merging `dev/v0.0.8` (a fast-forward to `db6b32e`) with the fix: the full suite (`-n 4 --reruns 5
+--reruns-delay 1`) **9157 passed, 673 skipped, 2 warnings (the known pyqtgraph one) in 231.03s; no RERUN**;
+the five type checks clean (mypy strict 204 + 200 files, win32 204; pyright both platforms 0 errors).
+
+CI **41489860538** (at `dc5219f`, the fix on `db6b32e`): **failure**, every Tests and Converter backends log
+read. Both Windows failures are `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer
+missing its window]`, RERUN 5 times then FAILED, in windows Converter backends (job 125429900442) and
+windows Tests (3/3) (job 125429900886). The rerun reasons are all `IndexUnavailable: HeLab's TXY index
+couldn't be written|opened (database is locked) … attempt 4`. This is dev's, not this branch's: dev's own
+run at `db6b32e` (41484513530) reran it on windows Tests (3/3), and dev fixed it after `db6b32e` in
+`28d8973` ("a writer tries a busy-index shot again until it lands"). One more RERUN, in ubuntu Tests (2/3)
+(job 125429900309): `test_plot_backends.py::test_2d_plots_draw_with_every_library[values0-Plotly-TxyHistograms]`,
+"worker 'gw1' crashed", passed on rerun. That is dev's plot-library crash, merged since as `823589a`. Every
+other job: **0 RERUN** (macOS Tests 3,113 + 3,029 + 3,015 and Converter backends 867; Ubuntu 3,112 + 3,027 +
+3,015 and 867; Windows 3,105 + 3,012). Merged `dev/v0.0.8` again (`1e06fc2`, with both fixes): the full suite **9163 passed, 673 skipped, 2 warnings (the known pyqtgraph one) in 175.43s; no RERUN**, the five type checks clean; pushed.
+
+CI **41492681998** (at `82502cc`): **success**, every job. Each Tests and Converter backends job's log was read: **0 RERUN** (macOS 3,117 + 3,029 + 3,017 and 867; Ubuntu 3,116 + 3,027 + 3,017 and 867; Windows 3,109 + 3,012 + 3,007 and 865 passed). This line's commit is local only.
+
 ## Questions for Tony (provisional)
 
 - **Q~1** The wording: Live line and Folder details `d3.txt read stopped at line 1010` (one) / `3 reads

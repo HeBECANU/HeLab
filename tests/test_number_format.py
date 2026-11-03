@@ -87,7 +87,7 @@ from PyQt6.QtWidgets import QApplication
 from helab.utils import app_log, constants, number_format
 from helab.utils.settings_defaults import DISK_BUDGET_SETTING, setting_default
 from helab.views.CacheTab import CacheTab
-app = QApplication([])
+app = QApplication(sys.argv[:1])  # never []: QtWebEngine needs the program name
 settings = QSettings(sys.argv[1], QSettings.Format.IniFormat)
 settings.setValue(DISK_BUDGET_SETTING, 10**9)  # 1 GB: the old minimum, under Windows' 1 GiB.
 read = constants.read_disk_budget(settings)

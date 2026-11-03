@@ -53,6 +53,12 @@ confirm as written) in `.ai/DECISIONS_TODO.md`.
 - **converted-txy/** (Q19.8, Q26.2): no JSON per TXY; one `converted-txy/index.sqlite` (folders:
   hash → source; shots: provenance), before v0.0.7's release; cleared only by the user.
 
+- **HeLab priority and MATLAB's TXY** (Q50.1, Tony 2026-11-03: "50.1 a"): under the default HeLab priority,
+  store-v4 converts on read only the shots MATLAB's TXY lacks, so a raw file that can't be converted yet
+  (settling, damaged) never costs a shot its MATLAB TXY; HeLab only converts every raw shot.
+- **raw_fill's extra listing** (Q51.1, "ok add to things I should check"): kept for v0.0.8; Tony times it on
+  the share before the switch-on (M47.2), and the load hands raw_fill its listing only if that is slow.
+
 ## Sizes (measured on the 309-shot sample set)
 
 - Raw text 217.5 MB; today's store keeps 16.2 MB (MATLAB's TXY); an `m19v1` TXY layer is 15.5 MB at
