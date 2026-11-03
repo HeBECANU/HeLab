@@ -33,6 +33,14 @@ A file that doesn't load is listed at the end of the scripts, under
 window with the details. Fix it and click **Reload**. A plot whose script didn't reload keeps
 running the code loaded before, and says so in amber.
 
+Before HeLab imports a folder (at start, on **Reload** and from **Load Scripts...**), it test-imports
+the folder in a separate process, so a script that hangs or crashes at import can't stop HeLab;
+meanwhile the button reads **Reload (checking)**. A folder whose test import doesn't finish within
+10 s, or ends the process, isn't imported: it is listed with the reason, for example
+`didn't load: its import didn't finish within 10 s`. **Code at the top level of your script runs
+twice** (once in the test, once for real), so keep it to imports and definitions, and do the work in
+the script's methods.
+
 ## A complete example
 
 This script plots the mean arrival time (T) of each shot's events against shot number:

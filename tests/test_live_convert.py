@@ -353,10 +353,11 @@ def test_shots_converted_with_no_hits_are_named_in_amber(qtbot: QtBot, service: 
 
 
 def test_a_read_stopped_early_is_named_on_the_live_line_and_in_folder_details(
-        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+        qtbot: QtBot, service: IOService, tmp_path: Path, notifier: FakeNotifier) -> None:
     """A37.1: a raw file whose read stopped at a line textscan can't read converts (the hits before it) and
     is named on the Live line and in Folder details' Auto-convert row, amber, with the detail in the tooltip;
-    several are counted; one converted again to its end is no longer named."""
+    several are counted; one converted again to its end is no longer named. Q48.2: each sends a system
+    notification once per file (name, size, mtime), as a damaged file does."""
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     session = explorer.live
     assert session is not None and session.convert is not None
@@ -370,6 +371,15 @@ def test_a_read_stopped_early_is_named_on_the_live_line_and_in_folder_details(
     assert "d3.txt read stopped at line 10" in text
     assert 'Read stopped early (1): d3.txt: read stopped at line 10, at "abc"' in tooltip
     assert "color" in explorer.folder_freshness_label.styleSheet()
+    def stopped() -> list[tuple[str, str]]:
+        return [sent for sent in notifier.sent if sent[0] == "HeLab: raw file read stopped early"]
+
+    assert stopped() == [("HeLab: raw file read stopped early",
+                              'd3.txt in run: read stopped at line 10, at "abc", which isn\'t a number: as MATLAB\'s '
+                              "converter reads the file, its TXY holds only the hits of what was read before it "
+                              f"({converted['read_stop']['unread']:,} bytes not read). Later shots go on.")]
+    [said] = [event for event in events.hub().history if event.kind == events.READ_STOPPED_RAW]
+    assert (said.data["path"], said.data["shot"], said.data["line"]) == (path, 3, 10)
     panel = FolderDetailsPanel()
     qtbot.addWidget(panel)
     panel.show_explorer(explorer, None)
@@ -378,6 +388,12 @@ def test_a_read_stopped_early_is_named_on_the_live_line_and_in_folder_details(
     session.convert.request = True
     explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "raw_sha256": "x"})
     assert "2 reads stopped early" in line(explorer)[0]
+    assert len(stopped()) == 2 and stopped()[1][1].startswith("d4.txt in run: read stopped at line 10")
+    # Once per file: the same file (name, size, mtime) again isn't notified again; changed, it is.
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "raw_sha256": "y"})
+    assert len(stopped()) == 2
+    explorer.live_control._convert_event(session, {**converted, "raw_size": converted["raw_size"] + 1})
+    assert len(stopped()) == 3
     explorer.live_control._convert_event(session, {**converted, "read_stop": None})
     explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "read_stop": None})
     assert session.convert.stopped == {} and "stopped" not in line(explorer)[0]

@@ -18,6 +18,7 @@ hooks:
   - docs/hooks/repo_links.py
 exclude_docs: |
   hooks/
+  publish/
 site_dir: site
 strict: true
 
@@ -42,6 +43,11 @@ theme:
         name: Light mode
 
 extra:
+  # The file:// shim the offline copy's search needs, vendored (MIT, docs/js/LICENSE-iframe-worker.txt), so
+  # the offline plugin doesn't load it from unpkg.com and the copy bundled in HeLab searches without a
+  # network. It changes nothing over http (it only replaces Worker under file://).
+  polyfills:
+    - js/iframe-worker-shim.js
   # One site version per release (mike); the version menu appears once a version is deployed.
   version:
     provider: mike
@@ -60,7 +66,8 @@ markdown_extensions:
 
 plugins:
   - search
-  # The copy built into the app (HeLab.spec) works from file:// with search: HELAB_DOCS_OFFLINE=true.
+  # The copy built into the app (HeLab.spec) works from file:// with search: HELAB_DOCS_OFFLINE=true
+  # (docs/publish/check_offline.py checks it loads no script from elsewhere).
   - offline:
       enabled: !ENV [HELAB_DOCS_OFFLINE, false]
   - autorefs

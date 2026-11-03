@@ -102,6 +102,15 @@ jobs:
           # Its links follow the repository it is built from (docs/hooks/repo_links.py), not a fixed one.
           grep -q "$HELAB_DOCS_REPO_URL/releases" "$RUNNER_TEMP/site/getting-started/install/index.html"
 
+      # The copy HeLab.spec bundles, built as ci-build.yml builds it: every script a file of the site, so
+      # its search works from file:// without a network (the iframe-worker shim is vendored in docs/js/).
+      - name: Check the offline manual loads no script from elsewhere
+        env:
+          HELAB_DOCS_OFFLINE: 'true'
+        run: |
+          mkdocs build --strict -d "$RUNNER_TEMP/offline"
+          python docs/publish/check_offline.py "$RUNNER_TEMP/offline"
+
   # Required coverage runs to completion on every OS, even after a failure.
   required-tests:
     name: ${{ matrix.os }} + py3.13

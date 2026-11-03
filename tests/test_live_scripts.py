@@ -73,6 +73,13 @@ EDITED = ('ParameterSpec("bins", "Bins", "int", 10, (1, 100)), ParameterSpec("mo
 
 
 @pytest.fixture(autouse=True)
+def no_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Folders import at once, without their test import in a separate process (Q49.3 (b), whose own tests
+    are tests/test_script_probe.py)."""
+    monkeypatch.setattr(script_tree, "PROBING", False)
+
+
+@pytest.fixture(autouse=True)
 def no_marker() -> Iterator[None]:
     """No loading marker before or after a test (the app folder lasts the xdist worker)."""
     def remove() -> None:

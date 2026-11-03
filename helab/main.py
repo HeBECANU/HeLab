@@ -13,6 +13,12 @@ if "--helab-io-helper" in sys.argv:
     from helab.io_helper import main as io_helper_main
     io_helper_main()
     raise SystemExit(0)
+# The try-import of a user script folder (Q49.3 (b), ``helab.scripts.probe``), in its own process: before
+# any GUI, cache or Dash import (it makes its own offscreen QApplication).
+if "--helab-script-probe" in sys.argv:
+    probe_arg = sys.argv.index("--helab-script-probe")
+    from helab.scripts.probe import main as probe_main
+    raise SystemExit(probe_main(sys.argv[probe_arg + 1:probe_arg + 3]))
 
 # The headless converter (``helab convert --watch <folder>``, also ``HeLab convert …`` in the
 # packaged app): before any Qt widgets, caches or Dash.

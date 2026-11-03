@@ -225,6 +225,8 @@ mkdocs build --strict -d .ai/temp/site        # as CI builds it: any warning fai
 ruff check                                    # the script API's docstrings (ruff.toml lists the modules)
 ```
 
+The published site (GitHub Pages, deployed by `.github/workflows/docs-site.yml` only when a release is published) has one version per release: its front page is the newest stable release (`latest`), the version menu lists every release, and `pre-release` is the newest alpha, beta or release candidate while it is newer than every stable release (a newer stable release removes the alias; the next pre-release brings it back). Until there is a stable release, the front page says so and links to the newest pre-release (`docs/publish/site_versions.py`). There is no development version online: for the manual of the code you have checked out, build it locally with `mkdocs serve` (or `mkdocs build`, above).
+
 To change the docs tools, edit `requirements-docs.txt`, then refresh its lock against the app's: `uv pip compile requirements-docs.txt --universal --python-version 3.13 -c requirements.lock -o requirements-docs.lock`.
 
 ## Testing

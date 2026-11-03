@@ -4,8 +4,11 @@ name: Docs site
 # its gh-pages branch), so another copy of the repo (a fork) publishes its own. It runs only when a
 # release is *published*: dev-cicd.yml's release job makes a draft, which stays private until it is
 # published by hand, and an abandoned draft never reaches the site. Never on a push or a PR.
-# "latest" follows the newest published release and is the site's front page. Help › User manual
-# opens <owner>.github.io/<repo>/<version>/.
+# Its versions (Q56.3, docs/publish/site_versions.py): every release is in the version menu; "latest" is
+# the newest stable release and the site's front page; "pre-release" the newest alpha, beta or release
+# candidate, removed by a newer stable release until the next pre-release; until there is a stable release the front page says so and links to the newest pre-release.
+# No dev channel: a development manual is built locally (README). Help › User manual opens
+# <owner>.github.io/<repo>/<version>/, the running version's page.
 
 on:
   release:
@@ -39,7 +42,7 @@ jobs:
       - name: Check this commit has the manual
         id: manual
         run: |
-          if [ -f mkdocs.yml ] && [ -f requirements-docs.lock ]; then
+          if [ -f mkdocs.yml ] && [ -f requirements-docs.lock ] && [ -f docs/publish/site_versions.py ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::No user manual at $RELEASE_TAG: nothing to publish."
@@ -62,5 +65,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin gh-pages:gh-pages || echo "No gh-pages branch yet: mike creates it."
-          mike deploy --push --update-aliases "$version" latest
-          mike set-default --push latest
+          # Its version, "latest" or "pre-release" when it is the newest of its kind, and the front page.
+          python docs/publish/site_versions.py "$version"
