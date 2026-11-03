@@ -90,6 +90,44 @@ The dataset's `txy` record keeps `source` (the mode, or the list text), `profile
 list) and gains `entries` (the resolved list with each HeLab entry's hash), so a list dataset says what it was
 asked for and the old fields mean what they meant.
 
+### What v0.0.7a1 makes of a list (CoCo's gap; checked against `e03c32a`, main's 0.0.7a1 commit)
+
+The store-v3 fallback saves datasets and results where v0.0.7a1 reads them, and both share the native
+settings. Its `txy_sources` is today's minus stage 3 (diffed), so:
+
+- **The `txy_source` setting holding `m23v1>External`:** `read_txy_source` → `normal_source` gives None →
+  the default, HeLab priority; its Settings combo shows "HeLab's where made, MATLAB's for the rest". No data is
+  misread: 0.0.7 loads what it shows. Pressing Save in 0.0.7's Settings writes its mode over the list (an old
+  app rewriting a value it doesn't know; the list is then gone, nothing else). A single-entry or mode-shaped
+  list is stored as its mode, which 0.0.7 reads exactly.
+- **A store-v3 dataset saved under a list:** its record's `source` is the list text, which 0.0.7's
+  `normal_source` doesn't know.
+  - Both quick paths (`_unchanged_since_cache`, `_unchanged_since_memory`) go through `_helab_unchanged`, which
+    returns False when `normal_source(saved.source) != source`: 0.0.7 never takes the list data as current
+    without a full check.
+  - The cache-first read (`read_cached`) sends the row as it is, and `FolderCache._with_choice` relabels a
+    record whose source it doesn't know with the tab's source. So for the moment before the check, 0.0.7 shows
+    the list's data as its tab's, marked not yet checked, the same as it already shows a tab dataset saved under
+    another of the four modes after a Settings change.
+  - The check-load then counts a held shot as held only when its origin equals what 0.0.7 composes
+    (`held_origins == origins`, unchanged): every shot the list took from another entry (another HeLab hash, or
+    External where 0.0.7 wants HeLab's) is read again; shots a list without External left out come in as new.
+    The data 0.0.7 ends with is its own choice's. Only MATLAB's TXY feed its mismatch rule, as here.
+  - Per-shot origins keep their format (`""` absent, `helab:<hash>`), which is all those checks read.
+- **A store-v3 result saved under a list:** its key carries `txy_source: "m23v1>External"`; 0.0.7 reuses a
+  result only on an exact key match (`result_cache.lookup_key`), and its own keys carry "" (absent),
+  `helab-only` or `matlab-only`: never a match. Its record text would read "TXY source: HeLab or MATLAB
+  priority" (`SHORT.get` default), with the HeLab shot count from the origins; display only. A result made in
+  0.0.7 from the brief relabelled data is keyed by those shots' true origins, so it is reused only on the same
+  data.
+
+So lists can be saved into store-v3 like the modes; no need to keep them out. **Pinned by
+`tests/test_txy_priority_v007.py`:** a verbatim copy of 0.0.7a1's `normal_source`, `_helab_unchanged`'s
+source check, `_with_choice`'s relabel and `read_txy_source`, run on records, settings values and result keys
+the new code makes for several lists: no list text is a 0.0.7 source, the quick check says "changed", the
+relabel lands on the tab's source, origins are in the old format, the setting reads as the default, and no
+list's result key equals an old mode's.
+
 ## 3. Migration
 
 - **Setting `txy_source`:** read as a list (`read_txy_source` → `txy_sources.read_list`): a mode or legacy
