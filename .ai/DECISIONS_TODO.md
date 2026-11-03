@@ -250,6 +250,10 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
   follows only if that is slow.
 - **Q50.2** keep the "Auto-convert" label; its store-v4 tooltip explains.
 - **Q50.18:** the pre-switch-on check is on Tony's list (MANUAL_TODO, "Before store-v4 is switched on").
+- **The switch-on lands before the PR** (Tony in Chat via Side, 2026-11-03: "shall we merge v4 to v0.0.8 and
+  implement the features described in aeed904?"): `agent/v4-switch-on` landed `92f9d1a`, store-v4 on on
+  `dev/v0.0.8`; Q50.18's check still comes before the PR. Block 53 is built on this Mac ("you are the dev
+  computer (M4M)").
 
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 

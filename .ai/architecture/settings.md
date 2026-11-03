@@ -16,10 +16,10 @@ on Ground, update it in the same commit as the code; on a floor, propose the cha
 
 ## Caching v2 rows
 
-`store_v4` (bool, default off, no control; `STORE_V4_SETTING`) picks the store layout once per process
-([cache-store](cache-store.md#store-v4-caching-v2-behind-the-switch)); it stays off until Tony's check, then
-turns on in the v0.0.8 PR (Q28.3, Q47.4), and is kept one release after that as a hidden fallback to store-v3,
-then goes (Q50.14). `cache_policy` (`CACHE_POLICY_SETTING`, default `raw+used`; stage 2, landed
+`store_v4` (bool, default on from v0.0.8, no control; `STORE_V4_SETTING`) picks the store layout once per
+process ([cache-store](cache-store.md#store-v4-caching-v2-behind-the-switch)); it turned on with the switch-on's
+landing (`92f9d1a`, Q47.4) and is kept one release as a hidden fallback to store-v3 (`false`, `0` or `False` set by
+hand), then goes (Q50.14). `cache_policy` (`CACHE_POLICY_SETTING`, default `raw+used`; stage 2, landed
 `1cd586c`) is the global cache policy (Q45.1), edited by Settings › Cache's Cache policy combo (store-v4
 only) and read lazily by `FolderCache.cache_policy`; it is sent as `policy` with store-v4 requests only. A
 folder's own policy and TXY source are store rows (`cache_policy`, `txy_source_prefs`), not settings.

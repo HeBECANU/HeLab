@@ -248,7 +248,9 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   more (Folder details' activity, or the I/O trace in the log); note whether it slows browsing or the next
   load. If it does, Q51.1 (c) follows.
 
-**Before store-v4 is switched on in the v0.0.8 PR** (Q50.18, Tony 2026-11-02, about 15 minutes): M44.1 and
+**Before the v0.0.8 PR** (Q50.18, Tony 2026-11-02, about 15 minutes; store-v4 is on on `dev/v0.0.8` since `92f9d1a`,
+2026-11-03, so run these on `dev/v0.0.8` with the run sheet's isolated folders,
+`.ai/sessions/2026-10-31-claude-caching-v2/` once the floor's docs land): M44.1 and
 M47.1 on screen, then M47.2 (with Q51.1's extra listing) and M42.1 on a lab PC with the switch on (one
 Live session).
 

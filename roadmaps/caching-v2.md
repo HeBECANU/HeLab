@@ -6,8 +6,8 @@ go came on 2026-10-31 (Q28.1): stages 0 and 1 in v0.0.8, stage 2 later**, on one
 off (Q28.3; [stages](#stages-each-needs-tonys-go)). Stage 1 landed `c2d0ece`; **stage 2 (Tony's go
 2026-11-02, Q45.1–Q45.11) landed `1cd586c`, the switch still off**. **Go for stages 3 and 4** (Tony,
 2026-11-02), on the same floor: stage 3 landed `d4f28f3`, stage 4 `8071c04` (with `9f92daf`), so **stages 0–4
-are done behind the switch**. After Tony's check the switch goes on in the v0.0.8 PR, so v0.0.8 (0.0.8a1) ships
-with store-v4 on (Q47.4, refining Q45.11); the switch-on is ready on its own branch, `agent/v4-switch-on`. Readiness for an unattended build: block 28; stage 1's
+are done**. The switch-on (`agent/v4-switch-on`) landed `92f9d1a` (Tony, 2026-11-03, before his Q50.18 check, which
+still comes before the PR), so v0.0.8 (0.0.8a1) ships with store-v4 on (Q47.4, refining Q45.11). Readiness for an unattended build: block 28; stage 1's
 design: the [addendum](../.ai/sessions/2026-10-31-claude-caching-v2/design-stage1.md). Evidence and options:
 [caching audit](../.ai/sessions/2026-10-29-claude-caching-audit/audit.md); the design:
 [store-v4 design note](../.ai/sessions/2026-10-29-claude-caching-audit/store-v4-design.md);
@@ -186,7 +186,7 @@ design:
    profile hash; every source mode disk cached. **Done behind the switch** (Tony's go 2026-11-02 with
    Q45.1–Q45.11; landed `1cd586c`; design: the [stage 2 addendum](../.ai/sessions/2026-10-31-claude-caching-v2/design-stage2.md),
    CoCo's answers S~1–S~5; mechanics: [cache-store](../.ai/architecture/cache-store.md#txy-layers-stage-2)).
-   The switch stays off through stages 3 and 4, then turns on in the v0.0.8 PR after Tony's check (Q47.4);
+   The switch stayed off through stages 3 and 4 and turned on with the switch-on's landing (`92f9d1a`, Q47.4);
    the row is kept one release. Steps:
    - [x] the design addendum (`1eddfaf`);
    - [x] the store side, inert: `txy_layers`, `txy_segments`, `txy_views`, `cache_policy`, `txy_source_prefs`,
@@ -249,8 +249,8 @@ design:
      ([review](../.ai/sessions/2026-10-31-claude-caching-v2/review-s4.md)). Q51.1 (every load lists
      the folder once more for `raw_fill`, shares too): kept, Tony checks it with M47.2 (2026-11-03).
 
-**The switch-on and store-v3** (Tony, 2026-11-02): the `store_v4` row stays off until the v0.0.8 PR, where it is
-switched on after Tony's check (Q47.4; Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC, about 15
+**The switch-on and store-v3** (Tony, 2026-11-02; landed `92f9d1a` on 2026-11-03, before the PR at Tony's word, his
+check still before the PR): the `store_v4` row was to stay off until the v0.0.8 PR and be switched on after Tony's check (Q47.4; Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC, about 15
 minutes), then kept one release as a hidden fallback to store-v3 (Q50.14). **Ready on its branch for the PR:**
 `agent/v4-switch-on` (`ca9c869`, kept current with `dev/v0.0.8`; not landed): the row defaults on with no
 Settings control (V-2, Q50.14), Keep's read-through gated by version (`cache_store.legacy_read_through`,
@@ -258,7 +258,11 @@ Settings control (V-2, Q50.14), Keep's read-through gated by version (`cache_sto
 release-note lines (V-5, Q50.17: `.ai/sessions/2026-10-31-claude-caching-v2/release-notes-v0.0.8-caching.md`
 on that branch), and the suite run on store-v4 (a `store_v3` marker on the tests of store-v3 itself). Its latest CI,
 41490797588 on `d3b4931`, was green (one RERUN, the known `test_test_isolation` lstat). **store-v3 read-through (Keep) ends
-with v0.0.9's start; then only Clear old stores… (asked)** (Q50.15, V-3; nothing to build now). No bulk import of
+with v0.0.9's start; then only Settings › Cache › Older cache (store-v3) › Clear… or Make room's Clear old stores…
+(asked)** (Q50.15, V-3). **Landed `92f9d1a`** (Tony, 2026-11-03, before the PR; Assay's landing review: SO-2 and
+SO-3 fixed, `8754b41`, `669a2d9`). **For v0.0.9 (SO-1, deferred):** Settings › Cache's Older cache row
+(`CacheDialogs.legacy_text`, `CacheTab`) still says store-v3 is kept and counted and offers Ignore it / Keep using
+it once the version gate stops both; from v0.0.9 it should offer only Clear…. No bulk import of
 store-v3 at the first start (Q50.16); the release notes say going back to v0.0.7 won't see what store-v4 cached
 (Q50.17). Tony on the risk: "it's fine, there's not much cached data anywhere, we could easily rebuild in
 minutes".

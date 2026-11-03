@@ -171,8 +171,8 @@ Each rule names the area file with the detail.
 **The disk cache** ([cache-store](.ai/architecture/cache-store.md),
 [data-roots](.ai/architecture/data-roots.md)):
 - Only helpers, `helab convert` (a headless process without the GUI) and, read only, `helab cache`
-  open the store (`DIR_CACHES/store-v3`, `CacheStore`; with the `store_v4` switch on, `store-v4`, and
-  store-v3 then only through `LegacyStore`, read only); the GUI sends
+  open the store (`DIR_CACHES/store-v4`, `CacheStore`; store-v3 only through `LegacyStore`, read only, and
+  only under the hidden `store_v4=false` fallback as the live store); the GUI sends
   `store_options()` with each request. A read answers found / missing / error, and an error is
   never "nothing saved".
 - Disk caching needs a data root (a hidden `.helab-root` at or above the folder; keys
@@ -212,7 +212,8 @@ Each rule names the area file with the detail.
 **Settings** ([settings](.ai/architecture/settings.md)): open QSettings only through
 `app_settings()` (helpers: `cache_setting.open_settings`). Every key HeLab reads is a row in
 `helab/utils/settings_defaults.py`, read through `read_setting`. Read numbers untyped (PyQt's
-`type=int` is 32-bit). The `store_v4` row stays off until Tony's check, then turns on in the v0.0.8 PR (Q28.3, Q47.4).
+`type=int` is 32-bit). The `store_v4` row is on from v0.0.8 (landed before the PR, Tony 2026-11-03); off is a hidden fallback to
+store-v3 for one release (Q50.14).
 
 **Analysis and plots** ([plots-and-scripts](.ai/architecture/plots-and-scripts.md),
 [dld-analyses](.ai/architecture/dld-analyses.md)):
@@ -262,7 +263,7 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | `helab/convert_cli.py`, `helab/cache_cli.py` | `helab convert --watch` (headless converter); `helab cache dump\|export` (caching v2's `.hlb` files and TXY layers, read only; [format](docs/hlb-format.md)) | [converter](.ai/architecture/converter.md), [cache-store](.ai/architecture/cache-store.md) |
 | `helab/utils/io_service.py` | `IOService`: lanes, slots, pausing, offline gate | [io-and-browsing](.ai/architecture/io-and-browsing.md) |
 | `helab/utils/folder_cache.py` | `FolderCache`: session memory, jobs, RAM budget, presets and results state, store identity | [cache-store](.ai/architecture/cache-store.md) |
-| `helab/utils/cache_store.py`, `cache_paths.py`, `data_roots.py`, `cache_move.py`; `store_v4.py`, `legacy_store.py`, `hlb.py` | the store, location keys, markers, cache-folder move; store-v4 behind its switch, store-v3 read only under it, the `.hlb` container | [cache-store](.ai/architecture/cache-store.md), [data-roots](.ai/architecture/data-roots.md) |
+| `helab/utils/cache_store.py`, `cache_paths.py`, `data_roots.py`, `cache_move.py`; `store_v4.py`, `legacy_store.py`, `hlb.py` | the store, location keys, markers, cache-folder move; store-v4 (on from v0.0.8; `store_v4=false` falls back to store-v3 for one release), store-v3 read only, the `.hlb` container | [cache-store](.ai/architecture/cache-store.md), [data-roots](.ai/architecture/data-roots.md) |
 | `helab/utils/file_kinds.py` | `FILE_KINDS`: raw `d<N>.txt`, TXY `d_txy_forc<N>.txt`, HeLab's `d_txy_helab_<tag>_<N>.txt` (a new format is a new entry) | [cache-store](.ai/architecture/cache-store.md) |
 | `helab/models/SnapshotFileSystemModel.py` | the tree model (memory only) | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md) |
 | `helab/views/` | main window, `FolderExplorer` and `explorer_live.py` (Live, auto-convert), `explorer_convert.py` (conversions from Folder details, the converter's share and Q38.1 questions), `live_launch.py` (one launch folder), Folder details, Settings tabs (`ConverterTab.py`: TXY converter), dialogs | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [live](.ai/architecture/live.md), [converter](.ai/architecture/converter.md) |
