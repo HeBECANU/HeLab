@@ -10,10 +10,11 @@ answers and addenda: `notes.md`. Base `c0daa9f`.
 | `4c47227` | **A54.1** docstrings for the script-facing API; `ruff.toml` (D1 on those modules only); `requirements-docs.txt`/`.lock`; the Docs CI job. CI run 41586073532: every job green, no RERUN in any of its 16 job logs. |
 | `9631294` | A54.1 review fixes D-1..D-3 (Assay), made on `agent/docs-a54-1` from `4c47227`, fast-forwarded here. |
 | `9507d02` | **A54.2** the manual: `mkdocs.yml`, `docs/` in Diátaxis sections, the API reference (mkdocstrings), eight first pages, `hlb-format.md` cleaned, README section, `/site/` ignored; public-safe module docstrings in `fits.py` and `profiles.py`. |
-| `3462828` | CI: `mkdocs build --strict` in the Docs job; `docs-site` publishes with mike only after a release (Q54.2). |
+| `3462828` | CI: `mkdocs build --strict` in the Docs job; `docs-site` publishes with mike after the release job (moved to publish-only by `d0128ae`). |
 | `0ab9c87` | `helab cache --help` names no one (explicit `DESCRIPTION`); `tests/test_cli_help.py`. |
 | `662a287` | Help › User manual (Q54.4 (a)): site → bundled copy → GitHub page, async check; `BuildInfo.repository` stamped at build time; the manual bundled by `HeLab.spec` from `ci-build.yml`'s offline build (Q54.3). |
 | `c8d400c` | Script loader: the module is in `sys.modules` only while its file runs, so `from __future__ import annotations` + `@dataclass` loads; the manual's warning replaced by the `get_type_hints` note. |
+| `d0128ae`, `17239e0`, `ee6df99` | Assay's Docs review: DM-1 the site deploys from its own `docs-site.yml` on `release: published` only (option (a); Tony's call, CoCo asking); DM-2 that deploy skips a commit without the manual; DM-3 the pages link the building repo through `{repo_url}` (`docs/hooks/repo_links.py`). `tests/test_docs_workflows.py`. |
 | `3b5a324`, `70a7248` | `HeLab.spec` fixes to `662a287`: the manual goes into `a.datas` after `Analysis` (a `Tree`), so `datas=` stays the plain list `test_spec_datas.py` reads; `Tree` imported, so `test_versioning.py`'s run of the spec works with `build/manual` present. |
 
 **Still to do on this floor (CoCo):** `helab/analysis/results.py` docstrings (`AnalysisContext`,
@@ -56,9 +57,15 @@ lands and this branch has merged `dev/v0.0.8`.
 **`.ai/architecture/release-and-ci.md`:**
 - CI: the "Docs" job (Ubuntu, 10 min, beside the tests, not in the release gate): `ruff check` then
   `mkdocs build --strict`, with `requirements-docs.lock` (compiled `-c requirements.lock`; never the app's).
-- `docs-site`: after `release` succeeds with `should_release`, mike deploys `<version>` (the tag without
-  `v`) with alias `latest` (set as default) to the running repo's `gh-pages`; concurrency
-  `helab-docs-site`; GitHub Pages must be enabled with source `gh-pages` (repo setting).
+- `docs-site.yml` (its own workflow): on `release: published` only (the release job's draft is private
+  until published by hand; an abandoned draft never deploys), mike deploys `<version>` (the tag without
+  `v`) with alias `latest` (set as default) to the running repo's `gh-pages`; a commit without
+  `mkdocs.yml`/`requirements-docs.lock` skips with a notice; concurrency `helab-docs-site`. GitHub Pages
+  must be enabled with source `gh-pages` (repo setting). `tests/test_docs_workflows.py` keeps it the only
+  workflow that runs mike.
+- The pages link their own repository: `{repo_url}` in a page is `repo_url`
+  (`HELAB_DOCS_REPO_URL`, the building repo in CI), by `docs/hooks/repo_links.py`; the Docs job checks the
+  install page links the building repo's releases.
 - Building: the 3.13 Build jobs build the manual offline (`HELAB_DOCS_OFFLINE=true`, Material's offline
   plugin) into `build/manual` in `build/docs-venv` (ignored, so the stamp stays clean); `HeLab.spec`
   bundles it as `helab/manual` (`HELAB_MANUAL_DIR`, else `build/manual`; says so when missing); "Check the
@@ -97,7 +104,7 @@ bundled copy, else `github.com/<repo>/blob/HEAD/docs/index.md` (`DEFAULT_REPOSIT
 - **Q~2 Which GitHub page a source run opens** when it can't know its repo (no stamp; never Git at
   runtime): `DEFAULT_REPOSITORY` is `TonyXTYan/HeLab`, while the lab's PCs run clones of `HeBECANU/HeLab`.
   **Proposed:** keep TonyXTYan (the site's home); or stamp source runs via an env variable later.
-- **Q~3 `latest` follows every release, pre-releases too** (every release so far is an alpha, so
+- **Q~3 `latest` follows every published release, pre-releases too** (every release so far is an alpha, so
   otherwise the site would have no front page). **Proposed:** yes until the first final release, then
   only finals.
 
@@ -111,6 +118,9 @@ bundled copy, else `github.com/<repo>/blob/HEAD/docs/index.md` (`DEFAULT_REPOSIT
 - **A~4** The built-in profiles' notes, shown in Settings › TXY converter, carry internal IDs ("stage 3",
   "Q6.11"): user-facing text.
 - **A~5** The stale docs listed under "Corrections" above.
+- **A~7 `helab --help` starts the GUI** (Assay): `helab/main.py` handles `--version`, `convert` and
+  `cache` before the GUI, but not `--help`/`-h`. Proposed: print a short usage (the app, `--version`,
+  `--geometry`, `convert`, `cache`, each with `--help`) and exit 0, before anything starts.
 - **A~6** Grow `ruff.toml`'s scope to the rest of what scripts import (`results.py` first, then
   `follow.py`, `backends.py`'s panes, `stats.py`), each with an API page.
 
@@ -119,7 +129,7 @@ bundled copy, else `github.com/<repo>/blob/HEAD/docs/index.md` (`DEFAULT_REPOSIT
   converting TXY, writing a script, command line, settings, cache. Their labels and numbers were checked
   against the code; the wording, the order and what is left out are yours.
 - **M~2 Turn on GitHub Pages** on TonyXTYan/HeLab (Settings › Pages › Deploy from a branch: `gh-pages`,
-  `/`) once the first release's `docs-site` job has made the branch; the same on HeBECANU/HeLab when
+  `/`) once the first published release's `docs-site` run has made the branch; the same on HeBECANU/HeLab when
   releases are made there.
 - **M~3 Help › User manual in a release build**: on a networked computer (the site's version page opens
   in the browser), offline or on the lab PC (the bundled copy opens, search works), and from a source run
