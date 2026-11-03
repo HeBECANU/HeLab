@@ -14,13 +14,42 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 from helab.analysis.display_units import number_text
 
 Kind = Literal["float", "int", "bool", "choice", "text"]  # "text": free text (multi-line)
+"""A parameter's type: a number, a switch, one of ``choices``, or free (multi-line) text."""
 # The prefixes ``unit_prefix`` may name, with their factors.
 SI_FACTORS = {"G": 1e9, "M": 1e6, "k": 1e3, "": 1.0, "m": 1e-3, "µ": 1e-6, "n": 1e-9}
+"""The SI prefixes ``ParameterSpec.unit_prefix`` may name, with their factors."""
 Value = float | int | bool | str
+"""A parameter's value: a plain JSON value."""
 
 
 @dataclass(frozen=True)
 class ParameterSpec:
+    """One parameter an analysis declares (``DatasetAnalysis.parameters``).
+
+    Example:
+        ``ParameterSpec("bins", "Bins", "int", 100, (10, 10_000), tip="Histogram bins.")``
+
+    Attributes:
+        name: The key the analysis reads in ``context.parameters``.
+        title: What the plot's settings show.
+        kind: The type (``Kind``).
+        default: The value when none is set.
+        limits: (min, max) a number is clamped to; None for no limits.
+        suffix: The unit shown after a number (e.g. " %", " s").
+        tip: The tooltip in the plot's settings.
+        choices: For kind "choice": the allowed values, shown as a drop-down.
+        group: The settings section it belongs to ("" for the top level).
+        when: (choice parameter, value): the parameter applies only while that choice
+            parameter has that value; None for always.
+        si: A float in a base unit (s, m), shown with SI prefixes (4 mm) and stepped by decade.
+        page: The settings tab it is on ("" for the first); a group goes on its first
+            parameter's page.
+        unit_prefix: With ``si``, the one SI prefix the value is always shown with ("m": a T in
+            s shown in ms), its digits grouped by thousands; the value itself stays in the base
+            unit. None: the prefix follows the value.
+        shown_with: A further condition on all the values, beside ``when``: the parameter
+            applies only while it holds too. Not compared.
+    """
     name: str  # the key the analysis reads
     title: str  # what the parameter tree shows
     kind: Kind

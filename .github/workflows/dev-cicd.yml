@@ -69,6 +69,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python -m helab.release
 
+  # The script-facing API's docstrings (A54.1): ruff's D1 on the modules ruff.toml lists. One OS,
+  # beside the test jobs, with the developer-only requirements-docs.lock (not the app's).
+  docs:
+    name: Docs
+    needs: get-version
+    if: needs.get-version.outputs.covered_by_pr != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the docs tools
+        run: pip install -r requirements-docs.lock
+
+      - name: Check the script API's docstrings (ruff D1, ruff.toml)
+        run: ruff check --output-format github
+
   # Required coverage runs to completion on every OS, even after a failure.
   required-tests:
     name: ${{ matrix.os }} + py3.13

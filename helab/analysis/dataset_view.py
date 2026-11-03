@@ -58,8 +58,10 @@ if TYPE_CHECKING:
     from helab.utils.folder_cache import Dataset
 
 Events = npt.NDArray[np.float64]
+"""Events as an (n, 3) float64 array of T, X and Y: T in s since the trigger, X and Y in m."""
 # (shot, size in bytes, mtime in ns), as the helper fingerprints each TXY file.
 Fingerprint = tuple[int, int, int]
+"""(shot, size in bytes, mtime in ns) of a shot's TXY file, as HeLab found it when loading."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,21 @@ class DataRootRef:
 
 @dataclass(frozen=True)
 class ViewIdentity:
+    """Which data a view is: its folder, the load and the TXY it is made of.
+
+    Two views with the same identity are revisions of one chain (``DatasetView.revision``); a
+    fresh load, another TXY choice or another profile is another identity.
+
+    Attributes:
+        source_path: The folder the data was loaded from.
+        root_key: The folder's data-root key, ``root://<uuid>/<relative>``; "" when no data
+            root (``.helab-root``) is known.
+        signature: The loaded dataset's signature (a hash of its TXY files' fingerprints); ""
+            when it has none (e.g. a resumed partial load).
+        source: Which TXY the data is made of (``txy_sources.identity_source``).
+        chain: The token of this chain of revisions ("" for a placeholder view). Not part of a
+            result's reuse key, which compares the data itself.
+    """
     source_path: str
     root_key: str  # "" when no data root is known
     signature: str  # "" when the dataset has none (e.g. a resumed partial load)
@@ -84,6 +101,7 @@ class ViewIdentity:
 
     @property
     def name(self) -> str:
+        """The folder's name (the last part of ``source_path``), for titles and records."""
         return os.path.basename(self.source_path.rstrip("/\\")) or self.source_path
 
 
@@ -94,11 +112,26 @@ class ViewKey:
     revision: int
 
     def short(self) -> str:
+        """``<folder name> · rev <revision>``, for a plot's source line."""
         return f"{self.identity.name} · rev {self.revision}"
 
 
 @dataclass(frozen=True)
 class Provenance:
+    """Where a view's data came from and how far it was checked, as the load reported it.
+
+    Attributes:
+        source: The load's source as the helper reported it (e.g. "disk", "memory", "merged").
+        loaded_at: When it was loaded (wall-clock time, s since the epoch); None if unknown.
+        checked_at: When it was last checked against the folder (wall-clock time); None: never.
+        verified: False while the data is shown from the disk cache, not yet checked against
+            the folder.
+        unsettled_files: TXY files left out because they were still being written.
+        failed_files: TXY files that couldn't be read.
+        problematic: Shots with unreadable rows (those rows dropped).
+        cache_reason: The load's note on the cache: why cached data was used (e.g. "Folder not
+            modified since cached") or why the data wasn't cached; "" for none.
+    """
     source: str  # the load's source as the helper reported it (e.g. "disk", "memory", "merged")
     loaded_at: float | None  # wall-clock time
     checked_at: float | None  # wall-clock time of the last check against the folder; None: never
@@ -111,6 +144,34 @@ class Provenance:
 
 @dataclass(frozen=True, eq=False)
 class DatasetView:
+    """A read-only, immutable snapshot of a loaded dataset: the one input an analysis gets.
+
+    ``compute`` reads it as ``context.view``. Its arrays are shared with HeLab and with other
+    runs, and read-only: copy one (``.copy()``) before changing it. A view may have no shots
+    (Live started before the folder's first shot); a plot then says it is empty.
+
+    Attributes:
+        identity: Which data this is (``ViewIdentity``).
+        revision: 1 for a loaded dataset, one more each time Live adds shots to it.
+        shots: Shot number → that shot's events, a read-only (n, 3) T/X/Y array (``Events``),
+            in ascending shot order. ``events`` joins chosen shots into one array.
+        fingerprints: Shot number → its TXY file's ``Fingerprint``.
+        provenance: Where the data came from (``Provenance``).
+        data_root: The data root the folder is under, when known.
+        added_shots: The shots this revision added to the previous one.
+        created_at: When the view was made (wall-clock time).
+        dataset_signature: The signature of the loaded dataset this revision is ("": the
+            identity's, as at revision 1).
+        raw_times: Shot number → its raw ``d<N>.txt`` file's mtime in ns, where one was found
+            (``shot_time`` reads it).
+        origins: Shot number → its origin, ``helab:<profile hash>``, for shots read from
+            HeLab's own TXY; shots from MATLAB's TXY aren't listed.
+        txy_profiles: Profile hash → its name, version and whether it is calibrated, for the
+            HeLab TXY in the view.
+        on_read: The HeLab shots converted from their raw files when they were read.
+        txy_choice: The TXY choice the data was loaded with ("": none named, MATLAB's TXY
+            alone). Views of two choices are never revisions of each other.
+    """
     identity: ViewIdentity
     revision: int
     shots: Mapping[int, Events]  # shot number → read-only (n, 3) T/X/Y array, ascending
@@ -141,6 +202,7 @@ class DatasetView:
 
     @property
     def key(self) -> ViewKey:
+        """What a result of this view is bound to: its identity and revision."""
         return ViewKey(self.identity, self.revision)
 
     @property
@@ -162,10 +224,12 @@ class DatasetView:
 
     @property
     def shot_numbers(self) -> tuple[int, ...]:
+        """The view's shot numbers, ascending."""
         return tuple(self.shots)
 
     @property
     def event_count(self) -> int:
+        """The number of events in all the view's shots."""
         return sum(len(array) for array in self.shots.values())
 
     def shot_time(self, shot: int) -> float | None:
@@ -258,6 +322,7 @@ class Held:
 
     @staticmethod
     def of(shots: Iterable[int], fingerprints: Mapping[int, Fingerprint], origins: Mapping[int, str]) -> Held:
+        """The ``Held`` record of these shots, with their fingerprints and origins."""
         numbers = sorted(int(shot) for shot in shots)
         rows = [[shot, list(fingerprints[shot]) if shot in fingerprints else None, origins.get(shot, "")]
                 for shot in numbers]

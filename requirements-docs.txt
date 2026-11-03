@@ -1,0 +1,6 @@
+# Developer tools for the docstrings and the user manual (A54.1, A54.2), never installed with the
+# app or its build: install them with `uv pip install -r requirements-docs.lock` beside
+# requirements.lock. Refresh the lock with
+#   uv pip compile requirements-docs.txt --universal --python-version 3.13 -c requirements.lock -o requirements-docs.lock
+# so that packages both need keep the versions the app is tested with.
+ruff

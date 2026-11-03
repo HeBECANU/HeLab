@@ -1,0 +1,22 @@
+# Ruff checks one thing here: that the script-facing API has docstrings (A54.1). They feed
+# PyCharm's Quick Documentation and the user manual's API reference (mkdocstrings), so a
+# public name without one fails CI. Only these modules are checked: add a module here when
+# the manual's API reference documents it. Run it with `ruff check` from the repo root
+# (ruff is in requirements-docs.txt, not in the app's requirements).
+include = [
+    "helab/scripts/base.py",
+    "helab/analysis/dataset_view.py",
+    "helab/analysis/parameters.py",
+    "helab/analysis/selection.py",
+    "helab/analysis/fits.py",
+    "helab/analysis/profiles.py",
+]
+
+[lint]
+# pydocstyle's "missing docstring" rules. D105 (magic methods) and D107 (__init__, described
+# by its class's docstring) are left out.
+select = ["D1"]
+ignore = ["D105", "D107"]
+
+[lint.pydocstyle]
+convention = "google"

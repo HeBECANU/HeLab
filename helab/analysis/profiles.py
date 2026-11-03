@@ -109,6 +109,7 @@ class Smoothing:
         self.squared = self.matrix.multiply(self.matrix).tocsr()
 
     def apply(self, values: npt.ArrayLike) -> Array:
+        """``values`` (one per bin) smoothed: S · values."""
         return np.asarray(self.matrix @ np.asarray(values, dtype=np.float64), dtype=np.float64)
 
     def variance(self, mean_counts: npt.ArrayLike) -> Array:
@@ -213,10 +214,12 @@ class AxisFit:
 
     @property
     def ok(self) -> bool:
+        """Whether the fit worked."""
         return self.fit.ok
 
     @property
     def failure(self) -> str:
+        """Why the fit failed; "" when it worked."""
         return self.fit.failure
 
     def text(self) -> str:

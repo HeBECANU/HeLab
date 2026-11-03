@@ -91,6 +91,16 @@ warnings.filterwarnings("ignore", category=OptimizeWarning, module=r"scipy\.opti
 
 @dataclass(frozen=True)
 class ModelParameter:
+    """One parameter of a ``FitModel``.
+
+    Attributes:
+        name: The key of its estimate in a ``FitResult``.
+        title: What a plot calls it.
+        role: How it scales with x and the counts: "position" and "width" with x, "height"
+            with the counts, "shape" not at all.
+        gates: Amplitudes of the parts this parameter shapes: when any is consistent with 0,
+            this one is undetermined by design (nan SE and a note, not a failure).
+    """
     name: str
     title: str
     role: Role  # how it scales with x and the counts: position and width with x, height with counts
@@ -135,13 +145,16 @@ class FitModel:
 
     @property
     def names(self) -> tuple[str, ...]:
+        """The parameters' names, in the order ``function`` takes them."""
         return tuple(parameter.name for parameter in self.parameters)
 
     def __call__(self, x: npt.ArrayLike, values: Sequence[float] | Array) -> Array:
+        """The model at ``x`` with the parameters ``values`` (in ``names`` order)."""
         return self.function(np.asarray(x, dtype=np.float64), *np.asarray(values, dtype=np.float64))
 
 
 MODELS: dict[str, FitModel] = {}
+"""The registered fit models by key (``register``); ``fit_histogram`` takes a key of one."""
 
 
 def register(model: FitModel) -> FitModel:
@@ -178,10 +191,12 @@ class FitResult:
 
     @property
     def ok(self) -> bool:
+        """Whether the fit worked (``failure`` is "")."""
         return not self.failure
 
     @property
     def reduced_chi2(self) -> float:
+        """χ² per degree of freedom; nan without a degree of freedom."""
         return self.chi2 / self.dof if self.dof > 0 else math.nan
 
     @property
@@ -190,6 +205,7 @@ class FitResult:
         return np.array([self.estimates[name].value for name in self.model.names])
 
     def __getitem__(self, name: str) -> Estimate:
+        """The estimate (value ± SE) of the parameter or extra ``name``."""
         return self.estimates[name]
 
     def evaluate(self, x: npt.ArrayLike) -> Array:
@@ -258,6 +274,7 @@ def bin_means(function: Callable[..., Array], lower: Array, upper: Array, values
 
 
 def bin_centres(edges: npt.ArrayLike) -> Array:
+    """The centres of the bins between consecutive ``edges`` (one fewer than the edges)."""
     edges = np.asarray(edges, dtype=np.float64)
     return cast(Array, (edges[:-1] + edges[1:]) / 2)
 
@@ -551,6 +568,7 @@ def _extent(x: Array) -> tuple[float, float, float, float]:
 
 
 def gaussian(x: Array, amplitude: float, centre: float, sigma: float, offset: float) -> Array:
+    """A exp(−(x − centre)²/2σ²) + offset: the "gaussian" model's function."""
     return amplitude * np.exp(-0.5 * ((x - centre) / sigma) ** 2) + offset
 
 
@@ -597,11 +615,14 @@ register(FitModel(
 
 def thomas_fermi(x: Array, amplitude: float, centre: float, radius: float, offset: float, power: float = 2.0
                  ) -> Array:
+    """A (1 − u²)₊^power + offset with u = (x − centre)/radius: the Thomas–Fermi profile
+    integrated over the other axes (power 2 for a full projection, 3/2 for a thin slice)."""
     inside = np.clip(1 - ((x - centre) / radius) ** 2, 0, None)
     return amplitude * inside ** power + offset
 
 
 def thomas_fermi_area(amplitude: float, radius: float, power: float = 2.0) -> float:
+    """∫ A (1 − u²)₊^p dx = A R √π Γ(p + 1) / Γ(p + 3/2) (16/15 A R at p = 2), without the offset."""
     return amplitude * abs(radius) * math.sqrt(math.pi) * math.exp(gammaln(power + 1) - gammaln(power + 1.5))
 
 
@@ -1078,6 +1099,9 @@ def fit_condensate(centres: npt.ArrayLike, counts: npt.ArrayLike, power: float =
 
 def arrival_time(x: Array, amplitude: float, centre: float, sigma: float, offset: float, fall_distance: float,
                  g: float) -> Array:
+    """The arrival-time thermal profile at times ``x`` for atoms falling ``fall_distance`` under
+    ``g`` (derived in the comment above it in the source); ``sigma`` is σ_v/g. Where
+    t = x − centre + t_f ≤ 0 it is the offset alone."""
     t_f = math.sqrt(2 * fall_distance / g)
     t = x - centre + t_f
     positive = t > 0
