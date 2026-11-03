@@ -349,3 +349,22 @@ On an export of `eb2f485`:
   pushes).
   - I read every log: 9 Tests, 3 Converter backends, 3 Build and Docs. **No RERUN in any.**
   - The three Build jobs found the manual in the app.
+
+## Re-check of DM-4's fix (`git diff eb2f485..ec9defd`)
+
+**DM-4: closed. Nothing new.** `ec9defd` changes two pages only (`docs/how-to/convert-txy.md`,
+`docs/how-to/data-root.md`), three lines, with no code.
+
+- **The convert item.** The page now names **File › Convert “&lt;folder&gt;”…**, as
+  `update_convert_folder_action` labels it.
+- **The swallowed text.** Escaped as `&lt;…&gt;`, the three placeholders render as text in the built site:
+  - "Convert “<folder>”…";
+  - "Place .helab-root in “<folder>”…";
+  - "Place at <top>". This is `DataRootDialogs.py:111`'s button label.
+
+  Before, Markdown took `<folder>` and `<top>` as HTML tags and dropped them.
+- **No other `<…>` in prose** on any page outside `.ai-generated/`, scanned outside fences and inline code. The
+  one hit, `hlb-format.md:173-174`, is an inline code span that wraps across a line. It renders as
+  `d_txy&lt;N&gt;.&lt;ext&gt;`.
+- **Checks:** `mkdocs build --strict` on an export of `ec9defd` passes. With no code changed, the suite and the
+  type checks at `eb2f485` still stand.
