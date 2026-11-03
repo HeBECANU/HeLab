@@ -50,12 +50,14 @@ def user_manual():
     --strict -d build/manual``, which ci-build.yml runs), as the app's ``helab/manual``: Help ›
     User manual opens it when the site can't be reached (``helab.utils.user_manual``). From
     ``HELAB_MANUAL_DIR``, else ``build/manual``; never from or into the source package. Without
-    it the app ships without the copy and opens GitHub's page instead. Returns the datas."""
+    it the app ships without the copy and opens GitHub's page instead. Returns its entries for
+    ``a.datas`` (a ``Tree``: added after ``Analysis``, whose ``datas`` list stays plain entries that
+    tests/test_spec_datas.py reads)."""
     folder = Path(os.environ.get("HELAB_MANUAL_DIR") or ROOT / "build" / "manual").resolve()
     if not (folder / "index.html").is_file():
         print(f"HeLab.spec: the app ships without the user manual (no {folder / 'index.html'})")
         return []
-    return [(str(folder), "helab/manual")]
+    return list(Tree(str(folder), prefix="helab/manual"))
 
 
 manual_datas = user_manual()
@@ -78,7 +80,7 @@ a = Analysis(
            (str(ROOT / 'helab/resources/ai-icon.icns'), 'helab/resources'),
            # The built-in detector profiles as JSON (A10.3; read by ``profile.builtin_files``).
            (str(ROOT / 'helab/convert/builtin_profiles/*.json'), 'helab/convert/builtin_profiles'),
-           (str(metadata_path), 'helab'), *manual_datas],
+           (str(metadata_path), 'helab')],
     hiddenimports=["helab.io_helper"] + backend_imports,
     hookspath=[],
     hooksconfig={},
@@ -89,6 +91,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+a.datas += manual_datas
 pyz = PYZ(a.pure)
 
 exe = EXE(
