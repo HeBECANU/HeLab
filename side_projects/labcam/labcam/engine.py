@@ -367,8 +367,14 @@ class Engine:
             self._last_align = now
             self.aligner.update(frame)
             with self.config.lock:
-                for name, inst in self.config.instruments.items():
-                    self.aligner.refine(name, inst.corners)
+                # The movement detector's area is most of the view: it follows the frame's transform.
+                moved = [name for name, inst in self.config.instruments.items()
+                         if inst.kind != "motion" and self.aligner.refine(name, inst.corners)]
+            if self.aligner.moved:
+                moved = list(self.config.instruments)
+            for name in moved:  # the usual surroundings were seen from the old place
+                self._usual_rings.pop(name, None)
+                self._covered_since.pop(name, None)
             self.timings["align_ms"] = (time.monotonic() - t0) * 1000
         alignment = self.aligner.current
         with self.config.lock:

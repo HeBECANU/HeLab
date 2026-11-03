@@ -446,3 +446,23 @@ def test_align_boxes_follow_their_own_surroundings() -> None:
     assert np.allclose(shift_r, (4, 3), atol=1.5), shift_r
     moved = a.for_box("left").move(left)
     assert np.allclose(a.for_box("left").back(moved), left, atol=1e-6)
+
+
+def test_align_holds_still_when_the_camera_does() -> None:
+    """A still camera isn't estimated again (so the boxes don't wander with the estimate's noise); a shifted one is."""
+    import cv2
+    import numpy as np
+
+    from labcam.align import Aligner
+
+    rng = np.random.default_rng(5)
+    ref = cv2.GaussianBlur(rng.integers(0, 256, (480, 640, 3), dtype=np.uint8), (0, 0), 1.2)
+    a = Aligner()
+    a.set_reference(ref)
+    a.update(ref)
+    assert a._matches is not None
+    a.update(ref)
+    assert a._matches is None and not a.moved
+    shifted = cv2.warpAffine(ref, np.float32([[1, 0, 9], [0, 1, -6]]), (640, 480), borderMode=cv2.BORDER_REFLECT)
+    a.update(shifted)
+    assert a.moved and np.allclose(a.current.shift, (9, -6), atol=1.0)
