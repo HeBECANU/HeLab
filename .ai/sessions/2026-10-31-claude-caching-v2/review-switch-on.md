@@ -192,3 +192,38 @@ On an export of `origin/agent/v4-switch-on` (`aeed904`), with testdata linked:
   - the row set by hand, read once;
   - a marked test followed by an unmarked one, with real loads.
 - **The marker-stripped copies** of the 6 marked tests: 6 failed, as expected. The copies were removed after.
+
+## Re-check of the fixes (`git diff aeed904 669a2d9`: SO-2 `8754b41`, SO-3 `669a2d9`)
+
+**Open findings: none in this diff.** SO-2 and SO-3 are closed. SO-1 is deferred to a v0.0.9 roadmap item (CoCo).
+
+- **SO-2: closed.**
+  - The release notes now say "Settings › Cache › Older cache (store-v3) › Clear… (or Make room's Clear old
+    stores…)", which match the controls (`CacheTab.py:351,361`; `CacheDialogs.py:141-146`).
+  - They also say the question comes only "if an older HeLab's cache (`store-v3`) is in the cache folder", as
+    `_legacy_due` checks `present`.
+  - The three comments and `CacheTab.clear_legacy`'s docstring say the same.
+  - **Not a finding:** "the first start asks once" is a little loose. If the question is closed unanswered, it is
+    asked again at the next start (`_legacy_asked` is per session; "Closing it answers nothing"). The old text had
+    the same looseness, and the notes are Tony's to edit.
+  - **Not a finding:** `CacheTab.clear_legacy`'s new docstring line is 159 characters. Nothing checks line length,
+    and `helab/` already has 190 lines over 120.
+- **SO-3: closed.**
+  - `test_non_data_folder_summary[raw-store-v3]` (a `store_v3`-marked `pytest.param`) checks store-v3's "1 raw shot
+    found · No converted TXY files" and "No data to cache".
+  - `test_row_tooltip_on_store_v3[fixable, raw only]` checks the tooltips without the on-read count.
+  - Both reuse the store-v4 cases' builders. The tooltip check moved into `check_tooltip` unchanged.
+  - **The marker works on a `pytest.param`, and the new cases depend on store-v3:** they pass as written (3 passed).
+    With the marker removed (copies, on the export), all 3 fail on store-v4.
+  - The store-v4 cases still pass beside them.
+
+### Checks (re-check)
+
+On an export of `669a2d9`:
+- The touched test files and their neighbours (`test_folder_summary`, `test_row_tooltip`, `test_cache_tab`,
+  `test_store_v3_question`, `test_store_v4`, `test_cache_switch`), run with `-n 4 --reruns 5 --reruns-delay 1`:
+  **221 passed, no RERUN.**
+- **Type checks:**
+  - `mypy --strict` of the touched files: no issues;
+  - `mypy helab/ --strict --platform win32` (204 files): no issues;
+  - `pyright` of the touched files, and `--pythonplatform Windows`: 0 errors.
