@@ -56,7 +56,9 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
 ### M1.1 Start-up
 - **Do:** About HeLab (the HeLab menu on macOS, Help on Windows).
 - **Expect:** the release's version (`helab/_version.py`), the commit you checked out, the branch.
-  Settings → Cache shows the inventory. A first start on this machine starts an empty `store-v3`.
+  Settings → Cache shows the inventory. A first start on this machine starts an empty `store-v4` (from
+  0.0.8); where an older HeLab's `store-v3` is in the cache folder, "An older disk cache" asks once (Keep,
+  Ignore or Clear…, Q44.1).
 
 ### M1.2 Browse and cache first
 - **Do:** browse the share two levels into a data root (a folder with a `.helab-root` at or
