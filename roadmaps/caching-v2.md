@@ -246,8 +246,8 @@ design:
      couldn't be converted yet. (b), later if Tony wants it: HeLab's conversion over MATLAB's with a fallback
      to MATLAB's TXY.
    - Review: Assay's S4-1–S4-4, S4R-1, SR-1, SV-1, SQ-1 fixed, no open findings
-     ([review](../.ai/sessions/2026-10-31-claude-caching-v2/review-s4.md)). For Tony: Q51.1 (every load lists
-     the folder once more for `raw_fill`, shares too).
+     ([review](../.ai/sessions/2026-10-31-claude-caching-v2/review-s4.md)). Q51.1 (every load lists
+     the folder once more for `raw_fill`, shares too): kept, Tony checks it with M47.2 (2026-11-03).
 
 **The switch-on and store-v3** (Tony, 2026-11-02): the `store_v4` row stays off until the v0.0.8 PR, where it is
 switched on after Tony's check (Q47.4; Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC, about 15
@@ -269,8 +269,9 @@ minutes".
 
 In [DECISIONS_TODO](../.ai/DECISIONS_TODO.md):
 
-- Q50.1 (HeLab priority and MATLAB's TXY: option (a) built, CoCo's call; (b) later), Q50.2 (Auto-convert keeps
-  its label), Q51.1 (with store-v4 on, every load lists the folder once more for `raw_fill`, shares too), open.
+- Decided 2026-11-03 (Tony): Q50.1 (a) (HeLab priority converts on read only the shots MATLAB's TXY lacks; (b)
+  only if asked later), Q50.2 (Auto-convert keeps its label), Q51.1 (a) (`raw_fill`'s extra listing kept for
+  v0.0.8; Tony checks it on the share with M47.2, and (c) follows only if it is slow).
 - Block 28 is decided (Tony, 2026-10-31): stages 0 and 1 (Q28.1), store-v4 behind a switch until stage
   2 (Q28.3), the `makers` table (Q28.4), Make room's "Clear old stores…" (Q28.5), the overwrite
   warning (Q28.6).
@@ -288,8 +289,8 @@ In [DECISIONS_TODO](../.ai/DECISIONS_TODO.md):
   on in the v0.0.8 PR after Tony's check; Q47.5 v0.0.8 as 0.0.8a1. Q19.1 decided the same day (TXY text stays
   in temp or cache until Tony switches the default to beside).
 - Block 50 (the A47 checkpoint and stage 3, 2026-11-02 night): Q50.3–Q50.18 decided by Tony (S3-1–S3-6,
-  S4-1–S4-3, P-1, P-2, V-2–V-5, the pre-switch-on checks); Q50.1 and Q50.2 open.
-- Block 51 (stage 4 and the switch-on, 2026-11-03): Q51.1 open; no other new item.
+  S4-1–S4-3, P-1, P-2, V-2–V-5, the pre-switch-on checks); Q50.1 (a) and Q50.2 decided 2026-11-03.
+- Block 51 (stage 4 and the switch-on, 2026-11-03): Q51.1 (a) decided 2026-11-03; no other new item.
 
 Decided: Q19.1 (2026-11-02), Q19.2 (under Q12.3), Q19.3–Q19.10, Q22.1–Q22.11 (Q22.7: keep 8 GB and zstd 9 + byte
 shuffle), Q26.1 (byte units by OS), Q26.2 (one `converted-txy/index.sqlite` instead of a JSON

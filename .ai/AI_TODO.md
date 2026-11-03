@@ -505,7 +505,7 @@ Q50.3–Q50.18, the open ones Q50.1 and Q50.2.
 
 From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 4" on, Vault;
 Assay's [review](sessions/2026-10-31-claude-caching-v2/review-s4.md); landed `8071c04` and `9f92daf`, the switch
-off). No new item: stage 4, the switch-on run's fixes and Q50.1's option (a) are done; Q51.1 is for Tony; the
+off). No new item: stage 4, the switch-on run's fixes and Q50.1's option (a) are done; Q51.1 (a) decided by Tony (2026-11-03); the
 switch-on (V-2, V-3, V-5) waits on `agent/v4-switch-on` for the v0.0.8 PR.
 
 ## Live Scripts' follow-ups (block 52)
