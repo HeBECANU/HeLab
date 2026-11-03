@@ -38,11 +38,25 @@ with open(os.path.join(os.path.dirname(__file__), "imported.jsonl"), "a") as han
 '''
 
 
+# The time limit while a test expects a probe to pass, crash or exit: far above any import's time under CI
+# load, so those tests wait for the probe's own answer, never the timer (Ground CI 41640562938: a 2 s limit
+# expired while the no-plugin probe was still importing PyQt6.QtWidgets, before its crash).
+LONG = 60.0
+# The limit only a round expected to hang gets (``short``), so a hang is found quickly. Set after anything that
+# must pass in the same test has answered, so no passing import ever races it.
+SHORT = 2.0
+
+
 @pytest.fixture(autouse=True)
-def short_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A 2 s limit (from the probe's ``ready``: its own start doesn't count), so a hang is found quickly."""
+def long_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(script_tree, "PROBING", True)
-    monkeypatch.setattr(script_tree, "PROBE_SECONDS", 2.0)
+    monkeypatch.setattr(script_tree, "PROBE_SECONDS", LONG)
+
+
+def short(monkeypatch: pytest.MonkeyPatch, on: bool = True) -> None:
+    """The short limit for a round expected to hang (``on`` False: back to the long one). ``FolderProbes``
+    reads the limit at each poll, so it applies to a probe already running."""
+    monkeypatch.setattr(script_tree, "PROBE_SECONDS", SHORT if on else LONG)
 
 
 def answers(response: Path) -> List[Dict[str, Any]]:
@@ -96,10 +110,12 @@ def hangs(folder: Path, how: str = "import time\ntime.sleep(120)\n") -> None:
     (folder / "hangs.py").write_text(how)
 
 
-def test_a_remembered_folder_whose_import_hangs_is_skipped_at_start(qtbot: QtBot, tmp_path: Path) -> None:
+def test_a_remembered_folder_whose_import_hangs_is_skipped_at_start(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """At start each remembered folder is tested first; one that hangs isn't imported (never in this
     process), waits for Reload with the reason in the start note, whose tooltip says how it was checked; the
-    good one loads; ``foldersRestored`` once both answered, the hung probe killed and its exit confirmed."""
+    good one loads; ``foldersRestored`` once both answered, the hung probe killed and its exit confirmed.
+    (The short limit is set once the good folder's probe has ended: only the hung one meets it.)"""
     good, stuck = tmp_path / "good", tmp_path / "stuck"
     good.mkdir()
     write_script(good, "lab_probe_b", "one")
@@ -108,8 +124,10 @@ def test_a_remembered_folder_whose_import_hangs_is_skipped_at_start(qtbot: QtBot
     app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(good), str(stuck)]))
     scripts = TreePanelWidget()
     qtbot.addWidget(scripts)
-    with qtbot.waitSignal(scripts.foldersRestored, timeout=60_000):
-        pass
+    with qtbot.waitSignal(scripts.foldersRestored, timeout=120_000):
+        qtbot.waitUntil(lambda: [item.folder for item in scripts._probes._running.values()] == [str(stuck)]
+                        and (stuck / "pid").is_file(), timeout=60_000)
+        short(monkeypatch)
     assert "Lab" in scripts.groups and scripts.script_manager.folders() == [str(good)]
     assert scripts._skipped == {str(stuck): "its import didn't finish within 2 s"}
     assert "not loaded at start (its import didn't finish within 2 s)" in scripts.start_note.text()
@@ -142,7 +160,7 @@ def test_load_scripts_of_a_folder_that_crashes_at_import_lists_it_with_the_reaso
 
 
 def test_a_reload_that_would_hang_keeps_the_plots_code_until_it_is_fixed(
-        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A script edited to wait for input at import (the probe's stdin stays open, so ``input()`` waits as in
     a terminal-launched HeLab) doesn't reload: its plot keeps the code it has and says why. A reload asked
     while the test runs follows it in a round of its own; once fixed, the plot takes the new code."""
@@ -154,6 +172,7 @@ def test_a_reload_that_would_hang_keeps_the_plots_code_until_it_is_fixed(
     instance = open_plot(qtbot, window, cache)
     assert shown_tag(instance) == "old"
     (tmp_path / "waits.py").write_text("ANSWER = input('Which detector? ')\n")
+    short(monkeypatch)
     scripts.reload_scripts()
     assert scripts._probing and scripts.reload_button.text() == "Reload (checking)"
     scripts.reload_scripts()  # (Waits for the running round: never a second probe beside it.)
@@ -163,6 +182,7 @@ def test_a_reload_that_would_hang_keeps_the_plots_code_until_it_is_fixed(
     qtbot.waitUntil(lambda: not scripts._probing and not scripts._pending, timeout=60_000)  # (The second round.)
     [line] = scripts.error_items()
     assert line.text(0).endswith(": didn't load: its import didn't finish within 2 s")
+    short(monkeypatch, False)
     (tmp_path / "waits.py").unlink()
     write_script(tmp_path, "lab_probe_c", "fixed")
     scripts.reload_scripts()
@@ -327,7 +347,7 @@ def test_stop_kills_the_probes_and_answers_nothing(qtbot: QtBot, tmp_path: Path)
 
 
 def test_auto_reload_tests_the_folder_before_reloading_it(
-        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path) -> None:
+        qtbot: QtBot, cache: FolderCache, windows: Windows, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Reload when a script is saved goes through the probe too: a save that makes the import hang leaves
     the plot on its code and lists the folder; the next save that fixes it reloads."""
     window = new_window(qtbot, cache, windows)
@@ -338,12 +358,14 @@ def test_auto_reload_tests_the_folder_before_reloading_it(
     scripts.set_auto_reload(True)
     instance = open_plot(qtbot, window, cache)
     (tmp_path / "lab_probe_h.py").write_text("import time\ntime.sleep(120)\nTAG = 'hung'\n")
+    short(monkeypatch)
     scripts._check_changes()  # (What the settle timer runs after a save.)
     assert scripts._probing and scripts.reload_button.text() == "Reload (checking)"
     qtbot.waitUntil(lambda: "didn't finish within 2 s" in instance._script_note, timeout=60_000)
     qtbot.waitUntil(lambda: not scripts._probing, timeout=30_000)
     [line] = scripts.error_items()
     assert line.text(0).endswith(": didn't load: its import didn't finish within 2 s")
+    short(monkeypatch, False)
     write_script(tmp_path, "lab_probe_h", "fixed")
     scripts._check_changes()
     qtbot.waitUntil(lambda: instance.shown is not None and shown_tag(instance) == "fixed", timeout=60_000)

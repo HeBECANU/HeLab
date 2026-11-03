@@ -99,7 +99,7 @@ def test_the_newest_stable_release_is_latest_and_the_front_page() -> None:
     site = _site_versions()
     assert site.plan("0.0.8", _deployed(("0.0.8a1", ["pre-release"]))) == [
         ["mike", "deploy", "--push", "--update-aliases", "0.0.8", "latest"],
-        ["mike", "delete", "--push", "pre-release"],  # (Q~3 (b): a newer stable release removes it.)
+        ["mike", "delete", "--push", "pre-release"],  # (Q58.3 (b): a newer stable release removes it.)
         ["mike", "set-default", "--push", "latest"]]
     after = _deployed(("0.0.8", ["latest"]), ("0.0.8a1", ["pre-release"]))
     assert site.plan("0.0.9a1", after) == [
@@ -193,7 +193,7 @@ def _apply(commands: list[list[str]], deployed: list[dict[str, Any]]) -> tuple[l
 
 
 def test_a_newer_stable_release_removes_the_pre_release_alias_until_the_next_pre_release() -> None:
-    """Q~3 (b) (Tony, 2026-11-03): 0.0.8a1, 0.0.8b1, 0.0.8, 0.0.9a1. ``pre-release`` follows the newest
+    """Q58.3 (b) (Tony, 2026-11-03): 0.0.8a1, 0.0.8b1, 0.0.8, 0.0.9a1. ``pre-release`` follows the newest
     pre-release; the stable 0.0.8 removes it (rather than pointing it at ``latest``, which would call the
     stable release a pre-release too) and takes ``latest`` and the front page; 0.0.9a1 brings it back. A
     pre-release published late, older than the stable release, doesn't take it."""

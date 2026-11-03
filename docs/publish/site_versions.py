@@ -5,7 +5,7 @@
 - ``latest``: the newest stable (final) release. It is the site's front page.
 - ``pre-release``: the newest alpha, beta or release candidate (PEP 440's pre-releases), while it is newer than
   every stable release: a stable release newer than its target removes the alias (``mike delete`` of the alias
-  only, Q~3 (b), Tony 2026-11-03), and the next pre-release brings it back. Removed rather than pointed at
+  only, Q58.3 (b), Tony 2026-11-03), and the next pre-release brings it back. Removed rather than pointed at
   ``latest``, which would label the stable release a pre-release too.
 - Until there is a stable release, the front page is a short "No stable release yet" page
   (``no-stable.html``, mike's ``set-default`` template) linking to the newest pre-release.
