@@ -14,6 +14,12 @@ How to use it:
 
 ## App
 
+- [ ] **A user script with `from __future__ import annotations` and a `@dataclass` fails to load**
+  (`AttributeError` from `dataclasses._is_type`): `ScriptsManager._load_script_file` runs the module without
+  registering it in `sys.modules`. Found by Quill writing the manual (2026-11-03); being fixed on the Docs floor
+  (register it under `helab.scripts.dynamic.<name>` before `exec_module`).
+- [ ] `helab cache --help` prints a person's name ("(Tony, 2026-10-31)"): `helab/cache_cli.py` builds argparse's
+  description from its docstring. Public CLI output; being fixed on the Docs floor with the other CLIs' help.
 - [ ] **The RAM budget box clips its text** (Settings → Cache): Qt's `QAbstractSpinBox.sizeHint`
   measures at most 18 characters, and "16.0 GiB (1/8 of 128 GiB)" is 25 (it was 23 as "17.2 GB (1/8
   of 137 GB)", clipped too; widths 131 and 135 px offscreen). A `sizeHint` override on
