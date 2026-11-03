@@ -338,6 +338,11 @@ def test_a_clear_keeps_the_row_of_a_txy_written_again_meanwhile(tmp_path: Path) 
 
 def test_the_cache_tab_shows_and_clears_converted_txy(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
                                                       tmp_path: Path) -> None:
+    # Its own temp folder: the worker's (conftest's, one per session) holds what earlier tests converted to
+    # "temp" (test_explorer_convert, test_convert_folder), which this test would count (it failed in -n runs).
+    temps = tmp_path / "temps"
+    temps.mkdir()
+    monkeypatch.setattr(constants, "DIR_TEMPS", str(temps))
     service, cache = frozen(monkeypatch)
     try:
         root = helab_txy.converted_root(store_options()["directory"])

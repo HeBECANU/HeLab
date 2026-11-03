@@ -35,7 +35,11 @@ def local(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_convert_this_folder_with_another_profile_to_temp(qtbot: QtBot, service: IOService, tmp_path: Path,
-                                                          local: None) -> None:
+                                                          local: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helab.utils import constants
+    temps = tmp_path / "temps"  # (Its own: the worker's temp folder is other tests' too.)
+    temps.mkdir()
+    monkeypatch.setattr(constants, "DIR_TEMPS", str(temps))
     explorer, path, _ = raw_folder(qtbot, tmp_path)
     cache, converter = explorer.model.cache, explorer.converter
     dialog = converter.ask_convert(path)
@@ -52,6 +56,7 @@ def test_convert_this_folder_with_another_profile_to_temp(qtbot: QtBot, service:
     conversion = converter.conversions[path]
     assert conversion.finished and conversion.converted == 2 and conversion.output == "temp"
     assert not list(Path(path).glob("d_txy_helab_*"))  # (Nothing beside the raw files.)
+    assert len(list(temps.rglob(f"d_txy_helab_{M23}_*.txt"))) == 2  # (Into the temp folder, with m23v1's tag.)
     row = converter.row(path)
     assert row is not None and f"with {M23}" in row[1]
     explorer.close_cleanup()
