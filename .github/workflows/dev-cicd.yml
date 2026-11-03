@@ -69,8 +69,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python -m helab.release
 
-  # The script-facing API's docstrings (A54.1): ruff's D1 on the modules ruff.toml lists. One OS,
-  # beside the test jobs, with the developer-only requirements-docs.lock (not the app's).
+  # The user manual and the script-facing API's docstrings (A54.1, A54.2): ruff's D1 on the modules
+  # ruff.toml lists, and the manual built with any warning failing it. One OS, beside the test jobs,
+  # with the developer-only requirements-docs.lock (not the app's). Nothing is published here: the
+  # site is deployed only after a release (docs-site, below).
   docs:
     name: Docs
     needs: get-version
@@ -91,6 +93,11 @@ jobs:
 
       - name: Check the script API's docstrings (ruff D1, ruff.toml)
         run: ruff check --output-format github
+
+      - name: Build the user manual (mkdocs --strict)
+        env:
+          HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: mkdocs build --strict -d "$RUNNER_TEMP/site"
 
   # Required coverage runs to completion on every OS, even after a failure.
   required-tests:
@@ -277,3 +284,47 @@ jobs:
       - name: Create or resume the draft and its verified assets
         run: python -m helab.release_draft --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_SHA" --prerelease "$RELEASE_PRERELEASE" --artifacts dist/release --body dist/release-body.md
 
+  # The user manual's site (Q54.2): one version per release on this repository's GitHub Pages (mike,
+  # on its gh-pages branch), so another copy of the repo (a fork) publishes its own. Only after the
+  # release job tagged a release; never for a branch push or a PR. "latest" follows the newest
+  # release and is the site's front page. Help › User manual opens <owner>.github.io/<repo>/<version>/.
+  docs-site:
+    name: Publish the user manual
+    needs: [get-version, release]
+    if: >-
+      !cancelled() &&
+      needs.release.result == 'success' &&
+      needs.get-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One deploy at a time: each pushes a commit to gh-pages.
+    concurrency:
+      group: helab-docs-site
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ needs.get-version.outputs.tag_name }}
+      RELEASE_SHA: ${{ needs.get-version.outputs.release_sha }}
+      HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - name: Checkout the released commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.get-version.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the docs tools
+        run: pip install -r requirements-docs.lock
+
+      - name: Deploy this release's manual with mike
+        run: |
+          version="${RELEASE_TAG#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages || echo "No gh-pages branch yet: mike creates it."
+          mike deploy --push --update-aliases "$version" latest
+          mike set-default --push latest
