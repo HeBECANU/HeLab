@@ -1,9 +1,9 @@
-"""T/X/Y profiles for the histogram plot (D1): display units, rates per shot, Gaussian
+"""T/X/Y profiles for the histogram plot: display units, rates per shot, Gaussian
 smoothing, and the fits with their temperatures.
 
-roadmaps/dld-front-panel-port.md (Decided) sets the units and the rate method, after the
-front panel's ``dld_plot_tof.m`` with its bug fixed:
-- **Axes:** X and Y in mm, T in ms (``display_units``: Tony, 2026-10-20).
+The units and the rate method follow the MATLAB front panel's ``dld_plot_tof.m``, with its bug
+fixed:
+- **Axes:** X and Y in mm, T in ms (``display_units``).
 - **Rates:** counts / bin width / number of shots, after the view range (and, when chosen,
   the whole box) has picked the events: T in kHz per shot (per ms), X and Y per mm per shot
   (the front panel divided X and Y by the bin width only).
@@ -185,7 +185,7 @@ CURVE_POINTS = 600  # the drawn fit's samples across the range
 def model_for(choice: str, constants: ResolvedConstants) -> FitModel:
     """The fit model a choice names; the arrival-time profile with the run's g and its effective
     fall distance (``velocity.effective_fall_distance``: h, or ½ g t_f² when the fall time was set
-    by hand, so that a v = 0 atom arrives t_f after release, as D8's velocities have it)."""
+    by hand, so that a v = 0 atom arrives t_f after release, as the velocity plots have it)."""
     if choice == ARRIVAL:
         return arrival_time_model(effective_fall_distance(constants), constants.g)
     return MODELS[MODEL_KEYS.get(choice, "gaussian")]

@@ -1,4 +1,4 @@
-"""Bounded least-squares fits of 1D histograms, for the T/X/Y fits of the DLD port (D1, D4).
+"""Bounded least-squares fits of 1D histograms, for the T/X/Y fits of the DLD port.
 
 ``fit_histogram(centres, counts, model)`` fits one of the registered ``MODELS`` with
 ``scipy.optimize.curve_fit`` and returns a ``FitResult``: each parameter's value ± SE (from
@@ -36,14 +36,14 @@ How a fit runs:
   part's amplitude as its ``gate``. When the amplitude is consistent with 0 (within 2 SE)
   the fit says so in a note and the parameter's SE is nan, instead of failing.
 
-Models are derived from the physics, not copied from the MATLAB code (which has bugs:
-roadmaps/dld-front-panel-port.md). Registered now: Gaussian + offset, the Thomas–Fermi
+Models are derived from the physics, not copied from the MATLAB code (which has bugs).
+Registered now: Gaussian + offset, the Thomas–Fermi
 projection (1 − u²)^p + offset, bimodal TF^p + Gaussian with a shared centre, and the exact
-arrival-time ("Yavin") thermal profile on T (``arrival_time_model``: D1), and (D4) the
+arrival-time ("Yavin") thermal profile on T (``arrival_time_model``), and the
 Bose-enhanced thermal profiles g_{5/2} and g_2 (``bose_model``, with ``polylog``) and the bimodal
 TF² + g_{5/2} and TF^{3/2} + g_2 (fugacity 1). ``condensate_fraction`` and ``component_areas`` give
 N0/N and the parts' areas ± SE from a fit's covariance; ``helab/analysis/bec.py`` turns them into
-BEC properties (D14) and sets the R/σ_th cap per axis. Pure NumPy/SciPy, no Qt. Fits run in the
+BEC properties and sets the R/σ_th cap per axis. Pure NumPy/SciPy, no Qt. Fits run in the
 analysis worker thread, so nothing here changes warning filters per call
 (``warnings.catch_warnings`` isn't thread-safe).
 """
@@ -125,7 +125,7 @@ class FitModel:
 
     ``guesses`` gets the cleaned (centres, counts, errors) and ``bounds`` (centres, counts);
     both work in data units. ``areas`` gives each component's integral over x (counts × x
-    units: divide by the bin width for counts), without the offset; D4's condensate fraction
+    units: divide by the bin width for counts), without the offset; the condensate fraction
     comes from these. ``extras`` are reported in the result's estimates too."""
     key: str
     title: str

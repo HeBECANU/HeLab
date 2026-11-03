@@ -1,0 +1,112 @@
+# HeLab's user manual: MkDocs with the Material theme, pages in docs/.
+#   uv pip install -r requirements-docs.lock    # developer-only, not the app's requirements
+#   mkdocs serve                                 # preview at http://127.0.0.1:8000
+#   mkdocs build --strict                        # what CI runs: any warning fails
+#   HELAB_DOCS_OFFLINE=true mkdocs build --strict -d build/manual   # the copy HeLab.spec bundles
+# The API reference (docs/reference/api/) is built by mkdocstrings from the docstrings of the
+# modules ruff.toml checks.
+site_name: HeLab manual
+site_description: User manual for HeLab, the Helium Experiment Lab Analysis Board.
+# The repo the site is built from: CI sets HELAB_DOCS_REPO_URL to its own repository, so a fork's
+# site links to the fork; without it, the development repo.
+repo_url: !ENV [HELAB_DOCS_REPO_URL, "https://github.com/TonyXTYan/HeLab"]
+repo_name: HeLab
+edit_uri: ""
+docs_dir: docs
+site_dir: site
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+
+extra:
+  # One site version per release (mike); the version menu appears once a version is deployed.
+  version:
+    provider: mike
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+plugins:
+  - search
+  # The copy built into the app (HeLab.spec) works from file:// with search: HELAB_DOCS_OFFLINE=true.
+  - offline:
+      enabled: !ENV [HELAB_DOCS_OFFLINE, false]
+  - autorefs
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            docstring_section_style: list
+            members_order: source
+            filters: ["!^_"]
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: true
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            show_if_no_docstring: false
+            heading_level: 2
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/install.md
+  - How-to guides:
+      - how-to/data-root.md
+      - how-to/live.md
+      - how-to/convert-txy.md
+      - how-to/write-a-script.md
+  - Reference:
+      - reference/command-line.md
+      - reference/settings.md
+      - The .hlb file format: hlb-format.md
+      - API for script writers:
+          - reference/api/index.md
+          - reference/api/script.md
+          - reference/api/dataset-view.md
+          - reference/api/parameters.md
+          - reference/api/selection.md
+          - reference/api/fits.md
+  - Explanations:
+      - explanation/cache.md

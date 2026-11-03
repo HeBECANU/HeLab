@@ -4,3 +4,8 @@
 #   uv pip compile requirements-docs.txt --universal --python-version 3.13 -c requirements.lock -o requirements-docs.lock
 # so that packages both need keep the versions the app is tested with.
 ruff
+# The user manual: MkDocs with the Material theme, the API reference from docstrings, and mike for
+# one site version per release (Q54.2). `mkdocs serve` previews it; `mkdocs build --strict` is CI's.
+mkdocs-material
+mkdocstrings[python]
+mike

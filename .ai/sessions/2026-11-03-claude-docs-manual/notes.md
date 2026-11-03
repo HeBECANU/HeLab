@@ -39,3 +39,21 @@ Addendum for A54.2 (Tony's answers on Ground `736bba6`); steps 1 and 2 unchanged
   runs `ruff check`. Step 3 adds `mkdocs build --strict` to it.
 - Not in scope, worth a follow-up: `helab/analysis/results.py` (`AnalysisContext`,
   `AnalysisResult`, which every script uses) has 14 D1 gaps; the API reference will want it.
+
+## CoCo's answers after ◆1
+
+- `results.py`: yes, docstrings only, and add it to `ruff.toml`, but only after TXY Priority lands and
+  this branch has merged `dev/v0.0.8` (Prio changed it too). CoCo says when.
+- A54.1 goes to review and lands once its CI is read. Step 2 goes on meanwhile.
+- Extra paths granted (CoCo, 2026-11-03): `helab/build_info.py` (a `repository` field, written at build
+  time only, never read from git at runtime, old files without it still read); a new
+  `helab/utils/user_manual.py` and its test (the site check fully asynchronous with a short timeout,
+  the click never waits, a failed or slow check falls back to the bundled copy); `site/` in
+  `.gitignore`. Material's end-of-life note: stay on Material, a Q~ in the handoff.
+- A54.1 review (Assay, D-1..D-3) fixed on `agent/docs-a54-1` at `9631294`, pushed, fast-forwarded here.
+- CoCo, after step 2's pages, on this floor, each its own commit with a test: (1) no person's name in
+  the CLI help (`helab/cache_cli.py`, and `convert_cli.py` and other argparse descriptions built from
+  `__doc__`); (2) the script loader registers the module in `sys.modules`
+  (`helab.scripts.dynamic.<name>`) before `exec_module`, removes it on a failed load, handles a reload
+  replacing it; then the manual's dataclass warning goes. Owned: `helab/cache_cli.py`,
+  `helab/convert_cli.py` (help text only), `helab/scripts/scripts_manager.py` (the loader only).

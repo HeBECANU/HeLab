@@ -214,6 +214,19 @@ Na, apparently github action is free for public repos, also much easier to setup
 
 
 
+## User manual
+
+The user manual is in [`docs/`](docs/index.md), built with [MkDocs](https://www.mkdocs.org/) and the Material theme (`mkdocs.yml`); its API reference for script writers comes from the docstrings by mkdocstrings. Its tools are developer-only, outside the app's requirements:
+
+```bash
+uv pip install -r requirements-docs.lock     # mkdocs-material, mkdocstrings, mike, ruff
+mkdocs serve                                  # preview at http://127.0.0.1:8000, rebuilt as you edit
+mkdocs build --strict -d .ai/temp/site        # as CI builds it: any warning fails
+ruff check                                    # the script API's docstrings (ruff.toml lists the modules)
+```
+
+To change the docs tools, edit `requirements-docs.txt`, then refresh its lock against the app's: `uv pip compile requirements-docs.txt --universal --python-version 3.13 -c requirements.lock -o requirements-docs.lock`.
+
 ## Testing
 
 Run the tests from the activated `venv`:

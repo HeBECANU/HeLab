@@ -1,19 +1,18 @@
 # HeLab's `.hlb` files
 
-HeLab's caching v2 (store-v4) keeps its binary data in `.hlb` files. This page describes the format and how to
-read one with or without HeLab, from the command line, and from MATLAB. Store-v4 is built behind a switch that
-stays off until HeLab 0.0.8 turns it on ([plan](../roadmaps/caching-v2.md)), so today's HeLab writes no `.hlb`
-files unless that switch is on. HeLab's code: `helab.utils.hlb.read`,
+HeLab's disk cache (store-v4) keeps its binary data in `.hlb` files. This page describes the format and how to
+read one with or without HeLab, from the command line, and from MATLAB. HeLab writes `.hlb` files from version
+0.0.8, which turns store-v4 on; earlier versions write none. HeLab's code: `helab.utils.hlb.read`,
 `helab.convert.raw_layer.columns`, `helab.convert.txy_layer.unpack_segment`, and `helab cache dump|export`
 (`helab/cache_cli.py`). The "without HeLab" sample below runs as a test
-(`tests/test_cache_cli.py`), checked against a file HeLab wrote. Written 2026-10-31 (caching v2 stage 1; Q42.5, Q44.2); TXY layers added 2026-11-02 (stage 2).
+(`tests/test_cache_cli.py`), checked against a file HeLab wrote.
 
 ## What a `.hlb` file is
 
-HeLab's caching v2 (store-v4) keeps binary data in `.hlb` files: named NumPy arrays, compressed, with a JSON header
+HeLab's disk cache (store-v4) keeps binary data in `.hlb` files: named NumPy arrays, compressed, with a JSON header
 that says what they are and who made them. No Python pickle anywhere, so any language can read one. There are two
 kinds: a **raw layer**, one raw TDC file `d<N>.txt` parsed into its pulses (`store-v4/raw/<uuid>.hlb`), and a **TXY
-segment**, some shots of one folder's TXY layer (`store-v4/txy/<uuid>.hlb`, stage 2).
+segment**, some shots of one folder's TXY layer (`store-v4/txy/<uuid>.hlb`).
 
 ## Byte layout (format 1)
 
@@ -47,7 +46,7 @@ The chunks tile the rest of the file exactly: no gap, no overlap, nothing after 
 
 - `format`: this layout's version. A reader refuses a higher one; it never rewrites a file.
 - `kind`: `raw` (a raw layer) or `txy` (a TXY segment).
-- `maker`: which HeLab session made the file (Q28.4): its id, and its record with HeLab's version and commit, the
+- `maker`: which HeLab session made the file: its id, and its record with HeLab's version and commit, the
   machine's random id, **its hostname**, and Python, NumPy, SciPy and blosc versions. A file shared off the machine
   carries the hostname.
 - `meta`: the kind's own fields (below).
@@ -56,7 +55,7 @@ The chunks tile the rest of the file exactly: no gap, no overlap, nothing after 
   `length` is its compressed bytes, `size` its uncompressed bytes (at most 64 MiB, cut at element boundaries) and
   `crc32` is zlib's CRC32 of its compressed bytes.
 - **Codec** `blosc`: each chunk is one python-blosc (Blosc 1) frame, decompressed with `blosc.decompress`.
-  `cname` and `clevel` are as written (raw layers: zstd 9, Q22.7). `shuffle` `byte` is Blosc's byte shuffle by
+  `cname` and `clevel` are as written (raw layers: zstd 9). `shuffle` `byte` is Blosc's byte shuffle by
   `typesize`, undone by the decompressor itself.
 
 ## Raw layers (`kind` `raw`)
@@ -76,7 +75,7 @@ Times are TDC bins. HeLab's profiles use **25 ps** (`bin_time` 25e-12 s), so sec
 empty file), `first_channel`, `blank`, `final_newline`, `line_endings` (`crlf`, `lf`, `cr`, `mixed`, `none`) and
 `reader` (`strict` or `general`), and `stop_line`: the line where the general reader stopped at a token it couldn't
 read, as MATLAB's converter stops (an integer from 1), or `null` when the file was read to its end; layers written
-before HeLab learnt it (A37.1) have no `stop_line`. `meta.parser` is HeLab's parser version (1).
+before HeLab learnt it have no `stop_line`. `meta.parser` is HeLab's parser version (1).
 
 ## TXY layers (`kind` `txy`)
 
@@ -94,7 +93,7 @@ Arrays:
 
 `meta`: `layer`, `profile_hash` (`""` for `matlab`), `tags`, and `precision`: `g8` holds the values the
 8-significant-figure text parses to (MATLAB's TXY and `m19v1`, so a shot equals its text TXY), `f64` full float64
-(newer profiles, Q19.6). Codec: Blosc zstd 9 with **no shuffle** (`shuffle` `none`).
+(newer profiles). Codec: Blosc zstd 9 with **no shuffle** (`shuffle` `none`).
 
 ```python
 from helab.convert import txy_layer
