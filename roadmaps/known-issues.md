@@ -121,6 +121,11 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second` reran once on Windows,
+  Ground CI 41578243240 (Tests 2/3, job 125726739543, `dcc02d8`, 2026-11-03): `assert (673.46 - 672.26) < 1.0`,
+  quitting took 1.2 s; passed on rerun. The first Ground run with store-v4 on by default (the switch-on landed
+  `92f9d1a`); "Disk cache inventory: Cancelled" was logged just after. Unchecked whether store-v4's quit path
+  (the inventory, `raw_fill`) adds the time or the runner was busy.
 - [ ] `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots` reran once on
   Windows CI 41561765280 (Tests 3/3, job 125673863803, `agent/v4-switch-on` `23134c0`, 2026-11-03):
   `assert took < 5.0` failed at 5.52 s (the load with the converted-TXY index held by another writer, which must
