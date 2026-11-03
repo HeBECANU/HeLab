@@ -450,3 +450,33 @@ def test_a_folder_row_naming_a_user_profile_stays_that_profile_in_the_helper(tmp
         assert (record["source"], record["profile_hash"], record["profile_tag"]) == ("helab-only", HUSER, UTAG)
     else:
         assert record["entries"][0] == [UTAG, HUSER]
+
+
+def test_resolving_a_list_for_a_tooltip_never_reads_the_profile_folder(monkeypatch: pytest.MonkeyPatch,
+                                                                      tmp_path: Path) -> None:
+    """TP-2: tooltips and summaries resolve lists from memory; the profile folder is read once on a request's
+    path (``with_txy``), or handed over by Settings' Save."""
+    from helab.convert import user_profiles
+    from test_raw_fill import frozen
+    reads: list[str] = []
+
+    def profiles(self: Any) -> dict[str, Any]:
+        reads.append("read")
+        return {"mine": MINE}
+    monkeypatch.setattr(user_profiles.ProfileLibrary, "profiles", profiles)
+    service, cache = frozen(monkeypatch)
+    try:
+        path = str(tmp_path)
+        cache.set_convert_profile(MATLAB_2019)
+        cache.remember_choices(path, {"policy": "", "source": f"{UTAG}>m19v1", "tag": "", "source_set_at": 2.0})
+        cache.folder_source(path), cache.converts_on_read(path), cache.on_read_shots(path, 3, 1)  # (A tooltip's.)
+        assert reads == [] and cache.profile_by_tag(UTAG) is None  # (Not read yet: unknown, never read here.)
+        txy = cache.with_txy(path, {})["txy"]
+        assert reads == ["read"] and txy["entries"][0]["profile_hash"] == HUSER and UTAG in txy["known"]
+        cache.with_txy(path, {}), cache.folder_source(path)
+        cache.set_convert_profile(MATLAB_2023_LAB_EDIT)  # (Settings' Save: no read either.)
+        cache.set_user_profiles([MINE])
+        cache.with_txy(path, {})
+        assert reads == ["read"] and cache.profile_by_tag(UTAG) is MINE
+    finally:
+        service.shutdown()

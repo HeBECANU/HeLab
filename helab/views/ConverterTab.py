@@ -490,6 +490,7 @@ class ConverterTab(QWidget):
         settings.setValue(TXY_SOURCE_SETTING, source)
         if self.cache is not None:
             self.cache.set_convert_profile(self.chosen_profile())
+            self.cache.set_user_profiles(self.user.values())  # (As this tab holds them: no read, TP-2.)
             self.cache.set_tab_source(source)
 
 

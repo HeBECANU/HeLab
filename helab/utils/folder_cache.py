@@ -408,8 +408,11 @@ class FolderCache(QObject):
         self._convert_profile: DetectorProfile | None = None
         self._tab_source: str | None = None  # The ``txy_source`` setting, read when first needed.
         # User profiles by tag (Q53.2: a list may name one), read from the profile folder when first needed.
-        self._user_profiles: dict[str, dict[str, Any]] | None = None
+        # Memory only (TP-2): read on a request's path (``with_txy``, once) or handed over by Settings' Save
+        # (``set_user_profiles``), never while rendering.
+        self._user_profiles: dict[str, dict[str, Any]] = {}
         self._user_profile_objects: dict[str, DetectorProfile] = {}  # (The same, as profiles.)
+        self._user_profiles_read = False
         # Folders whose Auto-convert converts with their one-entry TXY list's profile, taken from Live's offer
         # (Q~2.2; this session only).
         self.convert_with: dict[str, DetectorProfile] = {}
@@ -1002,9 +1005,8 @@ class FolderCache(QObject):
 
     def set_convert_profile(self, profile: DetectorProfile) -> None:
         """The profile HeLab converts with changed (Settings → TXY converter): loads from now on read its TXY
-        (a tab's data shown now stays until its folder loads again). The user profiles are read again."""
+        (a tab's data shown now stays until its folder loads again)."""
         self._convert_profile = profile
-        self._user_profiles = None
 
     def with_txy(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         """A load's payload with its ``txy`` options complete: the source (the tab's unless given), the
@@ -1015,6 +1017,7 @@ class FolderCache(QObject):
         given = payload.get(txy_sources.TXY_FIELD)
         txy = dict(given) if isinstance(given, Mapping) else {}
         options = store_options()
+        self.read_user_profiles()  # (A request, not rendering: the first one reads the profile folder, TP-2.)
         root = self.root_of(path)
         # A plot's own list (Q53.2: ``list``, its entries as saved, ``Conversion`` among them).
         listed = txy.pop("list", None)
@@ -1079,9 +1082,8 @@ class FolderCache(QObject):
     def known_profiles(self) -> dict[str, dict[str, Any]]:
         """The conversion profile and the user's by tag (``profile_hash``, ``profile``), for a load's last
         fallback stage to name HeLab's TXY beside the raw files (Q~2; the built-ins the helper knows)."""
-        self._profile_for_tag("")  # (Reads the user's profiles once.)
         found = {tag: {"profile_hash": item["profile_hash"], "profile": item["profile"]}
-                 for tag, item in (self._user_profiles or {}).items()}
+                 for tag, item in self._user_profiles.items()}
         conversion = self.conversion_options()
         found[str(conversion["profile_tag"])] = {"profile_hash": conversion["profile_hash"],
                                                  "profile": conversion["profile"]}
@@ -1169,26 +1171,36 @@ class FolderCache(QObject):
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
         """A list entry's tag as a load's profile options: the conversion profile's, else a built-in's, else a
-        user profile's (Q53.2; the profile folder read once, again after Settings saves)."""
+        user profile's (Q53.2). Memory only (TP-2): tooltips resolve lists with it."""
         from helab.convert.profile import BUILTIN_PROFILES, file_tag
         for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
             if file_tag(profile) == tag:
                 return {"profile_hash": profile.content_hash(), "profile_tag": tag,
                         "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
-        if self._user_profiles is None:
-            self._user_profiles = {}
-            from helab.convert.user_profiles import ProfileLibrary
-            from helab.utils.constants import profiles_folder
-            try:
-                library = ProfileLibrary(profiles_folder()).profiles()
-            except OSError:
-                library = {}
-            self._user_profile_objects = {file_tag(profile): profile for profile in library.values()}
-            for profile in library.values():
-                self._user_profiles[file_tag(profile)] = {
-                    "profile_hash": profile.content_hash(), "profile_tag": file_tag(profile),
-                    "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
         return self._user_profiles.get(tag)
+
+    def set_user_profiles(self, profiles: Iterable[DetectorProfile]) -> None:
+        """The user's profiles as Settings › TXY converter holds them (its Save; no read here)."""
+        from helab.convert.profile import file_tag
+        self._user_profile_objects = {file_tag(profile): profile for profile in profiles}
+        self._user_profiles = {tag: {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                                     "profile": {"name": profile.name, "version": profile.version,
+                                                 "calibrated": profile.calibrated}}
+                               for tag, profile in self._user_profile_objects.items()}
+        self._user_profiles_read = True
+
+    def read_user_profiles(self) -> None:
+        """Read the user's profile folder (the app folder's, not a source folder) the first time a request needs
+        them (``with_txy``); never from rendering (TP-2)."""
+        if self._user_profiles_read:
+            return
+        from helab.convert.user_profiles import ProfileLibrary
+        from helab.utils.constants import profiles_folder
+        try:
+            library = ProfileLibrary(profiles_folder()).profiles()
+        except OSError:
+            library = {}
+        self.set_user_profiles(library.values())
 
     def payload_source(self, payload: Mapping[str, Any]) -> str:
         txy = payload.get(txy_sources.TXY_FIELD)
