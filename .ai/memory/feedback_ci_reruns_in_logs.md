@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 9f95099f-0394-47b6-9616-b7bd3de498e0
-  modified: 2026-10-31T00:00:00.000Z
+  modified: 2026-11-03T07:39:23.922Z
 ---
 
 A HeLab CI job that passed only after `--reruns` still shows `success` in `gh run view`, so job conclusions
@@ -19,4 +19,8 @@ logs held three RERUNs, one of them new (`test_accessible_names` "QTabBar … no
 RERUN to be reported. Kept as a shared rule by Tony (2026-10-31).
 
 **How to apply:** Every time a run is reported, read all its test jobs' logs first. If the jobs API fails
-(HTTP 502), retry later rather than reporting from conclusions.
+(HTTP 502), retry later rather than reporting from conclusions. Also read **every Ground run, including the
+ones your own docs-only pushes start**: on 2026-11-03 a Ground run on a docs-only commit (41587336570,
+right after the store-v4 switch-on) went red and the Coordinator only noticed hours later, because it read
+the runs it was waiting on and skipped the one its own push started. List the branch's recent runs
+(`gh run list --branch dev/v0.0.8`) and check none failed since the last one read.
