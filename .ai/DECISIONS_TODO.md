@@ -29,15 +29,6 @@ How to use this list:
 - Features stay in `roadmaps/_readme.md` and bugs in `roadmaps/known-issues.md`; only the
   question goes here.
 
-## Documentation (block 54; open)
-
-- **Q54.4 Which site Help › User manual opens.** Q54.2 publishes the manual from `TonyXTYan/HeLab`; once
-  `HeBECANU/HeLab` receives a push with the same workflow and Pages turned on there (Settings › Pages › Source:
-  GitHub Actions, by an admin of HeBECANU), it gets its own site, `hebecanu.github.io/HeLab`. (a) The app opens
-  the site of the repo it was built from (a release from `HeBECANU` opens the lab's site). (b) Always the lab's
-  site once it exists, the dev site until then. **Proposed:** (a), with the bundled copy (Q54.3) when neither can
-  be reached.
-
 ## Recently decided
 
 Cleared at the v0.0.7a1 tidy-up (2026-10-31) where each was recorded in memory, an architecture file,
@@ -274,6 +265,8 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
   (Tony, 2026-11-03: "ok").
 - **Q54.3** the built manual is bundled in HeLab.app and the Windows zip, opened in the system browser when the
   site can't be reached (Tony, 2026-11-03: "yes").
+- **Q54.4** Help › User manual opens the site of the repo the build came from (a release from `HeBECANU/HeLab`
+  opens `hebecanu.github.io/HeLab`), and the bundled copy when it can't be reached (Tony, 2026-11-03: "a").
 
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 
