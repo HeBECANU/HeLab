@@ -1512,3 +1512,136 @@ Green on all three OSes. I read all 9 Tests and Converter logs.
       share question didn't appear within 5 s (line 114) on macOS CI 41482722171 (`agent/v4-switch-on`); 15/15
       locally on both stores; not pinned."
 - The known "GUI stalled" log appears 6 times.
+
+### The switch-on branch's merged CI (41484277419, `e4967ec`, three test groups)
+
+**Failed:** one test, the store-v4 bug already fixed at `65ee050`, which this branch doesn't have yet. I read all 12
+Tests and Converter logs.
+- **Windows times:**
+  - Tests 1/3: 11m41s (pytest 10.0 min);
+  - Tests 2/3: 10m14s (8.2 min);
+  - Tests 3/3: 11m49s (9.9 min).
+  - Down from tonight's 15–16 min with two groups.
+- **Other times:** macOS 6.9, 6.5 and 7.1 min; Ubuntu 4.2, 6.7 and 5.5.
+- **The failure:** Windows Tests 1/3 (job 125410633289).
+  `test_folder_cache.py::test_disk_badge_after_restart_ram_load_eviction_and_clear` failed at line 1201 every time
+  (5 RERUNs, then failed). This is the "loaded says not disk cached" bug that `65ee050` fixes on
+  `agent/caching-v2`. The branch gets it with the next merge of `dev/v0.0.8`, after `65ee050` lands.
+- **One more RERUN:** Ubuntu Tests 2/3 (job 125410633098),
+  `test_presets_plots.py::test_an_arrangement_preset_round_trips_every_bundled_script`. The worker was killed after
+  pytest-timeout's 100 s; the test passed on retry.
+  - The dump shows `presets.apply` then `_warn`: a modal `QMessageBox.warning`, "Preset can't be read" (from
+    `read_arrangement`'s RecordError), opened just after the test's simulated restart re-read the presets. Nothing
+    closes it in a test.
+  - It passed 15 of 15 locally on store-v4. The test and the A47.5 presets code came with tonight's merge of
+    `dev/v0.0.8`.
+  - **Cause:** not pinned. Likely the presets' re-read from the store (now store-v4) racing the test's apply.
+  - **Proposals:**
+    - a test seam for `_warn` (a raised error, not a modal) so a failure fails rather than hangs;
+    - a known-issues line: "`test_an_arrangement_preset_round_trips_every_bundled_script`: 'Preset can't be read'
+      warning (a modal) after the restart's re-read, on store-v4 (Ubuntu CI 41484277419, job 125410633098); a
+      100 s hang; 15/15 locally; not pinned."
+- The known "GUI stalled" log appears 7 times.
+
+### The switch-on branch's CI with 65ee050 (41490797588, `d3b4931`, three test groups)
+
+**Green on all three OSes.** I read all 12 Tests and Converter logs.
+- **Windows times:**
+  - Tests 1/3: 10m47s (pytest 9.0 min);
+  - Tests 2/3: 11m54s (10.1 min);
+  - Tests 3/3: 12m16s (10.3 min).
+- **Other times:** macOS 7.2, 4.0 and 7.5 min; Ubuntu 4.0, 3.5 and 5.0.
+- **One RERUN:** Windows Tests 1/3 (job 125433258156),
+  `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: a collection error in
+  pathlib's `lstat`, at line 49. It passed on retry. This is known-issues' entry for this test; add this run as a
+  sighting.
+- The disk-badge test that failed in 41484277419 passed with no RERUN.
+- The known "GUI stalled" log appears 5 times.
+
+## Doc proposals: stage 4's fixes and the switch-on (for the Coordinator's docs pass)
+
+Stage 4's own proposals are under "Stage 4: the policy UI" above. These cover what came after, through the landings
+`8071c04` and `9f92daf` and the branch `agent/v4-switch-on`.
+
+- **cache-store.md:**
+  - **Store creation:** a new store's layout is checked again under `BEGIN IMMEDIATE` (`CacheStore._create`), and
+    the switch to WAL is retried on BUSY or LOCKED until the busy timeout (`_wal`). Several helpers open a new
+    store at once on a first start.
+  - **Listings and scans in store-v4:**
+    - `read_dataset_infos` answers from the folder's view (`_view_infos`: the `wanted` view, else the most recently
+      used; that view's info and the bytes of the layers it names). A damaged view is an error for its folder only.
+    - `cached_matlab_shots` serves a scan's mismatch rule.
+  - **Settings' TXY only:** the inventory's `raw.following` is counted with `remove_raw_following`'s own condition
+    (`_FOLLOWING`).
+  - **V~3:** `legacy_read_through` and `LEGACY_READ_UNTIL` (0.0.9). Keep reads and counts store-v3 through v0.0.8
+    only.
+- **io-and-browsing.md:**
+  - A load's `disk_cached` holds when the folder has any view (`65ee050`).
+  - The listing records' `choices` (A47.2).
+- **converter.md and live.md:**
+  - `txy_sources.converts_over_matlab` and `CONVERT_OVER_MATLAB` (Q50.1 (a)): under HeLab priority, convert on
+    read only what MATLAB's TXY lacks.
+  - `helab_txy.on_read` spares shots held from HeLab (SQ-1).
+  - Live's `held_failed`, sent back with `known` (A40.2).
+- **app-runtime-and-ui.md:**
+  - Settings' TXY only offer: sized as its removal; asked after the event handler returns; when it can't be
+    offered, the status bar's in-app notice (`events.notify(..., status=True)`, `RAW_KEPT`).
+  - "Converted when loaded" follows Q50.1 (raw files without a TXY).
+- **settings.md:**
+  - On the switch-on branch, the `store_v4` row defaults True, a hidden fallback for one release (V~2).
+  - AGENTS.md's settings bullet ("The `store_v4` row stays off until …") becomes "The `store_v4` row is on from
+    v0.0.8; off is a hidden fallback to store-v3 for one release (V~2)", at the PR.
+- **testing.md:**
+  - The `store_v3` marker (conftest's `store_layout`: the row off in the test's own settings). With the switch on,
+    the suite runs on store-v4; the marker is for tests about store-v3 itself.
+  - `test_v4_listings.py`; `offline_restart` runs on both stores; the store-creation race test (8 rounds of six
+    threads).
+- **release-and-ci.md:** the release-note lines in `release-notes-v0.0.8-caching.md` on the switch-on branch (V~5).
+- **The plan** (`roadmaps/caching-v2.md`):
+  - stages 3 and 4 ticked; the switch-on on `agent/v4-switch-on` for the v0.0.8 PR;
+  - store-v3 read through v0.0.8 only (V~3);
+  - stage 5 waits for MATLAB's retirement;
+  - Q50.1 open with (b).
+- **known-issues** (the proposals above, one line each):
+  - `test_io_trace`'s `wait_idle` 20 s;
+  - the `test_convert_watch` hang;
+  - `test_left_widgets`' third teardown error;
+  - the QtWebEngine-family Live plots SIGSEGV, with the macOS crash report's mechanism;
+  - `test_a_conversion_refused_offline…`'s race;
+  - the converted-TXY index lock wait in the replay test;
+  - the share question's 5 s wait;
+  - the presets "can't be read" modal hang (Lumen is on it);
+  - new sightings for `test_timeout_retry…[1]`, `test_every_script_and_each_library`'s QTabBar and
+    `test_test_isolation`'s `lstat`.
+
+## The switch-on branch brought up to dev/v0.0.8 for Tony's check (2026-11-03)
+
+- **Merge:** `23134c0`, dev/v0.0.8 `162342d` merged into `agent/v4-switch-on`, with no conflicts.
+- **Local, on the merge:**
+  - full suite with `-n 12 --reruns 5 --reruns-delay 1`: 9163 passed, 689 skipped (no testdata in that worktree),
+    0 RERUNs, 83 s;
+  - strict mypy (helab, tests, `--platform win32`) and pyright (both platforms): 0 errors.
+- **Run sheet** for Tony's pre-switch-on check (Q50.18): [runsheet-switch-on.md](runsheet-switch-on.md).
+- **CI 41561765280** (`23134c0`): green, every job. I read all 12 Tests and Converter backends logs.
+  - Windows Tests groups: 1/3 11m29s, 2/3 11m58s, 3/3 10m23s (wall time); macOS 6–7.5 min; Ubuntu ~6 min.
+  - Two RERUNs; neither is in known-issues by name.
+  - **Windows Tests (3/3)** (job 125673863803):
+    - `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots`, "assert
+      5.5174164999999675 < 5.0".
+    - Not the switch-on's: dev/v0.0.8's own CI at `9f92daf` (run 41490153371, Windows Tests 3/3, job 125430855984),
+      with the switch off, reran it too, at "10.408340400000043 < 5.0". That is the index's 10 s busy timeout,
+      not the 200 ms wait the test expects.
+    - **Proposed known-issues entry (A~):** on Windows CI, a load's `last_used` mark can wait out the converted-TXY
+      index's 10 s busy timeout while another connection holds its write lock. Today's 5.5 s may only be a slow
+      runner. Next step: find which open of the index in the load isn't bounded by the 200 ms wait. It isn't
+      caching v2's (the mark is `helab_txy`/provenance's).
+  - **macOS Converter backends** (job 125673863875):
+    - `test_convert_helab.py::test_watch_converts_new_shots_and_stops_on_ctrl_c`: "assert -2 == 0", where -2 =
+      `wait(20)`. The watcher died of SIGINT instead of logging "Stopped" and exiting 0.
+    - Its watch loop catches `KeyboardInterrupt` around `convert_folder` and the sleep, and nothing in helab
+      resets SIGINT. The test sends it only after the shot's TXY is in place, so inside that loop.
+    - One look found no cause. It passed 15 of 15 runs locally, and appears in none of dev/v0.0.8's last 8 CI
+      runs.
+    - The switch-on can reach it: the watcher's cache options carry `store_v4`.
+    - **Proposed known-issues entry (A~):** watch whether it recurs. Next step: keep the watcher's stderr in the
+      assertion message (read it before asserting the return code), so a recurrence shows where SIGINT landed.
