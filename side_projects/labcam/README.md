@@ -48,9 +48,11 @@ and the overlay's text size and line width; they're saved in `config.local.json`
   is in the middle and the lock-in's number is within ±0.3 (`left_top:ok`, `scope_dot:still`, `lockin:middle`,
   `lockin_value:middle`). An unsure last digit doesn't matter when it can't change that (0.0? is within).
 
-A laser is `locked` only once every sign has held for 10 s, `lost` as soon as one fails for 3 analyses (about
-1.5 s), `unknown` when a sign can't be told. Each comes with how sure it is (its surest failing sign, or its
-least sure sign when locked) and why. The banner on the page shows them; changes are logged (a loss as a
+A laser is `locked` only once its signs have held for 10 s, `lost` as soon as one fails for 3 analyses (about
+1.5 s). A sign that can't be told (unreadable, covered) is left out when the laser has other signs, so one
+unknown He4 sign doesn't make He4 unknown; the laser is `unknown` only when none of its signs can be told (or
+its only sign can't). Each comes with how sure it is (its surest failing sign; or, when locked, its least sure
+sign told, times the share of its signs told) and why. The banner on the page shows them; changes are logged (a loss as a
 WARNING).
 
 **Someone in front.** Before reading an instrument, labcam checks whether it may be hidden: movement over its

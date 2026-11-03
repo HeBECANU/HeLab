@@ -75,7 +75,12 @@ def test_locks() -> None:
     lock = locks.evaluate(specs, instruments, readings)
     assert (lock.state, lock.confidence) == ("lost", 0.95) and "block" in lock.summary
     readings["top"] = Reading("unknown", "no signal", {"shape": "none"}, 0.5)
-    assert locks.evaluate(specs, instruments, readings).state == "unknown"
+    lock = locks.evaluate(specs, instruments, readings)  # one sign unknown among three: left out
+    assert (lock.state, lock.confidence) == ("locked", round(0.7 * 2 / 3, 2)) and "left out" in lock.summary
+    readings["dot"] = Reading("unknown", "covered?", {}, 0.0)
+    readings["needle"] = Reading("unknown", "covered?", {}, 0.0)
+    assert locks.evaluate(specs, instruments, readings).state == "unknown"  # none told
+    assert locks.evaluate(["top:flat"], instruments, readings).state == "unknown"  # its only sign
 
 
 def test_history_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
