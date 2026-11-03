@@ -100,7 +100,11 @@ shot 1 in the layer.
 - Type checks, all clean: `mypy helab/ --strict` (207 files), `mypy tests --strict` (210), `pyright helab tests`
   (0 errors), `mypy helab/ --strict --platform win32` (207), `pyright --pythonplatform Windows helab tests` (0 errors).
 - Each new test was run before its fix and failed as described above.
-- CI: CI_PLACEHOLDER
+- CI: run **41651767280** on `7238242` (push to `agent/pr11-codex`): **success**, every job green on macOS,
+  Ubuntu and Windows (Build, Tests 1/3, 2/3, 3/3, Converter backends, each per OS; Docs; the 3.11/3.12/3.14 compat
+  jobs are skipped, since they run on PRs only). Every Tests and Converter backends job's log was downloaded
+  (`gh api …/actions/jobs/<id>/logs`, each 80 kB–1.4 MB) and read: **no RERUN in any of them**. Summaries: macOS
+  3151/3075/3063 passed (Tests 1/2/3), 869 (Converter); Ubuntu 3150/3073/3063, 869; Windows 3143/3058/3051, 867.
 
 ## Proposed doc changes (Coordinator applies)
 
