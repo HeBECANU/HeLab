@@ -228,7 +228,7 @@ class AnalysisResult:
         lines = [f"{self.analysis.text()} · {self.action}",
                  f"Input: {identity.source_path} · revision {self.input.revision}",
                  f"Data root: {identity.root_key or 'none known'}",
-                 f"TXY source: {txy_sources.SHORT.get(identity.source, 'HeLab or MATLAB priority')}"
+                 f"TXY source: {txy_sources.SHORT.get(identity.source, 'HeLab or External priority')}"
                  + (f"; {len(self.coverage.origins):,} shots from HeLab's TXY" if self.coverage.origins else ""),
                  f"Signature: {identity.signature[:16] or 'none'}"
                  + (f" (this revision: {self.input_signature[:16]})"

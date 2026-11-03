@@ -148,8 +148,8 @@ SETTINGS: tuple[Setting, ...] = (
             "its first becomes that folder, and this key is removed."),
     Setting(TXY_SOURCE_SETTING, str, "helab-priority",
             "Which TXY tabs and Live load (Settings → TXY converter, Q18.2): helab-priority (HeLab's of the "
-            "conversion profile where they exist, MATLAB's for the rest), matlab-priority, helab-only or "
-            "matlab-only; anything else reads as helab-priority. A plot may choose another in its settings."),
+            "conversion profile where they exist, External's, the MATLAB converter's, for the rest), "
+            "matlab-priority, helab-only or matlab-only; anything else reads as helab-priority. A plot may choose another in its settings."),
     Setting(CONVERT_LOW_HITS_SETTING, int, 100,
             "Live auto-convert: a converted shot with fewer hits than this raises a system notification, once "
             "per shot (the Auto-convert menu); 0: never."),

@@ -399,8 +399,8 @@ def test_views_and_result_keys_carry_the_source() -> None:
     filled = build_view(dataset({"2": "helab:h"}))
     helab = build_view(dataset({"1": "helab:h", "2": "helab:h"}, source="helab-only"))
     assert (plain.identity.source, filled.identity.source, helab.identity.source) == ("", "", "helab-only")
-    assert dict(filled.origins) == {2: "helab:h"} and plain.txy_text() == "TXY: MATLAB's"
-    assert filled.txy_text() == "TXY: HeLab's (plates-2022 v1) for 1 of 2 shots, MATLAB's for the rest"
+    assert dict(filled.origins) == {2: "helab:h"} and plain.txy_text() == "TXY: External"
+    assert filled.txy_text() == "TXY: HeLab's (plates-2022 v1) for 1 of 2 shots, External for the rest"
     assert helab.txy_text() == "TXY: HeLab's (plates-2022 v1)"
     keys = [AnalysisResult.of(context(view), "completed").reuse_key() for view in (plain, filled, helab)]
     # MATLAB's alone: the key as it was before sources (no new fields).
@@ -1130,3 +1130,16 @@ def test_a_load_finding_the_cache_whole_with_a_new_signature_saves_it(tmp_path: 
     third = loaded(run_load(source, tmp_path, private_store, priority, memory=second["fingerprint"],
                             base_signature=second["signature"], memory_origins=second["txy"]["origins"]))
     assert third["source"] == "memory" and third["unchanged"], third["cache_reason"]
+
+
+def test_external_label_q53_1() -> None:
+    """Q53.1: the UI calls MATLAB's d_txy_forc "External (MATLAB converter)" (short "External"); only the label:
+    the sources' names, and HeLab's own matlab-2019 profile, keep theirs."""
+    from helab.convert.profile import BUILTIN_PROFILES
+    assert txy_sources.EXTERNAL_LABEL == "External (MATLAB converter)" and txy_sources.EXTERNAL_SHORT == "External"
+    texts = [*txy_sources.LABELS.values(), *txy_sources.SHORT.values()]
+    assert not [text for text in texts if "MATLAB" in text.replace(txy_sources.EXTERNAL_LABEL, "")]
+    assert txy_sources.LABELS[txy_sources.MATLAB_ONLY] == "External (MATLAB converter) only"
+    assert txy_sources.SHORT[txy_sources.MATLAB_PRIORITY] == "External priority"
+    assert txy_sources.MATLAB_ONLY == "matlab-only" and "matlab-2019" in BUILTIN_PROFILES
+    assert txy_sources.describe(txy_sources.HELAB_PRIORITY, {}, {}, 3) == "TXY: External"

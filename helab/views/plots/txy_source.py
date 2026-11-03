@@ -78,9 +78,9 @@ class TxySourceRow(QWidget):
         for value in txy_sources.SOURCES:
             self.combo.addItem(txy_sources.LABELS[value], value)
         self.combo.setToolTip(
-            "Which TXY this plot's data is made of (MATLAB's d_txy_forc, HeLab's d_txy_helab_<tag>). HeLab's only "
-            "and MATLAB's only: one plot on each, to compare. As the folder's tab: the source tabs and Live read "
-            "(Settings → TXY converter).")
+            "Which TXY this plot's data is made of (External: the MATLAB converter's d_txy_forc; HeLab's "
+            "d_txy_helab_<tag>). HeLab's only and External only: one plot on each, to compare. As the folder's "
+            "tab: the source tabs and Live read (Settings → TXY converter).")
         row.addWidget(self.combo, 2)
         self.profile_combo = identify(QComboBox(), "txy_profile", "TXY profile", "Whose HeLab TXY are read")
         self.profile_combo.setToolTip("Whose HeLab TXY are read: those of the profile HeLab converts with "

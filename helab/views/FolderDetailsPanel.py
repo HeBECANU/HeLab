@@ -417,15 +417,15 @@ class FolderDetailsPanel(QScrollArea):
     @staticmethod
     def _txy_row(meta: Mapping[str, Any]) -> tuple[str, str]:
         """The folder's TXY by kind as the shown data's load found them (``load_counts``: Q38.3, A39.4), e.g.
-        "120 MATLAB · 118 m19v1"; ("", "") for data whose load didn't count them (from memory or the disk cache
+        "120 External · 118 m19v1"; ("", "") for data whose load didn't count them (from memory or the disk cache
         unchanged, or saved before)."""
         counts = meta.get("load_counts")
         if not isinstance(counts, Mapping) or not isinstance(counts.get("txy_matlab"), int):
             return "", ""
         record = meta.get(txy_sources.TXY_FIELD)
         tag = str(record.get("profile_tag") or "") if isinstance(record, Mapping) else ""
-        parts = [f"{counts['txy_matlab']:,} MATLAB"]
-        lines = ["MATLAB's TXY (d_txy_forc<N>.txt) in the folder"]
+        parts = [f"{counts['txy_matlab']:,} {txy_sources.EXTERNAL_SHORT}"]
+        lines = [f"{txy_sources.EXTERNAL_LABEL} TXY (d_txy_forc<N>.txt) in the folder"]
         helab = counts.get("txy_helab")
         if isinstance(helab, int) and tag:
             parts.append(f"{helab:,} {tag}")
@@ -438,7 +438,7 @@ class FolderDetailsPanel(QScrollArea):
                 lines.append(f"HeLab {tag}, converted from raw: shots with no HeLab TXY file, converted from their "
                              "raw files when loaded and kept in the disk cache (no TXY file written).")
         else:
-            lines.append("HeLab's TXY not looked for: this folder's TXY source reads MATLAB's only.")
+            lines.append("HeLab's TXY not looked for: this folder's TXY source reads External only.")
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
 
     @staticmethod

@@ -3812,7 +3812,7 @@ class CacheStore:
                 summary["only_copy"] += 1
                 summary["only_copy_bytes"] += int(size)
                 only_folders.add(str(path))
-            for name in json.loads(layer_tags) or (["MATLAB"] if layer == _MATLAB_LAYER else []):
+            for name in json.loads(layer_tags) or (["External"] if layer == _MATLAB_LAYER else []):
                 tags[str(name)] = tags.get(str(name), 0) + 1
             summary["last_used"] = max(float(last_used), summary["last_used"] or 0.0)
         summary.update(folders=len(folders), tags=tags, only_copy_folders=len(only_folders))

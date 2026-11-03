@@ -47,14 +47,18 @@ HELAB_ORIGIN = "helab:"
 # The source and profile tag of a dataset's choice, as one text (``choice_text``).
 _CHOICE_SEPARATOR = "@"
 
+# What the UI calls MATLAB's ``d_txy_forc<N>.txt`` (Q53.1: the label only; files, tags and HeLab's
+# ``matlab-2019``/``matlab-2023-lab-edit`` profiles keep their names), in full and in short.
+EXTERNAL_LABEL = "External (MATLAB converter)"
+EXTERNAL_SHORT = "External"
 LABELS = {
-    HELAB_PRIORITY: "HeLab's where made, MATLAB's for the rest",
-    MATLAB_PRIORITY: "MATLAB's, HeLab's for shots MATLAB lacks",
+    HELAB_PRIORITY: f"HeLab's where made, {EXTERNAL_SHORT} for the rest",
+    MATLAB_PRIORITY: f"{EXTERNAL_LABEL}, HeLab's for shots it lacks",
     HELAB_ONLY: "HeLab's only",
-    MATLAB_ONLY: "MATLAB's only",
+    MATLAB_ONLY: f"{EXTERNAL_LABEL} only",
 }
-SHORT = {HELAB_PRIORITY: "HeLab priority", MATLAB_PRIORITY: "MATLAB priority", HELAB_ONLY: "HeLab only",
-         MATLAB_ONLY: "MATLAB only"}
+SHORT = {HELAB_PRIORITY: "HeLab priority", MATLAB_PRIORITY: f"{EXTERNAL_SHORT} priority", HELAB_ONLY: "HeLab only",
+         MATLAB_ONLY: f"{EXTERNAL_SHORT} only"}
 
 
 def normal_source(value: Any) -> str | None:
@@ -212,18 +216,18 @@ def on_read_of(metadata: Mapping[str, Any]) -> set[int]:
 
 def describe(source: str, origins: Mapping[int, str], profiles: Mapping[str, Mapping[str, Any]],
              shots: int, on_read: int = 0) -> str:
-    """``TXY: MATLAB's`` / ``TXY: HeLab's (matlab-2019 v1) for 3 of 10 shots, MATLAB's for the rest``; with
+    """``TXY: External`` / ``TXY: HeLab's (matlab-2019 v1) for 3 of 10 shots, External for the rest``; with
     ``on_read`` of the HeLab shots made from their raw files when read, "converted from raw" (S3~6)."""
     count = len(origins)
     names = sorted({_profile_text(origin[len(HELAB_ORIGIN):], profiles) for origin in origins.values()})
     helab = f"HeLab's ({', '.join(names)})" if names else "HeLab's"
     if not count:
-        return "TXY: none of HeLab's (no current HeLab TXY)" if source == HELAB_ONLY else "TXY: MATLAB's"
+        return "TXY: none of HeLab's (no current HeLab TXY)" if source == HELAB_ONLY else f"TXY: {EXTERNAL_SHORT}"
     from_raw = ("" if not on_read else ", converted from raw" if on_read >= count
                 else f" ({on_read:,} converted from raw)")
     if count >= shots:
         return f"TXY: {helab}{from_raw}"
-    return f"TXY: {helab} for {count:,} of {shots:,} shots{from_raw}, MATLAB's for the rest"
+    return f"TXY: {helab} for {count:,} of {shots:,} shots{from_raw}, {EXTERNAL_SHORT} for the rest"
 
 
 def _profile_text(profile_hash: str, profiles: Mapping[str, Mapping[str, Any]]) -> str:

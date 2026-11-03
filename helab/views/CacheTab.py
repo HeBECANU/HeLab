@@ -326,8 +326,8 @@ class CacheTab(QWidget):
         # Caching v2 stage 2: TXY data in layers (MATLAB's, and one per HeLab profile), and what new saves keep.
         self.txy_name = QLabel("TXY data")
         self.txy_label = QLabel("")
-        self.txy_label.setToolTip("Each folder's cached TXY: MATLAB's, and HeLab's of each converter profile used, each "
-                                  "shot kept once whichever TXY source a tab or plot shows. Only copies: their TXY "
+        self.txy_label.setToolTip("Each folder's cached TXY: External (MATLAB converter), and HeLab's of each "
+                                  "converter profile used, each shot kept once whichever TXY source a tab or plot shows. Only copies: their TXY "
                                   "files are gone from their folders since.")
         self.txy_button = QPushButton("Clear…")
         self.txy_button.clicked.connect(self.clear_txy)
@@ -686,8 +686,8 @@ class CacheTab(QWidget):
                 else f"what is left of HeLab's converted TXY: old records and damaged indexes ({size})")
         if not self.confirm("Clear HeLab's converted TXY?",
                             f"Removes {what}, from the cache and temp folders; HeLab's index of what made them "
-                            "stays. Raw files, MATLAB's TXY and HeLab's TXY written beside raw files are kept. Data "
-                            "loaded stays open; plots on HeLab's TXY keep what they show, and shots are converted "
+                            "stays. Raw files, External TXY (MATLAB converter) and HeLab's TXY written beside raw files "
+                            "are kept. Data loaded stays open; plots on HeLab's TXY keep what they show, and shots are converted "
                             "again when converting is on.", "Clear"):
             return
         self._run("Clear HeLab's converted TXY", "clear_converted_txy")

@@ -21,7 +21,7 @@ from test_cache_tab import GB, admin_request, finish, frozen_cache, inventory, m
 
 MB = 10**6
 TXY = {"layers": 3, "folders": 2, "shots": 120, "bytes": 40 * MB, "only_copy": 3, "only_copy_folders": 1,
-       "only_copy_bytes": 5 * MB, "tags": {"MATLAB": 2, "m19v1": 1}, "last_used": None}
+       "only_copy_bytes": 5 * MB, "tags": {"External": 2, "m19v1": 1}, "last_used": None}
 
 
 def v4_inventory(**changes: Any) -> dict[str, Any]:
@@ -40,7 +40,7 @@ def test_the_tab_shows_txy_data_and_the_policy_only_with_store_v4(qtbot: QtBot, 
         tab.inventory = v4_inventory()
         tab._update()
         assert tab.txy_button.isVisibleTo(tab) and tab.policy_combo.isVisibleTo(tab)
-        assert "120 shots in 2 folders" in tab.txy_label.text() and "MATLAB, m19v1" in tab.txy_label.text()
+        assert "120 shots in 2 folders" in tab.txy_label.text() and "External, m19v1" in tab.txy_label.text()
         assert "3 only copies" in tab.txy_label.text()
         tab.clear_txy()
         assert "the only copy" in asked[-1][1] and admin_request(service, "clear_txy")
