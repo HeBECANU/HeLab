@@ -156,3 +156,12 @@ run the suite with `TMPDIR` and `--basetemp` on a mounted disk image (macOS: `hd
 ## Test files touched
 
 `tests/conftest.py` and `tests/test_root_discovery.py`. App code: one function, `helab/utils/data_roots.py`.
+
+## CI 41604355924 (`c133e41`): success, all 15 job logs read, no RERUN
+
+- **Jobs:** Tests 1/3, 2/3 and 3/3, Converter backends and Build all succeeded on macOS, Windows and
+  Ubuntu. No log has a RERUN, a rerun reason or a crashed worker.
+- **New tests:** both passed on each OS: Ubuntu Tests 1/3, macOS Tests 1/3, Windows Tests 1/3.
+- **Image:** every Ubuntu job ran image 20261025.179.1, so CI didn't meet the old image's /tmp this
+  time. The local runs with /tmp on its own mount are the evidence for that layout.
+- **Windows pytest per group:** 9.9, 9.5 and 10.9 min.
