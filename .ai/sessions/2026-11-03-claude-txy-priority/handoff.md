@@ -65,7 +65,8 @@ Worker: Claude (Opus 5.5), floor TXY Priority, branch `agent/txy-priority` from 
 One commit each, every one with a test. TP-1 and TP-3 were checked to fail without their fix.
 
 After the fixes, dev/v0.0.8 was merged (`b959de1`: record-only commits and labcam). Full suite at `b959de1`:
-**9228 passed, 673 skipped, no RERUN**. The five type checks are clean. CI: run **41587970080** on `bf3fb85`, green on all three OSes. I read every Tests and Converter backends job's
+**9228 passed, 673 skipped, no RERUN**. The five type checks are clean. After TP-11 and the test fix (`f944a5a`):
+**9229 passed, 673 skipped, no RERUN**; the type checks are clean. CI: run **41587970080** on `bf3fb85`, green on all three OSes. I read every Tests and Converter backends job's
 log: **one RERUN**, Windows Tests (1/3) (job 125757887948):
 `tests/test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`, the known
 collection error in pathlib `lstat` on Windows. It passed on retry. It is the same signature as the open
@@ -83,6 +84,7 @@ to this branch. The other 11 job logs have no RERUN.
 | TP-7 (Low) | `aa39796` | Live's "Convert with <tag>" holds only while the folder reads that one profile (`taken_convert_with`); `set_folder_list` drops it. |
 | TP-8 (Low) | `66cde23` | A list that resolves to fewer entries says so: "Conversion (m19v1) › m19v1 (reads as m19v1 only)". The behaviour choice is **Q~9**. |
 | TP-9 (Low) | `962838c` | No silent refusals. While a converter question is open, the items are disabled with the reason; beside becoming unavailable while the dialog is open gets a message. |
+| TP-11 (Low, re-check) | `4bdfa14` | Live's tick compares the running conversion's whole profile (`converting_with(path, profile)`), as `convert` does. A same-name profile edited meanwhile now waits instead of stopping Auto-convert. The test fails without the fix. Also TP-8's nit: Folder details' line says "(reads as m19v1 only)" (`9de5e4c`). |
 | TP-10 (Nit) | `70b6f27` | The summaries follow the conversion profile picked in Settings, show Folder details' "Conversion (tag)", and refresh the plot row when its folder's list changes. |
 
 ## What changed, by area (for the Reviewer)
@@ -215,10 +217,17 @@ All were OK'd by CoCo:
 
 ## Known issues (for Ground to file)
 
-- `tests/test_converter_tab.py::test_the_cache_tab_shows_and_clears_converted_txy` failed all 6 tries in one
-  `-n 4` run of about 750 tests (after `99000a5`). It passed alone, in its file, and in every run since (two
-  full suites and CI). The cause is not found. File it in known-issues until it is (AGENTS.md: every repeated
-  failure).
+- **Found and fixed (`f944a5a`):** `tests/test_converter_tab.py::test_the_cache_tab_shows_and_clears_converted_txy`
+  failed all 6 tries twice on this floor (`-n 4` runs).
+  - **The cause:** it counted converted TXY in the xdist worker's temp folder (conftest's `DIR_TEMPS`, one per
+    session). Any test that converts to "temp" earlier on the same worker left files there: before this
+    branch, `test_explorer_convert`'s `[temp]` case; this branch's `test_convert_folder`. Each retry then hit
+    `FileExistsError` on its own folder. I reproduced it in one process with either test first.
+  - **The fix:** both tests use their own temp folder.
+  - For known-issues: listed as Fixed.
+- **Windows CI** (41587970080, job 125757887948, `bf3fb85`): one RERUN of
+  `test_test_isolation::test_pytest_imports_the_checkout_it_runs_in_before_any_other`, the open pathlib `lstat`
+  entry. Add this sighting.
 
 ## Follow-ups (A~)
 
