@@ -153,3 +153,18 @@ def test_the_shim_is_vendored_with_its_licence_and_the_docs_job_checks_the_offli
     assert "  polyfills:\n    - js/iframe-worker-shim.js\n" in (root / "mkdocs.yml").read_text(encoding="utf-8")
     docs_job = (WORKFLOWS / "dev-cicd.yml").read_text(encoding="utf-8")
     assert "HELAB_DOCS_OFFLINE: 'true'" in docs_job and 'python docs/publish/check_offline.py "$RUNNER_TEMP/offline"' in docs_job
+
+
+def test_a_failing_mike_list_stops_the_deploy(monkeypatch: Any, capsys: Any) -> None:
+    """Without gh-pages, ``mike list --json`` prints [] and succeeds; a failure is a real one, and planning
+    as if nothing were deployed could put "No stable release yet" over a stable release (review nit)."""
+    import subprocess
+    site = _site_versions()
+    ran: list[list[str]] = []
+
+    def failing(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        ran.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "fatal: bad object gh-pages")
+    monkeypatch.setattr(site.subprocess, "run", failing)
+    assert site.main(["0.0.8a1"]) == 1
+    assert ran == [["mike", "list", "--json"]] and "mike list failed (1): fatal: bad object" in capsys.readouterr().err

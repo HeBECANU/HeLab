@@ -68,8 +68,12 @@ def main(argv: List[str]) -> int:
         sys.stderr.write("usage: python docs/publish/site_versions.py VERSION [--dry-run]\n")
         return 2
     listed = subprocess.run(["mike", "list", "--json"], capture_output=True, text=True)
-    # (No gh-pages branch yet: nothing deployed.)
-    deployed = json.loads(listed.stdout) if listed.returncode == 0 and listed.stdout.strip() else []
+    if listed.returncode != 0:
+        # (Without a gh-pages branch mike lists [] and succeeds: a failure is a real one, and planning as if
+        # nothing were deployed could show "No stable release yet" over a stable release.)
+        sys.stderr.write(f"mike list failed ({listed.returncode}): {listed.stderr.strip()}\n")
+        return 1
+    deployed = json.loads(listed.stdout) if listed.stdout.strip() else []
     for command in plan(argv[0], deployed):
         print(" ".join(command), flush=True)
         if len(argv) == 1:
