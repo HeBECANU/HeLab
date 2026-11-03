@@ -314,6 +314,8 @@ def test_folder_details_names_a_folders_own_choices() -> None:
     assert text.endswith("this folder: m23v1 › Conversion › External")
     text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""}, "m19v1")
     assert text.endswith("this folder: m23v1 › Conversion (m19v1) › External")  # (As Settings and plots say, TP-10.)
+    text, _ = FolderDetailsPanel._with_choices(row, {"source": "Conversion>m19v1", "tag": ""}, "m19v1")
+    assert text.endswith("this folder: Conversion (m19v1) › m19v1 (reads as m19v1 only)")  # (TP-8's note.)
     assert "right-click › TXY for this folder…" in tip
 
 

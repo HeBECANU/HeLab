@@ -460,7 +460,8 @@ class FolderDetailsPanel(QScrollArea):
         entries = txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
         if entries is not None:
             # (Q53.2: its list in short, "m23v1 › Conversion › External".)
-            parts.append(f"this folder: {txy_sources.summary(entries, conversion_tag)}")
+            from helab.views.txy_list import list_summary  # (Says "(reads as m19v1 only)" too: TP-8.)
+            parts.append(f"this folder: {list_summary(entries, conversion_tag)}")
             lines.append("This folder's own TXY priority (right-click › TXY for this folder…), instead of "
                          "Settings': each shot from the first entry with a usable TXY.")
         policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
