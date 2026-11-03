@@ -53,7 +53,14 @@ def list_summary(entries: Optional[Sequence[str]], conversion_tag: str, follows:
     """A choice in short: the list, or what it follows ("As Settings (Conversion (m19v1) › External)")."""
     if entries is None:
         return follows
-    return txy_sources.summary(entries, conversion_tag) if entries else "Nothing ticked"
+    if not entries:
+        return "Nothing ticked"
+    text = txy_sources.summary(entries, conversion_tag)
+    resolved = txy_sources.resolve(entries, conversion_tag) if conversion_tag else tuple(entries)
+    if len(resolved) < len(entries):
+        # (TP-8: Conversion and the tag it is now are one entry; a list of one never falls back, Q~2.)
+        text += f" (reads as {txy_sources.summary(resolved)})"
+    return text
 
 
 class TxyListEditor(QWidget):

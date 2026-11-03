@@ -566,3 +566,11 @@ def test_lives_save_under_a_list_keeps_held_shots_and_records_the_fallback(tmp_p
     assert not [event for event in saved if event["kind"] in ("shots_missing", "error")]
     record = first(saved, "loaded")["txy"]
     assert record["fallback"] == [3] and record["origins"] == first_load["txy"]["origins"]
+
+
+def test_a_list_that_resolves_to_fewer_entries_says_so() -> None:
+    """TP-8: Conversion and the tag it resolves to are one entry; the summary says what the list reads as."""
+    from helab.views.txy_list import list_summary
+    assert list_summary((CONVERSION, M19), M19) == "Conversion (m19v1) › m19v1 (reads as m19v1 only)"
+    assert list_summary((CONVERSION, M23, EXTERNAL), M19) == "Conversion (m19v1) › m23v1 › External"
+    assert list_summary(None, M19, "As Settings") == "As Settings" and list_summary((), M19) == "Nothing ticked"
