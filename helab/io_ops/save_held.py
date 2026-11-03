@@ -77,7 +77,7 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         file_names: dict[int, str] = {}
         matlab: dict[int, str] = {}
         matlab_stats: dict[int, tuple[int, int]] = {}
-        beside_entries: dict[int, os.DirEntry[str]] = {}
+        beside: helab_txy.Beside = {}
         raw_entries: dict[int, os.DirEntry[str]] = {}  # For the times of shots read again.
         found: dict[str, set[int]] = {}  # (For the save's summary.)
         has_dirs = False
@@ -94,27 +94,38 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
                         matlab[matched[1]] = entry.path
                     elif matched[0] is file_kinds.RAW:
                         raw_entries[matched[1]] = entry
-                    elif matched[0] is file_kinds.HELAB_TXY and helab_txy.beside_wanted(entry.name, txy):
-                        beside_entries[matched[1]] = entry
+                    elif matched[0] is file_kinds.HELAB_TXY:
+                        helab_txy.add_beside(beside, entry.name, matched[1], entry, txy)
                 elif not has_dirs and _is_dir(entry):
                     has_dirs = True
         helab_key = helab_txy.store_key(store, path) or str(txy.get("key") or "")
         helab_state: list[list[Any]] = []
         helab_found: dict[int, helab_txy.HelabShot] = {}
+        listed_found: helab_txy.Found | None = None
         if txy_sources.wants_helab(txy_source):
             helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), listed_at)
             by_shot = {shot: (size, modified) for shot, size, modified in fingerprint}
             trusted = {shot: (*by_shot[shot], origin) for shot, origin in held_origins.items()}
-            helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted,
-                                         helab_txy.could_take(txy_source, raw_entries, matlab, held_origins))
+            listed_found = helab_txy.find_list(path, txy, helab_key, beside, raw_entries, matlab, trusted,
+                                               held_origins)
+            helab_found = listed_found.texts()
         # Each shot's TXY as the source asks; a held one is checked against the kind it was read from (MATLAB's
         # too: "" its origin).
         held_kinds = {shot: held_origins.get(shot, "") for shot in known}
-        chosen = helab_txy.compose(txy_source, matlab, helab_found, held_kinds)
+        helab_chosen: dict[int, helab_txy.HelabShot] = {}
+        fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
+        if listed_found is not None:
+            # (A save keeps every held shot's TXY while it is there; Live reads a reclaimed one again, TP-3.)
+            chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds,
+                                                                     reclaim=False)
+        else:
+            chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
         origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
         for shot, (filename, origin) in chosen.items():
-            listed[shot] = matlab_stats[shot] if not origin else (helab_found[shot].size, helab_found[shot].mtime_ns)
-            file_names[shot] = filename if origin and shot not in beside_entries else os.path.basename(filename)
+            listed[shot] = (matlab_stats[shot] if not origin
+                            else (helab_chosen[shot].size, helab_chosen[shot].mtime_ns))
+            file_names[shot] = (filename if origin and not helab_txy.is_beside(beside, shot, filename)
+                                else os.path.basename(filename))
 
         def mismatch(reason: str, shots: list[int]) -> None:
             send({"kind": "shots_missing", "reason": reason, "missing": shots[:20], "missing_count": len(shots),
@@ -223,8 +234,9 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         # Held shots keep their origin; one read again is the TXY chosen now.
         data_origins = {**{shot: origin for shot, origin in held_origins.items() if shot not in replaced},
                         **{shot: origins[shot] for shot in replaced if shot in origins}}
-        record = helab_txy.record(txy_source, data_origins, helab_found, held_record.get("profiles"), txy,
-                                  helab_state)
+        record = helab_txy.record(txy_source, data_origins, {**helab_found, **helab_chosen},
+                                  held_record.get("profiles"), txy,
+                                  helab_state, (), fell_back, {int(entry[0]) for entry in fingerprint})
         # The folder's MATLAB TXY as this data stands for them (``helab_txy.folder_print``, as Live's): its
         # summary's and its signature, so the tab finds it matches the folder.
         matlab_print = helab_txy.folder_print(fingerprint, data_origins,

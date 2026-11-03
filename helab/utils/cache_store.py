@@ -3812,7 +3812,7 @@ class CacheStore:
                 summary["only_copy"] += 1
                 summary["only_copy_bytes"] += int(size)
                 only_folders.add(str(path))
-            for name in json.loads(layer_tags) or (["MATLAB"] if layer == _MATLAB_LAYER else []):
+            for name in json.loads(layer_tags) or (["External"] if layer == _MATLAB_LAYER else []):
                 tags[str(name)] = tags.get(str(name), 0) + 1
             summary["last_used"] = max(float(last_used), summary["last_used"] or 0.0)
         summary.update(folders=len(folders), tags=tags, only_copy_folders=len(only_folders))
@@ -3901,6 +3901,9 @@ class CacheStore:
         """Set a folder's TXY source (Q18.2's mode and a tag; "" follows the global one, Q45.2) unless a later
         choice is saved; the choice now saved."""
         self._needs_v4()
+        from helab.utils.txy_sources import parse_list
+        if source and parse_list(source, tag) is None:
+            raise ValueError(f"Not a TXY source or priority list: {source!r}")  # (Q53.2: a mode, or a list's text.)
         return self._set_folder_choice("txy_source_prefs", path, {"source": source, "tag": tag if source else ""},
                                        set_at)
 

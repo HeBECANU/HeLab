@@ -388,7 +388,7 @@ def test_reset_all_settings_resets_the_txy_converter_tab_and_what_it_applies(
         tab = dialog.converter_tab
         dialog.reset_settings()
         shown.append((tab.profile_combo.currentData(), tab.backend_combo.currentData(),
-                       tab.output_combo.currentData(), tab.source_combo.currentData()))
+                       tab.output_combo.currentData(), txy_sources.setting_text(tab.txy_entries)))
         if then == "save":
             dialog.save_settings()
             return int(QDialog.DialogCode.Accepted)

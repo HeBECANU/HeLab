@@ -8,7 +8,7 @@ import logging
 import math
 import os
 import time
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
 import weakref
 
@@ -407,6 +407,15 @@ class FolderCache(QObject):
         # found them (sent back as ``helab_since``).
         self._convert_profile: DetectorProfile | None = None
         self._tab_source: str | None = None  # The ``txy_source`` setting, read when first needed.
+        # User profiles by tag (Q53.2: a list may name one), read from the profile folder when first needed.
+        # Memory only (TP-2): read on a request's path (``with_txy``, once) or handed over by Settings' Save
+        # (``set_user_profiles``), never while rendering.
+        self._user_profiles: dict[str, dict[str, Any]] = {}
+        self._user_profile_objects: dict[str, DetectorProfile] = {}  # (The same, as profiles.)
+        self._user_profiles_read = False
+        # Folders whose Auto-convert converts with their one-entry TXY list's profile, taken from Live's offer
+        # (Q~2.2; this session only).
+        self.convert_with: dict[str, DetectorProfile] = {}
         self._live_helab: dict[str, dict[str, Any]] = {}
         # The RAM budget for datasets no tab shows (Settings → Cache; ``set_ram_budget``).
         self.max_data_bytes = DEFAULT_RAM_STEPS * ram_step_bytes()
@@ -909,20 +918,42 @@ class FolderCache(QObject):
     # key (its choice), never a base for, or answer to, the tab's load. A tab load asking for another choice
     # than the tab's running load waits for it, then runs as its own (``submit``).
 
-    def tab_source(self) -> str:
-        """The TXY source tabs and Live load (the ``txy_source`` setting, Q18.2)."""
+    # Priority lists (Q53.2): the setting, a folder's row and a plot's choice are lists (``txy_sources``), which
+    # may name ``Conversion`` (the conversion profile); ``resolved`` makes a list a load's options, a mode's
+    # exactly as before.
+
+    def tab_list(self) -> txy_sources.Entries:
+        """The TXY list tabs and Live load (the ``txy_source`` setting, Q18.2, Q53.2), as saved."""
         if self._tab_source is None:
             from helab.utils.constants import read_txy_source
             from helab.utils.settings_store import app_settings
             self._tab_source = read_txy_source(app_settings())
-        return self._tab_source
+        return txy_sources.parse_list(self._tab_source) or txy_sources.list_of(txy_sources.DEFAULT_SOURCE)
 
     def set_tab_source(self, source: str) -> None:
-        """The tabs' and Live's TXY source changed (Settings → TXY converter): new loads use it."""
-        self._tab_source = txy_sources.normal_source(source) or txy_sources.DEFAULT_SOURCE
+        """The tabs' and Live's TXY list changed (Settings → TXY converter; a mode or a list's text): new loads
+        use it."""
+        entries = txy_sources.parse_list(source) or txy_sources.list_of(txy_sources.DEFAULT_SOURCE)
+        self._tab_source = txy_sources.setting_text(entries)
+
+    def conversion_options(self) -> dict[str, Any]:
+        """The conversion profile as a load's options (``Conversion``'s entry)."""
+        profile = self.convert_profile()
+        return {"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
+                "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+
+    def resolved(self, entries: Sequence[str]) -> dict[str, Any]:
+        """A list as a load's options (``txy_sources.with_list``): ``source`` (a mode, or a list's text),
+        the mode's profile, a list's ``entries``."""
+        return txy_sources.with_list(self.conversion_options(), entries, self._profile_for_tag)
+
+    def tab_source(self) -> str:
+        """The TXY source tabs and Live load: the setting's list, resolved (a mode, or a list's text)."""
+        return str(self.resolved(self.tab_list())["source"])
 
     def tab_choice(self) -> str:
-        return txy_sources.choice_text(self.tab_source(), self.convert_profile_tag())
+        found = self.resolved(self.tab_list())
+        return txy_sources.choice_text(str(found["source"]), str(found.get("profile_tag") or ""))
 
     @staticmethod
     def choice_suffix(choice: str | None) -> str:
@@ -986,17 +1017,32 @@ class FolderCache(QObject):
         given = payload.get(txy_sources.TXY_FIELD)
         txy = dict(given) if isinstance(given, Mapping) else {}
         options = store_options()
+        self.read_user_profiles()  # (A request, not rendering: the first one reads the profile folder, TP-2.)
         root = self.root_of(path)
+        # A plot's own list (Q53.2: ``list``, its entries as saved, ``Conversion`` among them).
+        listed = txy.pop("list", None)
         # Asked for no choice: the tab's (its dataset is the tab's, ``is_tab_dataset``).
-        txy.setdefault("tab", not txy.get("source") and not txy.get("profile_hash"))
-        if txy["tab"] and (choices := self.folder_choices.get(path)):
-            # The folder's own TXY source and tag (store-v4, Q45.2) for the tab's loads, Live and cached reads.
-            txy = txy_sources.with_choices(txy, choices, self._profile_for_tag)
+        txy.setdefault("tab", listed is None and not txy.get("source") and not txy.get("profile_hash"))
         if not txy.get("profile_hash"):
-            profile = self.convert_profile()
-            txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
-                        "profile": {"name": profile.name, "version": profile.version,
-                                    "calibrated": profile.calibrated}})
+            txy.update(self.conversion_options())
+        txy["conversion"] = self.conversion_options()  # (``Conversion``'s profile, whatever the list resolved to.)
+        # Q~2: a list of several entries falls back to the levels above it (a plot's: the folder's own list, then
+        # Settings'; a folder's own: Settings'), then to any TXY in the folder (the helper's last stages).
+        own_folder = self.folder_own_list(path)
+        if listed is not None:
+            entries = txy_sources.valid_list(listed)
+            txy = txy_sources.with_list(txy, entries or self.tab_list(), self._profile_for_tag)
+            above = [*(own_folder or ()), *self.tab_list()]
+        elif txy["tab"]:
+            # The folder's own TXY list (store-v4, Q45.2, Q53.2), else Settings', for the tab's loads, Live and
+            # cached reads.
+            txy = txy_sources.with_list(txy, self.folder_list(path), self._profile_for_tag)
+            above = list(self.tab_list()) if own_folder is not None else []
+        else:
+            above = []
+        if above:
+            txy["fallback"] = txy_sources.items_of(txy, list(dict.fromkeys(above)), self._profile_for_tag)
+        txy["known"] = self.known_profiles()
         if "profile_def" not in txy and (profile := self.convert_profile()).content_hash() == str(txy["profile_hash"]):
             # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
             # built-ins the helper knows itself; another user profile's TXY is read from its text).
@@ -1009,7 +1055,7 @@ class FolderCache(QObject):
             from helab.utils import constants
             from helab.utils.settings_store import app_settings
             txy["backend"] = constants.read_convert_backend(app_settings())
-        txy.update({"source": txy_sources.normal_source(txy.get("source")) or self.tab_source(),
+        txy.update({"source": txy_sources.source_text(txy.get("source")) or self.tab_source(),
                     "profile_hash": str(txy["profile_hash"]), "profile_tag": str(txy.get("profile_tag") or ""),
                     "cache_base": os.path.dirname(os.path.abspath(options["directory"])) if options else "",
                     "cache_directory": str(options.get("directory") or ""),
@@ -1028,9 +1074,31 @@ class FolderCache(QObject):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
+    def folder_own_list(self, path: str) -> txy_sources.Entries | None:
+        """A folder's own TXY list (Q45.2, Q53.2), None when it follows Settings'. Memory only."""
+        choices = self.folder_choices.get(path) or {}
+        return txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+
+    def known_profiles(self) -> dict[str, dict[str, Any]]:
+        """The conversion profile and the user's by tag (``profile_hash``, ``profile``), for a load's last
+        fallback stage to name HeLab's TXY beside the raw files (Q~2; the built-ins the helper knows)."""
+        found = {tag: {"profile_hash": item["profile_hash"], "profile": item["profile"]}
+                 for tag, item in self._user_profiles.items()}
+        conversion = self.conversion_options()
+        found[str(conversion["profile_tag"])] = {"profile_hash": conversion["profile_hash"],
+                                                 "profile": conversion["profile"]}
+        return found
+
+    def folder_list(self, path: str) -> txy_sources.Entries:
+        """The TXY list a tab load of ``path`` reads, as saved: the folder's own (Q45.2, Q53.2), else Settings'.
+        Memory only."""
+        choices = self.folder_choices.get(path) or {}
+        return txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or "")) or self.tab_list()
+
     def folder_source(self, path: str) -> str:
-        """The TXY source a load of ``path`` reads: the folder's own (Q45.2), else the tabs'. Memory only."""
-        return txy_sources.normal_source((self.folder_choices.get(path) or {}).get("source")) or self.tab_source()
+        """The TXY source a load of ``path`` reads (a mode, or a list's text): the folder's own (Q45.2), else the
+        tabs'. Memory only."""
+        return str(self.resolved(self.folder_list(path))["source"])
 
     def converts_on_read(self, path: str) -> bool:
         """Whether a load of ``path`` converts its raw files on read (caching v2 stage 3, S3~5): store-v4 (the
@@ -1070,6 +1138,13 @@ class FolderCache(QObject):
             self.folder_choices[path] = merged
             self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
 
+    def set_folder_list(self, path: str, entries: Sequence[str] | None, owner: str = "") -> str:
+        """Set a folder's own TXY list (Q53.2; None follows Settings'), saved in its old form when it is a mode
+        (``txy_sources.folder_row``). The job's owner, "" if it couldn't be queued."""
+        source, tag = txy_sources.folder_row(entries) if entries else ("", "")
+        self.convert_with.pop(self.key(path), None)  # (Live's offer was for the list it replaces, TP-7.)
+        return self.set_folder_choice(path, source=source, tag=tag, owner=owner)
+
     def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
                           tag: str | None = None, owner: str = "") -> str:
         """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
@@ -1096,17 +1171,41 @@ class FolderCache(QObject):
         return job
 
     def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
-        """A folder choice's tag as a load's profile options: the conversion profile's, else a built-in's."""
+        """A list entry's tag as a load's profile options: the conversion profile's, else a built-in's, else a
+        user profile's (Q53.2). Memory only (TP-2): tooltips resolve lists with it."""
         from helab.convert.profile import BUILTIN_PROFILES, file_tag
         for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
             if file_tag(profile) == tag:
                 return {"profile_hash": profile.content_hash(), "profile_tag": tag,
                         "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
-        return None
+        return self._user_profiles.get(tag)
+
+    def set_user_profiles(self, profiles: Iterable[DetectorProfile]) -> None:
+        """The user's profiles as Settings › TXY converter holds them (its Save; no read here)."""
+        from helab.convert.profile import file_tag
+        self._user_profile_objects = {file_tag(profile): profile for profile in profiles}
+        self._user_profiles = {tag: {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                                     "profile": {"name": profile.name, "version": profile.version,
+                                                 "calibrated": profile.calibrated}}
+                               for tag, profile in self._user_profile_objects.items()}
+        self._user_profiles_read = True
+
+    def read_user_profiles(self) -> None:
+        """Read the user's profile folder (the app folder's, not a source folder) the first time a request needs
+        them (``with_txy``); never from rendering (TP-2)."""
+        if self._user_profiles_read:
+            return
+        from helab.convert.user_profiles import ProfileLibrary
+        from helab.utils.constants import profiles_folder
+        try:
+            library = ProfileLibrary(profiles_folder()).profiles()
+        except OSError:
+            library = {}
+        self.set_user_profiles(library.values())
 
     def payload_source(self, payload: Mapping[str, Any]) -> str:
         txy = payload.get(txy_sources.TXY_FIELD)
-        return txy_sources.normal_source(txy.get("source") if isinstance(txy, Mapping) else None) or self.tab_source()
+        return txy_sources.source_text(txy.get("source") if isinstance(txy, Mapping) else None) or self.tab_source()
 
     def payload_key_choice(self, payload: Mapping[str, Any]) -> str | None:
         """The choice a load's dataset and job are found by: None for the tab's, else its own."""
@@ -1127,7 +1226,7 @@ class FolderCache(QObject):
         choice it was loaded for."""
         given = event.get(txy_sources.TXY_FIELD)
         record: dict[str, Any] = dict(given) if isinstance(given, Mapping) else {"origins": {}}
-        if txy_sources.normal_source(record.get("source")) is None:
+        if txy_sources.source_text(record.get("source")) is None:
             record["source"] = self.payload_source(payload)
         asked = payload.get(txy_sources.TXY_FIELD)
         asked = asked if isinstance(asked, Mapping) else {}
@@ -1293,7 +1392,9 @@ class FolderCache(QObject):
                     "loaded_at": time.time(), "checked_at": time.monotonic(), "verified": True,
                     # The tab's TXY choice, as its Live checks' data will name it.
                     txy_sources.TXY_FIELD: {"source": self.tab_source(), "origins": {},
-                                            "profile_tag": self.convert_profile_tag(), "tab": True}}
+                                            "profile_tag": txy_sources.choice_tag(self.tab_source(), str(
+                                                self.resolved(self.tab_list()).get("profile_tag") or "")),
+                                            "tab": True}}
         return Dataset(path, "", {}, metadata, self._epochs.get(path, 0))
 
     def release(self, owner: str) -> None:
@@ -1430,7 +1531,64 @@ class FolderCache(QObject):
         if self.write_beside(path) != before:
             self.folderPrefsChanged.emit(path)
 
-    def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None) -> bool:
+    def auto_convert_profile(self, path: str) -> DetectorProfile:
+        """The profile Live's Auto-convert converts ``path`` with: the one its Live line's offer set this session
+        (``convert_with``, Q~2.2), else Settings' conversion profile. Memory only."""
+        return self.taken_convert_with(path) or self.convert_profile()
+
+    def taken_convert_with(self, path: str) -> DetectorProfile | None:
+        """Live's offer as taken for ``path`` this session, while the folder's list is still that one profile
+        (TP-7: a list changed since drops it). Memory only."""
+        from helab.convert.profile import file_tag
+        key = self.key(path)
+        chosen = self.convert_with.get(key)
+        if chosen is None:
+            return None
+        if txy_sources.resolve(self.folder_list(path), self.convert_profile_tag()) != (file_tag(chosen),):
+            del self.convert_with[key]
+            return None
+        return chosen
+
+    def auto_convert_offer(self, path: str) -> DetectorProfile | None:
+        """The profile Live's line offers to convert ``path`` with (Q~2.2): its TXY list's one entry, when that
+        is a HeLab profile Auto-convert doesn't convert with now and HeLab knows it; else None. A list of
+        several entries falls back to the conversion profile's TXY (Q~2.1), so it offers nothing."""
+        entries = txy_sources.resolve(self.folder_list(path), self.convert_profile_tag())
+        if len(entries) != 1 or entries[0] == txy_sources.EXTERNAL:
+            return None
+        from helab.convert.profile import file_tag
+        if file_tag(self.auto_convert_profile(path)) == entries[0]:
+            return None
+        return self.profile_by_tag(entries[0])
+
+    def set_convert_with(self, path: str, profile: DetectorProfile | None) -> None:
+        """Live's offer taken (``profile``) or undone (None): this session's Auto-convert profile for ``path``."""
+        if profile is None:
+            self.convert_with.pop(self.key(path), None)
+        else:
+            self.convert_with[self.key(path)] = profile
+
+    def profile_by_tag(self, tag: str) -> DetectorProfile | None:
+        """The conversion profile, a built-in or a user profile whose TXY carry ``tag`` (``file_tag``). Memory
+        only: the user's as a load last read them (``_profile_for_tag``); a Live line renders with it."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return profile
+        return self._user_profile_objects.get(tag)
+
+    def converting_with(self, path: str, profile: DetectorProfile | None = None) -> str:
+        """The name of the profile a conversion of ``path`` running now converts with ("" for none); with
+        ``profile``, only when it isn't that very profile (its whole definition, as ``convert`` compares: TP-11).
+        One conversion per folder (a second asker joins it), so another profile's waits for it (TP-5). Memory only."""
+        job = self.jobs.get(job_key("convert", self.key(path)))
+        running = job.payload.get("profile") if job is not None else None
+        if not isinstance(running, Mapping) or profile is not None and running == profile.to_dict():
+            return ""
+        return str(running.get("name") or "?")
+
+    def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
+                profile_used: DetectorProfile | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
         background lane, pausable, refused while working offline: answered ``offline``). Sends
         the folder's last conversion's lists back (``seen``, ``done``, ``kept``, ``skip``; ``seen``
@@ -1439,12 +1597,17 @@ class FolderCache(QObject):
         conversion per folder at a time (a second asker joins it). Whether it was accepted.
         ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` the folder's flag as this
         memory knows it, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a
-        refused beside write); None: as set. The helper still writes beside only while the store's flag is on."""
+        refused beside write); None: as set. The helper still writes beside only while the store's flag is on.
+        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam)."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
         settings = app_settings()
-        profile = self.convert_profile().to_dict()  # (Settings → TXY converter; follows its Save.)
+        # (Settings → TXY converter, following its Save, unless another is asked for.)
+        profile = (profile_used or self.convert_profile()).to_dict()
+        running = self.jobs.get(job_key("convert", path))
+        if running is not None and running.payload.get("profile") != profile:
+            return False  # (Another profile's conversion runs: never joined, TP-5; the asker waits or says so.)
         payload: dict[str, Any] = {"path": path, "profile": profile,
                                    "backend": constants.read_convert_backend(settings), "temps": constants.DIR_TEMPS,
                                    "cache": store_options(),

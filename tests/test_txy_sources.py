@@ -148,7 +148,11 @@ def test_each_source_takes_its_txy(tmp_path: Path, private_store: str) -> None:
 def test_helabs_are_read_only_when_current_for_the_profile(tmp_path: Path, private_store: str) -> None:
     source = make_run(tmp_path, private_store)
     other = options(tmp_path, private_store, txy_sources.MATLAB, MATLAB_2023_LAB_EDIT.content_hash())
-    assert sorted(shots_read(run_load(source, tmp_path, None, other))) == [1, 2]
+    # (Q~2: MATLAB priority of m23v1, a list of two entries, falls back to any current HeLab TXY: m19v1's of 3
+    # and 4, said as fallback; a one-entry list never falls back.)
+    fell_back = run_load(source, tmp_path, None, other)
+    assert sorted(shots_read(fell_back)) == [1, 2, 3, 4] and loaded(fell_back)["txy"]["fallback"] == [3, 4]
+    assert loaded(fell_back)["txy"]["origins"] == {"3": f"helab:{PROFILE}", "4": f"helab:{PROFILE}"}
     with pytest.raises(ValueError, match="No current HeLab TXY"):
         run_load(source, tmp_path, None, {**other, "source": txy_sources.HELAB_ONLY})
     # Any profile when none is asked for.
@@ -399,8 +403,8 @@ def test_views_and_result_keys_carry_the_source() -> None:
     filled = build_view(dataset({"2": "helab:h"}))
     helab = build_view(dataset({"1": "helab:h", "2": "helab:h"}, source="helab-only"))
     assert (plain.identity.source, filled.identity.source, helab.identity.source) == ("", "", "helab-only")
-    assert dict(filled.origins) == {2: "helab:h"} and plain.txy_text() == "TXY: MATLAB's"
-    assert filled.txy_text() == "TXY: HeLab's (plates-2022 v1) for 1 of 2 shots, MATLAB's for the rest"
+    assert dict(filled.origins) == {2: "helab:h"} and plain.txy_text() == "TXY: External"
+    assert filled.txy_text() == "TXY: HeLab's (plates-2022 v1) for 1 of 2 shots, External for the rest"
     assert helab.txy_text() == "TXY: HeLab's (plates-2022 v1)"
     keys = [AnalysisResult.of(context(view), "completed").reuse_key() for view in (plain, filled, helab)]
     # MATLAB's alone: the key as it was before sources (no new fields).
@@ -626,9 +630,13 @@ def test_a_held_shot_of_another_profile_isnt_trusted(tmp_path: Path, private_sto
     first = loaded(run_load(source, tmp_path, None, options(tmp_path, private_store)))
     other = {**options(tmp_path, private_store), "profile_hash": MATLAB_2023_LAB_EDIT.content_hash(),
              "key": _key(source, private_store)}
+    with pytest.raises(ValueError, match="No current HeLab TXY"):  # (One entry, m23v1: the held m19v1 aren't it.)
+        run_load(source, tmp_path, None, {**other, "source": txy_sources.HELAB_ONLY}, memory=first["fingerprint"],
+                 memory_origins=first["txy"]["origins"], full_check=True)
+    # (Q~2: a list of several entries takes them from its fallback, any current HeLab TXY: m19v1's, the held.)
     held = loaded(run_load(source, tmp_path, None, other, memory=first["fingerprint"],
                            memory_origins=first["txy"]["origins"], full_check=True))
-    assert held["txy"]["origins"] == {} and held["memory_shots"] == [1, 2]
+    assert held["txy"]["fallback"] == [3, 4] and held["memory_shots"] == [1, 2, 3, 4]
     # Live's shortcut is the profile's too: the same folders with another profile asked for list again.
     steady = last(live(source, tmp_path, private_store, first["fingerprint"], memory_origins=first["txy"]["origins"]),
                   "live_unchanged")["live_helab"]
@@ -1130,3 +1138,16 @@ def test_a_load_finding_the_cache_whole_with_a_new_signature_saves_it(tmp_path: 
     third = loaded(run_load(source, tmp_path, private_store, priority, memory=second["fingerprint"],
                             base_signature=second["signature"], memory_origins=second["txy"]["origins"]))
     assert third["source"] == "memory" and third["unchanged"], third["cache_reason"]
+
+
+def test_external_label_q53_1() -> None:
+    """Q53.1: the UI calls MATLAB's d_txy_forc "External (MATLAB converter)" (short "External"); only the label:
+    the sources' names, and HeLab's own matlab-2019 profile, keep theirs."""
+    from helab.convert.profile import BUILTIN_PROFILES
+    assert txy_sources.EXTERNAL_LABEL == "External (MATLAB converter)" and txy_sources.EXTERNAL_SHORT == "External"
+    texts = [*txy_sources.LABELS.values(), *txy_sources.SHORT.values()]
+    assert not [text for text in texts if "MATLAB" in text.replace(txy_sources.EXTERNAL_LABEL, "")]
+    assert txy_sources.LABELS[txy_sources.MATLAB_ONLY] == "External (MATLAB converter) only"
+    assert txy_sources.SHORT[txy_sources.MATLAB_PRIORITY] == "External priority"
+    assert txy_sources.MATLAB_ONLY == "matlab-only" and "matlab-2019" in BUILTIN_PROFILES
+    assert txy_sources.describe(txy_sources.HELAB_PRIORITY, {}, {}, 3) == "TXY: External"

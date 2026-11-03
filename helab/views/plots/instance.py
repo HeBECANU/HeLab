@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import replace
 from datetime import datetime
-from typing import Any, Dict, List, Mapping, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
 from PyQt6 import sip
@@ -44,6 +44,7 @@ from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRu
 from helab.views.plots.dock import AnalysisDock, release_figures
 from helab.views.plots.pictures import ReleasedPlot, snapshot
 from helab.views.plots.txy_source import TxySourceRow, known_profiles, profile_by_tag
+from helab.views.txy_list import known_names
 if TYPE_CHECKING:
     from helab.views.plots.arrangement import FolderWait
     from helab.views.plots.presets import PresetBar
@@ -233,6 +234,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._reload_constants: Optional[Mapping[str, Mapping[str, float]]] = None
         if self.constant_keys:
             self._cache().constantsChanged.connect(self._constants_changed)
+        # The folder's own TXY list as the row's "As the folder's tab (…)" names it (TP-10).
+        self._cache().folderPrefsChanged.connect(self._folder_prefs_changed)
         # Presets (helab/views/plots/presets.py): the settings page's Presets row, and the script
         # preset last applied (its name and when it was saved), which an arrangement records.
         self.presets: Optional[PresetBar] = None
@@ -249,13 +252,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._held = False
         self._script_note = ""
         self.code_loaded_at = 0.0  # When its script's code was loaded (wall clock; the Scripts panel sets it)
-        # Its TXY choice (Q6.6, Q18.2, ``txy_source``): a source ("": as the folder's tab) and the profile
-        # whose HeLab TXY it reads (None: the conversion profile's). The tab's choice is the tab's data;
+        # Its TXY choice (Q6.6, Q18.2, Q53.2, ``txy_source``): a TXY priority list (None: as the folder's tab),
+        # ``Conversion`` among its entries for the conversion profile. The tab's choice is the tab's data;
         # another is a dataset the plot loads itself (``_source_owner``: that load in flight), again
         # whenever Live finds new shots. A reopened plot starts with its saved choice (Q14.2 = Q23.4), unless
         # "Keep this plot's TXY choice" (``txy_keep``) was off: then as the tab.
-        self.txy_source = ""
-        self.txy_profile: Optional[DetectorProfile] = None
+        self.txy_list: Optional[txy_sources.Entries] = None
         self.txy_keep = True
         # Reopened with its own choice before its folder was read this session (D4): it waits for a select of
         # the folder (a tab's load) or Rerun to load that choice, never reading the folder by itself.
@@ -338,8 +340,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
         assert isinstance(layout, QVBoxLayout)
         self.input_label.setToolTip(self.path)
         layout.addWidget(self.input_label)
-        self.txy_row = TxySourceRow(self.txy_source, self.set_txy_source,
-                                    self.txy_profile.name if self.txy_profile is not None else "",
+        self.txy_row = TxySourceRow(self.txy_list, self.set_txy_list, self._txy_context,
                                     keep=self.txy_keep, kept=self._keep_changed)
         layout.addWidget(self.txy_row)
         self._show_txy()
@@ -815,9 +816,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
         """Its TXY choice as its records save it (None while "Keep this plot's TXY choice" is off)."""
         if not self.txy_keep:
             return None
-        profile = self.txy_profile
-        return TxyChoice(self.txy_source, profile.name if profile is not None else "",
-                         file_tag(profile) if profile is not None else "")
+        return TxyChoice.of_list(self.txy_list, known_names())
 
     def set_txy_keep(self, keep: bool) -> None:
         """Keep this plot's TXY choice (its row's Keep box)."""
@@ -834,12 +833,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
     def _apply_txy(self, choice: TxyChoice) -> None:
         """A saved TXY choice: an open plot switches to it (as choosing it in its row does); a plot still
         waiting for its folder's data takes it as its choice (it loads it when its data is found)."""
+        entries = choice.tokens()
         if self.result is None and not self.job_id and is_waiting(self.follow.ran):
-            self.txy_source = choice.source
-            self.txy_profile = known_profiles().get(choice.profile) if choice.profile else None
+            self.txy_list = entries
             self._show_txy()
             return
-        self.set_txy_source(choice.source, choice.profile)
+        self.set_txy_list(entries)
 
     def saved_plot(self) -> SavedPlot:
         """The plot as an arrangement records it (its place is added by ``arrangement.capture``)."""
@@ -1111,43 +1110,67 @@ class AnalysisInstance(LinkedAnalysisInstance):
     # The TXY source (Q6.6)
 
     def _choice_from(self, choice: str) -> None:
-        """The plot's source and profile from a view's choice (``txy_sources.choice_text``), unless it is the
-        tab's (then the plot is as the tab)."""
+        """The plot's list from a view's choice (``txy_sources.choice_text``: ``mode@tag`` or a list's text),
+        unless it is the tab's (then the plot is as the tab). The conversion profile's tag reads as
+        ``Conversion``, as a choice made before Q53.2 named it."""
         cache = self._cache()
         if choice == cache.tab_choice():
             return
-        source, _, tag = choice.partition("@")
-        self.txy_source = txy_sources.normal_source(source) or ""
-        if tag and tag != cache.convert_profile_tag():
-            self.txy_profile = profile_by_tag(tag)
+        entries = txy_sources.parse_list(choice) or txy_sources.parse_list(choice.partition("@")[0])
+        if entries is not None:
+            tag = cache.convert_profile_tag()
+            self.txy_list = tuple(txy_sources.CONVERSION if token == tag else token for token in entries)
+
+    def _txy_context(self) -> tuple[str, str]:
+        """The conversion profile's tag and the folder tab's list in short (the row's button and editor)."""
+        cache = self._cache()
+        tag = cache.convert_profile_tag()
+        return tag, txy_sources.summary(cache.folder_list(self.path), tag)
 
     def txy_choice(self) -> str:
         """The plot's TXY choice as a dataset records it (``FolderCache.dataset_choice``)."""
         cache = self._cache()
-        tag = file_tag(self.txy_profile) if self.txy_profile is not None else cache.convert_profile_tag()
-        return txy_sources.choice_text(self.txy_source or cache.tab_source(), tag)
+        found = cache.resolved(self.txy_list or cache.folder_list(self.path))
+        return txy_sources.choice_text(str(found["source"]), str(found.get("profile_tag") or ""))
 
     def on_tab_choice(self) -> bool:
         """Whether the plot runs on the folder tab's data ("As the folder's tab": whatever choice the tab's
         data was loaded with; a choice made here, even the tab's, is the plot's own dataset)."""
-        return not self.txy_source and self.txy_profile is None
+        return self.txy_list is None
 
     def txy_label(self) -> str:
-        source = self.txy_source or self._cache().tab_source()
-        shown = self.txy_profile is not None and source != txy_sources.MATLAB_ONLY
-        return txy_sources.LABELS[source] + (f" ({self.txy_profile.name})" if self.txy_profile is not None and shown
-                                             else "")
+        cache = self._cache()
+        return txy_sources.summary(self.txy_list or cache.folder_list(self.path), cache.convert_profile_tag())
+
+    @property
+    def txy_source(self) -> str:
+        """The plot's list as a load sends it ("" as the tab; a mode, or a list's text)."""
+        return "" if self.txy_list is None else str(self._cache().resolved(self.txy_list)["source"])
+
+    @property
+    def txy_profile(self) -> Optional[DetectorProfile]:
+        """The profile of a plot's list that is a mode naming one (None: as the tab, Conversion, or a list)."""
+        mode = txy_sources.mode_of(self.txy_list) if self.txy_list is not None else None
+        return profile_by_tag(mode[1]) if mode is not None and mode[1] not in ("", txy_sources.CONVERSION) else None
 
     def set_txy_source(self, source: str, profile: str = "") -> None:
-        """Run on another TXY choice's data of the plot's folder: the tab's (as the tab), else a dataset of
-        it the plot loads (RAM only; ``FolderCache`` keeps it apart from the tab's). ``source`` "": as the
-        tab; ``profile``: a profile's name ("": the conversion profile)."""
-        if self.is_closed or source and source not in txy_sources.SOURCES:
+        """A mode and a profile's name ("": the conversion profile's) as the plot's list (as the row's pick was
+        before Q53.2); ``source`` "": as the tab."""
+        if source and source not in txy_sources.SOURCES:
             return
         chosen = known_profiles().get(profile) if profile else None
-        if source == self.txy_source and chosen == self.txy_profile:
+        self.set_txy_list(txy_sources.list_of(source, file_tag(chosen) if chosen is not None else "")
+                          if source else None)
+
+    def set_txy_list(self, entries: Optional[Sequence[str]]) -> None:
+        """Run on another TXY choice's data of the plot's folder: the tab's (None: as the tab), else a dataset
+        of it the plot loads (RAM only; ``FolderCache`` keeps it apart from the tab's)."""
+        entries = tuple(entries) if entries is not None else None
+        if self.is_closed or entries is not None and txy_sources.valid_list(entries) is None:
             return
-        self.txy_source, self.txy_profile = source, chosen
+        if entries == self.txy_list:
+            return
+        self.txy_list = entries
         cache = self._cache()
         if self._own_waits:  # (Chosen again: as choosing it does, it loads now.)
             self._own_waits = False
@@ -1176,12 +1199,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         owner = f"plot-txy:{self.instance_id}:{uuid4().hex}"
         cache.resultReady.connect(self._source_event)
         self._source_owner = owner
-        txy: Dict[str, Any] = {"source": self.txy_source or cache.tab_source()}
-        if self.txy_profile is not None:
-            profile = self.txy_profile
-            txy.update({"profile_hash": profile.content_hash(), "profile_tag": file_tag(profile),
-                        "profile": {"name": profile.name, "version": profile.version,
-                                    "calibrated": profile.calibrated}})
+        # (Its list, which FolderCache resolves: Conversion, the profiles by tag, Q53.2.)
+        txy: Dict[str, Any] = {"list": list(self.txy_list or cache.folder_list(self.path))}
         payload: Dict[str, Any] = {
             txy_sources.TXY_FIELD: txy, "cache": store_options(), "no_cache": True,
             "check_level": cache.check_level, "limits": cache.large_limits(), "deliberate": True,
@@ -1260,10 +1279,15 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.follow.pending = view
         self._submit(view, one_off=True)
 
+    def _folder_prefs_changed(self, path: str) -> None:
+        """A folder's own choices changed: the row names the tab's list afresh when it is this plot's folder."""
+        if FolderCache.key(path) == FolderCache.key(self.path):
+            self._show_txy()
+
     def _show_txy(self) -> None:
         if self.txy_row is None or sip.isdeleted(self.txy_row):
             return
-        self.txy_row.set_source(self.txy_source, self.txy_profile.name if self.txy_profile is not None else "")
+        self.txy_row.set_entries(self.txy_list)
         self.txy_row.show_profile(self._shown_view or self.view, self._cache().convert_profile().name)
 
     # Following Live
@@ -1355,10 +1379,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
         if self.on_tab_choice():
             count = len(view.origins)
             return f"TXY: {count:,} shot{'' if count == 1 else 's'} from HeLab's" if count else ""
-        source = self.txy_source or self._cache().tab_source()
-        shown = self.txy_profile is not None and source != txy_sources.MATLAB_ONLY
-        profile = f" ({file_tag(self.txy_profile)})" if self.txy_profile is not None and shown else ""
-        return f"TXY: {txy_sources.SHORT[source]}{profile}" + (" (loading…)" if self._source_owner else "")
+        return f"TXY: {self.txy_label()}" + (" (loading…)" if self._source_owner else "")
 
     def _live_text(self) -> str:
         live = self.live()
@@ -1732,6 +1753,10 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 self._cache().constantsChanged.disconnect(self._constants_changed)
             except TypeError:
                 pass
+        try:
+            self._cache().folderPrefsChanged.disconnect(self._folder_prefs_changed)
+        except TypeError:
+            pass
         if self.budget is not None:
             self.budget.remove(self)
         try:

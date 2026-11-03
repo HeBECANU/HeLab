@@ -417,15 +417,15 @@ class FolderDetailsPanel(QScrollArea):
     @staticmethod
     def _txy_row(meta: Mapping[str, Any]) -> tuple[str, str]:
         """The folder's TXY by kind as the shown data's load found them (``load_counts``: Q38.3, A39.4), e.g.
-        "120 MATLAB · 118 m19v1"; ("", "") for data whose load didn't count them (from memory or the disk cache
+        "120 External · 118 m19v1"; ("", "") for data whose load didn't count them (from memory or the disk cache
         unchanged, or saved before)."""
         counts = meta.get("load_counts")
         if not isinstance(counts, Mapping) or not isinstance(counts.get("txy_matlab"), int):
             return "", ""
         record = meta.get(txy_sources.TXY_FIELD)
         tag = str(record.get("profile_tag") or "") if isinstance(record, Mapping) else ""
-        parts = [f"{counts['txy_matlab']:,} MATLAB"]
-        lines = ["MATLAB's TXY (d_txy_forc<N>.txt) in the folder"]
+        parts = [f"{counts['txy_matlab']:,} {txy_sources.EXTERNAL_SHORT}"]
+        lines = [f"{txy_sources.EXTERNAL_LABEL} TXY (d_txy_forc<N>.txt) in the folder"]
         helab = counts.get("txy_helab")
         if isinstance(helab, int) and tag:
             parts.append(f"{helab:,} {tag}")
@@ -438,21 +438,32 @@ class FolderDetailsPanel(QScrollArea):
                 lines.append(f"HeLab {tag}, converted from raw: shots with no HeLab TXY file, converted from their "
                              "raw files when loaded and kept in the disk cache (no TXY file written).")
         else:
-            lines.append("HeLab's TXY not looked for: this folder's TXY source reads MATLAB's only.")
+            lines.append("HeLab's TXY not looked for: this folder's TXY source reads External only.")
+        fallback = sorted(txy_sources.fallback_of(meta))
+        if fallback:
+            # (Q~2: shots none of the list's own entries has a TXY of, from the levels above or any TXY there.)
+            origins, profiles = txy_sources.origins_of(meta), txy_sources.profiles_of(meta)
+            names = sorted({txy_sources.origin_name(origins.get(shot, ""), profiles) for shot in fallback})
+            parts.append(f"{len(fallback):,} fallback")
+            lines.append(f"Fallback: {len(fallback):,} shot{'' if len(fallback) == 1 else 's'} none of the TXY "
+                         f"list's own entries has a TXY of, taken from the lists above it or any TXY there "
+                         f"({', '.join(names)})")
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
 
     @staticmethod
-    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any]) -> tuple[str, str]:
+    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any], conversion_tag: str = "") -> tuple[str, str]:
         """The TXY line with the folder's own choices (store-v4, Q45.1, Q45.2), when it has any: its TXY source
         and tag, and its cache policy unless it follows Settings › Cache's."""
         from helab.views.CacheTab import POLICY_LABELS
         text, tip = row
         parts, lines = [], []
-        source = str(choices.get("source") or "")
-        if source in txy_sources.LABELS:
-            tag = str(choices.get("tag") or "")
-            parts.append(f"this folder: {txy_sources.LABELS[source]}" + (f" ({tag})" if tag else ""))
-            lines.append("This folder's own TXY source (right-click › TXY for this folder…), instead of Settings'.")
+        entries = txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+        if entries is not None:
+            # (Q53.2: its list in short, "m23v1 › Conversion › External".)
+            from helab.views.txy_list import list_summary  # (Says "(reads as m19v1 only)" too: TP-8.)
+            parts.append(f"this folder: {list_summary(entries, conversion_tag)}")
+            lines.append("This folder's own TXY priority (right-click › TXY for this folder…), instead of "
+                         "Settings': each shot from the first entry with a usable TXY.")
         policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
         if policy:
             parts.append(f"cache: {policy}")
@@ -482,7 +493,8 @@ class FolderDetailsPanel(QScrollArea):
             rows["files"] = (files, "Counts from when this data was loaded")
             rows["txy"] = FolderDetailsPanel._with_choices(
                 FolderDetailsPanel._txy_row(meta),
-                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {})
+                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {},
+                explorer.model.cache.convert_profile_tag())
         rows["data"] = (f"{plural(number('rows'), 'data row')} · {fnum(number('bytes')).strip()}B in RAM",
                         "Rows (t, x, y) across the loaded TXY files, and the memory their arrays use")
         loaded_at = meta.get("loaded_at")

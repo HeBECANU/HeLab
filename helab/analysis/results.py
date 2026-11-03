@@ -228,7 +228,7 @@ class AnalysisResult:
         lines = [f"{self.analysis.text()} · {self.action}",
                  f"Input: {identity.source_path} · revision {self.input.revision}",
                  f"Data root: {identity.root_key or 'none known'}",
-                 f"TXY source: {txy_sources.SHORT.get(identity.source, 'HeLab or MATLAB priority')}"
+                 f"TXY source: {_source_text(identity.source)}"
                  + (f"; {len(self.coverage.origins):,} shots from HeLab's TXY" if self.coverage.origins else ""),
                  f"Signature: {identity.signature[:16] or 'none'}"
                  + (f" (this revision: {self.input_signature[:16]})"
@@ -315,3 +315,13 @@ class RamResults:
 
     def __len__(self) -> int:
         return len(self._results)
+
+
+def _source_text(source: str) -> str:
+    """A view identity's TXY source in short: a mode's name, a list's entries (Q53.2), or for "" (the two
+    priority modes, which share it) both."""
+    if source in txy_sources.SHORT:
+        return txy_sources.SHORT[source]
+    if txy_sources.is_list(source):
+        return txy_sources.summary(txy_sources.entries_of(source))
+    return "HeLab or External priority"

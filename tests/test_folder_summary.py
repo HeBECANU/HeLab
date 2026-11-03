@@ -231,10 +231,10 @@ def test_folder_details_count_the_txy_by_kind_and_what_the_source_leaves_out(bro
     rows: dict[str, tuple[str, str]] = {}
     FolderDetailsPanel._data_rows(browser, meta, rows, False, True)
     text, tooltip = rows["txy"]
-    assert text == "120 MATLAB · 118 m19v1" and "d_txy_helab_m19v1_<N>.txt" in tooltip and "Other profiles" in tooltip
+    assert text == "120 External · 118 m19v1" and "d_txy_helab_m19v1_<N>.txt" in tooltip and "Other profiles" in tooltip
     matlab_only = {**meta, "load_counts": {key: value for key, value in counts.items() if key != "txy_helab"}}
     FolderDetailsPanel._data_rows(browser, matlab_only, rows, False, True)
-    assert rows["txy"][0] == "120 MATLAB" and "not looked for" in rows["txy"][1]
+    assert rows["txy"][0] == "120 External" and "not looked for" in rows["txy"][1]
     FolderDetailsPanel._data_rows(browser, {**meta, "load_counts": {"reused_memory": 118}}, rows, False, True)
     assert rows["txy"] == ("", "")
     browser.load_counts = counts

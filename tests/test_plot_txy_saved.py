@@ -107,7 +107,7 @@ def test_a_reopened_plot_takes_its_saved_choice_and_loads_it_once_its_folder_was
                                                          txy=TxyChoice("helab-only", "plates-2022", "p22v1")))
     assert instance.txy_source == "helab-only" and instance.txy_profile is not None
     assert instance.txy_profile.name == "plates-2022"
-    assert instance.txy_row is not None and instance.txy_row.source() == "helab-only"
+    assert instance.txy_row is not None and instance.txy_row.entries == ("p22v1",)
     qtbot.waitUntil(lambda: bool(loads(cache)), timeout=10_000)
     [request] = loads(cache)
     assert request.payload["txy"]["source"] == "helab-only" and request.payload["txy"]["profile_tag"] == "p22v1"
@@ -126,7 +126,7 @@ def test_a_reopened_plot_never_reads_its_folder_by_itself_for_its_choice(
     cache.datasets[cache.dataset_key(cached)] = cached
     instance = reopened(qtbot, cache, windows, SavedPlot(REF, path, txy=TxyChoice("helab-only")))
     qtbot.waitUntil(lambda: instance._own_waits, timeout=10_000)
-    assert loads(cache) == [] and "or Rerun, to load HeLab's only" in instance.status_label.text()
+    assert loads(cache) == [] and "or Rerun, to load Conversion (m19v1) only" in instance.status_label.text()
     instance.run()  # Rerun: the user's word.
     assert len(loads(cache)) == 1 and not instance._own_waits
 
@@ -176,14 +176,14 @@ def test_a_script_preset_carries_the_choice_and_one_without_leaves_it(
     load_through_the_cache(cache, path, range(1, 4), "v1", allow_missing=False)
     instance = reopened(qtbot, cache, windows, SavedPlot(REF, path, values={"bins": 3}))
     qtbot.waitUntil(lambda: instance.shown is not None, timeout=10_000)
-    switched: List[tuple[str, str]] = []
-    monkeypatch.setattr(instance, "set_txy_source", lambda source, profile="": switched.append((source, profile)))
+    switched: List[Any] = []
+    monkeypatch.setattr(instance, "set_txy_list", switched.append)
     full = {"bins": 4, "mode": "counts"}
     instance.apply_saved(ScriptPreset("without", instance.script_ref(), full, "PyQtGraph"), "left as they were")
     assert switched == []  # D2: the preset says nothing of TXY.
     instance.apply_saved(ScriptPreset("with", instance.script_ref(), full, "PyQtGraph",
                                       txy=TxyChoice("helab-only", "plates-2022", "p22v1")), "left as they were")
-    assert switched == [("helab-only", "plates-2022")]
+    assert switched == [("p22v1",)]  # (Its list, Q53.2: HeLab only of plates-2022.)
     # Saving a preset from the plot holds its choice (none while Keep is off).
     written: List[ScriptPreset] = []
     def write(preset: ScriptPreset) -> str:

@@ -1,28 +1,30 @@
-"""A plot's TXY choice (Q6.6, Q18.2): which TXY its data is made of, in its settings page.
+"""A plot's TXY choice (Q6.6, Q18.2, Q53.2): which TXY its data is made of, in its settings page.
 
-The sources (``txy_sources``): HeLab's where they exist with MATLAB's for the rest (the default for tabs
-and Live), MATLAB's with HeLab's filling the shots MATLAB lacks, and HeLab's only or MATLAB's only for
-comparing, one plot on each; and for HeLab's, the profile whose TXY are read, chosen by its tag (the
-conversion profile's unless another is picked). "As the tab" follows the folder's tab (the setting in
-Settings → TXY converter). A plot on another choice than the tab's loads its own dataset of the folder
-(RAM only) through ``FolderCache`` and loads it again when Live finds new shots. The row also names the
-profile HeLab converts with and, from the folder's date, the plate profile the swap dates suggest (Q6.10:
-shown, never applied), and "Keep" (Keep this plot's TXY choice, on by default; Q14.2 = Q23.4): on, the
-choice is saved with the plot's presets, arrangements and the plots reopened at start; off, it isn't
-(for tweaking and exploring).
+A TXY priority list (``txy_sources``): External (the MATLAB converter's ``d_txy_forc``), the conversion
+profile, and any profile's HeLab TXY by its tag, in order; each shot takes the first entry with a usable TXY.
+"As the folder's tab" follows the folder's tab (its own list, else Settings › TXY converter's). A plot on
+another choice than the tab's loads its own dataset of the folder (RAM only) through ``FolderCache`` and loads
+it again when Live finds new shots. The row is one button naming the list in short, which opens the list
+editor (``helab/views/txy_list.py``); a line under it names the profile HeLab converts with and, from the
+folder's date, the plate profile the swap dates suggest (Q6.10: shown, never applied), and "Keep" (Keep this
+plot's TXY choice, on by default; Q14.2 = Q23.4): on, the choice is saved with the plot's presets,
+arrangements and the plots reopened at start; off, it isn't (for tweaking and exploring).
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QResizeEvent
+from PyQt6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from helab.analysis.dataset_view import DatasetView
 from helab.convert.profile import BUILTIN_PROFILES, UNCALIBRATED, DetectorProfile, file_tag, suggested_plates
-from helab.utils import txy_sources
 from helab.utils.accessible import identify
+from helab.utils.txy_sources import Entries
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views.txy_list import AskList, ask_txy_list, known_names, list_summary
 
 
 def known_profiles() -> dict[str, DetectorProfile]:
@@ -57,41 +59,61 @@ def plate_note(view: DatasetView, profile_name: str) -> str:
     return f"{suggested}{' (uncalibrated)' if suggested in UNCALIBRATED else ''} suggested for this folder's date ({day})"
 
 
-class TxySourceRow(QWidget):
-    """``TXY: [source ▾] [profile ▾]`` and one line under it: the profile HeLab converts with, and a plate
-    suggestion when there is one, with the Keep box at its end. ``changed`` is called with the source ("":
-    as the tab) and the profile's name ("": the conversion profile's) chosen; ``kept`` with Keep's state."""
+class ElidedButton(QPushButton):
+    """A push button whose text is cut with "…" to its width (the full text in ``full`` and the tooltip), so it
+    shrinks with the settings panel and is never narrower than what it shows (Q33.2, R2-2)."""
 
-    def __init__(self, source: str, changed: Callable[[str, str], None], profile: str = "",
-                 parent: Optional[QWidget] = None, keep: bool = True,
-                 kept: Optional[Callable[[bool], None]] = None) -> None:
+    PADDING = 24  # (The style's margins around a push button's text.)
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self.full = text
+
+    def set_full_text(self, text: str) -> None:
+        self.full = text
+        self._elide()
+
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
+        super().resizeEvent(a0)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self.full, Qt.TextElideMode.ElideRight,
+                                              max(0, self.width() - self.PADDING))
+        if shown != self.text():
+            self.setText(shown)
+
+
+class TxySourceRow(QWidget):
+    """``TXY: [the plot's list ▸]`` and one line under it: the profile HeLab converts with, and a plate
+    suggestion when there is one, with the Keep box at its end. The button opens the TXY list editor
+    (``helab/views/txy_list.py``, Q53.2) with "As the folder's tab" at the top; ``changed`` is called with the
+    list chosen (None: as the tab); ``kept`` with Keep's state. ``context`` gives the conversion profile's
+    tag and the tab's list in short, for the button and the editor."""
+
+    def __init__(self, entries: Optional[Sequence[str]], changed: Callable[[Optional[Entries]], None],
+                 context: Callable[[], tuple[str, str]] = lambda: ("", ""), parent: Optional[QWidget] = None,
+                 keep: bool = True, kept: Optional[Callable[[bool], None]] = None) -> None:
         super().__init__(parent)
         self._changed = changed
+        self._context = context
+        self.entries: Optional[Entries] = tuple(entries) if entries is not None else None
+        self.ask_list: AskList = ask_txy_list  # (A test answers in its place.)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(0)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("TXY:"))
-        self.combo = identify(QComboBox(), "txy_source", "TXY source", "Which TXY this plot's data is made of")
-        self.combo.addItem("As the folder's tab", "")
-        for value in txy_sources.SOURCES:
-            self.combo.addItem(txy_sources.LABELS[value], value)
-        self.combo.setToolTip(
-            "Which TXY this plot's data is made of (MATLAB's d_txy_forc, HeLab's d_txy_helab_<tag>). HeLab's only "
-            "and MATLAB's only: one plot on each, to compare. As the folder's tab: the source tabs and Live read "
-            "(Settings → TXY converter).")
-        row.addWidget(self.combo, 2)
-        self.profile_combo = identify(QComboBox(), "txy_profile", "TXY profile", "Whose HeLab TXY are read")
-        self.profile_combo.setToolTip("Whose HeLab TXY are read: those of the profile HeLab converts with "
-                                      "(Settings → TXY converter), or another's, by the tag in their names.")
-        self.profile_combo.addItem("Conversion profile", "")
-        for name, item in sorted(known_profiles().items()):
-            self.profile_combo.addItem(f"{name} ({file_tag(item)})", name)
-        row.addWidget(self.profile_combo, 1)
-        for combo in (self.combo, self.profile_combo):  # (They shrink with the panel, not set its width: Q33.2.)
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(8)
+        self.button = identify(ElidedButton(""), "txy_source", "TXY priority",
+                               "Which TXY this plot's data is made of, in order: each shot from the first entry with "
+                               "a usable TXY (External: the MATLAB converter's d_txy_forc; HeLab's "
+                               "d_txy_helab_<tag>). As the folder's tab: what its tab and Live read.")
+        self.button.setToolTip(self.button.accessibleDescription())
+        self.button.setMinimumWidth(40)  # (It shrinks with the panel, not set its width: Q33.2.)
+        self.button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.button.clicked.connect(self.edit)
+        row.addWidget(self.button, 1)
         layout.addLayout(row)
         line = QHBoxLayout()
         line.setContentsMargins(0, 0, 0, 0)
@@ -109,38 +131,33 @@ class TxySourceRow(QWidget):
             self.keep_box.toggled.connect(kept)
         line.addWidget(self.keep_box)
         layout.addLayout(line)
-        self.set_source(source, profile)
-        self.combo.currentIndexChanged.connect(self._picked)
-        self.profile_combo.currentIndexChanged.connect(self._picked)
+        self.set_entries(self.entries)
 
-    def set_source(self, source: str, profile: str = "") -> None:
-        for combo, value in ((self.combo, source), (self.profile_combo, profile)):
-            index = combo.findData(value)
-            if index < 0 and combo is self.profile_combo and value:
-                combo.addItem(value, value)  # (A profile no longer listed: still named.)
-                index = combo.findData(value)
-            if index >= 0 and index != combo.currentIndex():
-                combo.blockSignals(True)
-                combo.setCurrentIndex(index)
-                combo.blockSignals(False)
-        self.profile_combo.setEnabled(self.source() != txy_sources.MATLAB_ONLY)
+    def set_entries(self, entries: Optional[Sequence[str]]) -> None:
+        """Show the plot's list (None: as the tab)."""
+        self.entries = tuple(entries) if entries is not None else None
+        tag, tab = self._context()
+        text = (f"As the folder's tab ({tab})" if self.entries is None and tab
+                else list_summary(self.entries, tag, "As the folder's tab"))
+        self.button.set_full_text(text)
+        self.button.setToolTip(f"{text}\n\n{self.button.accessibleDescription()}")
 
-    def source(self) -> str:
-        return str(self.combo.currentData() or "")
-
-    def profile(self) -> str:
-        return str(self.profile_combo.currentData() or "")
+    def edit(self) -> None:
+        """The list editor; a change is the plot's (``changed``)."""
+        tag, tab = self._context()
+        accepted, entries = self.ask_list(self, "TXY for this plot", "This plot's data, in this order (each shot "
+                                          "from the first entry with a usable TXY):", self.entries, tag,
+                                          known_names(), "As the folder's tab", tab)
+        if accepted and (entries is None or entries) and entries != self.entries:
+            self.set_entries(entries)
+            self._changed(self.entries)
 
     def show_profile(self, view: DatasetView, profile_name: str) -> None:
         """One line: the profile, the data's TXY and a plate suggestion (detail in the tooltip)."""
         suggestion = plate_note(view, profile_name)
         self.note.setText(f"HeLab converts with {profile_name}" + (f" · {suggestion}" if suggestion else ""))
-        self.note.setToolTip(f"{view.txy_text()}\nHeLab's TXY are read by their profile's tag (the profile "
-                             f"chosen here, else the one HeLab converts with: {profile_name}; Settings → TXY "
-                             "converter)."
+        self.note.setToolTip(f"{view.txy_text()}\nHeLab's TXY are read by their profile's tag (the profiles in "
+                             f"the list; Conversion profile: the one HeLab converts with, {profile_name}; "
+                             "Settings → TXY converter)."
                              + (f"\nThe plate swap dates suggest {suggestion}; it is not applied: choose it in "
                                 "Settings → TXY converter to convert with it." if suggestion else ""))
-
-    def _picked(self) -> None:
-        self.profile_combo.setEnabled(self.source() != txy_sources.MATLAB_ONLY)
-        self._changed(self.source(), self.profile())

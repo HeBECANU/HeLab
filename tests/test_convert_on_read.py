@@ -274,13 +274,13 @@ def test_the_wording_names_shots_converted_from_raw() -> None:
     assert txy_sources.describe(txy_sources.HELAB_ONLY, {1: origin, 2: origin}, profiles, 2, 2) == \
         "TXY: HeLab's (matlab-2019 v1), converted from raw"
     assert txy_sources.describe(txy_sources.HELAB_PRIORITY, {1: origin, 2: origin}, profiles, 3, 1) == \
-        "TXY: HeLab's (matlab-2019 v1) for 2 of 3 shots (1 converted from raw), MATLAB's for the rest"
+        "TXY: HeLab's (matlab-2019 v1) for 2 of 3 shots (1 converted from raw), External for the rest"
     assert txy_sources.describe(txy_sources.HELAB_ONLY, {1: origin, 2: origin}, profiles, 2) == \
         "TXY: HeLab's (matlab-2019 v1)"
     meta = {"load_counts": {"txy_matlab": 0, "txy_helab": 1, "helab_on_read": 2},
             txy_sources.TXY_FIELD: {"profile_tag": "m19v1"}}
     text, tip = FolderDetailsPanel._txy_row(meta)
-    assert text == "0 MATLAB · 1 m19v1 · 2 m19v1 converted from raw" and "HeLab m19v1, converted from raw" in tip
+    assert text == "0 External · 1 m19v1 · 2 m19v1 converted from raw" and "HeLab m19v1, converted from raw" in tip
     cache = SimpleNamespace(on_read_shots=lambda path, raw, txy: raw - txy)
     node = SimpleNamespace(path="/data/run", raw_count=5, txy_count=2, report=object())
     text = SnapshotFileSystemModel._on_read_text(SimpleNamespace(cache=cache), node)  # type: ignore[arg-type]
