@@ -408,6 +408,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     on_read: dict[int, helab_txy.HelabShot] = {}
     # The HeLab shots each shot's choice takes (a text, or a raw file converted on read).
     helab_chosen: dict[int, helab_txy.HelabShot] = {}
+    fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
     if txy_sources.wants_helab(txy_source):
         helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), listed_at)
         trusted = {int(shot): (int(size), int(modified), held_origins[int(shot)])
@@ -421,7 +422,7 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
                                            can_convert=can_convert if convert_here else None)
         helab_found = listed_found.texts()
         on_read = listed_found.on_read
-        chosen, helab_chosen = helab_txy.compose_list(listed_found, matlab)
+        chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab)
     else:
         chosen = helab_txy.compose(txy_source, matlab, {})
     # (Those a conversion now serves: the rest of on_read lost to another entry's TXY by the list's order.)
@@ -817,7 +818,8 @@ def _load(path: str, output: str, send: Emit, store: CacheStore | None, guard: S
     # HeLab's not beside the raw files are named in full (a quick check's samples join them to the folder).
     names = [filename if shot in origins and os.path.dirname(filename) != os.path.dirname(matlab_dir(shot))
              else os.path.basename(filename) for shot, filename in files]
-    txy_record = helab_txy.record(txy_source, origins, helab_chosen, None, txy, helab_state, on_read)
+    txy_record = helab_txy.record(txy_source, origins, helab_chosen, None, txy, helab_state, on_read, fell_back,
+                                  {shot for shot, _ in files})
     # Left out when the cache couldn't be read: unknown, not "not cached" (and for a quiet load: the folder's
     # cache state is its tab's, never a plot choice's).
     # store-v4: the folder is disk cached when it has any view, this TXY choice's or another's (as listings say,

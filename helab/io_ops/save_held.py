@@ -113,8 +113,9 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         # too: "" its origin).
         held_kinds = {shot: held_origins.get(shot, "") for shot in known}
         helab_chosen: dict[int, helab_txy.HelabShot] = {}
+        fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
         if listed_found is not None:
-            chosen, helab_chosen = helab_txy.compose_list(listed_found, matlab, held_kinds)
+            chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds)
         else:
             chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
         origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
@@ -233,7 +234,7 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
                         **{shot: origins[shot] for shot in replaced if shot in origins}}
         record = helab_txy.record(txy_source, data_origins, {**helab_found, **helab_chosen},
                                   held_record.get("profiles"), txy,
-                                  helab_state)
+                                  helab_state, (), fell_back, {int(entry[0]) for entry in fingerprint})
         # The folder's MATLAB TXY as this data stands for them (``helab_txy.folder_print``, as Live's): its
         # summary's and its signature, so the tab finds it matches the folder.
         matlab_print = helab_txy.folder_print(fingerprint, data_origins,

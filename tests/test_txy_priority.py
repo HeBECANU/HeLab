@@ -188,18 +188,45 @@ def test_each_shot_comes_from_the_first_entry_with_a_txy(tmp_path: Path, v4: boo
     assert quick.get("unchanged") is True or quick["load_counts"]["read"] == 0
 
 
-def test_a_list_without_external_leaves_externals_shots_out(tmp_path: Path) -> None:
+def test_a_list_without_external_falls_back_before_converting(tmp_path: Path) -> None:
+    """Q~2: a list of several entries falls back to Settings' list, External, then any HeLab TXY; convert on
+    read only when nothing in that chain has a file (Q~2.3)."""
     source = mixed_folder(tmp_path)
     txy = txy_sources.with_list(conversion(), (M23, M19), builtin_for_tag)
-    shots = shots_of(run_load(source, tmp_path, v4_options(tmp_path), txy=txy))
-    # Shots 3 (External's alone, not in the list) and 5 (raw only): no entry has a file of them, so they are
-    # converted on read with m23v1 (Q~1; as HeLab only converts over MATLAB's TXY).
-    assert sorted(shots) == [1, 2, 3, 4, 5] and float(shots[1][0][0]) == 1.23
-    assert np.array_equal(shots[3], converted(3, MATLAB_2023_LAB_EDIT))
-    # store-v3 (no conversion on read): External's shot 3 is left out, not missing.
+    events = run_load(source, tmp_path, v4_options(tmp_path), txy=txy)
+    shots, record = shots_of(events), first(events, "loaded")["txy"]
+    # Shot 3 (External's alone): from the fallback, External; shot 5 (raw only): converted with m23v1.
+    assert sorted(shots) == [1, 2, 3, 4, 5] and float(shots[1][0][0]) == 1.23 and float(shots[3][0][0]) == 3.1
+    assert np.array_equal(shots[5], converted(5, MATLAB_2023_LAB_EDIT))
+    assert record["fallback"] == [3] and "3" not in record["origins"] and record["on_read"] == [5]
+    # store-v3 (no conversion on read): shot 5 isn't there.
     v3 = {"directory": str(tmp_path / "caches" / "store-v3"), "budget": 8 << 30, "budget_set_at": 1.0}
     loaded = first(run_load(source, tmp_path, v3, txy=txy), "loaded")
-    assert sorted(int(shot) for shot, *_ in loaded["fingerprint"]) == [1, 2, 4]
+    assert sorted(int(shot) for shot, *_ in loaded["fingerprint"]) == [1, 2, 3, 4]
+
+
+def test_a_one_entry_list_never_falls_back(tmp_path: Path) -> None:
+    source = mixed_folder(tmp_path)
+    txy = txy_sources.with_list(conversion(), (M23,), builtin_for_tag)  # (HeLab only of m23v1.)
+    shots = shots_of(run_load(source, tmp_path, v4_options(tmp_path), txy=txy))
+    # Only m23v1: shot 1's text, and the rest converted from their raw files (External doesn't block one entry).
+    assert float(shots[1][0][0]) == 1.23 and all(np.array_equal(shots[shot], converted(shot, MATLAB_2023_LAB_EDIT))
+                                                 for shot in (2, 3, 4, 5))
+
+
+def test_a_plot_falls_back_to_its_folders_list_then_settings(tmp_path: Path) -> None:
+    """A plot's chain (Q~2.1): its own list → the folder's (tab's) → Settings' → any TXY."""
+    source = mixed_folder(tmp_path)
+    for shot in (2, 4):  # (No m19v1 now: shots 2 and 4 only if a fallback names a tag that has them.)
+        (source / f"d_txy_helab_{M19}_{shot}.txt").rename(source / f"d_txy_helab_p22v1_{shot}.txt")
+    p22 = builtin_for_tag("p22v1")
+    assert p22 is not None
+    folder = txy_sources.items_of(conversion(), ("p22v1", EXTERNAL), builtin_for_tag)
+    txy = {**txy_sources.with_list(conversion(), (M23, EXTERNAL), builtin_for_tag), "fallback": folder}
+    # [m23v1, External] own: 1 m23v1, 2 and 3 External; 4 from the folder's p22v1 (fallback); 5 converted.
+    record = first(run_load(source, tmp_path, v4_options(tmp_path), txy=txy), "loaded")["txy"]
+    assert record["origins"] == {"1": "helab:" + H23, "4": "helab:" + H19, "5": "helab:" + H23}
+    assert record["fallback"] == [4] and record["fallback_entries"] == [["p22v1", H19]]
 
 
 def test_a_first_entry_still_being_written_leaves_the_shot_out(tmp_path: Path,
@@ -273,6 +300,13 @@ def test_folder_cache_resolves_the_settings_the_folders_and_a_plots_list(monkeyp
         assert (plot["source"], plot["profile_hash"]) == (txy_sources.HELAB_ONLY, H23)  # (One entry: a mode.)
         plot = cache.with_txy(path, {"txy": {"list": [M23, CONVERSION]}})["txy"]
         assert plot["source"] == "m23v1>m19v1" and plot["tab"] is False
+        # Q~2's fallback: the plot's, the folder's list then Settings'; the folder's tab, Settings'; Settings', none.
+        tags = [item.get("tag") for item in plot["fallback"]]
+        assert tags == [M23, M19, None]  # (The folder's m23v1 › m19v1, then Settings' Conversion › External.)
+        tab = cache.with_txy(path, {})["txy"]
+        assert [item.get("tag") for item in tab["fallback"]] == [M19, None]
+        assert tab["known"][M19]["profile_hash"] == H19
+        assert "fallback" not in cache.with_txy(str(tmp_path / "other"), {})["txy"]
         # The folder's row as the store keeps it.
         assert txy_sources.folder_row((CONVERSION, EXTERNAL)) == (txy_sources.HELAB_PRIORITY, "")
     finally:
@@ -341,3 +375,16 @@ def test_the_list_editor_ticks_orders_and_follows(qtbot: Any) -> None:
     qtbot.addWidget(other)
     first_item = other.editor.list.item(0)
     assert first_item is not None and first_item.text() == "u0123abcd (no profile known by this tag)"
+
+
+def test_the_fallback_is_said_in_the_plots_line_and_folder_details() -> None:
+    from helab.views.FolderDetailsPanel import FolderDetailsPanel
+    profiles = {H19: {"name": "matlab-2019", "version": 1}, H23: {"name": "matlab-2023-lab-edit", "version": 1}}
+    text = txy_sources.describe("m23v1>m19v1", {1: "helab:" + H23, 2: "helab:" + H23, 3: "helab:" + H19}, profiles, 4,
+                                fallback={3: "helab:" + H19, 4: ""})
+    assert text.endswith("; 2 shots from the fallback (External, matlab-2019 v1)")
+    meta = {"load_counts": {"txy_matlab": 1, "txy_helab": 3},
+            "txy": {"source": "m23v1>m19v1", "origins": {"3": "helab:" + H19}, "profiles": profiles,
+                    "profile_tag": "", "fallback": [3, 4]}}
+    row, tip = FolderDetailsPanel._txy_row(meta)
+    assert row.endswith("· 2 fallback") and "(External, matlab-2019 v1)" in tip

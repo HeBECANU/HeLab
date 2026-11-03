@@ -439,6 +439,15 @@ class FolderDetailsPanel(QScrollArea):
                              "raw files when loaded and kept in the disk cache (no TXY file written).")
         else:
             lines.append("HeLab's TXY not looked for: this folder's TXY source reads External only.")
+        fallback = sorted(txy_sources.fallback_of(meta))
+        if fallback:
+            # (Q~2: shots none of the list's own entries has a TXY of, from the levels above or any TXY there.)
+            origins, profiles = txy_sources.origins_of(meta), txy_sources.profiles_of(meta)
+            names = sorted({txy_sources.origin_name(origins.get(shot, ""), profiles) for shot in fallback})
+            parts.append(f"{len(fallback):,} fallback")
+            lines.append(f"Fallback: {len(fallback):,} shot{'' if len(fallback) == 1 else 's'} none of the TXY "
+                         f"list's own entries has a TXY of, taken from the lists above it or any TXY there "
+                         f"({', '.join(names)})")
         return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
 
     @staticmethod

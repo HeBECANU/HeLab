@@ -198,6 +198,7 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
     helab_chosen: dict[int, helab_txy.HelabShot] = {}
     unheld: dict[int, tuple[str, str]] = {}  # (Each shot's TXY by the list's order alone.)
     unheld_shots: dict[int, helab_txy.HelabShot] = {}
+    fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
     held_kinds = {shot: held_origins.get(shot, "") for shot in held}
     if txy_sources.wants_helab(txy_source):
         trusted = {shot: (*held[shot], origin) for shot, origin in held_origins.items()}
@@ -210,8 +211,8 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
             on_read_profile = profile_of(str(listed_found.entries[listed_found.converting].get("profile_hash")))
         # Each shot's TXY as the list asks; a held shot keeps its entry while that TXY is there (one held from
         # MATLAB's too: "" its origin, so a HeLab TXY converted since doesn't replace it).
-        chosen, helab_chosen = helab_txy.compose_list(listed_found, matlab, held_kinds)
-        unheld, unheld_shots = helab_txy.compose_list(listed_found, matlab)
+        chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds)
+        unheld, unheld_shots, _ = helab_txy.compose_list(listed_found, matlab)
     else:
         chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
     on_read = {shot: found for shot, found in on_read.items() if chosen.get(shot, ("", ""))[0] == found.file}
@@ -485,7 +486,8 @@ def live_check(path: str, output: str, send: Emit = emit, memory: list[list[int]
           "signature": str(summary["signature"]),
           "txy": helab_txy.record(txy_source, data_origins, {**helab_found, **on_read, **helab_chosen},
                                   txy.get("profiles"), txy,
-                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins}),
+                                  helab_state, {shot for shot in {*on_read, *held_on_read} if shot in data_origins},
+                                  fell_back, {int(item[0]) for item in fingerprint}),
           **state(True, unsettled, True)})
 
 

@@ -1019,13 +1019,23 @@ class FolderCache(QObject):
         if not txy.get("profile_hash"):
             txy.update(self.conversion_options())
         txy["conversion"] = self.conversion_options()  # (``Conversion``'s profile, whatever the list resolved to.)
+        # Q~2: a list of several entries falls back to the levels above it (a plot's: the folder's own list, then
+        # Settings'; a folder's own: Settings'), then to any TXY in the folder (the helper's last stages).
+        own_folder = self.folder_own_list(path)
         if listed is not None:
             entries = txy_sources.valid_list(listed)
             txy = txy_sources.with_list(txy, entries or self.tab_list(), self._profile_for_tag)
+            above = [*(own_folder or ()), *self.tab_list()]
         elif txy["tab"]:
             # The folder's own TXY list (store-v4, Q45.2, Q53.2), else Settings', for the tab's loads, Live and
             # cached reads.
             txy = txy_sources.with_list(txy, self.folder_list(path), self._profile_for_tag)
+            above = list(self.tab_list()) if own_folder is not None else []
+        else:
+            above = []
+        if above:
+            txy["fallback"] = txy_sources.items_of(txy, list(dict.fromkeys(above)), self._profile_for_tag)
+        txy["known"] = self.known_profiles()
         if "profile_def" not in txy and (profile := self.convert_profile()).content_hash() == str(txy["profile_hash"]):
             # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
             # built-ins the helper knows itself; another user profile's TXY is read from its text).
@@ -1056,6 +1066,22 @@ class FolderCache(QObject):
             if isinstance(metadata, Mapping) and metadata.get("key"):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
+
+    def folder_own_list(self, path: str) -> txy_sources.Entries | None:
+        """A folder's own TXY list (Q45.2, Q53.2), None when it follows Settings'. Memory only."""
+        choices = self.folder_choices.get(path) or {}
+        return txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+
+    def known_profiles(self) -> dict[str, dict[str, Any]]:
+        """The conversion profile and the user's by tag (``profile_hash``, ``profile``), for a load's last
+        fallback stage to name HeLab's TXY beside the raw files (Q~2; the built-ins the helper knows)."""
+        self._profile_for_tag("")  # (Reads the user's profiles once.)
+        found = {tag: {"profile_hash": item["profile_hash"], "profile": item["profile"]}
+                 for tag, item in (self._user_profiles or {}).items()}
+        conversion = self.conversion_options()
+        found[str(conversion["profile_tag"])] = {"profile_hash": conversion["profile_hash"],
+                                                 "profile": conversion["profile"]}
+        return found
 
     def folder_list(self, path: str) -> txy_sources.Entries:
         """The TXY list a tab load of ``path`` reads, as saved: the folder's own (Q45.2, Q53.2), else Settings'.

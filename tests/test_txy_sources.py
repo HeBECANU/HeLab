@@ -148,7 +148,11 @@ def test_each_source_takes_its_txy(tmp_path: Path, private_store: str) -> None:
 def test_helabs_are_read_only_when_current_for_the_profile(tmp_path: Path, private_store: str) -> None:
     source = make_run(tmp_path, private_store)
     other = options(tmp_path, private_store, txy_sources.MATLAB, MATLAB_2023_LAB_EDIT.content_hash())
-    assert sorted(shots_read(run_load(source, tmp_path, None, other))) == [1, 2]
+    # (Q~2: MATLAB priority of m23v1, a list of two entries, falls back to any current HeLab TXY: m19v1's of 3
+    # and 4, said as fallback; a one-entry list never falls back.)
+    fell_back = run_load(source, tmp_path, None, other)
+    assert sorted(shots_read(fell_back)) == [1, 2, 3, 4] and loaded(fell_back)["txy"]["fallback"] == [3, 4]
+    assert loaded(fell_back)["txy"]["origins"] == {"3": f"helab:{PROFILE}", "4": f"helab:{PROFILE}"}
     with pytest.raises(ValueError, match="No current HeLab TXY"):
         run_load(source, tmp_path, None, {**other, "source": txy_sources.HELAB_ONLY})
     # Any profile when none is asked for.
@@ -626,9 +630,13 @@ def test_a_held_shot_of_another_profile_isnt_trusted(tmp_path: Path, private_sto
     first = loaded(run_load(source, tmp_path, None, options(tmp_path, private_store)))
     other = {**options(tmp_path, private_store), "profile_hash": MATLAB_2023_LAB_EDIT.content_hash(),
              "key": _key(source, private_store)}
+    with pytest.raises(ValueError, match="No current HeLab TXY"):  # (One entry, m23v1: the held m19v1 aren't it.)
+        run_load(source, tmp_path, None, {**other, "source": txy_sources.HELAB_ONLY}, memory=first["fingerprint"],
+                 memory_origins=first["txy"]["origins"], full_check=True)
+    # (Q~2: a list of several entries takes them from its fallback, any current HeLab TXY: m19v1's, the held.)
     held = loaded(run_load(source, tmp_path, None, other, memory=first["fingerprint"],
                            memory_origins=first["txy"]["origins"], full_check=True))
-    assert held["txy"]["origins"] == {} and held["memory_shots"] == [1, 2]
+    assert held["txy"]["fallback"] == [3, 4] and held["memory_shots"] == [1, 2, 3, 4]
     # Live's shortcut is the profile's too: the same folders with another profile asked for list again.
     steady = last(live(source, tmp_path, private_store, first["fingerprint"], memory_origins=first["txy"]["origins"]),
                   "live_unchanged")["live_helab"]

@@ -356,8 +356,27 @@ def on_read_of(metadata: Mapping[str, Any]) -> set[int]:
     return {int(shot) for shot in shots if isinstance(shot, int)} if isinstance(shots, list) else set()
 
 
+def fallback_of(metadata: Mapping[str, Any]) -> set[int]:
+    """The shots of a dataset taken from beyond its list's own entries (Q~2's fallback)."""
+    record = metadata.get(TXY_FIELD)
+    shots = record.get("fallback") if isinstance(record, Mapping) else None
+    return {int(shot) for shot in shots if isinstance(shot, int)} if isinstance(shots, list) else set()
+
+
 def describe(source: str, origins: Mapping[int, str], profiles: Mapping[str, Mapping[str, Any]],
-             shots: int, on_read: int = 0) -> str:
+             shots: int, on_read: int = 0, fallback: Mapping[int, str] | None = None) -> str:
+    """``describe_own`` and, when some shots came from beyond the list's own entries (Q~2: ``fallback``, shot →
+    origin), "; 3 shots from the fallback (m19v1 v1, External)"."""
+    text = describe_own(source, origins, profiles, shots, on_read)
+    if not fallback:
+        return text
+    names = sorted({origin_name(origin, profiles) for origin in fallback.values()})
+    count = len(fallback)
+    return f"{text}; {count:,} shot{'' if count == 1 else 's'} from the fallback ({', '.join(names)})"
+
+
+def describe_own(source: str, origins: Mapping[int, str], profiles: Mapping[str, Mapping[str, Any]],
+                 shots: int, on_read: int = 0) -> str:
     """``TXY: External`` / ``TXY: HeLab's (matlab-2019 v1) for 3 of 10 shots, External for the rest``; with
     ``on_read`` of the HeLab shots made from their raw files when read, "converted from raw" (S3~6)."""
     count = len(origins)
@@ -371,6 +390,11 @@ def describe(source: str, origins: Mapping[int, str], profiles: Mapping[str, Map
     if count >= shots:
         return f"TXY: {helab}{from_raw}"
     return f"TXY: {helab} for {count:,} of {shots:,} shots{from_raw}, {EXTERNAL_SHORT} for the rest"
+
+
+def origin_name(origin: str, profiles: Mapping[str, Mapping[str, Any]]) -> str:
+    """A shot's origin in short: "External", or its profile's name and version ("matlab-2019 v1")."""
+    return _profile_text(origin[len(HELAB_ORIGIN):], profiles) if is_helab(origin) else EXTERNAL_SHORT
 
 
 def _profile_text(profile_hash: str, profiles: Mapping[str, Mapping[str, Any]]) -> str:
@@ -406,8 +430,19 @@ def with_list(txy: Mapping[str, Any], entries: Sequence[str],
         if tag and tag not in (CONVERSION, conversion_tag) and (profile := profiles(tag)) is not None:
             found.update(profile)
         return found
+    return {**found, "source": list_text(resolved), "entries": items_of(txy, resolved, profiles)}
+
+
+def items_of(txy: Mapping[str, Any], entries: Sequence[str],
+             profiles: Callable[[str], dict[str, Any] | None]) -> list[dict[str, Any]]:
+    """A list's entries as a load sends them (``with_list``'s ``entries``), whether or not it is a mode: for
+    the fallback lists (Q~2). ``txy`` holds the conversion profile's fields (or ``conversion``)."""
+    conversion = txy.get("conversion")
+    if isinstance(conversion, Mapping) and conversion.get("profile_tag"):
+        txy = {**txy, **{key: conversion[key] for key in ("profile_hash", "profile_tag", "profile") if key in conversion}}
+    conversion_tag = str(txy.get("profile_tag") or "")
     items: list[dict[str, Any]] = []
-    for token in resolved:
+    for token in (resolve(entries, conversion_tag) if conversion_tag else tuple(entries)):
         if token == EXTERNAL:
             items.append({"external": True})
             continue
@@ -419,7 +454,7 @@ def with_list(txy: Mapping[str, Any], entries: Sequence[str],
         items.append({"tag": conversion_tag if token == CONVERSION else token,
                       "profile_hash": str(profile.get("profile_hash") or ""),
                       "profile": dict(given) if isinstance(given, Mapping) else {"name": token}})
-    return {**found, "source": list_text(resolved), "entries": items}
+    return items
 
 
 def payload_entries(txy: Mapping[str, Any]) -> list[dict[str, Any]]:
