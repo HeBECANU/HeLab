@@ -421,7 +421,8 @@ class CacheDialogs(QObject):
 
     def _legacy_due(self) -> bool:
         """The store-v3 question, once, while Keep still reads store-v3 (through v0.0.8, V~3); from v0.0.9 it is
-        never asked: only Settings' Clear old stores… remains."""
+        never asked: only Settings › Cache's Older cache Clear… (or Make room's Clear old stores…) remains.
+        Asked only when an older HeLab's store-v3 is in the cache folder (``present``)."""
         from helab.utils.cache_store import legacy_read_through
         legacy = self.cache.legacy or {}
         return (bool(legacy.get("present")) and legacy.get("choice") is None and not self._legacy_asked

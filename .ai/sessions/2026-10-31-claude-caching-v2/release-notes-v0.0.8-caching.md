@@ -9,13 +9,14 @@ These are proposed lines for the release notes. Tony edits them; the release its
   - It also keeps HeLab's own copy of the raw pulses (the `d` files' contents), so another converter profile can
     make its TXY without reading the folder again.
   - The `d` files themselves are never changed or removed.
-- **The older cache.** The first start shows a one-time question about the older cache (`store-v3`):
+- **The older cache.** If an older HeLab's cache (`store-v3`) is in the cache folder, the first start asks once
+  what to do with it:
   - **Keep using it:** HeLab reads its records and saved analysis where the new cache has none, and counts it in
     the disk budget.
   - **Ignore it:** it stays on disk, unused.
   - **Clear it…:** it is removed, after asking with its size.
   - HeLab 0.0.8 is the last version that reads the older cache. From 0.0.9 it is no longer read or counted, and
-    only Settings › Cache › Clear old stores… removes it.
+    only Settings › Cache › Older cache (store-v3) › Clear… (or Make room's Clear old stores…) removes it.
 - **Going back to 0.0.7.** HeLab 0.0.7 still works with its own `store-v3`, which 0.0.8 never writes. What 0.0.8
   cached in `store-v4` isn't seen by 0.0.7, which loads those folders from their files again.
 

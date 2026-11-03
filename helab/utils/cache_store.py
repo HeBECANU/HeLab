@@ -772,7 +772,8 @@ def _reset_live_layout(layout: int | None = None) -> None:
 
 
 # Keep's read-through of an older HeLab's store-v3 lasts through v0.0.8 only (Tony, V~3, 2026-11-03): from
-# v0.0.9 store-v4 reads it no more and counts it in no budget; Settings' Clear old stores… still removes it.
+# v0.0.9 store-v4 reads it no more and counts it in no budget; Settings › Cache's Older cache Clear… (or Make
+# room's Clear old stores…) still removes it.
 LEGACY_READ_UNTIL = (0, 0, 9)
 
 
@@ -1029,7 +1030,8 @@ class CacheStore:
     def _kept_legacy(self) -> LegacyStore | None:
         """store-v3, read only, while it is kept (Keep, or not answered yet: Q22.3); None under v3
         itself, after Ignore or Clear, or when there is none or it can't be read now, and from v0.0.9 on
-        (Keep's read-through ends then, V~3: only Clear old stores… remains)."""
+        (Keep's read-through ends then, V~3: only Settings › Cache's Older cache Clear…, or Make room's
+        Clear old stores…, remains)."""
         if self.layout < store_v4.LAYOUT or not legacy_read_through():
             return None
         if self._legacy_choice() not in (None, "keep"):
