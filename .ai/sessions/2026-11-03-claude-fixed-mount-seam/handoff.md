@@ -68,9 +68,11 @@ ubuntu-26.04 image, but not on the older one.
 **Conftest:** `tests/conftest.py` sets the variable at import, beside the other test variables, so
 helpers inherit it.
 - Its value is the longest psutil mountpoint holding `realpath(tempfile.gettempdir())`.
-- It isn't set on Windows, where `HELAB_TEST_LOCAL_MOUNT` already stands in for the drives.
-- On macOS and the newer image it names a mount that is already trusted (`/System/Volumes/Data`,
-  `/`), so nothing changes there.
+- ~~It isn't set on Windows, where `HELAB_TEST_LOCAL_MOUNT` already stands in for the drives.~~ Wrong
+  (review FM-2): on Windows `fixed_mount` trusts only `%SystemDrive%`. Since the review fixes it is set
+  on Windows too (see below).
+- On macOS and the newer image it names a mount that is already trusted (`/`: macOS's temp folder
+  resolves to `/private/var/…`, below `/`), so nothing changes there.
 
 **Tests:** in `tests/test_root_discovery.py`.
 - `test_the_mount_the_tests_name_needs_no_verification_and_only_when_named`:
@@ -138,24 +140,68 @@ both are logged with HeLab going on.
    - Check whether `close` should skip the runner once it is gone (the runner held as a weakref, or
      `sip.isdeleted`), or whether the test should close its plots before stopping the runner.
 
+## Review fixes (Sieve's review.md, c6e9dc9: FM-1, FM-2 Low; FM-3 Info): `21e614a`
+
+- **FM-1 (`--basetemp` on another mount): fixed.**
+  - The seam takes several mounts, `os.pathsep`-separated.
+  - conftest's `name_fixed_mount(path)` adds the mount holding `path` (`mount_holding`, the longest
+    psutil mountpoint), once. It names the temp folder's mount at import, and `--basetemp`'s in
+    `pytest_configure`. That runs on each xdist worker, with its own `popen-gwN` folder, before any
+    helper starts.
+  - Tests:
+    - the seam test also checks two named mounts (each trusted, a third not); it fails on the old
+      `data_roots.py`;
+    - `test_conftest_names_basetemps_mount_beside_the_temp_folders` checks the naming: a fake mount
+      table, a name-prefix that isn't a mount, no duplicates;
+    - `test_the_mount_holding_this_runs_basetemp_is_named` checks the live variable.
+  - Repro: the normal `TMPDIR`, with `--basetemp` on a disk image mounted inside the checkout. The
+    real-data guard refuses a basetemp under `/Volumes`, with or without this change.
+    - On `ee4bbdf`, `test_result_cache_plots`' reopened-plot test times out at `:238` and the folders
+      test fails.
+    - On the fix, they pass. Under `-n 4`, the result-cache, root-discovery, preset and offline files
+      pass 109/109.
+- **FM-2 (the Windows comment): corrected, and the seam is set on Windows too.**
+  - `mount_holding` gives the drive (`Path(real).anchor`, as `HELAB_TEST_LOCAL_MOUNT` names it). So a
+    TEMP on a drive other than `%SystemDrive%` is trusted.
+  - The docstring says what stays: a basetemp on a drive other than TEMP's is named but changes
+    nothing, since `HELAB_TEST_LOCAL_MOUNT` gives the tests' mount list only TEMP's drive.
+  - That gap predates the branch, and no CI run meets it: GitHub's Windows runners keep TEMP on `C:`
+    and pass no `--basetemp`. Proposed A~2 below.
+- **FM-3 (the seam reaches every `fixed_mount` caller): noted** in the testing.md proposal below. No
+  code change.
+
+## Proposed AI_TODO item (A~2): Windows tests with `--basetemp` on another drive than TEMP's
+
+- **Gap:** conftest's `HELAB_TEST_LOCAL_MOUNT` gives the tests' mount list only TEMP's drive. So a
+  `--basetemp` on another drive (AGENTS.md suggests a per-run `--basetemp=.ai/temp/pytest-<name>` on
+  Windows, and the checkout may be on `D:`) has no mount in that list.
+- **To check:** whether those tests then run as on CI. Its effect wasn't checked.
+- **Fix if they don't:** let `HELAB_TEST_LOCAL_MOUNT` list several drives too (TEMP's and basetemp's).
+
 ## Proposed doc change: `.ai/architecture/testing.md`
 
 In the paragraph listing the production code's test seams, after `HELAB_TEST_VOLUME_ID (a fixed volume
 ID)`, add:
 
-> `HELAB_TEST_FIXED_MOUNT` (`data_roots.fixed_mount`: the mount it names is trusted as the system volume
-> is, so the tests' folders under the temp folder need no volume check; conftest sets it, not on Windows,
-> to the mount holding the temp folder; it acts only when set, and HeLab never sets it. A runner whose
-> /tmp is a mount of its own, such as ubuntu-26.04 image 20261018.50.1, once failed every result-cache
-> test without it)
+> `HELAB_TEST_FIXED_MOUNT` (`data_roots.fixed_mount`: the mounts it names, `os.pathsep`-separated, are
+> trusted as the system volume is, wherever `fixed_mount` is asked: volume checks, `mount_hints`, and offline
+> transparency. So the tests' folders need no volume check. conftest sets it to the mounts holding the
+> temp folder and `--basetemp`, on every OS. It acts only when set, and HeLab never sets it. A runner
+> whose /tmp is a mount of its own, such as ubuntu-26.04 image 20261018.50.1, once failed every
+> result-cache test without it. One side effect there: `test_offline_browsing`'s fake
+> `Mount("tmpfs", "/tmp", "tmpfs")` is trusted through the seam before `TRANSPARENT_FILESYSTEMS` is
+> asked, so it no longer tests tmpfs transparency on such a runner; its `/run/user/1000` case still does,
+> and every other runner still checks `/tmp` itself)
 
 A sentence for the isolation section: "To check a change against a runner whose /tmp is its own mount,
 run the suite with `TMPDIR` and `--basetemp` on a mounted disk image (macOS: `hdiutil create -size 8g
--type SPARSE -fs APFS`)."
+-type SPARSE -fs APFS`, then `hdiutil attach -mountpoint <folder>`). For `--basetemp` on another mount,
+mount the image inside the checkout: the real-data guard refuses a basetemp under `/Volumes`."
 
 ## Test files touched
 
-`tests/conftest.py` and `tests/test_root_discovery.py`. App code: one function, `helab/utils/data_roots.py`.
+`tests/conftest.py` and `tests/test_root_discovery.py`. App code: one function and its constant,
+`helab/utils/data_roots.py`.
 
 ## CI 41604355924 (`c133e41`): success, all 15 job logs read, no RERUN
 
@@ -165,3 +211,13 @@ run the suite with `TMPDIR` and `--basetemp` on a mounted disk image (macOS: `hd
 - **Image:** every Ubuntu job ran image 20261025.179.1, so CI didn't meet the old image's /tmp this
   time. The local runs with /tmp on its own mount are the evidence for that layout.
 - **Windows pytest per group:** 9.9, 9.5 and 10.9 min.
+
+## Checks after the review fixes (`21e614a`)
+
+- **Full suite, `--reruns 5 --reruns-delay 1`:** three layouts, each 9233 passed, 673 skipped, no
+  RERUN:
+  - the normal tmp, `-n 12`;
+  - `/tmp` on its own mount (`TMPDIR` and `--basetemp` on a mounted disk image), `-n 8`;
+  - `--basetemp` on another mount (the image mounted inside the checkout), `-n 8`.
+- **Type checks:** all five clean.
+- **CI:** below.
