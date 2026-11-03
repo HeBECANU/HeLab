@@ -31,3 +31,13 @@ def test_no_other_workflow_publishes_the_site() -> None:
         if path.name != "docs-site.yml":
             text = path.read_text(encoding="utf-8")
             assert "mike " not in text and "gh-pages" not in text, path.name
+
+
+def test_a_release_of_a_commit_without_the_manual_skips() -> None:
+    """A release of an older commit (before the manual) skips the deploy with a notice, as ci-build.yml
+    builds such a commit without the manual, rather than failing on a missing requirements-docs.lock."""
+    text = (WORKFLOWS / "docs-site.yml").read_text(encoding="utf-8")
+    assert "[ -f mkdocs.yml ] && [ -f requirements-docs.lock ]" in text
+    steps = text.split("- name: ")[1:]
+    after_check = [step for step in steps if not step.startswith(("Checkout", "Check this commit"))]
+    assert after_check and all("if: steps.manual.outputs.present == 'true'" in step for step in after_check)

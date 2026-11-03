@@ -34,15 +34,29 @@ jobs:
           ref: refs/tags/${{ github.event.release.tag_name }}
           fetch-depth: 0
 
+      # A release of a commit from before the manual (an older tag's draft published late) has
+      # nothing to deploy: skip with a notice, as ci-build.yml builds such a commit without it.
+      - name: Check this commit has the manual
+        id: manual
+        run: |
+          if [ -f mkdocs.yml ] && [ -f requirements-docs.lock ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No user manual at $RELEASE_TAG: nothing to publish."
+          fi
+
       - name: Set up Python
+        if: steps.manual.outputs.present == 'true'
         uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
       - name: Install the docs tools
+        if: steps.manual.outputs.present == 'true'
         run: pip install -r requirements-docs.lock
 
       - name: Deploy this release's manual with mike
+        if: steps.manual.outputs.present == 'true'
         run: |
           version="${RELEASE_TAG#v}"
           git config user.name "github-actions[bot]"
