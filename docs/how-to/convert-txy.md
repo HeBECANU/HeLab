@@ -13,6 +13,11 @@ already in a source folder.
 
 - **While Live watches a folder**: turn on **Auto-convert**, and each new raw file is converted
   once it has finished being written. See [Follow a folder live](live.md#auto-convert-while-live-is-on).
+- **Any folder, any profile**: right-click the folder › **Convert this folder…**, or **File ›
+  Convert This Folder…** for the tab's selected folder. Pick the profile (built-in or yours) and
+  where the TXY go: HeLab's cache, its temp folder, or beside the raw files (on a share, HeLab asks
+  first). Only that folder is converted, not its subfolders, and not while Live's Auto-convert is
+  converting it.
 - **From Folder details**, for a folder on a network share that has raw files and no TXY at all:
   Folder details shows a **Convert** row, `No TXY · on a share · Convert…`. Click it and choose
   **Convert to HeLab's cache (recommended)**, **Convert to HeLab's temp folder** or
@@ -95,7 +100,8 @@ A backend that can't run on this computer makes the conversion say why.
 
 ## Which TXY HeLab reads
 
-!!! note "Changing in the next version"
-    How HeLab chooses which TXY files to read for a folder (HeLab's, of which profile, or those of
-    the external MATLAB converter) is changing in the next version. This section will describe it
-    then.
+!!! note "To be written"
+    HeLab reads each shot from the first entry of an ordered list that has a usable TXY: HeLab's
+    TXY of a profile, or **External (MATLAB converter)**, the MATLAB converter's
+    `d_txy_forc<N>.txt`. Settings › TXY converter sets the list; this section will describe how to
+    set it for a folder or a plot.

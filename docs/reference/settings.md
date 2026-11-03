@@ -69,7 +69,7 @@ The choices HeLab's own TXY conversions use (see [Convert raw files to TXY](../h
 | Conversions use the profile | The detector profile for conversions: a built-in one or one of yours. A profile that no longer exists shows as not found, and conversions use the default. | matlab-2019 |
 | Backend | The converter code: **numpy (default; always available)**, **reference (plain Python, slow)**, **rust (optional, compiled)**, **cython (optional, compiled)**, **numba (optional)** or **mlx (optional; Apple GPU)**. Every backend writes the same TXY byte for byte; an optional one that can't run on this computer makes the conversion say why. | numpy |
 | HeLab's TXY go to | Where converted TXY files go: **The disk cache's folder (by the folder's data root; else temp)** or **HeLab's temp folder**. Folders you set to write TXY beside their raw files do that instead. | The disk cache's folder |
-| Tabs and Live read (when a folder loads again) | Which TXY files a folder's tab and Live load. This setting is changing in the next version. | |
+| Tabs and Live read (when a folder loads again) | The ordered list of TXY a folder's tab and Live read: each shot from the first entry with a usable TXY. **Edit…** changes it. See [Convert raw files to TXY](../how-to/convert-txy.md#which-txy-helab-reads). | |
 
 Under **Profiles**, the list shows the built-in profiles (`matlab-2019`, `matlab-2023-lab-edit`,
 `plates-2017`, `plates-2022` and `plates-2025`, the last marked uncalibrated) and yours. Built-in
