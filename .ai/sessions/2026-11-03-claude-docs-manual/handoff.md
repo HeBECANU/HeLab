@@ -17,9 +17,9 @@ answers and addenda: `notes.md`. Base `c0daa9f`.
 | `d0128ae`, `17239e0`, `ee6df99` | Assay's Docs review: DM-1 the site deploys from its own `docs-site.yml` on `release: published` only (option (a); Tony's call, CoCo asking); DM-2 that deploy skips a commit without the manual; DM-3 the pages link the building repo through `{repo_url}` (`docs/hooks/repo_links.py`). `tests/test_docs_workflows.py`. |
 | `3b5a324`, `70a7248` | `HeLab.spec` fixes to `662a287`: the manual goes into `a.datas` after `Analysis` (a `Tree`), so `datas=` stays the plain list `test_spec_datas.py` reads; `Tree` imported, so `test_versioning.py`'s run of the spec works with `build/manual` present. |
 
-**Still to do on this floor (CoCo):** `helab/analysis/results.py` docstrings (`AnalysisContext`,
-`AnalysisResult`; 14 D1 gaps) and its entry in `ruff.toml` and the API reference, after TXY Priority
-lands and this branch has merged `dev/v0.0.8`.
+| `1bb993b` | Merge of `dev/v0.0.8` (TXY Priority, `9bf99ff`): no conflicts. |
+| `aafcb9d` | `results.py`'s docstrings, in `ruff.toml` and a new API page ("Run context and results"); `dataset_view.py`'s docstrings checked against Prio's changes (`fallback`, list identities). |
+| `40754fe` | The manual true to TXY Priority: Convert this folder…, and the TXY list in the convert and settings pages' placeholders. |
 
 ## Checks
 
@@ -109,7 +109,10 @@ bundled copy, else `github.com/<repo>/blob/HEAD/docs/index.md` (`DEFAULT_REPOSIT
   only finals.
 
 **Work agents may do (AI_TODO)**
-- **A~1** `results.py`'s docstrings and its API page (assigned to this floor, after TXY Priority lands).
+- **A~1** ~~`results.py`'s docstrings and its API page~~: done (`aafcb9d`).
+- **A~8 Write the manual's "Which TXY HeLab reads" section** (now a short note): the ordered TXY list
+  (Settings › TXY converter › Edit…, a folder's and a plot's own lists, the fallback shots and how a
+  plot's record names them), and the External label.
 - **A~2** `dataset_view.py`'s module docstring public-safe (it names Q6.6, plots-1, plots-3; `root_key`'s
   docstring a person and "codebase review 2, C-15"), after TXY Priority lands; then its API page may render
   the module.
