@@ -346,3 +346,95 @@ On a `git clone --shared` of `2eac45a`, with testdata linked:
   - the clones `fu-git` and `fu-mike`;
   - the sites `fu-site-off` and `fu-site-on`;
   - `fu-npm`, the job logs in `fu-jobs`.
+
+## Re-check of the fixes (`git diff 2eac45a..3ee1660`, agent/followups)
+
+**Open findings: FU-3 only, which waits on Tony. FU-1, FU-2 and FU-4 are closed, and nothing new.**
+- `3ee1660` descends from `2eac45a`.
+- **Commits:**
+  - `56f594b`: FU-1 and FU-2;
+  - `dd8005a`: the `mike list` nit;
+  - `9b8c841`, `95df7f9` and `3ee1660`: the handoff.
+
+### FU-1: closed
+
+The fix has two parts, and each one fixes the bug by itself.
+- **The probe exits at once** (`probe.py`). `main` no longer deletes its QApplication: it keeps the reference in
+  the module's `_KEPT` until `os._exit(0)`, so `~QCoreApplication` never runs and never waits for the global
+  thread pool.
+  - **My original repro** (a folder whose file starts a 40 s `QThreadPool` task at import) now exits 0 after 2 s,
+    with `ready` and `done`. Before, it was still running at 25 s.
+- **A deadline after `done`** (`script_tree.py`):
+  - `_read` stamps `done_at` the first time it reads `done`.
+  - `_poll` kills a probe still running `PROBE_EXIT_SECONDS` (5 s) after it, logs a warning and marks it
+    `lingered`. It no longer simply skips a probe that said `done`.
+  - The probe's `finished` then answers the round with the folder passed: `killed` is "", so `failure` is None.
+  - Nothing else holding a probe after `done` can hold a round.
+- **The tests have teeth.**
+  - `test_a_script_leaving_a_thread_pool_task_running_doesnt_hold_its_probe` runs the real probe, and its task
+    runs only in the probe (it checks the application's name).
+    - With `del application` put back in my clone, it fails: the deadline ended the probe after 5 s ("finished but
+      its process didn't exit within 5 s; ended"), and the test asserts no such line.
+    - The folder still loaded, through the deadline alone.
+  - `test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads` tests the deadline by itself.
+    Its fake probe answers `done` and sleeps; with `PROBE_EXIT_SECONDS` 1 s, the folder loads with no error.
+- **The stderr nit is also fixed.** `_stderr_tail` seeks to the last 4,000 bytes instead of reading the whole file.
+
+### FU-2: closed
+
+There are 7 new tests in `tests/test_script_probe.py`, one for each path I listed:
+- **The offscreen fallback:**
+  - `_plugin_folders` → `[]` gives `none (no offscreen platform plugin)`;
+  - a probe without the plugin skips a script that makes a widget at import (a crash or an exit code);
+  - the log names the fallback.
+- **The start limit:** a probe that only sleeps is killed, with "HeLab's test import didn't start within 1 s".
+- **A crash by signal** (POSIX): `SIGKILL` at import gives "its import crashed HeLab's test import".
+- **`stop()`:**
+  - two running probes are killed (their `finished` seen, `CrashExit`);
+  - the queued third is dropped;
+  - no round answers.
+- **Auto-reload with probing on:** a save that makes the import hang leaves the plot on its code and lists the
+  folder; the save that fixes it reloads.
+- FU-1's two cases (above).
+
+### FU-4: closed
+
+`handoff.md` is now on the branch. Its "Proposed doc changes" covers everything I listed:
+- AGENTS.md's frozen dispatch (both entry points), plus a try-import line;
+- `plots-and-scripts.md`: the try-import, `skip_folder`, `PROBE_EXIT_SECONDS`;
+- `release-and-ci.md`: the launch order, the shim, `check_offline`, the probe step, the Q56.3 plan and the guard;
+- `converter.md:545` (`beside-forced`), plus Q48.2's notification;
+- `settings.md:33`;
+- the known-issues item, narrowed to what the probe can't catch;
+- `testing.md` (`PROBING`);
+- DECISIONS_TODO, with FU-3 as Q~3.
+
+It also adds CI 41622979011's one RERUN, at `fdd895c`, to the open `test_watch_converts_new_shots_and_stops_on_ctrl_c`
+known-issues item. That job's log isn't part of this diff, so I didn't re-read it.
+
+### The `mike list` nit (`dd8005a`): fixed
+
+- `main` now stops with exit 1 and "mike list failed (N): …" when `mike list --json` fails. Without gh-pages it
+  still gets `[]` with exit 0, and the plan is unchanged.
+- **The test** patches `subprocess.run` to fail and checks that only `mike list` ran.
+
+### Checks (re-check)
+
+On the shared clone moved to `3ee1660`:
+- **The touched tests** (`test_script_probe.py`, `test_docs_workflows.py`, `test_headless_imports.py`,
+  `-n 4 --reruns 5 --reruns-delay 1`): **26 passed**, no RERUN.
+- **The full suite** (`-n 4 --reruns 5 --reruns-delay 1`): **9282 passed, 673 skipped, 2 warnings, 1 failed,
+  5 rerun in 223 s.**
+  - The failure and all 5 RERUNs are again `test_versioning.py::test_frozen_metadata_survives_no_git_and_unrelated_cwd`.
+    The cause is my clone's symlinked `testdata`, as in the first review.
+  - With `testdata` an empty folder, `test_versioning.py` and `test_release_recovery.py` gave **56 passed**, no
+    RERUN.
+  - No other RERUN.
+- **The five type checks:**
+  - `mypy helab/ --strict` (207 files), `mypy tests --strict` (210), `--platform win32`: no issues;
+  - `pyright` and `--pythonplatform Windows`: 0 errors.
+- **CI run 41632238929 (`3ee1660`): success.**
+  - All 17 jobs that ran succeeded, and I read every log for `RERUN`: 0 in each.
+  - `test_script_probe.py`: 41 passed and 1 skipped across the three OSes (14 tests each; the signal test is
+    skipped on Windows).
+  - The frozen probe step answered `ready` (`offscreen`) and `done`, exit 0, on each OS.
