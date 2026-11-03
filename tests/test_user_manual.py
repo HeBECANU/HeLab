@@ -160,3 +160,9 @@ def test_menu_item_has_a_name_and_an_id(qtbot: QtBot) -> None:
         assert actions[0].toolTip()
     finally:
         window.close()
+
+
+def test_a_pre_release_opens_its_own_versions_page() -> None:
+    """Q56.3: every release, pre-releases too, is a version of the site named by its version without ``v``
+    (docs/publish/site_versions.py), so a pre-release opens its own manual, never ``latest``'s."""
+    assert user_manual.site_url(replace(BUILT, version="0.0.8a1")) == "https://tonyxtyan.github.io/HeLab/0.0.8a1/"

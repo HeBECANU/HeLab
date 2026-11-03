@@ -18,6 +18,7 @@ hooks:
   - docs/hooks/repo_links.py
 exclude_docs: |
   hooks/
+  publish/
 site_dir: site
 strict: true
 
