@@ -29,6 +29,18 @@ How to use this list:
 - Features stay in `roadmaps/_readme.md` and bugs in `roadmaps/known-issues.md`; only the
   question goes here.
 
+## Documentation (block 54; open)
+
+Tony in Chat, 2026-11-03: "do (a) and (b) now, before PR" (Q54.1). Two choices for the manual (b):
+
+- **Q54.2 Where the manual is published.** (a) GitHub Pages on `TonyXTYan/HeLab`. The repo is already public,
+  so the manual would be too, and like the repo it must name no person and no lab machine. (b) The manual is
+  only bundled in the app and in the repo's `docs/`, with no site. **Proposed:** (a), versioned per release
+  (`mike`), with the app's Help › User manual opening the running version's page.
+- **Q54.3 An offline copy in the app.** Bundle the built HTML (a few MB) in HeLab.app and the Windows zip.
+  Help › User manual then opens it in the system browser when the site can't be reached (lab PCs may be
+  offline; the Side PC's QtWebEngine can't draw). **Proposed:** yes.
+
 ## Recently decided
 
 Cleared at the v0.0.7a1 tidy-up (2026-10-31) where each was recorded in memory, an architecture file,
@@ -254,6 +266,12 @@ Tony in Chat, 2026-11-03 morning (via CoCo; "50.1 a", "51.1 ok add to things I s
   implement the features described in aeed904?"): `agent/v4-switch-on` landed `92f9d1a`, store-v4 on on
   `dev/v0.0.8`; Q50.18's check still comes before the PR. Block 53 is built on this Mac ("you are the dev
   computer (M4M)").
+
+## Documentation (block 54)
+
+- **Q54.1** before the v0.0.8 PR: (a) a docstring pass on the script-facing API with a check that keeps it
+  (A54.1), and (b) a user manual with MkDocs Material, an API reference from the docstrings (mkdocstrings) and
+  Help › User manual (A54.2) (Tony in Chat, 2026-11-03).
 
 ## TXY priority lists (block 53; [plan](../roadmaps/txy-priority.md))
 

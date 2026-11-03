@@ -536,6 +536,22 @@ Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f
   that reaches them stubs them; or, broader, a conftest guard on `QMessageBox.exec` / `QDialog.exec` that fails
   unless a test allows it.
 
+## Documentation (block 54; Q54.1, Tony 2026-11-03, before the v0.0.8 PR)
+
+- [ ] **A54.1 Docstrings for the script-facing API.** Every public name in `helab/scripts/base.py`,
+  `helab/analysis/dataset_view.py` (the `DatasetView` class itself, `name`, `short`, `key`, `shot_numbers`,
+  `event_count`, `ViewIdentity`, `Provenance`), `parameters.py`, `selection.py` and the fit helpers scripts use
+  gets a docstring, with Google-style `Args:`/`Returns:` where they add something the types don't. A check keeps
+  it: ruff's pydocstyle rules (`D1`) on those modules only, in CI. Counts on 2026-11-03: `base.py` 35/37,
+  `DatasetView`'s module 21/30; all of `helab/` 60 % of public functions. These docstrings feed PyCharm's Quick
+  Documentation and the manual's API reference (A54.2).
+- [ ] **A54.2 The user manual's frame.** MkDocs with the Material theme in `docs/` (beside `hlb-format.md`),
+  Diátaxis sections (getting started, how-to, reference, explanations), an API reference for script writers built
+  by mkdocstrings from A54.1's docstrings, a CI job that builds it with warnings as errors, and Help › User
+  manual. First pages: install and first folder, `.helab-root`, Live, converting TXY, writing a script, the cache,
+  `helab convert` / `helab cache`, the settings. Written for users from `.ai/architecture/` and the memory
+  notes; names no person or lab machine. Publishing and the offline copy wait on Q54.2 and Q54.3.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:
