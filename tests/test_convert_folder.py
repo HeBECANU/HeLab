@@ -147,15 +147,15 @@ def test_lives_tick_waits_while_another_profiles_conversion_runs(monkeypatch: py
         asked.append("convert")
         return True
     cache = SimpleNamespace(live_interval=0.0, auto_convert_profile=lambda path: MATLAB_2019,
-                            converting_with=lambda path: "matlab-2023-lab-edit", write_beside=lambda path: False,
-                            convert=convert)
+                            converting_with=lambda path, profile=None: "matlab-2023-lab-edit",
+                            write_beside=lambda path: False, convert=convert)
     monkeypatch.setattr(explorer_convert, "instead_of_beside", lambda path: None)
     control: Any = SimpleNamespace(explorer=SimpleNamespace(model=SimpleNamespace(cache=cache), live_owner="live"),
                                    box=None)
     session: Any = SimpleNamespace(path="/data/run", convert=explorer_live.AutoConvert(started_at=0.0))
     explorer_live.LiveController._convert_tick(control, session)
     assert asked == [] and not session.convert.request and not session.convert.error
-    cache.converting_with = lambda path: "matlab-2019"  # (Its own profile's: joins, as before.)
+    cache.converting_with = lambda path, profile=None: ""  # (Its own profile's: joins, as before.)
     explorer_live.LiveController._convert_tick(control, session)
     assert asked == ["convert"] and session.convert.request
 
@@ -177,4 +177,26 @@ def test_convert_this_folder_never_refuses_silently(qtbot: QtBot, service: IOSer
     assert "question is open" in converter.convert_unavailable(path) and converter.ask_convert(path) is None
     box.close()
     assert converter.box is None and converter.convert_unavailable(path) == ""
+    explorer.close_cleanup()
+
+
+def test_lives_tick_waits_for_an_edited_profile_of_the_same_name(qtbot: QtBot, service: IOService, tmp_path: Path,
+                                                                 local: None) -> None:
+    """TP-11: a running conversion with a profile of the same name but other content (edited meanwhile) isn't
+    Live's to join: Live's tick waits instead of stopping Auto-convert with "couldn't be queued"."""
+    from types import SimpleNamespace
+    from helab.convert.profile import MATLAB_2019
+    from helab.views import explorer_live
+    explorer, path, _ = raw_folder(qtbot, tmp_path)
+    cache = explorer.model.cache
+    edited = MATLAB_2019.replace(search_depth=40)  # (Same name, other content.)
+    assert edited.name == MATLAB_2019.name and edited.to_dict() != MATLAB_2019.to_dict()
+    assert cache.convert("details", path, profile_used=MATLAB_2019)
+    setattr(cache, "auto_convert_profile", lambda folder: edited)  # (Live converts with the edited one.)
+    control: Any = SimpleNamespace(explorer=SimpleNamespace(model=SimpleNamespace(cache=cache), live_owner="live"),
+                                   box=None)
+    session: Any = SimpleNamespace(path=path, convert=explorer_live.AutoConvert(started_at=0.0))
+    explorer_live.LiveController._convert_tick(control, session)
+    assert not session.convert.error and not session.convert.request  # (Waits: the next tick converts.)
+    assert cache.converting_with(path, edited) == "matlab-2019" and cache.converting_with(path, MATLAB_2019) == ""
     explorer.close_cleanup()

@@ -1577,12 +1577,15 @@ class FolderCache(QObject):
                 return profile
         return self._user_profile_objects.get(tag)
 
-    def converting_with(self, path: str) -> str:
-        """The name of the profile a conversion of ``path`` running now converts with ("" for none). One
-        conversion per folder (a second asker joins it), so another profile's waits for it (TP-5). Memory only."""
+    def converting_with(self, path: str, profile: DetectorProfile | None = None) -> str:
+        """The name of the profile a conversion of ``path`` running now converts with ("" for none); with
+        ``profile``, only when it isn't that very profile (its whole definition, as ``convert`` compares: TP-11).
+        One conversion per folder (a second asker joins it), so another profile's waits for it (TP-5). Memory only."""
         job = self.jobs.get(job_key("convert", self.key(path)))
-        profile = job.payload.get("profile") if job is not None else None
-        return str(profile.get("name") or "?") if isinstance(profile, Mapping) else ""
+        running = job.payload.get("profile") if job is not None else None
+        if not isinstance(running, Mapping) or profile is not None and running == profile.to_dict():
+            return ""
+        return str(running.get("name") or "?")
 
     def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
                 profile_used: DetectorProfile | None = None) -> bool:

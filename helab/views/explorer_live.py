@@ -863,7 +863,7 @@ class LiveController:
                 self.explorer, path, share, lambda choice: self._share_answered(path, choice))
             return
         profile = cache.auto_convert_profile(session.path)
-        if (other := cache.converting_with(session.path)) and other != profile.name:
+        if cache.converting_with(session.path, profile):
             return  # (Convert this folder… of another profile runs: Live's next tick converts, TP-5.)
         if not cache.convert(self.explorer.live_owner, session.path, destination=destination,
                              beside=None if destination is None else False, profile_used=profile):
