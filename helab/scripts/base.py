@@ -51,7 +51,10 @@ class ScriptMetadata:
             record it.
         version: A version the author bumps whenever the output changes; results record it
             beside the ID.
-        file_hash: SHA-256 of the script file as loaded (set by HeLab; "" if unreadable).
+        file_hash: SHA-256 of the script file as loaded (set by HeLab; "" if unreadable). When
+            the folder has helper modules the scripts import, it is instead a SHA-256 of the
+            file's hash and every helper's path and hash, so a change to a helper counts too; it
+            then differs from the file's own SHA-256.
     """
     name: str
     description: str

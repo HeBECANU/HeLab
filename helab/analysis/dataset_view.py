@@ -86,7 +86,9 @@ class ViewIdentity:
             root (``.helab-root``) is known.
         signature: The loaded dataset's signature (a hash of its TXY files' fingerprints); ""
             when it has none (e.g. a resumed partial load).
-        source: Which TXY the data is made of (``txy_sources.identity_source``).
+        source: Which TXY source the data is made of: "" for the two priority modes (the
+            shots' ``DatasetView.origins`` tell their data apart), else the mode's name
+            (``txy_sources.identity_source``).
         chain: The token of this chain of revisions ("" for a placeholder view). Not part of a
             result's reuse key, which compares the data itself.
     """
@@ -152,13 +154,17 @@ class DatasetView:
 
     Attributes:
         identity: Which data this is (``ViewIdentity``).
-        revision: 1 for a loaded dataset, one more each time Live adds shots to it.
+        revision: 1 for a loaded dataset, one more each time a newer load (Live's) adds or
+            replaces shots, or only finds their raw files' times.
         shots: Shot number → that shot's events, a read-only (n, 3) T/X/Y array (``Events``),
             in ascending shot order. ``events`` joins chosen shots into one array.
         fingerprints: Shot number → its TXY file's ``Fingerprint``.
         provenance: Where the data came from (``Provenance``).
         data_root: The data root the folder is under, when known.
-        added_shots: The shots this revision added to the previous one.
+        added_shots: The shots this revision added or replaced (a replaced shot's array is new:
+            its TXY file was rewritten, or it now comes from another TXY). A revision that only
+            found shot times has none. A running total over revisions must take a replaced
+            shot's old events out before adding its new ones.
         created_at: When the view was made (wall-clock time).
         dataset_signature: The signature of the loaded dataset this revision is ("": the
             identity's, as at revision 1).
