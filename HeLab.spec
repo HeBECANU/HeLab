@@ -7,6 +7,7 @@ import sys
 import importlib.util
 
 from packaging.version import Version
+from PyInstaller.building.datastruct import Tree
 from PyInstaller.config import CONF
 
 ROOT = Path(SPECPATH).resolve()
