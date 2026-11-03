@@ -415,6 +415,8 @@ class ExplorerConverter:
     def convert_unavailable(self, path: str) -> str:
         """Why Convert this folder… can't run now ("" when it can): Live converts it, or a conversion of it from
         here is running."""
+        if self.box is not None:
+            return "a converter question is open: answer it first"  # (Never a silent refusal, TP-9.)
         if self.explorer.live_control.auto_converting(path):
             return "Live's Auto-convert converts this folder (its menu: Convert with…)"
         conversion = self.conversions.get(path)
@@ -426,7 +428,8 @@ class ExplorerConverter:
 
     def ask_convert(self, path: str) -> ConvertFolderDialog | None:
         """Right-click › Convert this folder… (Q~4): the dialog, then the conversion as chosen."""
-        if self.box is not None or self.convert_unavailable(path):
+        if why := self.convert_unavailable(path):
+            logging.info("Convert this folder… not now for %s: %s", path, why)  # (The items say why, disabled.)
             return None
         from helab.utils.constants import read_convert_output
         from helab.utils.settings_store import app_settings
@@ -449,12 +452,22 @@ class ExplorerConverter:
             return
         if where == "beside":
             if why := beside_unavailable(self.explorer.model.cache, path):
+                # (It changed while the dialog was open: said, never a silent refusal, TP-9.)
                 logging.info("Converting %s beside the raw files isn't available: %s", path, why)
+                self.box = question(self.explorer, "convert_folder_beside", "Convert this folder",
+                                    f"{_name(path)} can't be converted beside its raw files now.",
+                                    f"Not available: {why}. Nothing was converted; Convert this folder… again to "
+                                    f"choose HeLab's cache or temp folder.\n\n{path}",
+                                    [("ok", "OK", QMessageBox.ButtonRole.AcceptRole)], "ok", "ok",
+                                    self._beside_said)
                 return
             share = share_to_confirm(path)
             if share and not confirm_beside_on_share(self.explorer, path, share):
                 return
         self.start(path, where, profile)
+
+    def _beside_said(self, _choice: str) -> None:
+        self.box = None
 
     def start(self, path: str, destination: str, profile: DetectorProfile | None = None) -> bool:
         """Convert ``path``'s raw files to ``destination`` (``cache``, ``temp`` or ``beside``) with ``profile``

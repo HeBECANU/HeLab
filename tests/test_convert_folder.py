@@ -158,3 +158,23 @@ def test_lives_tick_waits_while_another_profiles_conversion_runs(monkeypatch: py
     cache.converting_with = lambda path: "matlab-2019"  # (Its own profile's: joins, as before.)
     explorer_live.LiveController._convert_tick(control, session)
     assert asked == ["convert"] and session.convert.request
+
+
+def test_convert_this_folder_never_refuses_silently(qtbot: QtBot, service: IOService, tmp_path: Path, local: None,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """TP-9: while another converter question is open the item says why (disabled); beside no longer available
+    when the dialog is answered: a message says so."""
+    from PyQt6.QtWidgets import QMessageBox
+    explorer, path, _ = raw_folder(qtbot, tmp_path)
+    converter = explorer.converter
+    monkeypatch.setattr(explorer_convert, "beside_unavailable", lambda cache, folder: "")
+    dialog = converter.ask_convert(path)
+    monkeypatch.setattr(explorer_convert, "beside_unavailable", lambda cache, folder: "the disk cache is off")
+    answer(dialog, M23, "beside")
+    box = converter.box
+    assert isinstance(box, QMessageBox) and "the disk cache is off" in box.informativeText()
+    assert path not in converter.conversions
+    assert "question is open" in converter.convert_unavailable(path) and converter.ask_convert(path) is None
+    box.close()
+    assert converter.box is None and converter.convert_unavailable(path) == ""
+    explorer.close_cleanup()
