@@ -438,3 +438,53 @@ On the shared clone moved to `3ee1660`:
   - `test_script_probe.py`: 41 passed and 1 skipped across the three OSes (14 tests each; the signal test is
     skipped on Windows).
   - The frozen probe step answered `ready` (`offscreen`) and `done`, exit 0, on each OS.
+
+## Re-check of FU-3's fix (`git diff 3ee1660..e100872`, agent/followups; Tony chose (b))
+
+**Open findings: none. FU-3 is closed, and nothing new.**
+- `e100872` descends from `3ee1660`. `4a4f8ea` and `e100872` change only these files:
+  - `docs/publish/site_versions.py`;
+  - its tests in `tests/test_docs_workflows.py`;
+  - `docs-site.yml`'s comment;
+  - the README's manual paragraph;
+  - the handoff.
+
+  No `helab/` code changed.
+- **The fix:**
+  - **A stable release** newer than the version `pre-release` points to adds `mike delete --push pre-release`,
+    between its deploy and `set-default`. `_alias_target` reads the alias's version from `mike list --json`.
+  - **A pre-release** now takes `pre-release` only when it is newer than every other release, stable ones
+    included. So a late 0.0.8rc1 after 0.0.8 doesn't bring the alias back.
+  - **A stable release older than the alias's target** (0.0.8.1 after 0.0.9a1) leaves the alias alone.
+- **`mike delete` of an alias removes only the alias.**
+  - **mike 2.2.0's code:** `Versions.find` returns `(version, alias)` for an alias, and `_remove_by_key` then
+    removes only that alias from the version's list. `delete` deletes only the alias's own folder, then rewrites
+    `versions.json`.
+  - **Checked on a real branch:** the "Removed pre-release" commit changed only `pre-release` and
+    `versions.json`, and every file of `0.0.8b1/` was still there.
+- **Simulated with mike 2.2.0** on a fresh gh-pages branch in the scratch clone at `e100872`, without `--push`:
+
+  | Release | Version menu after it | Front page |
+  |---|---|---|
+  | 0.0.8a1 | `0.0.8a1 [pre-release]` | "No stable release yet", linking `pre-release/` |
+  | 0.0.8b1 | `0.0.8b1 [pre-release]`, `0.0.8a1` | the same |
+  | 0.0.8 | `0.0.8 [latest]`, `0.0.8b1`, `0.0.8a1`: no `pre-release` | redirects to `latest/` |
+  | 0.0.9a1 | `0.0.9a1 [pre-release]`, `0.0.8 [latest]`, … | still `latest` |
+  | 0.0.8rc1, published late | its version only, no alias moved | still `latest` |
+
+- **The new test** replays the same sequence through a model of mike's aliases, plus the older stable case. It
+  and the updated stable test pass.
+- The README and the workflow comment say the same as the code.
+
+### Checks (re-check)
+
+On the scratch clone at `e100872`:
+- `pytest tests/test_docs_workflows.py -n 4 --reruns 5 --reruns-delay 1`: **11 passed**, no RERUN.
+- `mypy tests --strict` (210 files) and `mypy --strict docs/publish/site_versions.py`: no issues.
+- `pyright tests` and `--pythonplatform Windows`: 0 errors.
+- `ruff check` (0.17.3): all checks passed.
+- **CI run 41636994449 (`e100872`): success.**
+  - All 17 jobs that ran succeeded, and I read every log for `RERUN`: 0 in each.
+  - At first 8 logs came back empty while the network was down. A retry fetched them all before this count.
+  - The new test passed on each OS.
+- Since no `helab/` code changed, the full suite at `3ee1660` (above) still stands.
