@@ -488,3 +488,54 @@ On the scratch clone at `e100872`:
   - At first 8 logs came back empty while the network was down. A retry fetched them all before this count.
   - The new test passed on each OS.
 - Since no `helab/` code changed, the full suite at `3ee1660` (above) still stands.
+
+## Re-check of the probe tests' limit fix (`git diff 935ee8c..1920a67`, agent/followups)
+
+**Closed, nothing new.**
+- `1920a67`'s parent is `935ee8c`. The range has no merge, so there is no dev content to skip.
+- It changes three files:
+  - `tests/test_script_probe.py`;
+  - two comments in `tests/test_docs_workflows.py`;
+  - `docs/publish/site_versions.py`'s docstring.
+- In the last two, `Q~3` becomes `Q58.3`, and nothing else changes. No `helab/` code changed.
+
+### The cause, confirmed
+
+Ground CI 41640562938, job 125932836198 (Ubuntu Tests 2/3) had one RERUN, of
+`test_without_the_offscreen_plugin_the_probe_runs_without_an_application`. I read that job's log:
+- The item read "widget: didn't load: its import didn't finish within 2 s" instead of a crash or an exit code.
+- Every probe test ran with a 2 s limit. Without the plugin, the probe imports `PyQt6.QtWidgets` inside the limit
+  before it crashes, and under CI load that took longer than 2 s.
+
+### The fix
+
+- **The default is now 60 s.** The autouse fixture `long_limit` sets `PROBE_SECONDS` to `LONG` (60 s), so a test
+  that expects a probe to pass, crash or exit waits for the probe's own answer.
+- **Only a round expected to hang gets 2 s.** `short(monkeypatch)` sets `SHORT` (2 s) for that round, and
+  `short(monkeypatch, False)` restores 60 s before a round that must pass.
+- **The switch takes effect mid-round.** `FolderProbes._poll` reads the module's `PROBE_SECONDS` on each poll, both
+  for the deadline and for the reason's text (`script_tree.py:253-254`). So a limit set while a probe runs applies
+  to it, and the reasons still say "2 s".
+- **The three hang tests:**
+  - **Start:** `short` is set inside `waitSignal(foldersRestored)`, once `_running` holds only the stuck folder and
+    its pid file exists. By then the good folder's probe has ended, and both probes start at once
+    (`PROBES_AT_ONCE` 2), so the good one never races 2 s.
+  - **Reload** and **auto-reload:** `short` is set just before the hanging round (and the queued round that
+    follows it), and back to 60 s before the fixed file's round.
+- **Every other probe test is now independent of the 2 s limit:** I read each (crash, SIGKILL, thread pool,
+  lingering, fallback, stop, can't start, start limit). Their own limits are `PROBE_EXIT_SECONDS` or
+  `PROBE_START_SECONDS`, or none.
+- **The only "within 2 s" assertions** are in the three tests that call `short`.
+
+### Checks (re-check)
+
+On the scratch clone at `1920a67`:
+- **`tests/test_script_probe.py` under load:** three concurrent `-n 4 --reruns 5 --reruns-delay 1` runs, twice:
+  **14 passed in each of the 6 runs**, no RERUN.
+- `tests/test_docs_workflows.py`: 11 passed.
+- `mypy --strict` of the two test files: no issues.
+- `pyright` and `--pythonplatform Windows`: 0 errors.
+- `ruff check` (0.17.3): all checks passed.
+- **CI run 41644057504 (`1920a67`): success.**
+  - All 17 jobs that ran succeeded, and I read every log (none empty) for `RERUN`: 0 in each.
+  - `test_script_probe.py`: 41 passed and 1 skipped (the signal test on Windows).
