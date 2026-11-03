@@ -420,6 +420,8 @@ class ExplorerConverter:
         conversion = self.conversions.get(path)
         if conversion is not None and not conversion.finished and not conversion.error:
             return "this folder is being converted (Folder details)"
+        if other := self.explorer.model.cache.converting_with(path):
+            return f"a conversion of this folder with {other} is running"  # (Another tab's, or Live's: TP-5.)
         return ""
 
     def ask_convert(self, path: str) -> ConvertFolderDialog | None:
@@ -499,7 +501,9 @@ class ExplorerConverter:
         cache = self.explorer.model.cache
         if not cache.convert(self.owner, conversion.path, destination=None if beside else conversion.destination,
                              beside=beside, profile_used=conversion.profile):
-            conversion.error = "the conversion couldn't be queued"
+            other = cache.converting_with(conversion.path)
+            conversion.error = (f"a conversion of this folder with {other} is running; try again when it ends"
+                                if other else "the conversion couldn't be queued")
             self.explorer.loadStateChanged.emit()
             return False
         conversion.request, conversion.todo, conversion.done = True, 0, 0

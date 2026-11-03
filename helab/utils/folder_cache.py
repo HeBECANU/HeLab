@@ -1563,6 +1563,13 @@ class FolderCache(QObject):
                 return profile
         return self._user_profile_objects.get(tag)
 
+    def converting_with(self, path: str) -> str:
+        """The name of the profile a conversion of ``path`` running now converts with ("" for none). One
+        conversion per folder (a second asker joins it), so another profile's waits for it (TP-5). Memory only."""
+        job = self.jobs.get(job_key("convert", self.key(path)))
+        profile = job.payload.get("profile") if job is not None else None
+        return str(profile.get("name") or "?") if isinstance(profile, Mapping) else ""
+
     def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
                 profile_used: DetectorProfile | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
@@ -1581,6 +1588,9 @@ class FolderCache(QObject):
         settings = app_settings()
         # (Settings → TXY converter, following its Save, unless another is asked for.)
         profile = (profile_used or self.convert_profile()).to_dict()
+        running = self.jobs.get(job_key("convert", path))
+        if running is not None and running.payload.get("profile") != profile:
+            return False  # (Another profile's conversion runs: never joined, TP-5; the asker waits or says so.)
         payload: dict[str, Any] = {"path": path, "profile": profile,
                                    "backend": constants.read_convert_backend(settings), "temps": constants.DIR_TEMPS,
                                    "cache": store_options(),

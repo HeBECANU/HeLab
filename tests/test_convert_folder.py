@@ -117,3 +117,44 @@ def test_the_menu_bar_item_converts_the_tabs_selected_folder(monkeypatch: pytest
     assert HelabMainWindow.convert_folder_in_current_tab(window) and asked == ["/data/run"]
     converter.convert_unavailable = lambda path: "busy"
     assert not HelabMainWindow.convert_folder_in_current_tab(window) and asked == ["/data/run"]
+
+
+def test_a_conversion_of_another_profile_is_never_joined(qtbot: QtBot, service: IOService, tmp_path: Path,
+                                                         local: None) -> None:
+    """TP-5: one conversion per folder; one of another profile isn't joined (it would report the other's
+    results): Convert this folder… says so, FolderCache refuses it, and Live's tick waits."""
+    from helab.convert.profile import MATLAB_2019
+    explorer, path, _ = raw_folder(qtbot, tmp_path)
+    cache, converter = explorer.model.cache, explorer.converter
+    assert cache.converting_with(path) == ""
+    assert cache.convert("other-tab", path, profile_used=MATLAB_2023_LAB_EDIT)
+    assert cache.converting_with(path) == "matlab-2023-lab-edit"
+    assert not cache.convert("live", path, profile_used=MATLAB_2019)  # (Not joined.)
+    assert cache.convert("third", path, profile_used=MATLAB_2023_LAB_EDIT)  # (The same profile joins.)
+    assert "with matlab-2023-lab-edit is running" in converter.convert_unavailable(path)
+    assert converter.ask_convert(path) is None
+    explorer.close_cleanup()
+
+
+def test_lives_tick_waits_while_another_profiles_conversion_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TP-5: Live's Auto-convert never joins Convert this folder… of another profile: its tick waits."""
+    from types import SimpleNamespace
+    from helab.convert.profile import MATLAB_2019
+    from helab.views import explorer_live
+    asked: list[str] = []
+
+    def convert(*args: Any, **kwargs: Any) -> bool:
+        asked.append("convert")
+        return True
+    cache = SimpleNamespace(live_interval=0.0, auto_convert_profile=lambda path: MATLAB_2019,
+                            converting_with=lambda path: "matlab-2023-lab-edit", write_beside=lambda path: False,
+                            convert=convert)
+    monkeypatch.setattr(explorer_convert, "instead_of_beside", lambda path: None)
+    control: Any = SimpleNamespace(explorer=SimpleNamespace(model=SimpleNamespace(cache=cache), live_owner="live"),
+                                   box=None)
+    session: Any = SimpleNamespace(path="/data/run", convert=explorer_live.AutoConvert(started_at=0.0))
+    explorer_live.LiveController._convert_tick(control, session)
+    assert asked == [] and not session.convert.request and not session.convert.error
+    cache.converting_with = lambda path: "matlab-2019"  # (Its own profile's: joins, as before.)
+    explorer_live.LiveController._convert_tick(control, session)
+    assert asked == ["convert"] and session.convert.request
