@@ -53,6 +53,7 @@ from helab.views.FolderExplorer import (
     AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, LARGE_TOOLTIP, REFUSED_TOOLTIP,
     IO_SPINNER, FolderExplorer, paint_spinner,
 )
+from helab.views.explorer_live import ARM_AUTO_CONVERT
 from helab.views.explorer_text import large_text
 from helab.views.FolderTabWidget import FolderTabWidget
 from helab.views import live_launch, state_dump
@@ -1083,6 +1084,14 @@ class HelabMainWindow(QMainWindow):
         self.action_tab_live.setCheckable(True)
         # Enabled for the current tab's selected folder once its data is shown (_update_live_action).
         self.action_tab_live.setEnabled(False)
+        # Below Live, so it stays at hand while Live collapses the left panel: the Live line's Auto-convert
+        # (on or off while Live watches; armed before it starts), its menu on the arrow below it.
+        self.action_tab_auto_convert = QAction(ToolIcons.ICON_AUTO_CONVERT, "Auto-convert", self)
+        self.action_tab_auto_convert.setCheckable(True)
+        self.action_tab_auto_convert.setEnabled(False)
+        self.action_tab_auto_convert.triggered.connect(self.on_auto_convert_clicked)
+        self.auto_convert_menu = QMenu(self)
+        self.auto_convert_menu.aboutToShow.connect(self._fill_auto_convert_menu)
 
         self.action_tab_new.setToolTip("New Tab")
         self.action_tab_new.setWhatsThis(
@@ -1144,6 +1153,32 @@ class HelabMainWindow(QMainWindow):
         self.sidebar_toolbar_left.addWidget(status_control)
         self.sidebar_toolbar_left.addAction(self.action_tab_cancel)
         self.sidebar_toolbar_left.addAction(self.action_tab_live)
+        convert_control = QWidget(self.sidebar_toolbar_left)
+        convert_layout = QVBoxLayout(convert_control)
+        convert_layout.setContentsMargins(0, 0, 0, 0)
+        convert_layout.setSpacing(0)
+        self.auto_convert_tool_button = identify(QToolButton(convert_control), "toolbar_auto_convert",
+                                                 description="Auto-convert new raw shots while Live watches, or "
+                                                             "arm it before Live starts")
+        self.auto_convert_tool_button.setAutoRaise(True)
+        self.auto_convert_tool_button.setDefaultAction(self.action_tab_auto_convert)
+        self.auto_convert_tool_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.auto_convert_tool_button.setIconSize(self.sidebar_toolbar_left.iconSize())
+        self.auto_convert_tool_button.setFixedSize(button_size)
+        self.auto_convert_scope_button = HoverMenuToolButton(convert_control)
+        self.auto_convert_scope_button.setIcon(QIcon(arrow_path))
+        self.auto_convert_scope_button.setIconSize(QSize(6, 8))
+        self.auto_convert_scope_button.setFixedSize(button_size.width(), 12)
+        self.auto_convert_scope_button.setMenu(self.auto_convert_menu)
+        self.auto_convert_scope_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.auto_convert_scope_button.setToolTip("Auto-convert's choices\nHover or click to open them.")
+        identify(self.auto_convert_scope_button, "toolbar_auto_convert_menu", "Auto-convert's choices",
+                 "Open auto-convert's choices: where TXY files go, Live at launch, low-count notifications")
+        self.action_tab_auto_convert.changed.connect(self._sync_auto_convert_menu_button)
+        self._sync_auto_convert_menu_button()
+        convert_layout.addWidget(self.auto_convert_tool_button)
+        convert_layout.addWidget(self.auto_convert_scope_button)
+        self.sidebar_toolbar_left.addWidget(convert_control)
         for action, ident, description in (
                 (self.action_tab_new, "new_tab", "Open a new folder tab"),
                 (self.action_tab_folder_up, "folder_up", "Show the folder above in this tab"),
@@ -1846,6 +1881,48 @@ class HelabMainWindow(QMainWindow):
                                         or "Live couldn't start")
         self._update_live_action()
 
+    def on_auto_convert_clicked(self, on: bool) -> None:
+        """The toolbar's Auto-convert: as the Live line's (arms the selected folder before Live starts)."""
+        explorer = self.tab_widget.currentWidget()
+        if isinstance(explorer, FolderExplorer) and not explorer.closed:
+            explorer.live_control.set_auto_convert(on)
+        self._update_live_action()
+
+    def _fill_auto_convert_menu(self) -> None:
+        self.auto_convert_menu.clear()
+        explorer = self.tab_widget.currentWidget()
+        if isinstance(explorer, FolderExplorer) and not explorer.closed:
+            explorer.live_control.fill_convert_menu(self.auto_convert_menu)
+
+    def _sync_auto_convert_menu_button(self) -> None:
+        self.auto_convert_scope_button.setEnabled(self.action_tab_auto_convert.isEnabled())
+
+    def _update_auto_convert_action(self, explorer: FolderExplorer | None) -> None:
+        """The toolbar's Auto-convert follows the current tab's Live line: on or off while Live watches,
+        armed or not before it starts; off with no folder selected."""
+        action = self.action_tab_auto_convert
+        control = explorer.live_control if explorer is not None else None
+        path = control.convert_folder() if control is not None else ""
+        watching = explorer is not None and explorer.live is not None
+        on = control is not None and bool(path) and (control.auto_converting(path) if watching
+                                                     else control.auto_convert_armed(path))
+        name = os.path.basename(path.rstrip(os.sep)) or path
+        if not path:
+            tooltip = "Auto-convert\nSelect a folder to arm auto-convert for Live there."
+        elif watching:
+            tooltip = (f"Auto-convert is on in {name}\nClick to stop converting its new raw files." if on else
+                       f"Auto-convert {name}'s new raw files (d<N>.txt) to HeLab's TXY while Live watches it")
+        else:
+            tooltip = (f"Auto-convert armed for {name}\nTurn Live on to start watching it and converting its new raw "
+                       "files. Click to disarm." if on else
+                       f"{ARM_AUTO_CONVERT} for {name}\nWhen you turn Live on there, it also converts the folder's "
+                       "new raw files (d<N>.txt) to HeLab's TXY.")
+        action.setEnabled(bool(path))
+        action.setChecked(on)
+        action.setText("Auto-convert" if watching else ARM_AUTO_CONVERT)
+        if action.toolTip() != tooltip:
+            action.setToolTip(tooltip)
+
     def _update_live_action(self) -> None:
         """The toolbar's Live follows the current tab. While it is on, the tab's folder tree is
         locked, and so are Up, Refresh and Check folder status; switching tabs turns it off."""
@@ -1865,6 +1942,7 @@ class HelabMainWindow(QMainWindow):
         else:
             self.set_tools_and_tabs_enable()
         session = explorer.live if explorer is not None else None
+        self._update_auto_convert_action(explorer)
         self._live_panel(session is not None and not session.error)
 
     def _open_first_tab(self) -> None:

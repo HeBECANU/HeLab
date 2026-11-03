@@ -40,6 +40,8 @@ LIVE_BLOCKED = {
     "cached data mismatched": "its cached data doesn't match the folder (Review…)",
     "cache unavailable": "the disk cache couldn't be written for this folder this time",
 }
+# Auto-convert's button before Live starts (on the Live line and the toolbar): Live started then converts at once.
+ARM_AUTO_CONVERT = "Arm auto-convert"
 
 
 # Why a raw file isn't converted yet that is no news while Live watches: it was just written, or
@@ -678,21 +680,43 @@ class LiveController:
         self._live_forget(session)
         explorer._update_activity()
 
-    # Auto-convert (TXY converter stage 4, Q6.8): shown once Live is on; reset each session (Q9.6).
+    # Auto-convert (TXY converter stage 4, Q6.8): on while Live watches, or armed before it starts
+    # (``FolderCache.auto_convert``: Live started there converts at once); reset each session (Q9.6).
 
     def auto_converting(self, path: str | None = None) -> bool:
         """Whether Live converts new raw shots of ``path`` (the watched folder by default)."""
         session = self.live
         return session is not None and session.convert is not None and path in (None, session.path)
 
+    def convert_folder(self) -> str:
+        """The folder auto-convert is for: the watched one, or else the selected one ("" if none)."""
+        return self.live.path if self.live is not None else self.explorer.selected_path_globally
+
+    def auto_convert_armed(self, path: str) -> bool:
+        """Whether Live started in ``path`` auto-converts at once (armed, not watching it now)."""
+        session = self.live
+        return (session is None or session.path != path) and path in self.explorer.model.cache.auto_convert
+
     def set_auto_convert(self, on: bool) -> None:
         """Turn auto-convert on or off for the folder Live watches (remembered for this session,
         so turning Live on there again converts again). Off stops new conversions and cancels a
-        running one (its shots written so far stay: each is written whole)."""
+        running one (its shots written so far stay: each is written whole). Before Live starts it
+        arms or disarms the selected folder instead: Live started there converts at once."""
         session = self.live
-        if session is None or on == (session.convert is not None):
-            return
         cache = self.explorer.model.cache
+        if session is None:
+            path = self.explorer.selected_path_globally
+            if not path or on == (path in cache.auto_convert):
+                return
+            if on:
+                cache.auto_convert.add(path)
+            else:
+                cache.auto_convert.discard(path)
+            logging.info("Live auto-convert %s: %s", "armed" if on else "disarmed", path)
+            self._live_changed()
+            return
+        if on == (session.convert is not None):
+            return
         if on:
             cache.auto_convert.add(session.path)
             self._convert_on(session)
@@ -709,16 +733,25 @@ class LiveController:
         menu.clear()
         menu.setToolTipsVisible(True)
         session = self.live
-        if session is None:
+        cache, path = self.explorer.model.cache, self.convert_folder()
+        if not path:
             return
-        cache, path = self.explorer.model.cache, session.path
         name = os.path.basename(path.rstrip(os.sep)) or path
-        action = menu.addAction("Auto-convert new raw shots")
-        assert action is not None
-        action.setCheckable(True)
-        action.setChecked(session.convert is not None)
-        action.setToolTip("Convert each raw file (d<N>.txt) to HeLab's TXY once it is written; the new shots "
-                          "then join the data. Off at each start, except in folders set to start at launch.")
+        if session is not None:
+            action = menu.addAction("Auto-convert new raw shots")
+            assert action is not None
+            action.setCheckable(True)
+            action.setChecked(session.convert is not None)
+            action.setToolTip("Convert each raw file (d<N>.txt) to HeLab's TXY once it is written; the new shots "
+                              "then join the data. Off at each start, except in folders set to start at launch "
+                              "or armed before Live started.")
+        else:
+            action = menu.addAction("Arm auto-convert (starts with Live)")
+            assert action is not None
+            action.setCheckable(True)
+            action.setChecked(path in cache.auto_convert)
+            action.setToolTip(f"Turn Live on in {name} to start watching it and auto-converting its new raw "
+                              "files (d<N>.txt) to HeLab's TXY. Remembered for this session.")
         action.toggled.connect(self.set_auto_convert)
         action = menu.addAction("Write TXY beside the raw files in this folder…")
         assert action is not None
