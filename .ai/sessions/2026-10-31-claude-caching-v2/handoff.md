@@ -1613,3 +1613,35 @@ Stage 4's own proposals are under "Stage 4: the policy UI" above. These cover wh
   - the presets "can't be read" modal hang (Lumen is on it);
   - new sightings for `test_timeout_retry…[1]`, `test_every_script_and_each_library`'s QTabBar and
     `test_test_isolation`'s `lstat`.
+
+## The switch-on branch brought up to dev/v0.0.8 for Tony's check (2026-11-03)
+
+- **Merge:** `23134c0`, dev/v0.0.8 `162342d` merged into `agent/v4-switch-on`, with no conflicts.
+- **Local, on the merge:**
+  - full suite with `-n 12 --reruns 5 --reruns-delay 1`: 9163 passed, 689 skipped (no testdata in that worktree),
+    0 RERUNs, 83 s;
+  - strict mypy (helab, tests, `--platform win32`) and pyright (both platforms): 0 errors.
+- **Run sheet** for Tony's pre-switch-on check (Q50.18): [runsheet-switch-on.md](runsheet-switch-on.md).
+- **CI 41561765280** (`23134c0`): green, every job. I read all 12 Tests and Converter backends logs.
+  - Windows Tests groups: 1/3 11m29s, 2/3 11m58s, 3/3 10m23s (wall time); macOS 6–7.5 min; Ubuntu ~6 min.
+  - Two RERUNs; neither is in known-issues by name.
+  - **Windows Tests (3/3)** (job 125673863803):
+    - `test_txy_sources.py::test_a_load_whose_last_used_mark_times_out_still_returns_its_shots`, "assert
+      5.5174164999999675 < 5.0".
+    - Not the switch-on's: dev/v0.0.8's own CI at `9f92daf` (run 41490153371, Windows Tests 3/3, job 125430855984),
+      with the switch off, reran it too, at "10.408340400000043 < 5.0". That is the index's 10 s busy timeout,
+      not the 200 ms wait the test expects.
+    - **Proposed known-issues entry (A~):** on Windows CI, a load's `last_used` mark can wait out the converted-TXY
+      index's 10 s busy timeout while another connection holds its write lock. Today's 5.5 s may only be a slow
+      runner. Next step: find which open of the index in the load isn't bounded by the 200 ms wait. It isn't
+      caching v2's (the mark is `helab_txy`/provenance's).
+  - **macOS Converter backends** (job 125673863875):
+    - `test_convert_helab.py::test_watch_converts_new_shots_and_stops_on_ctrl_c`: "assert -2 == 0", where -2 =
+      `wait(20)`. The watcher died of SIGINT instead of logging "Stopped" and exiting 0.
+    - Its watch loop catches `KeyboardInterrupt` around `convert_folder` and the sleep, and nothing in helab
+      resets SIGINT. The test sends it only after the shot's TXY is in place, so inside that loop.
+    - One look found no cause. It passed 15 of 15 runs locally, and appears in none of dev/v0.0.8's last 8 CI
+      runs.
+    - The switch-on can reach it: the watcher's cache options carry `store_v4`.
+    - **Proposed known-issues entry (A~):** watch whether it recurs. Next step: keep the watcher's stderr in the
+      assertion message (read it before asserting the return code), so a recurrence shows where SIGINT landed.
