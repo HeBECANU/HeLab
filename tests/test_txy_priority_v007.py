@@ -131,3 +131,18 @@ def test_the_setting_holding_a_list_reads_as_v007s_default() -> None:
     assert read_txy_source(txy_sources.setting_text((EXTERNAL, CONVERSION))) == MATLAB_PRIORITY
     # A mode with a pinned tag (``helab-only@m23v1``): 0.0.7 reads its default too.
     assert read_txy_source(txy_sources.setting_text((M23,))) == DEFAULT_SOURCE
+
+
+def test_a_modes_dataset_with_fallback_shots_across_versions() -> None:
+    """TP-6 (design §2): a HeLab priority dataset with a fallback shot of another profile keeps its mode's
+    source and profile, so 0.0.7a1's quick check goes on to HeLab's folders (it may keep the dataset, each shot
+    labelled by its origin); and data saved before Q~2 (no ``fallback_entries``) matches this build's tab load of
+    a folder with no list of its own, so a quick check keeps it until a change or a full check."""
+    txy = payload((CONVERSION, EXTERNAL))
+    assert txy["source"] == HELAB_PRIORITY
+    record = helab_txy.record(txy["source"], {3: "helab:" + H23}, {}, None, txy, [], fallback=[3], shots={3})
+    assert record["fallback"] == [3] and record["origins"] == {"3": "helab:" + H23}
+    assert (record["profile_hash"], record["profile_tag"]) == (H19, M19) and "fallback_entries" not in record
+    assert helab_unchanged_by_source(HELAB_PRIORITY, record) is None  # (0.0.7: on to HeLab's folders.)
+    before = {key: value for key, value in record.items() if key != "fallback"}  # (Saved before Q~2.)
+    assert helab_txy.saved_wanted(before) == helab_txy.wanted_key(txy)

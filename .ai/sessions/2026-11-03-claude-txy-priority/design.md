@@ -124,6 +124,22 @@ settings. Its `txy_sources` is today's minus stage 3 (diffed), so:
   0.0.7 from the brief relabelled data is keyed by those shots' true origins, so it is reused only on the same
   data.
 
+- **The modes' own fallback (Q~2/Q~6; review TP-6).** HeLab priority and MATLAB priority are lists of two, so
+  their datasets can now hold fallback shots of other profiles (origins `helab:<other hash>`, record `fallback`)
+  with `source` still the mode and the profile the same. Two effects:
+  - **v0.0.7a1 on such a store-v3 dataset.** `_helab_unchanged`'s source check passes (same mode), so while
+    HeLab's folders are unchanged its quick check takes the dataset as current. It then shows shots its own
+    composition would leave out (another profile's TXY, where it reads only the conversion profile's). Each is
+    labelled by its true origin, so no data is mislabelled, and a full check (Refresh) or any change in HeLab's
+    folders reads them as 0.0.7's own choice. This differs from the conclusion above ("0.0.7 ends with its own
+    choice's data") only until such a check.
+  - **This build on data saved before Q~2.** Such data has no `fallback_entries`, and a tab load with no folder
+    list sends no `fallback`, so `wanted_key` matches it and a quick check can keep it: the fallback shots
+    appear after the next change in the folder or HeLab's folders, or a full check. Nothing is lost or
+    mislabelled.
+  - Pinned by `test_txy_priority_v007.py::test_a_modes_dataset_with_fallback_shots_across_versions`. For Tony
+    under Q~6; no code change proposed.
+
 So lists can be saved into store-v3 like the modes; no need to keep them out. **Pinned by
 `tests/test_txy_priority_v007.py`:** a verbatim copy of 0.0.7a1's `normal_source`, `_helab_unchanged`'s
 source check, `_with_choice`'s relabel and `read_txy_source`, run on records, settings values and result keys
