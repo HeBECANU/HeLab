@@ -64,6 +64,9 @@ Worker: Claude (Opus 5.5), floor TXY Priority, branch `agent/txy-priority` from 
 
 One commit each, every one with a test. TP-1 and TP-3 were checked to fail without their fix.
 
+After the fixes, dev/v0.0.8 was merged (`b959de1`: record-only commits and labcam). Full suite at `b959de1`:
+**9228 passed, 673 skipped, no RERUN**. The five type checks are clean. CI: CI_AFTER_REVIEW.
+
 | Finding | Commit | Fix |
 |---|---|---|
 | TP-1 (High) | `35a7007` | The helper's folder-row step resolves tags from what the app resolved and sent (`helab_txy.tag_lookup`: the mode's profile, the entries, `known`, `conversion`, then the built-ins). A user-profile row stays that profile, as a mode and as a list. |
