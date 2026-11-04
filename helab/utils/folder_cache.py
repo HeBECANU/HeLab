@@ -3279,6 +3279,7 @@ class FolderCache(QObject):
         verification, so saves get the I/O (a save waiting for a load it doesn't join then
         starts); none of those start again (``quitting``)."""
         self.quitting = True
+        self.service.set_user_hold(False)  # (The Activity window's Pause background I/O: quitting lifts it.)
         if self._root_verify_owner:
             self.service.cancel(self._root_verify_owner)
         for job in list(self.jobs.values()):
@@ -3354,6 +3355,13 @@ class FolderCache(QObject):
         is Live's new shots; None if ``owner`` is no such load."""
         path = self._finishing.get(owner)
         return None if path is None else (path, bool(self._finishing_live.get(owner)))
+
+    def cancel_raw_fill(self, path: str) -> None:
+        """Stop a folder's ``raw_fill`` (the Activity window's Cancel): it ends as ``cancelled``
+        (``_on_raw_fill_event``); the folder's next save asks for it again."""
+        path = self.key(path)
+        self._raw_fill_again.discard(path)
+        self.service.cancel(RAW_FILL_OWNER + path)
 
     def raw_filling(self, owner: str) -> bool:
         """Whether a helper's request is a folder's ``raw_fill``."""

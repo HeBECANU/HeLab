@@ -12,13 +12,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.results import AnalysisContext, AnalysisResult, RamResults
 from helab.analysis.runner_core import AnalysisQueue, RunInfo
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
-from helab.utils import app_log
+from helab.utils import activity, app_log
 
 
 class AnalysisRunner(QObject):
@@ -32,6 +32,11 @@ class AnalysisRunner(QObject):
         super().__init__(parent)
         self.core = AnalysisQueue(results, None, self._finished)
         self.results = self.core.results
+        # Jobs that follow Live (``AnalysisContext.live``): their successes aren't kept in the history.
+        self._live_jobs: set[str] = set()
+        # The session's history (the Activity window) hears of each end on the GUI thread, where Qt
+        # delivers ``finished`` to this runner's own slot.
+        self.finished.connect(self._record)
 
     def _finished(self, result: AnalysisResult) -> None:
         app_log.milestone("plot_done", script=result.analysis.analysis_id, version=result.analysis.version,
@@ -40,13 +45,31 @@ class AnalysisRunner(QObject):
                           state={"completed": "ok"}.get(result.state, result.state))
         self.finished.emit(result)
 
+    @pyqtSlot(object)
+    def _record(self, result: AnalysisResult) -> None:
+        """A job's end in the session's history (Q62.4): failures and cancellations, and successes but
+        Live's reruns (Q~2)."""
+        live = result.job_id in self._live_jobs
+        self._live_jobs.discard(result.job_id)
+        outcome: activity.Outcome = ("ok" if result.state == "completed" else
+                                     "cancelled" if result.state == "cancelled" else "failed")
+        if outcome == "ok" and live:
+            return
+        activity.record(activity.Finished(
+            f"analysis:{result.job_id}", "analysis", f"{result.analysis.short()}: {result.action}", "",
+            result.finished_at, outcome, result.error, result.started_at, (result.owner,) if result.owner else (),
+            route=activity.Route("analysis", result.owner, job=result.job_id),
+            details=(f"Job {result.job_id} on the analysis worker",) + ((" following Live",) if live else ())))
+
     def submit(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                view: DatasetView, values: Optional[Mapping[str, Any]] = None,
                constants: Optional[Mapping[str, Mapping[str, float]]] = None, owner: str = "",
                live: bool = False) -> AnalysisContext:
         """Queue ``action`` on ``view`` (GUI thread; ``AnalysisQueue.submit``). Raises
         ``RuntimeError`` while the runner is stopping (until its worker has exited)."""
-        return self.core.submit(script, metadata, action, view, values, constants, owner=owner, live=live)
+        context = self.core.prepare(script, metadata, action, view, values, constants, owner=owner, live=live)
+        self.enqueue(script, context)
+        return context
 
     def prepare(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                 view: DatasetView, values: Optional[Mapping[str, Any]] = None,
@@ -59,6 +82,8 @@ class AnalysisRunner(QObject):
     def enqueue(self, script: DatasetAnalysis, context: AnalysisContext) -> None:
         """Queue a prepared run (``AnalysisQueue.enqueue``); ``RuntimeError`` while stopping."""
         self.core.enqueue(script, context)
+        if context.live:
+            self._live_jobs.add(context.job_id)
 
     def cancel(self, job_id: str) -> None:
         """Ask a queued or running job to stop; it ends as ``cancelled`` (cooperatively)."""

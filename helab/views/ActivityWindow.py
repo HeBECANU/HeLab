@@ -404,6 +404,17 @@ class ActivitySources:
         return Snapshot(activity.ordered(tasks), counts, service.user_hold, now)
 
 
+def unique(items: Iterable[Any]) -> list[Any]:
+    """``items`` without repeats, by identity, in order."""
+    seen: set[int] = set()
+    kept = []
+    for item in items:
+        if id(item) not in seen:
+            seen.add(id(item))
+            kept.append(item)
+    return kept
+
+
 def _orphan(task: Task) -> Task:
     from dataclasses import replace
     return replace(task, parent="")
@@ -445,6 +456,8 @@ def parse_size(text: object, default: tuple[int, int] = (760, 420)) -> tuple[int
 
 
 MIN_SIZE = (400, 200)
+# Listings and scans: their Retry is the tree's right-click Retry (``FolderExplorer.refresh_folder``).
+LISTINGS = frozenset({"list", "details", "scan", "resolve"})
 NOW_COLUMNS = ("Task", "Tab", "Folder", "State", "Progress", "Elapsed", "Left")
 HISTORY_COLUMNS = ("Ended", "Task", "Tab", "Folder", "Outcome", "Took")
 # IOService events that change what the list shows at once (progress waits for the 1 s tick).
@@ -480,14 +493,18 @@ class ActivityActions:
         self.run_plot = run_plot
         self.reload_scripts = reload_scripts
 
-    def _explorer(self, route: Route) -> Optional[FolderExplorer]:
-        """The tab a route's owner (or, for a helper's request, one of its subscribers) belongs to."""
-        owners = [route.owner]
+    def _owners(self, route: Route, owners: Sequence[str] = ()) -> list[str]:
+        """Whom a route's task works for: a helper's subscribers while it runs, else those it recorded
+        (a finished task's ``owners``), else its own owner."""
         if route.kind == "io":
             request = self._request(route)
             if request is not None:
-                owners = self.sources.subscribers(request)
-        for name in owners:
+                return self.sources.subscribers(request)
+        return list(owners) or [route.owner]
+
+    def _explorer(self, route: Route, owners: Sequence[str] = ()) -> Optional[FolderExplorer]:
+        """The tab a route's owner (or, for a helper's request, one of its subscribers) belongs to."""
+        for name in self._owners(route, owners):
             owner = self.sources.owner(name)
             if owner is not None and owner.explorer is not None:
                 return owner.explorer
@@ -498,47 +515,196 @@ class ActivityActions:
         return next((r for r in (*service.active, *service.pending, *service.retired)
                      if (r.owner, r.operation, r.path) == (route.owner, route.operation, route.path)), None)
 
-    def _plot(self, route: Route) -> str:
+    def _plot(self, route: Route, owners: Sequence[str] = ()) -> str:
         if route.kind == "analysis":
             return route.owner
-        if route.kind == "io":
-            request = self._request(route)
-            for name in self.sources.subscribers(request) if request is not None else [route.owner]:
-                owner = self.sources.owner(name)
-                if owner is not None and owner.plot:
-                    return owner.plot
+        for name in self._owners(route, owners):
+            owner = self.sources.owner(name)
+            if owner is not None and owner.plot:
+                return owner.plot
         return ""
 
-    def show(self, route: Route, folder: str) -> bool:
+    def show(self, route: Route, folder: str, owners: Sequence[str] = ()) -> bool:
         """Show the task's folder in its tab (``FolderExplorer.reveal``), or its plot."""
-        plot = self._plot(route)
+        plot = self._plot(route, owners)
         if plot:
             return self.show_plot(plot)
-        explorer = self._explorer(route)
+        explorer = self._explorer(route, owners)
         if explorer is None:
             return False
         self.show_tab(explorer, route.path or folder)
         return True
 
-    def show_target(self, route: Route) -> bool:
+    def show_target(self, route: Route, owners: Sequence[str] = ()) -> bool:
         """Whether Show in tab has somewhere to go for ``route``: a tab or a plot that is open now."""
-        return bool(self._plot(route) and self._plot(route) in self.sources._plots) or self._explorer(route) is not None
+        plot = self._plot(route, owners)
+        return bool(self.sources.plot_title(plot)) if plot else self._explorer(route, owners) is not None
 
-    # (Step 4: through each owner's path.)
+    def _tab(self, owner: str) -> Optional[FolderExplorer]:
+        found = self.sources.owner(owner)
+        return None if found is None else found.explorer
+
+    def _tab_of(self, owners: Iterable[str], roles: Iterable[str] = ("select", "background")) -> Optional[FolderExplorer]:
+        roles = set(roles)
+        for name in owners:
+            found = self.sources.owner(name)
+            if found is not None and found.explorer is not None and found.role in roles:
+                return found.explorer
+        return None
+
+    # Cancel (Q62.3): each through its owner's own path; a helper then shows "stopping" until its exit.
+
     def cancel(self, task: Task) -> bool:
-        return False
+        """Cancel ``task`` as its owner's own Cancel does; whether anything was asked to stop."""
+        route, cache = task.route, self.sources.cache
+        if route.kind == "analysis":
+            for runner in unique(self.sources.runners()):
+                runner.cancel(route.job)
+            return True
+        if route.kind == "move":
+            return self._cancel_move()
+        if route.kind == "autoconvert":
+            explorer = self._tab(route.owner)
+            if explorer is None or not explorer.live_control.watching(route.path):
+                return False
+            explorer.live_control.set_auto_convert(False)  # (Its own toggle: one pass cancelled would only restart.)
+            return True
+        if route.kind == "conversion":
+            cache.cancel(route.owner, "convert", route.path)  # (As ExplorerConverter.close does.)
+            return True
+        if route.kind != "io":
+            return False
+        request = self._request(route)
+        if request is None:
+            return False
+        if request.operation == "raw_fill" or cache.raw_filling(request.owner):
+            cache.cancel_raw_fill(request.path)
+            return True
+        if request.operation == "cache_move":
+            return self._cancel_move()
+        asked = False
+        for name in self.sources.subscribers(request):
+            found = self.sources.owner(name)
+            if found is None:
+                continue
+            explorer = found.explorer
+            if found.role == "live" and request.operation == "convert" and explorer is not None:
+                if explorer.live_control.watching(request.path):
+                    explorer.live_control.set_auto_convert(False)
+                else:
+                    cache.cancel(name, "convert", request.path)
+            elif found.role == "select" and request.operation in ("load", "cached") and explorer is not None:
+                explorer.cancel_loading()  # (The toolbar's Cancel: the tab says "Cancelled — Retry".)
+                if self._subscribed(request, name):
+                    cache.cancel(name, request.operation, request.path)
+            elif found.role in ("select", "background", "convert", "plot"):
+                cache.cancel(name, request.operation, request.path)
+            else:
+                continue
+            asked = True
+        return asked
 
-    def retry(self, route: Route, folder: str) -> bool:
-        return False
+    def _subscribed(self, request: IORequest, owner: str) -> bool:
+        job = self.sources.cache.job_of(request.owner)
+        return job is not None and any(subscriber.owner == owner for subscriber in job.subscribers.values())
 
-    def retry_refusal(self, entry: activity.Finished) -> str:
-        return "Not yet"
-
-    def stop_live(self, route: Route) -> bool:
-        return False
+    def _cancel_move(self) -> bool:
+        mover = self.sources.mover()
+        if mover is None or not mover.busy:
+            return False
+        mover.cancel()  # (Until the copy is verified; a rename can't be.)
+        return True
 
     def cancel_queued(self, snapshot: Snapshot) -> int:
-        return 0
+        """Cancel every queued task that can be cancelled, each through its own path; how many."""
+        count = 0
+        for task in snapshot.tasks:
+            if task.state == "queued" and "cancel" in task.actions and self.cancel(task):
+                count += 1
+        return count
+
+    # Retry: a failed task, through its owner; never beside the attempt it replaces.
+
+    def retry_refusal(self, route: Route, outcome: Optional[str] = None, owners: Sequence[str] = ()) -> str:
+        """Why ``route``'s task can't be retried now ("" when it can)."""
+        if outcome == "ok":
+            return "Only a failed or cancelled task"
+        operation = {"live": "load", "autoconvert": "convert", "conversion": "convert"}.get(route.kind, route.operation)
+        if route.path and operation and self.sources.service.unexited(operation, route.path):
+            return "The previous attempt is still stopping: Retry once its process has exited"
+        if route.kind in ("live", "autoconvert"):
+            explorer = self._tab(route.owner)
+            if explorer is None:
+                return "Its tab is closed"
+            session = explorer.live_control.live
+            if session is None or session.path != route.path:
+                return "Live is off there: turn it on in its tab"
+            if route.kind == "live" and not session.error:
+                return "Live isn't stopped by an error"
+            if route.kind == "autoconvert" and not (session.convert is not None and session.convert.error):
+                return "Auto-convert isn't stopped by an error"
+            return ""
+        if route.kind == "conversion":
+            explorer = self._tab(route.owner)
+            if explorer is None:
+                return "Its tab is closed"
+            conversion = explorer.converter.conversions.get(route.path)
+            return "" if conversion is not None and conversion.error else "This conversion isn't stopped now"
+        if route.kind == "analysis":
+            if not route.owner or not self.sources.plot_title(route.owner):
+                return "Its plot is closed"
+            if any(job.owner == route.owner for runner in unique(self.sources.runners()) for job in runner.jobs()):
+                return "The plot is running"
+            return ""
+        if route.kind == "probe":
+            return ""
+        if route.kind == "io":
+            explorer = self._tab_of(owners)
+            if explorer is None:
+                return "Its owner tries again by itself, or its tab is closed"
+            if route.operation in LISTINGS:
+                return ""
+            if route.operation in ("load", "cached"):
+                return ("" if explorer.selected_path_globally == route.path
+                        else "Select the folder in its tab to load it again (Show in tab)")
+            return "Its owner tries again by itself"
+        return NOT_FOR["retry"]
+
+    def retry(self, route: Route, folder: str, owners: Sequence[str] = ()) -> bool:
+        """Retry through the owner's own Retry; whether it was asked."""
+        if self.retry_refusal(route, None, owners):
+            return False
+        if route.kind in ("live", "autoconvert"):
+            explorer = self._tab(route.owner)
+            if explorer is not None:
+                explorer.resume_live()  # (The Live line's Retry.)
+            return explorer is not None
+        if route.kind == "conversion":
+            explorer = self._tab(route.owner)
+            if explorer is not None:
+                explorer.converter.clicked(route.path)  # (The Convert row's click.)
+            return explorer is not None
+        if route.kind == "analysis":
+            return self.run_plot(route.owner)
+        if route.kind == "probe":
+            self.reload_scripts([route.path])
+            return True
+        explorer = self._tab_of(owners)
+        if explorer is None:
+            return False
+        if route.operation in LISTINGS:
+            explorer.refresh_folder(route.path)  # (Right-click Retry.)
+        else:
+            explorer.retry()  # (The tab's Retry, for its selected folder.)
+        return True
+
+    def stop_live(self, route: Route) -> bool:
+        """Turn Live off for the task's folder (the toolbar's Live; its new shots are saved)."""
+        explorer = self._explorer(route) if route.kind == "io" else self._tab(route.owner)
+        if explorer is None or not explorer.live_control.watching(route.path):
+            return False
+        explorer.stop_live()
+        return True
 
     def answer(self, route: Route) -> bool:
         explorer = self._explorer(route) if route.kind != "question" else next(
@@ -703,7 +869,7 @@ class ActivityWindow(QWidget):
         pairs: list[tuple[Any, Callable[..., None]]] = [
             (sources.service.activityChanged, self.request_refresh), (sources.service.resultReady, self._io_event),
             (sources.cache.quitSavesChanged, self.request_refresh)]
-        for runner in dict.fromkeys(sources.runners()):
+        for runner in unique(sources.runners()):
             pairs.append((runner.finished, self._run_ended))
         for signal, slot in pairs:
             signal.connect(slot)
@@ -918,7 +1084,9 @@ class ActivityWindow(QWidget):
             if action == "log":
                 result[action] = ""
             elif task is not None:
-                result[action] = "" if action in task.actions else NOT_FOR.get(action, "Not for this task")
+                result[action] = ("" if action in task.actions else NOT_FOR.get(action, "Not for this task"))
+                if action == "retry" and not result[action]:
+                    result[action] = self.handler.retry_refusal(task.route)
             elif entry is not None:
                 result[action] = self._entry_action(entry, action)
             else:
@@ -927,9 +1095,9 @@ class ActivityWindow(QWidget):
 
     def _entry_action(self, entry: activity.Finished, action: str) -> str:
         if action == "show":
-            return "" if self.handler.show_target(entry.route) else NOT_FOR["show"]
+            return "" if self.handler.show_target(entry.route, entry.owners) else NOT_FOR["show"]
         if action == "retry":
-            return self.handler.retry_refusal(entry)
+            return self.handler.retry_refusal(entry.route, entry.outcome, entry.owners)
         return "Not for a finished task"
 
     def _update_buttons(self) -> None:
@@ -950,22 +1118,22 @@ class ActivityWindow(QWidget):
 
     # The buttons
 
-    def _route(self) -> tuple[Optional[Route], str]:
+    def _route(self) -> tuple[Optional[Route], str, tuple[str, ...]]:
         task, entry = self.selected_task(), self.selected_entry()
         if task is not None:
-            return task.route, task.folder
+            return task.route, task.folder, ()
         if entry is not None:
-            return entry.route, entry.folder
-        return None, ""
+            return entry.route, entry.folder, entry.owners
+        return None, "", ()
 
     @pyqtSlot()
     def _on_show(self) -> None:
-        route, folder = self._route()
+        route, folder, owners = self._route()
         if route is not None:
             if route.kind == "question":
                 self.handler.answer(route)
             else:
-                self.handler.show(route, folder)
+                self.handler.show(route, folder, owners)
 
     @pyqtSlot()
     def _on_log(self) -> None:
@@ -983,8 +1151,8 @@ class ActivityWindow(QWidget):
         task, entry = self.selected_task(), self.selected_entry()
         if task is not None and "retry" in task.actions:
             self.handler.retry(task.route, task.folder)
-        elif entry is not None and not self.handler.retry_refusal(entry):
-            self.handler.retry(entry.route, entry.folder)
+        elif entry is not None and not self.handler.retry_refusal(entry.route, entry.outcome, entry.owners):
+            self.handler.retry(entry.route, entry.folder, entry.owners)
         self.request_refresh()
 
     @pyqtSlot()

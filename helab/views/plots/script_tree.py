@@ -27,6 +27,7 @@ from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.scripts import dld, probe, standard
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.scripts_manager import LoadError, ScriptsManager
+from helab.utils import activity
 from helab.utils.accessible import id_part, identify, identify_buttons
 from helab.utils.colours import AMBER
 from helab.utils.settings_defaults import SCRIPT_AUTO_RELOAD_SETTING, SCRIPT_FOLDERS_SETTING, read_setting
@@ -316,6 +317,13 @@ class FolderProbes(QObject):
             return ""
 
     def _ended(self, item: _Probe, failure: Optional[ProbeFailure]) -> None:
+        now = time.time()
+        activity.record(activity.Finished(
+            f"probe:{item.folder}:{item.started}", "scripts", "Test-import scripts", item.folder, now,
+            "ok" if failure is None else "failed", "" if failure is None else failure.reason,
+            now - (time.monotonic() - item.started) if item.started else None,
+            route=activity.Route("probe", path=item.folder),
+            details=(failure.details,) if failure is not None and failure.details else ()))
         if item.process is not None:
             self._running.pop(id(item.process), None)
             if not sip.isdeleted(item.process):

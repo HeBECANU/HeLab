@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
 from helab.convert.profile import file_tag
 from helab.convert.raw import ReadStop
-from helab.utils import app_log, cache_location, events
+from helab.utils import activity, app_log, cache_location, events
 from helab.utils import folder_cache
 from helab.utils import txy_sources
 from helab.utils.folder_cache import Dataset, FolderCache
@@ -343,6 +343,11 @@ class LiveController:
         if save:
             self._live_save(session)
         self._live_forget(session)
+        activity.record(activity.Finished(
+            f"live:{explorer.live_owner}:{session.path}", "live", "Live", session.path, time.time(),
+            "failed" if session.error else "ok", session.error, session.started_at, (explorer.live_owner,),
+            route=activity.Route("live", explorer.live_owner, path=session.path),
+            details=(f"Checks: {session.checks:,} · new shots: {session.new:,}",)))
         logging.info("Live off: %s", session.path)
         self._live_changed()
 
