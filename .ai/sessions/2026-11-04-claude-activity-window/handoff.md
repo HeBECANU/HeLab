@@ -101,7 +101,7 @@ with answers (1)–(4) and (a)–(d)).
 
 ## Checks
 
-**After the review fixes** (`d4593c8` and this commit):
+**After the review fixes** (code at `de386d2`):
 - Full suite, `pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`: **9391 passed, 673
   skipped, 2 RERUN** (output kept whole in `.ai/temp/activity-suite-review.txt`), both of one existing test,
   `tests/test_gui_responsiveness.py::test_rendering_never_reads_filesystem_or_disk_cache`: reasons
@@ -113,7 +113,17 @@ with answers (1)–(4) and (a)–(d)).
   runs of the activity files followed by `test_gui_responsiveness.py` in one process. Proposed for
   known-issues below.
 - The five type checks: clean (`.ai/temp/activity-types-review.txt`). `ruff check`; `mkdocs build --strict`.
-- CI: CI_REVIEW
+- Suite again at `de386d2` (after the AW-9 test fix): **9390 passed, 673 skipped, no RERUN**
+  (`.ai/temp/activity-suite-review2.txt`); the five type checks clean (`.ai/temp/activity-types-review2.txt`).
+- CI: run `41808661689` (`99c74c4`) failed Windows Tests 1/3 on the new AW-9 test (the window can't be
+  narrower than its button row, 1,074 px, on the 800 px offscreen screen), fixed in `de386d2`. **Run
+  `41810647028` on `de386d2`: green on every job**; every Tests and Converter backends log read: one RERUN,
+  macOS Tests 1/3, `tests/test_root_gui.py::test_the_gui_never_writes_the_saved_file_itself` (worker
+  crashed: the 100 s timeout), already in known-issues ("cause unknown"). Its faulthandler stack names the
+  cause: the test's `service.shutdown()` cancels the marker save, and `DataRootDialogs.ManualMarkerDialog._result`
+  answers `cancelled` with a modal `QMessageBox.warning` (`DataRootDialogs.py:235`), which blocks until the
+  timeout; conftest's `no_modal_warnings` patches only `presets.warning_box`. Not touched here (the
+  cancel's routing is unchanged; `_ended` only reports it first). Proposed addition to that entry below.
 
 **Before the review** (`b2e996a`):
 
@@ -253,6 +263,11 @@ Status to done (v0.0.9) at landing; "Reordering the queue" and `helab convert` b
   Probably a thread another test left behind (a helper's artifact cleanup, `shutil.rmtree`) started during the
   test, which `this_tests` counts as the test's own; a fix would be to count only threads the test's own
   service starts. Not touched here.
+- **Known issue (addition)**: `test_root_gui.py::test_the_gui_never_writes_the_saved_file_itself`, again on
+  macOS CI run `41810647028` (job 126508807739, `de386d2`), passed on retry; the faulthandler stack shows
+  the cause (above): the dialog's modal `QMessageBox.warning` on `cancelled` at the test's
+  `service.shutdown()`. A fix: close the dialog before the shutdown in the test, or show the warning
+  non-modally (`open()`), as the converter's questions are.
 - **Known issue (proposed)**: `tests/test_load_queue.py::test_an_automatic_load_waits_for_the_selection_to_settle_only_while_loads_are_busy`
   RERAN once on Ubuntu CI (run `41794579242`, Tests 1/3): `assert (False) where False =
   FolderExplorer.settling` at `:674`, right after selecting a third folder while the second's load was
