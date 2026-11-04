@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 import weakref
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Callable, Generic, Mapping, Optional, TypeVar
 
@@ -43,6 +43,24 @@ class _Held(Generic[_Call]):
         return self._method() if self._method is not None else self._strong
 
 
+@dataclass(frozen=True)
+class RunInfo:
+    """One job queued or computing (``AnalysisQueue.jobs``), for the Activity window: its id, the plot
+    asking (``AnalysisContext.owner``), the analysis and action, whether it follows Live, its state
+    ("queued", "running", or "stopping": cancelled, its ``compute`` not yet returned) and when it was
+    queued and started (``time.monotonic()``, and the same as wall-clock seconds)."""
+    job_id: str
+    owner: str
+    analysis: str
+    action: str
+    live: bool
+    state: str
+    queued_at: float
+    queued_wall: float
+    started_at: Optional[float] = None
+    started_wall: Optional[float] = None
+
+
 class AnalysisQueue:
     """The runner without Qt: a FIFO queue of jobs, one daemon worker thread that computes them,
     job ids, cooperative cancellation and the completed results kept in RAM (``results``).
@@ -60,6 +78,9 @@ class AnalysisQueue:
         self._queue: queue.Queue[_Job | None] = queue.Queue()
         self._contexts: dict[str, AnalysisContext] = {}
         self._scripts: dict[str, DatasetAnalysis] = {}  # Each queued or running job's script
+        # When each was queued and started (monotonic, wall), for ``jobs``.
+        self._queued: dict[str, tuple[float, float]] = {}
+        self._started: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
         # The worker stays registered until it has exited, so there is never a second one.
         self._thread: threading.Thread | None = None
@@ -123,6 +144,7 @@ class AnalysisQueue:
                 raise RuntimeError("The analysis runner is stopping")
             self._contexts[context.job_id] = context
             self._scripts[context.job_id] = script
+            self._queued[context.job_id] = (time.monotonic(), time.time())
             if self._thread is None:
                 # The worker holds the callbacks (and so their owner) while it runs.
                 callbacks = (self._on_started.get(), self._on_finished.get())
@@ -147,6 +169,20 @@ class AnalysisQueue:
         ``compute`` has returned (a reload of a script's folder waits for these: live scripts)."""
         with self._lock:
             return tuple(self._scripts.values())
+
+    def jobs(self) -> tuple[RunInfo, ...]:
+        """The jobs queued or computing now, in submission order (memory only; any thread)."""
+        with self._lock:
+            items = [(context, self._queued.get(job_id), self._started.get(job_id))
+                     for job_id, context in self._contexts.items()]
+        jobs = []
+        for context, queued, started in items:
+            queued = queued or (time.monotonic(), time.time())
+            state = "queued" if started is None else "stopping" if context.cancelled() else "running"
+            jobs.append(RunInfo(context.job_id, context.owner, context.analysis.short(), context.action, context.live,
+                                state, queued[0], queued[1], None if started is None else started[0],
+                                None if started is None else started[1]))
+        return tuple(jobs)
 
     def stop(self, timeout: float = 5.0) -> bool:
         """Cancel every job and end the worker; True once it has exited. A computation that
@@ -211,6 +247,8 @@ class AnalysisQueue:
         if context.cancelled():
             result = AnalysisResult.of(context, "cancelled", started_at=started)
         else:
+            with self._lock:
+                self._started[context.job_id] = (time.monotonic(), started)
             if on_started is not None:
                 on_started(context.job_id)
             try:
@@ -230,6 +268,8 @@ class AnalysisQueue:
         with self._lock:
             self._contexts.pop(context.job_id, None)
             self._scripts.pop(context.job_id, None)
+            self._queued.pop(context.job_id, None)
+            self._started.pop(context.job_id, None)
         if result.state == "completed":
             self.results.add(replace(result, packed=None) if result.packed is not None else result)
         if on_finished is not None:

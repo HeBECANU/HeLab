@@ -17,10 +17,11 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Callable, Iterator, TYPE_CHECKING
+from typing import Any, Callable, Iterator, Mapping, TYPE_CHECKING
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
 
+from helab.utils import activity
 from helab.utils.constants import MAX_SIMULTANEOUS_IO
 from helab.utils.time_format import duration
 
@@ -68,6 +69,11 @@ class IORequest:
     # Bytes the helper needs from this process (a result save's packed data, R2): written to its
     # private folder before it starts (``blob_file``), off the GUI thread.
     blob: bytes | None = None
+    # The Activity window's: the kind of its helper's last event, when it was queued (monotonic), and
+    # whether its end went in the session's history (``IOService._report_end``, once).
+    last_event: str = ""
+    queued_at: float = field(default_factory=time.monotonic)
+    reported: bool = False
 
 
 # Help › Record I/O trace (this session): every helper's operations on source folders, one JSON line
@@ -127,6 +133,8 @@ BACKGROUND = "background"
 # Reads of the local disk cache only; they never touch source folders.
 LOCAL = "local"
 REQUEUED = "moved to the background queue"
+# The status bar's counts while the Activity window's Pause background I/O is on (Q~3).
+USER_HOLD_NOTE = "paused by you"
 
 
 class IOService(QObject):
@@ -215,6 +223,9 @@ class IOService(QObject):
         # Cached data doesn't match several folders: loads and scans pause, and none start,
         # until the user answers (``FolderCache.resume_after_mismatch`` and friends).
         self.mismatch_hold = False
+        # The Activity window's Pause background I/O (``set_user_hold``): background loads, scans, conversions
+        # and the like pause, and none start, until Resume (or quitting, ``FolderCache.cancel_for_quit``).
+        self.user_hold = False
         # Work Offline (``set_offline``): only ``OFFLINE_OPERATIONS`` start; the operations refused
         # so far this session (logged once each).
         self.offline = False
@@ -409,7 +420,7 @@ class IOService(QObject):
         for request in list(self.active):
             if self.uses_cache(request):
                 self._retire(request)
-                self.resultReady.emit(request, {"kind": "cancelled"})
+                self._ended(request, {"kind": "cancelled"})
         self.activityChanged.emit()
 
     def cache_busy(self) -> bool:
@@ -439,6 +450,24 @@ class IOService(QObject):
         return (self.mismatch_hold and request.operation in self.MISMATCH_HELD
                 and not self.mismatch_spared(request))
 
+    def set_user_hold(self, held: bool) -> None:
+        """Pause background I/O, and start none, or let it go on (the Activity window's Pause background
+        I/O): the mismatch hold's twin for every ``PAUSABLE`` operation in the background lane. Never the
+        current tab's (foreground) or the local lane, saves or Live checks (``mismatch_spared``)."""
+        if held != self.user_hold:
+            self.user_hold = held
+            logging.info("Background I/O %s (Activity)", "paused" if held else "resumed")
+            self.reschedule()
+
+    def user_held(self, request: IORequest) -> bool:
+        """Whether the user's hold pauses (or, queued, holds) this request: a ``PAUSABLE`` request outside
+        the foreground and local lanes, not a save or a Live check."""
+        if not self.user_hold or request.operation not in self.PAUSABLE or self.mismatch_spared(request):
+            return False
+        if request in self.pending:
+            return not self.wants_foreground(request) and request.operation not in self.LOCAL_OPERATIONS
+        return request.lane == BACKGROUND
+
     def cancel_held(self) -> None:
         """Cancel every queued or running load and scan the mismatch hold holds (``held_by_mismatch``
         with the hold on); a finished load still writing its disk cache is left to finish."""
@@ -446,11 +475,11 @@ class IOService(QObject):
             if request.operation in self.MISMATCH_HELD and not self.mismatch_spared(request):
                 self.pending.remove(request)
                 request.cancelled.set()
-                self.resultReady.emit(request, {"kind": "cancelled"})
+                self._ended(request, {"kind": "cancelled"})
         for request in list(self.active):
             if request.operation in self.MISMATCH_HELD and not self.mismatch_spared(request) and not request.completed:
                 self._retire(request)
-                self.resultReady.emit(request, {"kind": "cancelled"})
+                self._ended(request, {"kind": "cancelled"})
         self.activityChanged.emit()
 
     def offline_refuses(self, operation: str) -> bool:
@@ -484,13 +513,13 @@ class IOService(QObject):
         for request in [r for r in self.pending if not self.finishes_offline(r)]:
             self.pending.remove(request)
             request.cancelled.set()
-            self.resultReady.emit(request, {"kind": "cancelled"})
+            self._ended(request, {"kind": "cancelled"})
         for request in [r for r in self.active if not self.finishes_offline(r)]:
             # A load that delivered its data may still read the folder for its cache write: it
             # stops too, and says so (Vernier, review round 1: going offline never waits on a
             # volume that may be gone).
             self._retire(request)
-            self.resultReady.emit(request, {"kind": "cancelled", "message": self.OFFLINE_SAVE_STOPPED}
+            self._ended(request, {"kind": "cancelled", "message": self.OFFLINE_SAVE_STOPPED}
                                   if request.completed else {"kind": "cancelled"})
         self.activityChanged.emit()
 
@@ -500,7 +529,7 @@ class IOService(QObject):
             self.offline_refuses(request.operation)
             self.pending.remove(request)
             request.cancelled.set()
-            self.resultReady.emit(request, {"kind": "cancelled"})
+            self._ended(request, {"kind": "cancelled"})
             return
         if request.payload.get("cache") and self.cache_options is not None:
             # Queued before a cache move: it opens the cache where it is now, or none if the disk
@@ -546,7 +575,7 @@ class IOService(QObject):
                 continue
             if not self._background_room():
                 break
-            if hold and request.operation in self.PAUSABLE:
+            if request.operation in self.PAUSABLE and (hold or self.user_held(request)):
                 continue
             self._start(request, BACKGROUND)
 
@@ -558,8 +587,9 @@ class IOService(QObject):
             # stop and start it; a load starting after the listings ended has nothing to give way to.
             hold_load = listing or listed_lately and request.pause_requested
             pause = (request.operation in self.PAUSABLE and not request.completed
-                     and (self.held_by_mismatch(request) or (hold_background if request.lane != FOREGROUND
-                                                             else request.operation == "load" and hold_load)))
+                     and (self.held_by_mismatch(request) or self.user_held(request)
+                          or (hold_background if request.lane != FOREGROUND
+                              else request.operation == "load" and hold_load)))
             if pause != request.pause_requested:
                 with request.control:
                     # Not written (the flag held by another process for a moment): the next tick tries again,
@@ -752,6 +782,8 @@ class IOService(QObject):
             now = time.monotonic()
             ages = [age for r in self.retired if (age := self.stopping_for(r, now)) is not None]
             parts.append(f"{len(self.retired):,} stopping" + (f" ({duration(max(ages))})" if ages else ""))
+        if self.user_hold:
+            parts.append(USER_HOLD_NOTE)
         return " · ".join(parts) or "Ready"
 
     LANE_NOTES = {FOREGROUND: " (current tab)", BACKGROUND: " (background)", LOCAL: " (local disk cache)"}
@@ -786,7 +818,8 @@ class IOService(QObject):
         paused = [f"{self.label(r)}: {r.path}" for r in self.active if r.paused]
         if paused:
             why = ("Paused: cached data doesn't match several folders (see the status bar's ⚠)"
-                   if self.mismatch_hold else "Paused while the current tab browses or loads")
+                   if self.mismatch_hold else "Paused by you (Activity: Resume background I/O)" if self.user_hold
+                   else "Paused while the current tab browses or loads")
             parts.append(f"{why}:\n" + "\n".join(paused))
         rows: dict[tuple[str, str], str] = {}
         for request in self.pending:
@@ -987,6 +1020,45 @@ class IOService(QObject):
             threading.Thread(target=shutil.rmtree, args=(output,), kwargs={"ignore_errors": True},
                              daemon=True, name="HeLab-artifact-cleanup").start()
 
+    def _ended(self, request: IORequest, event: dict[str, Any]) -> None:
+        """Say a request ended (``cancelled``, ``done``, ``error``) to its owner, after the history."""
+        self._report_end(request, event)
+        self.resultReady.emit(request, event)
+
+    def _report_end(self, request: IORequest, event: Mapping[str, Any]) -> None:
+        """Record a request's end in the session's history (the Activity window, Q62.4), once, before its
+        owner hears of it (so FolderCache still knows whom it worked for). A timeout that is retried, or a
+        load moved to the background queue, isn't an end: the next attempt goes on with the task."""
+        if request.reported:
+            return
+        request.reported = True
+        kind = event["kind"]
+        outcome: activity.Outcome = "ok" if kind == "done" else "cancelled" if kind == "cancelled" else "failed"
+        cache = self.folder_cache
+        if cache is not None and cache.reports_end_itself(request.owner):
+            return  # (A GUI conversion's pass: the conversion's own entry is the one, AW-15.)
+        if not activity.kept_in_history(request.operation, request.payload, outcome):
+            return
+        try:
+            # (Named by what it was asked to do: a load that delivered its data and then failed writing
+            # the cache is still a load, its message says what failed.)
+            activity.record(activity.finished_request(
+                request, outcome, str(event.get("message") or ""),
+                label="Live check" if self.live(request) else self.LABELS.get(request.operation, request.operation),
+                owners=self.owners_of(request), admin=cache.admin_action(request.owner) if cache else ""))
+        except AssertionError:
+            raise
+        except Exception:
+            logging.exception("Activity history: %s %s", request.operation, request.path)
+
+    def unexited(self, operation: str, path: str) -> bool:
+        """Whether a helper of ``operation`` on ``path`` is running or stopping, its exit not yet confirmed:
+        a retry from the Activity window waits until none is (a retry never runs beside the attempt it
+        replaces; the owners' own paths start new owners, which ``blocker`` wouldn't hold)."""
+        target = os.path.abspath(path)  # (Lexical, as ``FolderCache.key``: owners name a folder either way.)
+        return any(request.operation == operation and os.path.abspath(request.path) == target
+                   and not request.exited.is_set() for request in (*self.active, *self.retired))
+
     def _retire(self, request: IORequest, reason: str = "cancelled") -> None:
         request.retirement_reason = reason
         if request.retired_at is None:
@@ -1002,11 +1074,11 @@ class IOService(QObject):
             if request.owner == owner and (operation is None or request.operation == operation):
                 self.pending.remove(request)
                 request.cancelled.set()
-                self.resultReady.emit(request, {"kind": "cancelled"})
+                self._ended(request, {"kind": "cancelled"})
         for request in list(self.active):
             if request.owner == owner and (operation is None or request.operation == operation):
                 self._retire(request)
-                self.resultReady.emit(request, {"kind": "cancelled"})
+                self._ended(request, {"kind": "cancelled"})
         self.activityChanged.emit()
 
     def _tick(self) -> None:
@@ -1022,6 +1094,7 @@ class IOService(QObject):
                 self._forget(request)
             elif not request.cancelled.is_set() and not self.closed:
                 kind = event["kind"]
+                request.last_event = kind
                 if kind == "error":
                     # One line per failure; timeouts are logged where they are detected.
                     logging.warning("%s failed: %s — %s", self.label(request), request.path,
@@ -1053,6 +1126,8 @@ class IOService(QObject):
                     request.completed = True
                     request.last_activity = time.monotonic()
                     request.timeout = self.FINISH_TIMEOUT
+                if event["kind"] in ("done", "error"):
+                    self._report_end(request, event)
                 self.resultReady.emit(request, event)
         # Exit notifications may be delayed behind reader events. Confirmed
         # death is an independent memory-only signal; cleanup cannot hold a slot.
@@ -1074,7 +1149,7 @@ class IOService(QObject):
             if request.completed:
                 # Data may already be delivered while the helper writes its
                 # disk cache. Never restart or fail a successful request.
-                self.resultReady.emit(request, {"kind": "done"})
+                self._ended(request, {"kind": "done"})
                 continue
             retries = self.retries(request)
             logging.warning("I/O timeout after %.0f s without progress (attempt %s/%s): %s %s",
@@ -1096,7 +1171,7 @@ class IOService(QObject):
                 message = (f"File timed out after 3 attempts: {os.path.basename(request.current_file)} — Retry"
                            if retries and request.current_file else
                            f"Timed out after {request.timeout:.0f} s without progress — Retry")
-                self.resultReady.emit(request, {"kind": "error", "timeout": True,
+                self._ended(request, {"kind": "error", "timeout": True,
                                                "attempt": request.attempt,
                                                "message": message})
             self.activityChanged.emit()

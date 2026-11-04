@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
 from helab.convert.profile import file_tag
 from helab.convert.raw import ReadStop
-from helab.utils import app_log, cache_location, events
+from helab.utils import activity, app_log, cache_location, events
 from helab.utils import folder_cache
 from helab.utils import txy_sources
 from helab.utils.folder_cache import Dataset, FolderCache
@@ -234,6 +234,15 @@ class LiveController:
         """The Live session of ``path``: watched, or with a save still to run or finish."""
         return self._live_sessions.get(path)
 
+    def sessions(self) -> list[LiveSession]:
+        """This tab's Live sessions, the watched one first, then those whose save hasn't ended (memory
+        only; the Activity window)."""
+        sessions = list(self._live_sessions.values())
+        if self.live is not None and self.live in sessions:
+            sessions.remove(self.live)
+            sessions.insert(0, self.live)
+        return sessions
+
     def watching(self, path: str | None) -> bool:
         """Live is on for ``path`` (checking, or stopped by an error until Retry)."""
         return self.live is not None and self.live.path == path
@@ -334,6 +343,11 @@ class LiveController:
         if save:
             self._live_save(session)
         self._live_forget(session)
+        activity.record(activity.Finished(
+            f"live:{explorer.live_owner}:{session.path}", "live", "Live", session.path, time.time(),
+            "failed" if session.error else "ok", session.error, session.started_at, (explorer.live_owner,),
+            route=activity.Route("live", explorer.live_owner, path=session.path),
+            details=(f"Checks: {session.checks:,} · new shots: {session.new:,}",)))
         logging.info("Live off: %s", session.path)
         self._live_changed()
 
@@ -868,8 +882,22 @@ class LiveController:
                              beside=None if destination is None else False, profile_used=profile):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
+            self._convert_stopped(session)
             return
         convert.request, convert.todo, convert.done = True, 0, 0
+
+    def _convert_stopped(self, session: LiveSession) -> None:
+        """Auto-convert stopped without a helper's failure (one couldn't be queued, or Work Offline refused it):
+        said in the session's history (the Activity window, Q62.4; a helper's failure IOService reports)."""
+        convert = session.convert
+        if convert is None:
+            return
+        live_owner = self.explorer.live_owner
+        activity.record(activity.Finished(
+            f"autoconvert:{live_owner}:{session.path}:{time.time()}", "live", "Auto-convert", session.path,
+            time.time(), "failed", convert.error, convert.started_at, (live_owner,),
+            route=activity.Route("autoconvert", live_owner, path=session.path),
+            details=(f"Converted {convert.converted:,} since it was turned on",)))
 
     def _share_answered(self, path: str, choice: str) -> None:
         """Live's auto-convert beside the raw files on a share (A39.5): beside (confirmed this session), HeLab's
@@ -963,6 +991,7 @@ class LiveController:
         elif kind in ("done", "error", "cancelled", "offline"):
             if kind == "offline":
                 convert.error = "not while working offline"
+                self._convert_stopped(session)  # (No helper ran: IOService has no end to report.)
             elif kind == "error":
                 convert.error = str(event.get("message") or "the conversion failed").removesuffix(" — Retry")
             if kind != "offline":

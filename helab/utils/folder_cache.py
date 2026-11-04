@@ -196,6 +196,7 @@ def store_options() -> dict[str, Any]:
 
 
 class FolderCache(QObject):
+    MAX_SELF_REPORTED = 1024  # (``_self_reported``: requests that never ended are dropped oldest first.)
     resultReady = pyqtSignal(object, object)
     snapshotChanged = pyqtSignal(str)
     datasetChanged = pyqtSignal(str)
@@ -302,6 +303,11 @@ class FolderCache(QObject):
         # new shots wait in RAM before the folder is saved (Settings → Cache).
         self.live_interval = DEFAULT_LIVE_INTERVAL
         self.live_autosave_shots = DEFAULT_LIVE_AUTOSAVE
+        # Owners that report their tasks' ends to the Activity history themselves (a tab's GUI conversions,
+        # ``ExplorerConverter``: the conversion is the entry, AW-15), and the helpers' requests (producer owners)
+        # working for one: IOService doesn't report those (``reports_end_itself``). Bounded, oldest dropped.
+        self.self_reporting: set[str] = set()
+        self._self_reported: OrderedDict[str, None] = OrderedDict()
         # Saves (loads with ``save`` in their payload) waiting for the folder's running save to
         # end, so saves of one folder never overlap: folder → (owner, payload).
         self._deferred_saves: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -2667,6 +2673,7 @@ class FolderCache(QObject):
             if timeout is not None and math.isinf(timeout):
                 self.service.set_timeout(job.owner, timeout)
             job.subscribers[(owner, generation)] = request
+            self._note_self_reported(owner, job.owner)
             self._catch_up(job, request)
             self.service.reschedule()
             return True
@@ -2726,6 +2733,7 @@ class FolderCache(QObject):
             job.payload = payload = {**payload, "scan_operation_id": job.owner,
                                      "scan_revision": time.time_ns(), "scan_manual": manual}
         job.subscribers[(owner, generation)] = request
+        self._note_self_reported(owner, job.owner)
         self.jobs[job.key] = job
         self._producers[job.owner] = job
         if not self.service.submit(job.owner, 0, path, operation, payload, priority=priority, timeout=timeout,
@@ -3279,6 +3287,7 @@ class FolderCache(QObject):
         verification, so saves get the I/O (a save waiting for a load it doesn't join then
         starts); none of those start again (``quitting``)."""
         self.quitting = True
+        self.service.set_user_hold(False)  # (The Activity window's Pause background I/O: quitting lifts it.)
         if self._root_verify_owner:
             self.service.cancel(self._root_verify_owner)
         for job in list(self.jobs.values()):
@@ -3311,6 +3320,11 @@ class FolderCache(QObject):
             if not job.subscribers:
                 self._forget_job(job)
                 self.service.cancel(job.owner)
+            elif job.owner in self._self_reported and not any(
+                    subscriber.owner in self.self_reporting for subscriber in job.subscribers.values()):
+                # (The GUI conversion left a pass that goes on for another owner, Live's: no longer the
+                # conversion's to report, so IOService reports its end: AW-16.)
+                del self._self_reported[job.owner]
 
     def transfer(self, owner: str, generation: int, path: str,
                  new_owner: str, new_generation: int, operation: str = "load") -> bool:
@@ -3339,6 +3353,44 @@ class FolderCache(QObject):
             self.resultReady.emit(request, job.load_status)
         if job.paused:
             self.resultReady.emit(request, {"kind": "paused"})
+
+    def _note_self_reported(self, subscriber: str, producer: str) -> None:
+        if subscriber in self.self_reporting:
+            self._self_reported[producer] = None
+            while len(self._self_reported) > self.MAX_SELF_REPORTED:
+                self._self_reported.popitem(last=False)
+
+    def reports_end_itself(self, producer: str) -> bool:
+        """Whether the helper's request (its producer owner) works for an owner that reports the task's end
+        to the Activity history itself (``self_reporting``), so IOService doesn't (AW-15); asked once, as it
+        ends."""
+        return self._self_reported.pop(producer, 0) is None
+
+    def job_of(self, owner: str) -> SharedJob | None:
+        """The shared job a helper's request (``owner``) works for, if it is one (memory only; the
+        Activity window)."""
+        return self._producers.get(owner)
+
+    def admin_action(self, owner: str) -> str:
+        """The ``cache_admin`` action a helper's request runs ("sweep", "trim"…; "" if none)."""
+        return self._admin.get(owner, "")
+
+    def finishing_of(self, owner: str) -> tuple[str, bool] | None:
+        """A finished load still writing the disk cache (its job forgotten): its folder, and whether it
+        is Live's new shots; None if ``owner`` is no such load."""
+        path = self._finishing.get(owner)
+        return None if path is None else (path, bool(self._finishing_live.get(owner)))
+
+    def cancel_raw_fill(self, path: str) -> None:
+        """Stop a folder's ``raw_fill`` (the Activity window's Cancel): it ends as ``cancelled``
+        (``_on_raw_fill_event``); the folder's next save asks for it again. ``path`` as its request names it
+        (``schedule_raw_fill``'s owner is made from that string)."""
+        self._raw_fill_again.discard(path)
+        self.service.cancel(RAW_FILL_OWNER + path)
+
+    def raw_filling(self, owner: str) -> bool:
+        """Whether a helper's request is a folder's ``raw_fill``."""
+        return owner in self._raw_fills
 
     def load_clock(self, path: str) -> LoadClock | None:
         """The running load's clock for this folder, if it is loading."""

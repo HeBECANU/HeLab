@@ -27,6 +27,7 @@ from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.scripts import dld, probe, standard
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.scripts_manager import LoadError, ScriptsManager
+from helab.utils import activity
 from helab.utils.accessible import id_part, identify, identify_buttons
 from helab.utils.colours import AMBER
 from helab.utils.settings_defaults import SCRIPT_AUTO_RELOAD_SETTING, SCRIPT_FOLDERS_SETTING, read_setting
@@ -173,6 +174,18 @@ class FolderProbes(QObject):
     def busy(self) -> bool:
         return bool(self._queue or self._running)
 
+    def activity(self) -> List[Tuple[str, str, Optional[float]]]:
+        """Each probe running or queued (the Activity window): its folder, "importing", "starting" (its
+        process not ready yet), "stopping" (killed, its exit not yet seen) or "queued", and when it started
+        (``time.monotonic()``; None while queued). Memory only."""
+        rows: List[Tuple[str, str, Optional[float]]] = []
+        for item in self._running.values():
+            state = ("stopping" if item.killed or item.lingered else "importing" if item.ready is not None
+                     else "starting")
+            rows.append((item.folder, state, item.started))
+        rows += [(item.folder, "queued", None) for item in self._queue]
+        return rows
+
     def probe(self, folders: List[str], answer: Callable[[Dict[str, Optional[ProbeFailure]]], None]) -> None:
         if not folders:
             answer({})
@@ -304,6 +317,13 @@ class FolderProbes(QObject):
             return ""
 
     def _ended(self, item: _Probe, failure: Optional[ProbeFailure]) -> None:
+        now = time.time()
+        activity.record(activity.Finished(
+            f"probe:{item.folder}:{item.started}", "scripts", "Test-import scripts", item.folder, now,
+            "ok" if failure is None else "failed", "" if failure is None else failure.reason,
+            now - (time.monotonic() - item.started) if item.started else None,
+            route=activity.Route("probe", path=item.folder),
+            details=(failure.details,) if failure is not None and failure.details else ()))
         if item.process is not None:
             self._running.pop(id(item.process), None)
             if not sip.isdeleted(item.process):
@@ -795,6 +815,21 @@ class TreePanelWidget(QWidget):
         code with the folder's other plots (``_adopt``)."""
         if self._folder_key(instance) in {os.path.normcase(folder) for folder in self._round | self._pending}:
             instance.hold_for_reload()
+
+    def probe_activity(self) -> List[Tuple[str, str, Optional[float]]]:
+        """The script folders' test imports running or queued (``FolderProbes.activity``)."""
+        return self._probes.activity()
+
+    @staticmethod
+    def probe_limits() -> Tuple[float, float]:
+        """A test import's time limits: to start, and to import once started (the Activity window says them)."""
+        return PROBE_START_SECONDS, PROBE_SECONDS
+
+    def reload_waiting(self) -> Tuple[List[str], int]:
+        """A reload waiting (the Activity window): its folders, and the runs of their scripts it waits for
+        to end (0: none, or it waits for a round of test imports). Memory only."""
+        folders = sorted(self._pending)
+        return folders, (self._busy(self._pending) if folders else 0)
 
     @pyqtSlot()
     def _reload_clicked(self) -> None:

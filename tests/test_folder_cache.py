@@ -381,7 +381,7 @@ def test_queue_tooltip_covers_scans_loads_and_navigation_across_tabs_when_idle(
     expected = (f"Queued folders (next first):\nLoad data: {data}\nBrowse folder: {browse}"
                 f"\nCheck folder status: {bulk}")
     assert status.status_bar_message_left.text() == "3 queued"
-    assert status.status_bar_message_left.toolTip() == f"3 operations queued\n\n{expected}"
+    assert status.status_bar_message_left.toolTip() == f"3 operations queued\n\n{expected}\n\nClick for Activity"
     assert first.loading_tooltip == expected
     assert expected in first.folder_summary_label.toolTip()
     # The pending list is global and deduplicated despite multiple subscribers.
@@ -433,7 +433,7 @@ def test_queue_explains_waiting_for_timed_out_operation_to_stop(
     HelabMainWindow.update_status_bar_left(window)
     # The held retry waits for the stopping helper; it is not counted as queued.
     assert global_label.text() == "1 stopping (42 s)"
-    assert global_label.toolTip() == f"Waiting for timed-out folder listing to stop (42 s)\n\n{tooltip}"
+    assert global_label.toolTip() == f"Waiting for timed-out folder listing to stop (42 s)\n\n{tooltip}\n\nClick for Activity"
     assert window.status_bar_progress.isHidden()
     service.messages.put((old, {"kind": "exit"}))
     service._tick()

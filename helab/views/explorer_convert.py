@@ -57,7 +57,7 @@ from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QDialogButtonBox,
 
 from helab.convert.profile import DetectorProfile, file_tag
 from helab.convert.raw import ReadStop
-from helab.utils import cache_location, events, folder_cache
+from helab.utils import activity, cache_location, events, folder_cache
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
 from helab.views.explorer_text import plural
@@ -347,6 +347,7 @@ class ExplorerConverter:
         self._timer.timeout.connect(self._next_passes)
         cache = explorer.model.cache
         self._cache = cache
+        cache.self_reporting.add(self.owner)  # (This reports its conversions' ends: ``_report``, AW-15.)
         cache.folderPrefsChanged.connect(self._flag_changed)
         cache.cacheAdminResult.connect(self._admin_result)
 
@@ -526,6 +527,7 @@ class ExplorerConverter:
                 # The folder's flag first: the helper writes beside only while the store's flag is on.
                 if not cache.set_write_beside(path, True):
                     conversion.error = "the folder's beside setting couldn't be saved (HeLab's work queue is full)"
+                    self._report(conversion, "failed")
                     self.explorer.loadStateChanged.emit()
                     return False
                 conversion.flag = True
@@ -551,6 +553,7 @@ class ExplorerConverter:
                 conversion.error = ("the folder's beside setting couldn't be saved: "
                                     + str(event.get("message") or "cancelled"))
                 logging.warning("Converting %s stopped: %s", conversion.path, conversion.error)
+                self._report(conversion, "failed")
         self.explorer.loadStateChanged.emit()
 
     def _pass(self, conversion: FolderConversion) -> bool:
@@ -561,6 +564,7 @@ class ExplorerConverter:
             other = cache.converting_with(conversion.path)
             conversion.error = (f"a conversion of this folder with {other} is running; try again when it ends"
                                 if other else "the conversion couldn't be queued")
+            self._report(conversion, "failed")
             self.explorer.loadStateChanged.emit()
             return False
         conversion.request, conversion.todo, conversion.done = True, 0, 0
@@ -606,6 +610,7 @@ class ExplorerConverter:
                                     if kind == "cancelled" else
                                     str(event.get("message") or "the conversion failed").removesuffix(" — Retry"))
                 logging.warning("Converting %s stopped: %s", conversion.path, conversion.error)
+                self._report(conversion, "cancelled" if kind == "cancelled" else "failed")
                 if conversion.refused and self.box is None:
                     self.box = ask_after_refusal(self.explorer, conversion.path, conversion.refused,
                                                  lambda choice: self._refusal_answered(conversion.path, choice))
@@ -622,11 +627,21 @@ class ExplorerConverter:
         conversion.finished = True
         logging.info("Converted %s: %d to %s", conversion.path, conversion.converted,
                      WHERE.get(conversion.output, conversion.output))
+        self._report(conversion, "ok")
         if conversion.converted:
             explorer = self.explorer
             explorer.refresh_folder(conversion.path)
             if conversion.path == explorer.selected_path_globally:
                 explorer.queue_load(conversion.path)
+
+    def _report(self, conversion: FolderConversion, outcome: activity.Outcome) -> None:
+        """A conversion's end in the session's history (the Activity window, Q62.4)."""
+        where = WHERE.get(conversion.output or conversion.destination, conversion.destination)
+        activity.record(activity.Finished(
+            f"conversion:{self.owner}:{conversion.path}:{conversion.started_at}", "convert", "Convert raw files to TXY",
+            conversion.path, time.time(), outcome, conversion.error, conversion.started_at, (self.owner,),
+            route=activity.Route("conversion", self.owner, "convert", conversion.path),
+            details=(f"{conversion.converted:,} converted to {where} in {conversion.passes:,} passes",)))
 
     def close(self) -> None:
         self._timer.stop()
@@ -638,5 +653,6 @@ class ExplorerConverter:
         for conversion in self.conversions.values():
             if conversion.request:
                 self.explorer.model.cache.cancel(self.owner, "convert", conversion.path)
+        self._cache.self_reporting.discard(self.owner)
         if self.box is not None:
             self.box.close()

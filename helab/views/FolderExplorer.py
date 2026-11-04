@@ -609,6 +609,10 @@ class FolderExplorer(QWidget):
             if not self.load_to_ram_cache(path, dwell=False) and not (self.loading and self._load_path == path):
                 self._unchecked_path = unchecked  # Nothing will check it (e.g. auto-load is off).
 
+    def retry(self) -> None:
+        """The tab's Retry (the Activity window's, for the tab's selected folder)."""
+        self._retry()
+
     def _retry(self) -> None:
         if self.live is not None:
             self.resume_live()

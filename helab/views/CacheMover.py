@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import sys
+import time
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -28,7 +29,7 @@ from PyQt6.QtCore import QObject, QSettings, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QAbstractButton, QMessageBox, QProgressDialog, QPushButton, QWidget
 
-from helab.utils import cache_move
+from helab.utils import activity, cache_move
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.cache_locks import FileLock, lock_for_move
 from helab.utils.cache_setting import write_cache_setting
@@ -355,6 +356,11 @@ class CacheMover(QObject):
             self.lock = None
         was_running, self.running, self.moving = self.running, False, False
         if was_running:
+            outcome: activity.Outcome = "ok" if moved else "cancelled" if self._cancelled else "failed"
+            activity.record(activity.Finished(
+                f"move:{self.move_id}", "upkeep", "Move disk cache", self.source, time.time(), outcome,
+                self._abort_reason, route=activity.Route("move", self.owner),
+                details=(f"From {self.source} to {self.target}", f"Method: {self.method or 'not chosen'}")))
             self.finished.emit(moved)
 
     def _finish(self, moved: bool, title: str, text: str, folders: list[str] | None = None,
