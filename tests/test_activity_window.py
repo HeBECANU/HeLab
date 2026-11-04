@@ -410,3 +410,29 @@ def test_history_rows_are_added_on_top_and_keep_their_selection(qtbot: QtBot, mo
     first = window.history.topLevelItem(0)
     assert first is not None and first.text(3) == str(activity.HISTORY_SIZE - 1)
     service.shutdown()
+
+
+def test_the_list_keeps_its_scroll_position_when_a_task_starts_or_leaves(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-14: with no row selected, a change of the rows' places (one more queued scan, one cancelled) keeps
+    the list where the user scrolled it."""
+    service = quiet_service(monkeypatch)
+    for n in range(80):
+        service.submit(f"s{n}", 0, f"/data/run_{n}", "scan")
+    window = make_window(qtbot, service)
+    window.show()
+    window.resize(1200, 420)
+    window.refresh()
+    bar = window.now.verticalScrollBar()
+    assert bar is not None
+    qtbot.waitUntil(lambda: bar.maximum() > 10)
+    bar.setValue(bar.maximum())
+    value = bar.value()
+    assert window.now.selectedItems() == []  # (No row chosen: nothing for setCurrentItem to scroll to.)
+    service.submit("more", 0, "/data/run_more", "scan")
+    window.refresh()
+    assert bar.value() == value
+    service.cancel("s3")
+    window.refresh()
+    assert bar.value() == min(value, bar.maximum())
+    service.shutdown()

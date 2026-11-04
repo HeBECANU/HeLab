@@ -979,9 +979,13 @@ class ActivityWindow(QWidget):
         tree = self.now
         selected = self._selected_id()
         held: list[QTreeWidgetItem] = []  # (Taken out of the tree: alive until the render ends.)
+        bars = [bar for bar in (tree.verticalScrollBar(), tree.horizontalScrollBar()) if bar is not None]
+        scrolled = [bar.value() for bar in bars]  # (Taking the rows out clamps them to 0: AW-14.)
         tree.blockSignals(True)
         try:
             self._place_rows(tree, held)
+            for bar, value in zip(bars, scrolled):
+                bar.setValue(value)
             if selected is not None and selected in self._items:
                 tree.setCurrentItem(self._items[selected])
         finally:
