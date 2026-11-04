@@ -16,45 +16,106 @@ How to use it:
 - Keep each item to one or two lines; link substantial features to a document
   in this folder. Keep priority/completion here rather than duplicating task lists.
 
-## Now: v0.0.7
+## Now: v0.0.8
 
-v0.0.6a1 went to `main` by PR on 2026-10-28 (Tony: released on his own use of HeLab on his
-Mac and the lab PCs through v0.0.6, plus the Mac smoke pass; Q6.1). Work for v0.0.7 branches
-from `dev/v0.0.7` (agents: `agent/<task>`, [workflow](agent-workflow.md)) and lands back
-there; `dev/v0.0.7` goes to `main` by PR, with the version bump on that branch.
+v0.0.7a1 went to `main` by PR on 2026-10-31 (TonyXTYan/HeLab#10, squash `e03c32a`), an alpha
+pre-release with v0.0.8 development straight after (Q27.3). Its open checks are below, not waited
+for (Tony, 2026-10-31). Work for v0.0.8 branches from `dev/v0.0.8` (agents: `agent/<task>`,
+[workflow](agent-workflow.md)) and lands back there; `dev/v0.0.8` goes to `main` by PR, with the
+version bump on that branch. **v0.0.8 ships as the 0.0.8a1 alpha pre-release** (Q47.5, Tony 2026-11-02): the
+PR to `main` opens when everything below has landed and CI is green, and the merge is Tony's. Store-v4 is
+switched on in that PR, after Tony's check (Q47.4).
 
-**Focus for v0.0.7 (Tony, 2026-10-28; Q6.12):** the TXY converter port. Distributed results
-compute is postponed until the converter works well (Q6.2).
+**Left for v0.0.8** (2026-11-03): every planned floor has landed. What remains is Tony's: the checks before
+the switch-on (Q50.18, with Q51.1's extra listing on the share), the open questions of v0.0.8's floors
+(Converter UX's Q48.1–Q48.6, Live Scripts' Q49.1–Q49.3, Q50.1, Q50.2 and Q51.1 decided 2026-11-03; the follow-ups' Q58.1 and Q58.2 open), (`agent/v4-switch-on` landed `92f9d1a`: store-v4 on), the version bump, and the PR to `main` once CI is
+green (Q47.5: 0.0.8a1).
+Added 2026-11-03 (Tony, Q53.3): the TXY priority lists below, landed `9bf99ff` (block 55; Q55.9 decided that evening).
+Added 2026-11-03 (Tony, Q54.1): the script API's docstrings and the user manual below, landed `b0e3aac` (block 56;
+Q56.1–Q56.3 decided that evening).
+The follow-ups (Tony, 2026-11-03 evening) landed `72ab47a`: Q48.2, Q48.3 (`--output beside-forced`), Q49.3 (b)
+(the try-import of script folders), Q56.3 with Q58.3 (the site's versions) and Q56.1 (b) (Material for v0.0.8,
+its search offline; Zensical later, A58.1). Block 58; Q58.1 and Q58.2 open.
 
-- [ ] The TXY converter port (`HeBECANU/tdc_autoconverter`, `lib/dld_raw_to_txy_counts.m`;
-  [Live L4](live-monitoring.md#stages)): a headless HeLab converter (`helab convert --watch`) and
-  Live's auto-convert toggle replace MATLAB's converter (Q6.3, Q6.8). Output
-  `d_txy_helab_<tag>_<N>.txt` (Q18.4), written to a temporary name and renamed, into HeLab's cache
-  (the default) or temp folder, or beside the raw files as a per-folder option (Q9.3, Q9.7). **The
-  bar is byte-identical output:** `matlab-2019` reproduces 303 of the 309 sample shots and the
-  other 6 are proved reference faults
-  ([findings](../.ai/sessions/2026-10-28-claude-txy-converter-plan/findings.md),
-  [legacy notes](../.ai/sessions/2026-10-20-claude-dld-front-panel-review/core-update.md#import-and-reconstruction)).
-  Stage 1, the reference cross-checked against MATLAB run headless: **done 2026-10-29**
-  (`d26e196`). Stage 2, one floor per backend: **done 2026-10-29** (`3bd791c`); NumPy the default,
-  Cython optional, the reference kept; numba, MLX and Rust left the build (Q11.2, `134e2ec`).
-  Stage 4, in HeLab: **done 2026-10-29** (`02cda86`; Tony's follow-ups: tagged names, four source
-  modes, one launch folder, damaged raw files, `c718c71`). Stage 3 (calibration) and stage 5
-  (replacing MATLAB) **not started**, after v0.0.7 (Q9.9); the post-2025 plate findings feed stage 3
-  (a 180° orientation from July 2026, Q25.1; an opt-in burst veto, Q25.5). Open: Q6.7, Q6.9–Q6.11,
-  Q12.6, Q14.2, Q14.4, Q15.3, Q23.x, Q25.2, Q25.4 ([plan](txy-converter.md#open-decisions)). [Plan](txy-converter.md)
-  (2026-10-29; focus 2026-10-28).
-- [ ] Release v0.0.7 (Q9.9: stages 1, 2 and 4 plus the smoke pass). Left: the smoke pass on a Mac
-  and a lab PC (M1.1–M1.10; the converter step is M1.9, Q24.3); byte units by OS (A26.1) done
-  (landed `8bf810f`); the runner aids for the smoke pass (Smoke ready landed `4ad8ac5`; Runner Tools landed
-  `0316bae`); UI polish (block 33) done (landed `c104502`, 2026-10-30); `converted-txy/index.sqlite` with Q19.5 and A19.1 (Q26.2, Q27.4, Q27.5) done (landed
-  `460360b`, 2026-10-30), its follow-up A30.4; saved results off by default (Q27.1, done); Q23.1 confirmed;
-  the version bump on the PR branch to the pre-release **`0.0.7a1`** (Tony, 2026-10-29; then v0.0.8
-  development straight away); the PR to `main`; the release tidy-up (Q8.3) (2026-10-29).
-- [ ] Caching v2: the raw d files as the cached source (a raw layer of pulses plus TXY layers per
-  profile, with a per-folder policy) in a fresh store-v4, with versioning (Q27.2). v0.0.7 covers its
-  planning only; it is built in **v0.0.8** (Q28.2), stage by stage after Tony's go (block 28;
-  [plan](caching-v2.md), Q19.x, Q22.x, 2026-10-29).
+**Focus for v0.0.8 (Tony; Q28.2, 2026-10-31):**
+
+- [ ] Caching v2 first: the raw d files as the cached source (a raw layer of pulses plus TXY layers
+  per profile, with a per-folder policy) in a fresh store-v4, with versioning (Q27.2). Planned in
+  v0.0.7; built in v0.0.8 (Q28.2) as one staged area floor
+  ([hybrid workflow](agent-workflow.md#feature-floors-with-named-areas-hybrid-tony-2026-10-31)),
+  stage by stage, **after Tony's go** (no cache code before it) (block 28; [plan](caching-v2.md),
+  Q19.x, Q22.x, 2026-10-29). Go given (Q28.1); stage 0 and stage 1's checkpoint 2 (the `.hlb` container,
+  the raw layer, store-v4's core and raw layers' store side) landed `ad86bd3`. **Stage 1 done, the switch
+  off** (checkpoint 3 landed `c2d0ece`: `raw_fill`, the store-v3 question and Settings › Cache's rows, the
+  integration check, cache export and the [`.hlb` format page](../docs/hlb-format.md), Q42.5, Q44.1, Q44.2);
+  the switch stays off until stage 2 and Tony's go (Q28.3). **Stage 2 done, the switch off** (Tony's go
+  2026-11-02 with Q45.1–Q45.11; landed `1cd586c`: TXY layers per profile hash, the loading order, every
+  source mode disk cached, Live's segments and compaction, the policy and per-folder choices, A40.3, A42.1,
+  A42.2, A44.1, A44.2). **Go for stages 3 and 4** (Tony, 2026-11-02, with S3-1–S3-6, S4-1–S4-4, P-1, P-2,
+  V-2–V-5 as Q50.3–Q50.17 and Q47.3). The A47 checkpoint landed `1d91897` (the purge per kind plus
+  Everything, A47.4; A47.2; A47.6). **Stage 3 done, the switch off** (landed `d4f28f3`: loads and Live
+  convert on read in store-v4, user profiles too (A47.1), A40.2, "converted when loaded" and "converted from
+  raw"; no text written by a load, Q19.1). **Stage 4 done, the switch off** (landed `8071c04`, with `9f92daf`:
+  TXY only's offer to remove HeLab's cached raw pulses, S4-1; and what the switch-on run found: a new store
+  opened by several helpers at once, store-v4's listings, scans and adopt reading views, Q50.1's option (a)).
+  **Caching v2 is done, and on** (stages 0–4; stage 5 waits for MATLAB's retirement). The switch-on landed
+  `92f9d1a` (Tony, 2026-11-03: before the PR; V-2, V-3's version gate, V-5's release notes); the PR still waits for
+  Tony's check (Q47.4, Q50.18: M44.1 and M47.1 on screen, M47.2 and M42.1 on a lab PC). Decided 2026-11-03:
+  Q50.1 (a) (HeLab priority converts only the shots MATLAB's TXY lacks), Q50.2 (Auto-convert keeps its label),
+  Q51.1 (a) (`raw_fill`'s extra listing kept; Tony checks it on the share with M47.2).
+- [x] TXY priority lists (Q53.1–Q53.3; Tony, 2026-11-03): MATLAB's `d_txy_forc<N>.txt` labelled
+  "External (MATLAB converter)"; any ordered list of profiles' TXY and External, set globally, per folder
+  and per plot, replacing the four fixed sources (old modes keep their identities) ([plan](txy-priority.md)).
+  TXY Priority floor, landed `9bf99ff` (block 55): a per-shot fallback (Q55.2), the `Conversion` entry, Live's
+  "Convert with <tag>" offer and Convert this folder… (Q55.4); Q55.1–Q55.8 decided, Q55.9 open; M55.1–M55.4.
+- [x] Documentation (Q54.1–Q54.4; Tony, 2026-11-03): docstrings for the script-facing API kept by ruff's D1 (A54.1),
+  and a user manual in `docs/` with MkDocs Material and an API reference by mkdocstrings (A54.2), built in CI,
+  bundled in the app and opened by Help › User manual; its site deploys per published release (DM-1 (a)). Docs
+  floor, landed `b0e3aac` (block 56): Q56.1–Q56.3 open, A56.2–A56.8, M56.1–M56.3 (GitHub Pages to turn on).
+- [x] Say when a raw file's reading stops early (A37.1, Q37.1; Tony, 2026-10-31): the parser stops at
+  the first unreadable token as MATLAB's `textscan` does, and now says where (the Live line, Folder details,
+  `helab convert`, the raw layer's `stop_line`). Converter UX, landed `ed7bcf9`; wording Q48.1, a
+  notification Q48.2 (open); M48.3.
+- [x] TXY and shares (Q39.2, Tony 2026-10-31; A39.5): writing TXY to a share warns that conversion
+  belongs on the machine that owns the data; a share folder without TXY offers to convert into HeLab's
+  cache (recommended) or temp, and still allows beside after the warning; with Q38.1's Retry or HeLab's cache
+  or temp folder after a refused beside write. Converter UX, landed `ed7bcf9`; Q48.3–Q48.6 (open), A48.1–A48.4;
+  on the lab share M48.1, M48.2.
+- [x] Live scripts (Tony, 2026-11-02: "yes I need live scripts build in v0.0.8"): a Reload button and
+  optional auto-reload on save; open plots rerun on the new code keeping their settings; remembered script
+  folders; load errors shown in the Scripts panel; helper modules re-imported (`helab/scripts/scripts_manager.py`,
+  `helab/views/plots/script_tree.py`, the workspace). With A47.5 (Q14.2 = Q23.4: a plot's TXY source and
+  profile saved with presets, arrangements and reopened plots, with a Keep box to turn that off). Live
+  Scripts, landed `971f4af`; open: wording Q49.1, Q49.2, imports on the GUI thread Q49.3; A49.1–A49.5; Tony's
+  checks M49.1, M49.2 ([design](../.ai/sessions/2026-11-02-claude-live-scripts/design.md)). Follow-ups landed
+  2026-11-03: the reload-wait tests' race (`f534ede`), a test-only crash from the Scripts panel's polish
+  (`823589a`; users can't hit it), the arrangement preset hang in a test's simulated restart (`566eed6`);
+  A52.1–A52.4.
+- [x] One running HeLab per computer, from source or a build (Q39.1, A39.3; `0335768`, Quick Fixes 8).
+- [ ] The v0.0.7a1 area review's findings (`.ai/sessions/2026-10-31-claude-area-review/`): io by IO Fixes
+  (landed `471966b`, with A39.2), plots by Plot Identity (`e3f94d9`), cache by Caching v2's stage 0
+  (`ad86bd3`), app-1, app-2 and convert-1 by Quick Fixes 8 on Ground, with A39.1 (the archive check on PR
+  builds, `c201c01`); convert-2 (`9d2a866`) and A39.4 (`915aff5`) by Quick Fixes 8 too;
+  Q43.1's Reset popup (A43.3, `c9e64e6`) and Q43.4's refusal wording (A43.4, `4940a81`) built since (Q43.2–Q43.4
+  decided 2026-10-31).
+- [ ] Quick Fixes 7's open items (block 38): Q38.1–Q38.3 (beside conversion without a no-replace
+  rename, Live switching a held shot to HeLab's TXY, Folder details' wording), A38.1, A38.2 and M38.1
+  (whether the lab share can add a file without replacing one). Q38.2 is built (A39.2, `471966b`);
+  Q38.3 is A39.4. Q38.1 is decided (Tony, 2026-11-02) and built: a warning offering Retry or HeLab's cache
+  or temp folder (Converter UX, `ed7bcf9`).
+- [ ] v0.0.7's open checks ([MANUAL_TODO](../.ai/MANUAL_TODO.md)): on a Mac, M1.4-2 to M1.4-4,
+  M1.5, M1.6-3, M1.8, M1.9 and M36.1–M36.4, and by hand the splitter drags and floated plots
+  opening a step apart; the review of M1.4-1 and M1.7's physics; the lab PC pass (M1.1–M1.10 on
+  Windows, with Live during an acquisition, M1.3).
+
+**Carried over from v0.0.7:**
+
+- [ ] The TXY converter, stage 3 (calibration) and stage 5 (replacing MATLAB), after v0.0.7 (Q9.9);
+  stages 1, 2 and 4 are done (Done, v0.0.7a1). The post-2025 plate findings feed stage 3 (a 180°
+  orientation from July 2026, Q25.1; an opt-in burst veto, Q25.5). Open: Q6.7, Q6.9–Q6.11, Q12.6,
+  Q14.4, Q23.1, Q25.2, Q25.4 ([plan](txy-converter.md#open-decisions)) (2026-10-29); Q14.2 =
+  Q23.4 decided 2026-11-02 (A47.5, Live Scripts, done); Q15.3, Q23.2, Q23.3 and Q23.5 kept as built (Tony,
+  2026-11-02); Q14.4 waits until after caching v2's stage 3 (landed: to ask again).
 - [ ] Distributed results compute: one machine computes analysis results and other HeLabs use
   them without repeating the work. It builds on the [headless runner](headless-analysis.md)
   and the [network extension](network-runners-and-web.md#cross-machine-result-sharing).
@@ -72,24 +133,17 @@ compute is postponed until the converter works well (Q6.2).
   table with `read_setting` (`0f4df65`) landed from `agent/ci-robustness-2` (merge
   `51c0ee2`, 2026-10-22). Left: Restore default and default tooltips, the profiles.
 
-- [x] Release v0.0.6a1 (Tony, 2026-10-28: Q1.1–Q1.3, Q6.1). The smoke pass ran on a Mac by
-  computer use ([results](../.ai/sessions/2026-10-28-claude-smoke-mac/results.md)). Tony
-  released on that and on his own use through v0.0.6, so the lab PC pass and Live (M1.3) are
-  the first checks of v0.0.7. Merged to `main` (`9c477c2`) and tagged `v0.0.6a1`, with no
-  RERUN in the test jobs (2026-10-28). Its draft has no assets, since the release job
-  couldn't find it under GitHub's `untagged-…` name (run 40675311830; fixed in `d36a20e` on
-  `dev/v0.0.7`, [known issues](known-issues.md#fixed)); Tony leaves it as it is, and v0.0.7's
-  release is the first with zips (Q8.1). The `v0.0.5a1` draft stays unpublished.
-
 - [ ] Unsupervised smoke runs: menu-bar actions, an in-app save-screenshot command,
   accessibility labels, a debug/smoke menu, then a `--smoke` control channel (design first),
   so a model drives the smoke pass (M1.1–M1.10) without taking the cursor. Approved by Tony 2026-10-28 (Q5.2)
-  ([plan](smoke-automation.md)) (2026-10-28).
+  ([plan](smoke-automation.md)) (2026-10-28). Everything but `--smoke` landed in v0.0.7 (Smoke ready
+  `4ad8ac5`, Runner Tools `0316bae`); left: `--smoke` (v0.0.8).
 
 - [ ] Release repos: develop and release on `TonyXTYan/HeLab`; fast-forward
   `HeBECANU/HeLab` `main` only for lab-ready versions, which drafts the same
   release there; stop pushing dev branches to `HeBECANU`. Confirmed by Tony
-  2026-10-28 (Q1.4); v0.0.6a1 is not lab-ready, so HeBECANU waits for a later version (Q1.4.1)
+  2026-10-28 (Q1.4); v0.0.6a1 is not lab-ready, so HeBECANU waits for a later version (Q1.4.1;
+  for 0.0.7a1, proposed: not yet, after the lab PC pass)
   ([plan](app-updates.md#release-repos-proposed-2026-10-13-tony-to-confirm)) (2026-10-13).
 
 - [ ] Build size: exclude unused packages (pyarrow, mypy), replace
@@ -254,6 +308,41 @@ Bugs, gaps and flaky tests, open and recently fixed: [known issues](known-issues
   list; may no longer be needed).
 
 ## Done
+
+v0.0.7a1 (`main` `e03c32a`, TonyXTYan/HeLab#10, 2026-10-31; no tag or GitHub release, see below;
+open checks under Now):
+
+- [x] Release v0.0.7 (Q9.9: converter stages 1, 2 and 4 plus the smoke pass): the version bump to the
+  pre-release `0.0.7a1` on the PR branch, the PR squash-merged to `main` (`e03c32a`), `dev/v0.0.8`
+  cut from it (Q27.3). The Mac smoke pass ran in part on `6dec236`
+  ([results](../.ai/sessions/2026-10-30-claude-smoke-final-mac/results.md)); the rest is open under
+  Now. Main's release job stopped before tagging (run 41110274554: the macOS zip's build stamp is
+  now a symlink, which the check read as JSON; [known issues](known-issues.md#fixed)), so 0.0.7a1 has
+  no tag and no draft. Tony, 2026-10-31: no hotfix to `main`; the fix is on `dev/v0.0.8`, and v0.0.8's
+  release is the first with zips. HeBECANU waits (Q1.4.1).
+- [x] The TXY converter port, stages 1, 2 and 4 (Q6.12; [plan](txy-converter.md)): HeLab converts raw
+  `d<N>.txt` to `d_txy_helab_<tag>_<N>.txt` byte for byte as MATLAB's `tdc_autoconverter`
+  (`matlab-2019`: 303 of the 309 sample shots, the other 6 proved reference faults). Stage 1, the
+  reference cross-checked against MATLAB run headless (`d26e196`); stage 2, the backends: NumPy the
+  default, Cython optional, the reference kept, numba, MLX and Rust out of the build (`3bd791c`,
+  Q11.2, `134e2ec`); stage 4, in HeLab: `helab convert --watch` and Live's auto-convert, tagged names,
+  four source modes, one launch folder, damaged raw files (`02cda86`, `c718c71`) (2026-10-29).
+- [x] `converted-txy/index.sqlite`, one converted-TXY index per base, with Q19.5 and A19.1 (Q26.2,
+  Q27.4, Q27.5; landed `460360b`, 2026-10-30).
+- [x] Byte sizes by OS (A26.1, Q26.1; landed `8bf810f`).
+- [x] Runner aids for the smoke pass: Smoke ready (accessible names and stable IDs, the Debug menu's
+  runner items, Save Window Screenshot, Dump State, `--geometry`; landed `4ad8ac5`) and Runner Tools
+  (milestone log lines, the dev `.app` stub; landed `0316bae`) (2026-10-30).
+- [x] UI polish (block 33; landed `c104502`, 2026-10-30).
+- [x] Saved results off by default (Q27.1).
+- [x] HeLab's test data: the private Hugging Face dataset `TonyXTYan/HeLab-TestData` (tag v1) in CI
+  (`ffe346c`) and as the `testdata` submodule, with Live and convert tests on it (`1afc90c`)
+  (Q31.4, block 37; 2026-10-31).
+- [x] Release v0.0.6a1 (Tony, 2026-10-28: Q1.1–Q1.3, Q6.1): merged to `main` (`9c477c2`) and tagged
+  `v0.0.6a1`, released on a Mac smoke pass by computer use
+  ([results](../.ai/sessions/2026-10-28-claude-smoke-mac/results.md)) and Tony's own use. Its draft
+  has no assets (the release job's lookup missed GitHub's `untagged-…` name; fixed in `d36a20e`);
+  Tony leaves it as it is (Q8.1), as the `v0.0.5a1` draft.
 
 v0.0.6a1 (`main` `9c477c2`, 2026-10-28; native checks in [MANUAL_TODO](../.ai/MANUAL_TODO.md)):
 

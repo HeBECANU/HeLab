@@ -6,6 +6,7 @@ Helpers run in-process, as in ``test_live``: each queued request gets the real h
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import time
 from typing import Any, Iterator
 
 import pytest
+from PyQt6.QtWidgets import QMenu
 from pytestqt.qtbot import QtBot
 
 from helab.convert.profile import MATLAB_2019, MATLAB_2023_LAB_EDIT
@@ -25,13 +27,14 @@ from helab.utils import events, folder_cache, io_service
 from helab.utils.folder_cache import FolderCache, SharedJob
 from helab.utils.io_service import IORequest, IOService
 from helab.utils.settings_defaults import (
-    CONVERT_BACKEND_SETTING, CONVERT_LOW_HITS_SETTING, LIVE_LAUNCH_FOLDER_SETTING, LIVE_LAUNCH_FOLDERS_SETTING,
+    CONVERT_BACKEND_SETTING, CONVERT_LOW_HITS_SETTING, CONVERT_OUTPUT_SETTING, LIVE_LAUNCH_FOLDER_SETTING,
+    LIVE_LAUNCH_FOLDERS_SETTING,
 )
 from helab.utils.settings_store import app_settings
 from helab.views import live_launch
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderExplorer import FolderExplorer
-from helab.views.explorer_live import no_hits_text as live_no_hits
+from helab.views.explorer_live import ARM_AUTO_CONVERT, no_hits_text as live_no_hits
 from test_convert_helab import raw_bytes
 from test_live import age_folder, deliver, job_of, next_request, producer, replay, service, write_shot  # noqa: F401
 
@@ -217,18 +220,26 @@ def test_a_raw_file_arriving_during_live_is_converted_once_written_not_before(
     explorer.close_cleanup()
 
 
-def test_a_converted_shot_asks_for_lives_next_check(qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+@pytest.mark.parametrize("interval", [0.02, 0.0])
+def test_a_converted_shot_asks_for_lives_next_check(
+    qtbot: QtBot, service: IOService, tmp_path: Path, interval: float,
+) -> None:
     """After a conversion writes a shot, Live's next check starts at once (it reads HeLab's TXY): the
-    check queued with the conversion runs, then the next one without the wait."""
+    check running beside the conversion ends, then the next one comes without the wait.
+
+    ``interval`` 0: every tick finds the conversion's interval over, as a slow machine's late ticks do
+    (CI 41158349537, macOS: a RERUN). A tick then queues a conversion with the check ``cycle`` answers,
+    so one is already queued, with no check out, before the next tick sends one."""
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache = explorer.model.cache
+    cache.live_interval = interval
     session = explorer.live
     assert session is not None
     cycle(qtbot, explorer, path, tmp_path)  # (Records.)
     write_raw(Path(path), 1, raw_bytes(10_000))
     cycle(qtbot, explorer, path, tmp_path)  # (Seen once.)
-    qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
-    assert session.request == "check" and not session.check_soon  # Queued with the conversion.
+    qtbot.waitUntil(lambda: ("convert", path) in cache.jobs and session.request == "check")
+    assert not session.check_soon
     assert [event["shot"] for event in of(run_convert(cache, path), "shot_converted")] == [1]
     assert session.check_soon
     cache.live_interval = 30.0  # Long: only a requested check comes soon.
@@ -264,17 +275,48 @@ def test_turning_auto_convert_off_stops_new_conversions(qtbot: QtBot, service: I
     explorer.close_cleanup()
 
 
-def test_auto_convert_is_remembered_for_the_session_and_shown_only_while_live(
+def test_auto_convert_is_remembered_for_the_session_and_stays_armed_after_live(
         qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
     explorer, path = watching_raw_folder(qtbot, tmp_path)
+    assert explorer.auto_convert_button.text() == "Auto-convert"
     explorer.stop_live(save=False)
     explorer._update_activity()
-    assert explorer.auto_convert_button.isHidden()
+    # Live off: the button arms the folder's next Live (still armed, as it was on).
+    assert explorer.auto_convert_button.text() == ARM_AUTO_CONVERT and explorer.auto_convert_button.isChecked()
+    assert explorer.live_control.auto_convert_armed(path)
     assert explorer.start_live()
     explorer._update_activity()
     assert explorer.live is not None and explorer.live.convert is not None
-    assert explorer.auto_convert_button.isChecked()
+    assert explorer.auto_convert_button.isChecked() and not explorer.live_control.auto_convert_armed(path)
     explorer.stop_live(save=False)
+    explorer.model.cache.auto_convert.discard(path)
+    explorer.close_cleanup()
+
+
+def test_arming_auto_convert_before_live_converts_once_live_starts(
+        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+    explorer, path = watching_raw_folder(qtbot, tmp_path, auto_convert=False)
+    cache = explorer.model.cache
+    explorer.stop_live(save=False)
+    explorer._update_activity()
+    button = explorer.auto_convert_button
+    assert button.text() == ARM_AUTO_CONVERT and not button.isChecked()
+    assert not button.isHidden() or explorer.isHidden()
+    button.click()  # Armed: nothing converts until Live starts.
+    assert path in cache.auto_convert and button.isChecked() and "armed" in button.toolTip()
+    assert ("convert", path) not in cache.jobs
+    menu = QMenu()
+    explorer.live_control.fill_convert_menu(menu)
+    first = menu.actions()[0]
+    assert first.text().startswith(ARM_AUTO_CONVERT) and first.isChecked()
+    first.setChecked(False)  # The menu disarms it too.
+    assert path not in cache.auto_convert and not button.isChecked()
+    button.click()
+    assert explorer.start_live()
+    assert explorer.live is not None and explorer.live.convert is not None
+    assert button.text() == "Auto-convert" and button.isChecked()
+    explorer.stop_live(save=False)
+    cache.auto_convert.discard(path)
     explorer.close_cleanup()
 
 
@@ -307,6 +349,57 @@ def test_shots_converted_with_no_hits_are_named_in_amber(qtbot: QtBot, service: 
     explorer.stop_live(save=False)
     panel.show_explorer(explorer, None)
     assert panel.text("convert") == "1 shot with no hits" and "color" in panel.values["convert"].styleSheet()
+    explorer.close_cleanup()
+
+
+def test_a_read_stopped_early_is_named_on_the_live_line_and_in_folder_details(
+        qtbot: QtBot, service: IOService, tmp_path: Path, notifier: FakeNotifier) -> None:
+    """A37.1: a raw file whose read stopped at a line textscan can't read converts (the hits before it) and
+    is named on the Live line and in Folder details' Auto-convert row, amber, with the detail in the tooltip;
+    several are counted; one converted again to its end is no longer named. Q48.2: each sends a system
+    notification once per file (name, size, mtime), as a damaged file does."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    cycle(qtbot, explorer, path, tmp_path)
+    write_raw(Path(path), 3, raw_bytes(10_000, 20_000) + b"0,12abc\r\n" + raw_bytes(30_000)[len(b"5,1000\r\n"):])
+    cycle(qtbot, explorer, path, tmp_path)
+    _, sent = cycle(qtbot, explorer, path, tmp_path)
+    [converted] = of(sent, "shot_converted")
+    assert converted["shot"] == 3 and converted["hits"] == 2 and converted["read_stop"]["line"] == 10
+    text, tooltip = line(explorer)
+    assert "d3.txt read stopped at line 10" in text
+    assert 'Read stopped early (1): d3.txt: read stopped at line 10, at "abc"' in tooltip
+    assert "color" in explorer.folder_freshness_label.styleSheet()
+    def stopped() -> list[tuple[str, str]]:
+        return [sent for sent in notifier.sent if sent[0] == "HeLab: raw file read stopped early"]
+
+    assert stopped() == [("HeLab: raw file read stopped early",
+                              'd3.txt in run: read stopped at line 10, at "abc", which isn\'t a number: as MATLAB\'s '
+                              "converter reads the file, its TXY holds only the hits of what was read before it "
+                              f"({converted['read_stop']['unread']:,} bytes not read). Later shots go on.")]
+    [said] = [event for event in events.hub().history if event.kind == events.READ_STOPPED_RAW]
+    assert (said.data["path"], said.data["shot"], said.data["line"]) == (path, 3, 10)
+    panel = FolderDetailsPanel()
+    qtbot.addWidget(panel)
+    panel.show_explorer(explorer, None)
+    assert "d3.txt read stopped at line 10" in panel.text("convert")
+    assert "at line 10" in panel.values["convert"].toolTip() and "color" in panel.values["convert"].styleSheet()
+    session.convert.request = True
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "raw_sha256": "x"})
+    assert "2 reads stopped early" in line(explorer)[0]
+    assert len(stopped()) == 2 and stopped()[1][1].startswith("d4.txt in run: read stopped at line 10")
+    # Once per file: the same file (name, size, mtime) again isn't notified again; changed, it is.
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "raw_sha256": "y"})
+    assert len(stopped()) == 2
+    explorer.live_control._convert_event(session, {**converted, "raw_size": converted["raw_size"] + 1})
+    assert len(stopped()) == 3
+    explorer.live_control._convert_event(session, {**converted, "read_stop": None})
+    explorer.live_control._convert_event(session, {**converted, "shot": 4, "raw_name": "d4.txt", "read_stop": None})
+    assert session.convert.stopped == {} and "stopped" not in line(explorer)[0]
+    panel.show_explorer(explorer, None)
+    assert "color" not in panel.values["convert"].styleSheet()
+    explorer.stop_live(save=False)
     explorer.close_cleanup()
 
 
@@ -387,6 +480,41 @@ def test_a_file_unconvertible_under_one_profile_is_tried_under_another(
     explorer.close_cleanup()
 
 
+def test_a_shot_refused_for_its_paths_length_converts_once_the_user_follows_the_advice(
+        qtbot: QtBot, service: IOService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """convert-2 (area review): "Path too long… choose a shorter cache or temp folder (Settings)" refuses the shot,
+    which isn't tried again while nothing changed; once the user changes where TXY go (here cache to temp), or the
+    backend, it is tried again and converts, this session (the unconvertible list is those settings', as the done
+    one is the profile's)."""
+    from helab.convert import txy
+    real, too_long = txy.write_atomic, [True]
+
+    def write_atomic(target: str, *args: Any, **kwargs: Any) -> Any:
+        if too_long[0]:
+            raise OSError(errno.ENAMETOOLONG, "File name too long", target)
+        return real(target, *args, **kwargs)
+    monkeypatch.setattr(txy, "write_atomic", write_atomic)
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cycle(qtbot, explorer, path, tmp_path)
+    write_raw(Path(path), 4, raw_bytes(10_000))
+    cycle(qtbot, explorer, path, tmp_path)  # (Seen once.)
+    _, sent = cycle(qtbot, explorer, path, tmp_path)
+    [refused] = of(sent, "shot_unconvertible")
+    assert refused["shot"] == 4 and "Path too long" in refused["message"], refused
+    request, sent = cycle(qtbot, explorer, path, tmp_path)
+    assert [entry[0] for entry in request.payload["skip"]] == ["d4.txt"] and not of(sent, "shot_unconvertible")
+    # The user follows the advice: TXY to the temp folder, whose paths are short enough.
+    app_settings().setValue(CONVERT_OUTPUT_SETTING, "temp")
+    too_long[0] = False
+    request, sent = cycle(qtbot, explorer, path, tmp_path)
+    # (Tried again, it is a file this check sees for the first time: it waits one tick, as under another profile.)
+    assert "skip" not in request.payload and [event["shot"] for event in of(sent, "shot_waiting")] == [4]
+    _, sent = cycle(qtbot, explorer, path, tmp_path)
+    assert [event["shot"] for event in of(sent, "shot_converted")] == [4] and not of(sent, "shot_unconvertible")
+    explorer.stop_live(save=False)
+    explorer.close_cleanup()
+
+
 def test_a_file_waiting_off_one_profiles_trigger_converts_under_another(
         qtbot: QtBot, service: IOService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Codex 4425610377: why a file looked unfinished is the profile's (its trigger channel): under another
@@ -412,16 +540,38 @@ def test_a_file_waiting_off_one_profiles_trigger_converts_under_another(
 def test_the_lists_of_the_last_conversion_are_sent_back(service: IOService) -> None:
     cache = folder_cache.get_folder_cache(service)
     path = FolderCache.key("/data/run")
-    cache._remember_convert(
-        SharedJob("job", path, "convert", 0, {"profile": MATLAB_2019.to_dict()}),
-        {"current": [["d1.txt", 10, 1]], "waiting": [["d2.txt", 5, 2, "no_final_newline", "…"]],
-         "unconvertible": [["d3.txt", 0, 3]], "kept": [["d4.txt", 9, 4]]})
+    lists = {"current": [["d1.txt", 10, 1]], "waiting": [["d2.txt", 5, 2, "no_final_newline", "…"]],
+             "unconvertible": [["d3.txt", 0, 3]], "kept": [["d4.txt", 9, 4]]}
+
+    def converted() -> dict[str, Any]:
+        """A conversion asked for now, answered with ``lists``: its payload."""
+        assert cache.convert("t", path)
+        made = next(r for r in service.pending if r.operation == "convert").payload
+        cache.cancel("t")
+        cache._remember_convert(SharedJob("job", path, "convert", 0, made), lists)
+        return made
+    converted()
     assert cache.convert("t", path)
     payload = next(r for r in service.pending if r.operation == "convert").payload
     assert payload["seen"] == [["d2.txt", 5, 2, "no_final_newline", "…"]] and payload["skip"] == [["d3.txt", 0, 3]]
     assert payload["done"] == [["d1.txt", 10, 1]] and payload["kept"] == [["d4.txt", 9, 4]]
     assert payload["profile"] == MATLAB_2019.to_dict() and payload["backend"] == "numpy"
     cache.cancel("t")
+    # The same profile, another backend or place for the TXY (convert-2): the unconvertible shots are tried
+    # again (a path too long, a backend's failure), the done ones still aren't.
+    for key, value in ((CONVERT_BACKEND_SETTING, "reference"), (CONVERT_OUTPUT_SETTING, "temp")):
+        app_settings().setValue(key, value)
+        assert cache.convert("t", path)
+        payload = next(r for r in service.pending if r.operation == "convert").payload
+        assert "skip" not in payload and payload["done"] == [["d1.txt", 10, 1]], key
+        cache.cancel("t")
+        converted()  # (Under these settings now: skipped again while they hold.)
+        assert cache.convert("t", path)
+        assert next(r for r in service.pending if r.operation == "convert").payload["skip"] == [["d3.txt", 0, 3]]
+        cache.cancel("t")
+    app_settings().remove(CONVERT_BACKEND_SETTING)
+    app_settings().remove(CONVERT_OUTPUT_SETTING)
+    converted()
     # Another profile and backend (Settings → TXY converter's Save): the profile's current shots
     # aren't this one's, so they are checked again.
     cache.set_convert_profile(MATLAB_2023_LAB_EDIT)
@@ -451,8 +601,13 @@ def test_work_offline_refuses_a_conversion(qtbot: QtBot, service: IOService, tmp
         cache.set_offline(False)
 
 
+@pytest.mark.parametrize("due", [False, True], ids=["as it comes", "a Live check comes due while offline"])
 def test_a_conversion_refused_offline_stops_auto_convert_and_says_so(
-        qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+        qtbot: QtBot, service: IOService, tmp_path: Path, due: bool) -> None:
+    """Going offline with no Live check in flight, its next one (every 20 ms here) could be asked for while
+    offline: refused, its "cancelled" halted Live ("Live stopped: Cancelled", macOS CI 41472779247) before the
+    conversion's own refusal was said. So the next check is queued first; it stays (dispatch is frozen here),
+    and Live asks for none meanwhile (``due``: its tick runs while offline)."""
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cache = explorer.model.cache
     cycle(qtbot, explorer, path, tmp_path)
@@ -461,8 +616,11 @@ def test_a_conversion_refused_offline_stops_auto_convert_and_says_so(
     assert session is not None and session.convert is not None
     cache.cancel(explorer.live_owner, "convert", path)  # (Cancelled by someone else: tried again next tick.)
     assert not session.convert.request and not session.convert.error
+    next_request(qtbot, explorer, path)  # Live's next check, queued before going offline.
     service.offline = True  # (As if offline came first; the window turns Live off then.)
     try:
+        if due:
+            explorer.live_control._live_tick()  # (As its timer can: a check in flight, it asks for none.)
         session.convert.ended_at = -1e9
         explorer.live_control._convert_tick(session)
         qtbot.waitUntil(lambda: bool(session.convert and session.convert.error))
@@ -644,6 +802,16 @@ def test_the_launch_folder_opens_alone_and_starts_live_with_auto_convert(
     # Live on collapses the file explorer panel; an error stopping its checks (Retry is there) and Live
     # off restore it.
     assert main.splitter.sizes()[0] == 0
+    # The toolbar's Auto-convert stays at hand with the panel collapsed, and turns it off and on.
+    action = main.action_tab_auto_convert
+    assert action.isEnabled() and action.isChecked() and action.text() == "Auto-convert"
+    assert not main.auto_convert_tool_button.isHidden() and main.auto_convert_scope_button.isEnabled()
+    action.trigger()
+    assert explorer.live.convert is None and not action.isChecked()
+    action.trigger()
+    assert explorer.live.convert is not None and action.isChecked()
+    main._fill_auto_convert_menu()
+    assert main.auto_convert_menu.actions()[0].isChecked()
     explorer.live.error = "test"
     explorer.liveChanged.emit()
     assert main.splitter.sizes()[0] > 0
@@ -652,6 +820,7 @@ def test_the_launch_folder_opens_alone_and_starts_live_with_auto_convert(
     assert main.splitter.sizes()[0] == 0
     explorer.stop_live(save=False)
     assert main.splitter.sizes()[0] > 0 and not main._live_collapsed_panel
+    assert action.isChecked() and action.text() == ARM_AUTO_CONVERT  # Armed for the next Live.
     # A panel the user collapsed stays so after Live.
     main.toggle_left_panel(False)
     assert explorer.start_live()

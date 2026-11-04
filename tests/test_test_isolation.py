@@ -7,13 +7,15 @@ import ast
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pytestqt.qtbot import QtBot
 
 import helab
-from conftest import START_FOLDER
+from conftest import START_FOLDER, live_reason, this_tests
 from helab.utils import constants
 from helab.utils.cache_store import CacheStore, store_root
 from helab.utils.folder_cache import store_options
@@ -87,3 +89,50 @@ def test_each_test_has_a_store_of_its_own(private_store: str, tmp_path_factory: 
     with CacheStore(store_root(private_store), root_mode=True) as store:
         assert len(store.root_locations()) == 1
         assert store.inventory()["pending"] == []
+
+
+def test_a_process_wide_fake_acts_on_this_tests_threads_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A46.1: ``this_tests`` gives a fake to the test's own thread and to threads started after it is put in
+    place (an IOService's helpers), and the real function to threads alive before (an earlier test's helper
+    reader or log tidy calling ``os.stat`` meanwhile): Windows CI's flakes counted or refused those."""
+    go, answers = threading.Event(), dict[str, int | str]()
+
+    def call(name: str) -> None:
+        try:
+            answers[name] = os.stat(tmp_path).st_mode
+        except AssertionError as exc:
+            answers[name] = str(exc)
+
+    def earlier_thread() -> None:
+        assert go.wait(10)
+        call("earlier")
+    earlier = threading.Thread(target=earlier_thread)
+    earlier.start()  # (Alive before the patch: another test's.)
+
+    def refused(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("refused")
+    monkeypatch.setattr(os, "stat", this_tests(refused, os.stat))
+    go.set()
+    earlier.join(10)
+    later = threading.Thread(target=call, args=("later",))
+    later.start()
+    later.join(10)
+    call("ours")
+    assert isinstance(answers["earlier"], int) and answers["later"] == answers["ours"] == "refused", answers
+
+
+def test_a_failure_or_rerun_is_said_as_it_happens() -> None:
+    """A CI job cancelled at its time limit never reaches pytest's summary, which lost every traceback and rerun
+    reason of Ubuntu CI 41468043383's attempt 1: conftest writes each failure's and rerun's reason live."""
+    text = "def test_x():\n>       assert 1 == 2\nE       assert 1 == 2\n\ntests/test_x.py:3: AssertionError"
+
+    def report(outcome: str, when: str = "call") -> pytest.TestReport:
+        return pytest.TestReport("tests/test_x.py::test_x", ("tests/test_x.py", 2, "test_x"), {},
+                                 outcome, text, when)  # type: ignore[arg-type]  # ("rerun" is rerunfailures')
+    assert live_reason(report("rerun")) == ("RERUN REASON tests/test_x.py::test_x (call):\n"
+                                            "E       assert 1 == 2\ntests/test_x.py:3: AssertionError")
+    assert (live_reason(report("failed", "teardown")) or "").startswith("FAILED REASON tests/test_x.py::test_x (teardown):")
+    assert live_reason(report("passed")) is None and live_reason(report("skipped")) is None
+    # xdist's report of a worker that died (here: killed at CI's --timeout after a hang) has the phase "???".
+    assert (live_reason(report("failed", "???")) or "").startswith(
+        "FAILED REASON tests/test_x.py::test_x (worker crashed or was killed):")

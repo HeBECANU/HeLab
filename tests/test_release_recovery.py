@@ -166,12 +166,104 @@ def test_commit_collision_refuses_any_release_mutation(tmp_path: Path, wrong_tag
     assert api.creations == api.body_updates == 0 and not api.uploads and not api.deleted
 
 
+def add_link(archive: Path, name: str, target: str) -> None:
+    """A symlink entry as ``zip -y`` stores one (the macOS zip keeps HeLab.app's links)."""
+    info = zipfile.ZipInfo(name)
+    info.external_attr = (0o120755 << 16)
+    with zipfile.ZipFile(archive, "a") as stream:
+        stream.writestr(info, target)
+
+
+def test_a_stamp_linked_to_the_packaged_one_is_checked_through_it(tmp_path: Path) -> None:
+    # 0.0.7a1's macOS zip (run 41110274554): Contents/Frameworks/helab/_build_info.json links to
+    # Contents/Resources/helab/_build_info.json, and reading the link as JSON stopped the release.
+    files = archives(tmp_path)
+    add_link(files[ASSET_NAMES[0]], "HeLab/Frameworks/helab/_build_info.json", "../../_internal/helab/_build_info.json")
+    assert set(validate_archives(files, TAG, SHA)) == set(ASSET_NAMES)
+
+
+@pytest.mark.parametrize("target", ["../../payload.txt", "../../_internal/helab/missing/_build_info.json"])
+def test_a_linked_stamp_must_lead_to_a_packaged_stamp(tmp_path: Path, target: str) -> None:
+    files = archives(tmp_path)
+    add_link(files[ASSET_NAMES[0]], "HeLab/Frameworks/helab/_build_info.json", target)
+    with pytest.raises(ValueError, match="links outside the stamps"):
+        validate_archives(files, TAG, SHA)
+
+
+def test_an_archive_with_only_a_linked_stamp_has_none(tmp_path: Path) -> None:
+    files = archives(tmp_path)
+    only_link = tmp_path / "only-link.zip"
+    with zipfile.ZipFile(only_link, "w") as archive:
+        archive.writestr("HeLab/payload.txt", "first")
+    add_link(only_link, "HeLab/Frameworks/helab/_build_info.json", "../../payload.txt")
+    files[ASSET_NAMES[0]] = only_link
+    with pytest.raises(ValueError, match="no packaged build stamp"):
+        validate_archives(files, TAG, SHA)
+
+
 @pytest.mark.parametrize("commit,dirty", [(LATER_SHA, False), (SHA, True)])
 def test_wrong_commit_or_dirty_archives_are_rejected_before_mutation(tmp_path: Path, commit: str, dirty: bool) -> None:
     api = MemoryReleases()
     with pytest.raises(ValueError):
         publish_draft(api, TAG, SHA, True, archives(tmp_path, commit=commit, dirty=dirty), "Notes")
     assert api.creations == api.body_updates == 0 and api.uploads == []
+
+
+def built(root: Path, name: str, *, version: str, commit: str = SHA, dirty: bool = False) -> Path:
+    """One platform's archive as its build job zips it, its stamp saying ``version``."""
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / name
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("HeLab/_internal/helab/_build_info.json",
+                         json.dumps({"version": version, "commit": commit, "dirty": dirty}))
+    return path
+
+
+@pytest.mark.parametrize("name", ASSET_NAMES)
+def test_a_build_checks_its_own_archive_without_a_tag(tmp_path: Path, name: str,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    """A39.1: each PR build runs ``release_draft --check`` on its archive against its build commit and the
+    checkout's version: the release's stamp check, with no tag and no draft, before any merge."""
+    from helab._version import __version__
+    from helab.release_draft import main
+    main(["--check", str(built(tmp_path, name, version=__version__)), "--commit", SHA])
+    assert capsys.readouterr().out == f"{name}: built cleanly from {__version__} at {SHA}\n"
+    linked = built(tmp_path / "linked", name, version=__version__)
+    add_link(linked, "HeLab/Frameworks/helab/_build_info.json", "../../_internal/helab/_build_info.json")
+    main(["--check", str(linked), "--commit", SHA])  # (0.0.7a1's macOS zip: a linked stamp.)
+    for wrong in (built(tmp_path / "commit", name, version=__version__, commit=LATER_SHA),
+                  built(tmp_path / "dirty", name, version=__version__, dirty=True),
+                  built(tmp_path / "version", name, version="0.0.1")):
+        with pytest.raises(ValueError, match="not built cleanly"):
+            main(["--check", str(wrong), "--commit", SHA])
+    add_link(linked, "HeLab/Other/helab/_build_info.json", "../../payload.txt")
+    with pytest.raises(ValueError, match="links outside the stamps"):
+        main(["--check", str(linked), "--commit", SHA])
+
+
+def test_the_release_still_needs_its_tag_and_the_three_archives(tmp_path: Path) -> None:
+    from helab.release_draft import main
+    with pytest.raises(SystemExit):
+        main(["--validate-only", "--commit", SHA, "--artifacts", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        main(["--validate-only", "--commit", SHA, "--tag", TAG])
+    files = archives(tmp_path)
+    main(["--validate-only", "--commit", SHA, "--tag", TAG, "--artifacts", str(tmp_path)])
+    files[ASSET_NAMES[1]].unlink()
+    with pytest.raises(FileNotFoundError):
+        main(["--validate-only", "--commit", SHA, "--tag", TAG, "--artifacts", str(tmp_path)])
+
+
+def test_each_python_3_13_build_checks_its_archive_against_its_commit() -> None:
+    """A39.1: the build job's step (ci-build.yml) runs the check on what it built, for every OS."""
+    workflow = (ROOT / ".github" / "workflows" / "ci-build.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Check the build's stamps against its commit", 1)[1].split("\n      - name:", 1)[0]
+    assert "if: inputs.python-minor == '13' && inputs.build-sha == github.sha" in step
+    assert 'python -m helab.release_draft --check "$archive" --commit "$BUILD_SHA"' in step
+    assert "BUILD_SHA: ${{ inputs.build-sha }}" in step
+    assert workflow.index("Zip the macOS app") < workflow.index("Check the build's stamps") < workflow.index(
+        "Archive build artifacts")
+    assert "if: inputs.os == 'macos' && (inputs.upload || inputs.python-minor == '13')" in workflow
 
 
 def test_publication_during_recovery_stops_further_writes(tmp_path: Path) -> None:
@@ -241,6 +333,10 @@ def test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing
     checkout = tmp_path / "checkout"
     subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(ROOT), str(checkout)], check=True)
     subprocess.run(["git", "-C", str(checkout), "checkout", "--quiet", "--detach", "HEAD"], check=True)
+    # git's first status on a checkout just written refreshes its whole index (and on Windows meets the virus
+    # scanner over every new file): past build_info's 2 s per git call on a slow runner, which then stamped
+    # "unknown" (Windows CI 41481668334). Done once here, untimed, so what follows tests the stamp, not that.
+    subprocess.run(["git", "-C", str(checkout), "status", "--porcelain"], check=True, capture_output=True)
     commit = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
     assert checkout_build_info(checkout).branch == "detached"
     monkeypatch.delenv("HELAB_BUILD_BRANCH", raising=False)

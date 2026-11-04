@@ -139,6 +139,32 @@ jobs:
           fi
           pytest -n 4 --verbose --reruns 5 --reruns-delay 5 --timeout=120 --timeout-method=thread
 
+      # The user manual for offline reading, which HeLab.spec bundles from build/manual (Help › User
+      # manual opens it when the site can't be reached). Its tools get their own venv in build/ (ignored
+      # by Git, so the build stamp stays clean), never the app's. Python 3.13 only: the docs lock is
+      # 3.13's, and only those builds are released. A recovery build of a tag from before the manual
+      # builds without it, as that tag did.
+      - name: Build the user manual for the app
+        if: inputs.python-minor == '13'
+        shell: bash
+        env:
+          HELAB_DOCS_OFFLINE: 'true'
+          HELAB_DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [ ! -f mkdocs.yml ] || [ ! -f requirements-docs.lock ]; then
+            echo "No user manual at this commit: building without it."
+            exit 0
+          fi
+          python -m venv build/docs-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source build/docs-venv/Scripts/activate
+          else
+            source build/docs-venv/bin/activate
+          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements-docs.lock
+          mkdocs build --strict -d build/manual
+
       - name: Build with PyInstaller
         shell: bash
         run: |
@@ -169,12 +195,103 @@ jobs:
           python native/check_build.py --frozen "$app" --require "$HELAB_REQUIRE_BACKENDS"
           du -sh dist/HeLab
 
+      # Q49.3 (b): the try-import of a script folder in the packaged app, as HeLab starts it
+      # (`HeLab --helab-script-probe FOLDER RESPONSE`, helab/main.py's dispatch before any GUI import): on a
+      # tiny folder whose script makes a Qt widget at import, it answers ready (under an offscreen
+      # QApplication, so the platform plugin was collected) and done, frozen, with no GUI module imported.
+      - name: Check the script folder probe in the packaged app
+        shell: bash
+        run: |
+          if [ ! -f helab/scripts/probe.py ]; then
+            echo "No script probe at this commit."
+            exit 0
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source venv/Scripts/activate
+          else
+            source venv/bin/activate
+          fi
+          case "$RUNNER_OS" in
+            macOS) app=dist/HeLab.app/Contents/MacOS/HeLab ;;
+            Windows) app=dist/HeLab/HeLab.exe ;;
+            *) app=dist/HeLab/HeLab ;;
+          esac
+          HELAB_FROZEN_APP="$app" python - <<'EOF'
+          import json, os, subprocess, sys, tempfile
+          from pathlib import Path
+          work = Path(tempfile.mkdtemp(prefix="helab-probe-check-"))
+          folder, response = work / "scripts", work / "response.jsonl"
+          folder.mkdir()
+          (folder / "widget.py").write_text(
+              "import json, os, sys\n"
+              "from PyQt6.QtWidgets import QLabel\n"
+              "LABEL = QLabel('made at import')\n"
+              "with open(os.path.join(os.path.dirname(__file__), 'seen.json'), 'w') as handle:\n"
+              "    json.dump({'frozen': bool(getattr(sys, 'frozen', False)),\n"
+              "               'gui': 'helab.views.HelabMainWindow' in sys.modules}, handle)\n")
+          done = subprocess.run([os.environ["HELAB_FROZEN_APP"], "--helab-script-probe", str(folder), str(response)],
+                                capture_output=True, text=True, timeout=300)
+          print(done.stderr[-2000:])
+          events = [json.loads(line) for line in response.read_text().splitlines()]
+          seen = json.loads((folder / "seen.json").read_text())
+          print("exit", done.returncode, "events", events, "seen", seen)
+          assert done.returncode == 0, done.returncode
+          assert [event["kind"] for event in events] == ["ready", "done"], events
+          assert events[0]["application"] == "offscreen", events[0]
+          assert seen == {"frozen": True, "gui": False}, seen
+          EOF
+
+      - name: Check the packaged app has the user manual
+        if: inputs.python-minor == '13'
+        shell: bash
+        run: |
+          if [ ! -f mkdocs.yml ]; then
+            echo "No user manual at this commit."
+            exit 0
+          fi
+          case "$RUNNER_OS" in
+            macOS) app=dist/HeLab.app ;;
+            *) app=dist/HeLab ;;
+          esac
+          found=$(find "$app" -path "*/helab/manual/index.html" | head -n 1)
+          if [ -z "$found" ]; then
+            echo "::error::The packaged app has no helab/manual/index.html"
+            exit 1
+          fi
+          echo "User manual in the app: $found"
+
       # Ship only HeLab.app on macOS (dist/HeLab is the same app again), zipped here
       # so the Qt framework symlinks survive: upload-artifact would replace each
-      # link with a copy of its target (~2.1 GB instead of ~290 MB).
+      # link with a copy of its target (~2.1 GB instead of ~290 MB). Also made to check it (below).
       - name: Zip the macOS app, keeping its symlinks
-        if: inputs.upload && inputs.os == 'macos'
+        if: inputs.os == 'macos' && (inputs.upload || inputs.python-minor == '13')
         run: ditto -c -k --norsrc --noextattr --noacl --keepParent dist/HeLab.app dist/HeLab-macos.zip
+
+      # A39.1: each Python 3.13 build's archive checked as the release job checks the three (its build
+      # stamps: version, commit, clean), against the commit it was built from, with no tag or draft, so a
+      # packaging change that breaks the release's check fails its PR. The release zips Windows' and
+      # Ubuntu's folder from the artifact, whose links are copies: zipfile follows links too. (A recovery
+      # build of an older tag, whose release_draft has no --check, is checked by the release job.)
+      - name: Check the build's stamps against its commit
+        if: inputs.python-minor == '13' && inputs.build-sha == github.sha
+        shell: bash
+        env:
+          BUILD_SHA: ${{ inputs.build-sha }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source venv/Scripts/activate
+          else
+            source venv/bin/activate
+          fi
+          case "$RUNNER_OS" in
+            macOS) archive=dist/HeLab-macos.zip ;;
+            Windows) archive="$RUNNER_TEMP/HeLab-windows.zip" ;;
+            *) archive="$RUNNER_TEMP/HeLab-ubuntu.zip" ;;
+          esac
+          if [ "$RUNNER_OS" != "macOS" ]; then
+            python -m zipfile -c "$archive" dist/HeLab
+          fi
+          python -m helab.release_draft --check "$archive" --commit "$BUILD_SHA"
 
       - name: Archive build artifacts
         if: inputs.upload

@@ -4,7 +4,8 @@ such an event calls ``notify`` and nothing else, so hooks (sounds, scripts, remo
 can attach here later without touching it.
 
 - ``notify(kind, message, ...)`` records an ``Event``, gives it to every hook (``add_hook``)
-  and, for an event that asks for it (``desktop=True``), shows a desktop notification.
+  and, for an event that asks for it (``desktop=True``), shows a desktop notification; with
+  ``status=True`` instead, an in-app one: the main window's status bar, never the desktop.
 - **Once per key:** an event with a ``key`` (a shot's path, number and fingerprint) is
   delivered once; the same key again is ignored (the last ``SEEN_LIMIT`` keys are kept). No
   time limit (Tony, 2026-10-26): each shot's notification shows, a typical shot being ~30 s
@@ -33,6 +34,9 @@ LOW_COUNTS = "low_counts"  # a shot below a plot's low-count rule(s), during Liv
 LIVE_ERROR = "live_error"  # Live stopped checking a folder on an error (LiveController._live_halt)
 CLOCK_SKEW = "clock_skew"  # a folder's files dated ahead of this computer's clock (ClockSkewWarning)
 DAMAGED_RAW = "damaged_raw"  # a raw file Live's auto-convert found damaged (Q18.5), once per file
+READ_STOPPED_RAW = "read_stopped_raw"  # a raw file whose read stopped early in Live's auto-convert (Q48.2), once per file
+RAW_OVERWRITTEN = "raw_overwritten"  # a raw file overwritten in place since store-v4 cached it (Q28.6), once per shot
+RAW_KEPT = "raw_kept"  # Settings set TXY only but couldn't offer to remove the cached raw pulses (S4~1, S4R-1)
 SEEN_LIMIT = 4096
 HISTORY_LIMIT = 256
 
@@ -189,9 +193,10 @@ class EventHub:
         return key in self._seen
 
     def notify(self, kind: str, message: str, *, title: str = "HeLab", key: Any = None, desktop: bool = False,
-               **data: Any) -> Optional[Event]:
-        """Record an event and give it to the hooks; with ``desktop``, show it. None when ``key``
-        was delivered before (nothing happens)."""
+               status: bool = False, **data: Any) -> Optional[Event]:
+        """Record an event and give it to the hooks; with ``desktop``, show it; with ``status`` (and not
+        ``desktop``), show it in the app only, in the main window's status bar. None when ``key`` was
+        delivered before (nothing happens)."""
         if key is not None:
             if key in self._seen:
                 return None
@@ -203,7 +208,14 @@ class EventHub:
                 data = {**data, "delivered": self.notifier.deliver(title, message)}
             except Exception:
                 logging.exception("Notification failed: %s", message)
-        event = Event(kind, message, title, MappingProxyType(dict(data)), time.time(), desktop, desktop)
+        shown = desktop
+        if status and not desktop and (sink := self.desktop._sink()) is not None:
+            try:
+                sink(message)
+                shown = True
+            except Exception:
+                logging.exception("In-app notice failed: %s", message)
+        event = Event(kind, message, title, MappingProxyType(dict(data)), time.time(), desktop, shown)
         self.history.append(event)
         del self.history[:-HISTORY_LIMIT]
         for hook in list(self._hooks):

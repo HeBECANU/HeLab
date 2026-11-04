@@ -129,6 +129,7 @@ On macOS, to drive a source run with computer-use tools (which need a bundle ID)
 Notes:
 - Bare `python` on lab PCs is often an old interpreter (for example Python 2.7). Use the one in `venv`.
 - On Windows, start HeLab from the desktop, not over SSH. An SSH session as an administrator runs elevated, and it can leave cache folders that a normal launch can't write to.
+- File formats: caching v2 (built behind a switch that stays off until its stage 2) keeps cached raw pulses in `.hlb` files. [docs/hlb-format.md](docs/hlb-format.md) describes them, with Python and MATLAB examples; `helab cache dump FILE.hlb` and `helab cache export FILE.hlb|--folder FOLDER --to npz|mat|csv` read them without changing the cache.
 - The submodule (`legacy/tdc_autoconverter`) is MATLAB reference code only. HeLab runs without it. In an existing clone, fetch it with `git submodule update --init --recursive`.
 - The `testdata` submodule is HeLab's test data (the private Hugging Face dataset `TonyXTYan/HeLab-TestData`, about 100 MB), used only by tests, which skip without it. It is never fetched by default (`update = none`). With access to the dataset: `hf auth login --add-to-git-credential` once, then `git submodule update --init --checkout testdata`. Or download it anywhere and point `HELAB_TESTDATA` at it: `hf download TonyXTYan/HeLab-TestData --type dataset --revision v1 --local-dir <folder>`.
 - Legacy references for porting work (not submodules, and not needed to run HeLab): clone them into `legacy/` at the commits the port was read from:
@@ -212,6 +213,21 @@ See [the versioning plan](roadmaps/app-versioning.md) for implementation details
 Na, apparently github action is free for public repos, also much easier to setup and faster parallel jobs.
 
 
+
+## User manual
+
+The user manual is in [`docs/`](docs/index.md), built with [MkDocs](https://www.mkdocs.org/) and the Material theme (`mkdocs.yml`); its API reference for script writers comes from the docstrings by mkdocstrings. Its tools are developer-only, outside the app's requirements:
+
+```bash
+uv pip install -r requirements-docs.lock     # mkdocs-material, mkdocstrings, mike, ruff
+mkdocs serve                                  # preview at http://127.0.0.1:8000, rebuilt as you edit
+mkdocs build --strict -d .ai/temp/site        # as CI builds it: any warning fails
+ruff check                                    # the script API's docstrings (ruff.toml lists the modules)
+```
+
+The published site (GitHub Pages, deployed by `.github/workflows/docs-site.yml` only when a release is published) has one version per release: its front page is the newest stable release (`latest`), the version menu lists every release, and `pre-release` is the newest alpha, beta or release candidate while it is newer than every stable release (a newer stable release removes the alias; the next pre-release brings it back). Until there is a stable release, the front page says so and links to the newest pre-release (`docs/publish/site_versions.py`). There is no development version online: for the manual of the code you have checked out, build it locally with `mkdocs serve` (or `mkdocs build`, above).
+
+To change the docs tools, edit `requirements-docs.txt`, then refresh its lock against the app's: `uv pip compile requirements-docs.txt --universal --python-version 3.13 -c requirements.lock -o requirements-docs.lock`.
 
 ## Testing
 

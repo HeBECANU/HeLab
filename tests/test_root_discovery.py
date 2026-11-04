@@ -1,6 +1,7 @@
 """D2 helper discovery and root-keyed cache behavior on fake shares."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,7 @@ from helab.utils.cache_paths import Mount
 from helab.utils.cache_store import CacheStore, DatasetRecord
 from helab.utils.folder_cache import FolderCache
 from helab.utils.io_service import IORequest, IOService
+from conftest import mount_holding, name_fixed_mount, this_tests
 
 pytestmark = pytest.mark.no_auto_data_root
 
@@ -57,7 +59,7 @@ def test_listing_discovers_marker_and_uses_root_key(tmp_path: Path,
         assert store._path_key(str(run)) == f"root://{identifier}/run"
         store.save_record("summaries", str(run), {"saved": True},
                           store.guard([str(run)], ["summaries"]))
-    with sqlite3.connect(Path(options(tmp_path)["directory"]) / "records.sqlite") as conn:
+    with contextlib.closing(sqlite3.connect(Path(options(tmp_path)["directory"]) / "records.sqlite")) as conn, conn:
         assert conn.execute("SELECT path FROM folder_summaries").fetchone()[0] == (
             f"root://{identifier}/run")
 
@@ -319,6 +321,56 @@ def test_system_volume_hint_needs_no_verification(tmp_path: Path, monkeypatch: p
     assert not fixed_mount(Mount("/dev/disk4s1", "/Volumes/USB", "apfs"))
 
 
+def test_the_mount_the_tests_name_needs_no_verification_and_only_when_named(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test seam (``HELAB_TEST_FIXED_MOUNT``, set by conftest only) trusts the mount it names, as the
+    system volume is: a runner whose /tmp is a mount of its own (CI 41587336570, 41570883747) left every
+    test folder's cached read waiting for a volume check. Unset, it does nothing."""
+    run, mount, cache = usb_root(tmp_path, monkeypatch)
+    monkeypatch.delenv("HELAB_TEST_FIXED_MOUNT", raising=False)
+    assert not data_roots.fixed_mount(mount)
+    with pytest.raises(data_roots.VolumeUnverified):
+        stores._cache_store(cache["directory"], [str(run)], local_lane=True, verified_volumes=[])
+    monkeypatch.setenv("HELAB_TEST_FIXED_MOUNT", mount.path)
+    assert data_roots.fixed_mount(mount)
+    assert not data_roots.fixed_mount(Mount("/dev/disk5s1", mount.path + "-other", "apfs"))
+    with stores._cache_store(cache["directory"], [str(run)], local_lane=True, verified_volumes=[]) as store:
+        assert store.read_dataset_row(str(run)).value is not None
+    # Several mounts (the temp folder's and --basetemp's), os.pathsep-separated: each is trusted.
+    other = Mount("/dev/disk5s1", str(tmp_path / "Other"), "apfs")
+    monkeypatch.setenv("HELAB_TEST_FIXED_MOUNT", os.pathsep.join([other.path, mount.path]))
+    assert data_roots.fixed_mount(mount) and data_roots.fixed_mount(other)
+    assert not data_roots.fixed_mount(Mount("/dev/disk6s1", str(tmp_path / "Third"), "apfs"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows names drives (mount_holding's anchor)")
+def test_conftest_names_basetemps_mount_beside_the_temp_folders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--basetemp on another mount than the temp folder (a checkout on /mnt, an external disk) is named
+    too, once, so the tests' folders there need no volume check either (review FM-1)."""
+    mountpoints = ["/", "/tmp", "/mnt/data"]
+    assert mount_holding("/mnt/data/checkout/.ai/temp/pytest", mountpoints) == "/mnt/data"
+    assert mount_holding("/mnt/database", mountpoints) == "/"  # (A prefix of the name isn't the mount.)
+    monkeypatch.setenv("HELAB_TEST_FIXED_MOUNT", "/tmp")
+    name_fixed_mount("/mnt/data/checkout/.ai/temp/pytest/popen-gw0", mountpoints)
+    name_fixed_mount("/mnt/data/other", mountpoints)
+    assert os.environ["HELAB_TEST_FIXED_MOUNT"] == os.pathsep.join(["/tmp", "/mnt/data"])
+
+
+def test_the_mount_holding_this_runs_basetemp_is_named(tmp_path_factory: pytest.TempPathFactory) -> None:
+    named = os.environ.get("HELAB_TEST_FIXED_MOUNT", "").split(os.pathsep)
+    assert mount_holding(str(tmp_path_factory.getbasetemp())) in named, named
+
+
+def test_the_tests_folders_are_on_a_mount_that_needs_no_verification(tmp_path: Path) -> None:
+    """Whatever the runner's mount table (/tmp on / or a mount of its own), the mount holding the tests'
+    folders is trusted at once: conftest names it (``HELAB_TEST_FIXED_MOUNT``), on Windows too (its drive)."""
+    folder = cache_paths._normal(str(tmp_path.resolve()))
+    holding = [mount for mount in cache_paths.current_mounts()
+               if cache_paths._inside(folder, cache_paths._normal(mount.path))]
+    assert holding, cache_paths.current_mounts()
+    assert data_roots.fixed_mount(max(holding, key=lambda mount: len(cache_paths._normal(mount.path))))
+
+
 def test_verification_reports_checked_volumes_before_visiting_markers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -344,7 +396,7 @@ def test_volume_check_alone_refreshes_hints_without_visiting_markers(
     run, mount, cache = usb_root(tmp_path, monkeypatch)
     monkeypatch.setattr(infra, "_volume_id_cache", {})
     monkeypatch.setattr(data_roots, "_volume_id", lambda _: "disk-b")
-    monkeypatch.setattr(os, "lstat", lambda *_: pytest.fail("visited a source folder"))
+    monkeypatch.setattr(os, "lstat", this_tests(lambda *_: pytest.fail("visited a source folder"), os.lstat))
     monkeypatch.setattr(data_roots, "read_marker", lambda _: pytest.fail("read a marker"))
     events: list[Any] = []
     verify_volumes(cache, events.append)

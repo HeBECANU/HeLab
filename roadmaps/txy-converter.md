@@ -49,7 +49,7 @@ replace the constants MATLAB hard-codes, and a parameter scan tunes them on real
 - **Which TXY a folder uses** (Q6.6, Q18.2): four source modes, set for tabs and Live in Settings
   → TXY converter and per plot: helab-priority (the default), matlab-priority, helab-only and
   matlab-only, with HeLab's profile chosen by its tag. Every dataset and saved result records its
-  source, so caches never mix them. Whether a plot's choice is saved with presets is Q14.2.
+  source, so caches never mix them. A plot's choice is to be saved with presets (Q14.2, decided 2026-11-02; A47.5).
 - **Raw files not done** (Q9.8, Q18.5): read only once settled; a raw file unchanged for 20 s
   that still fails the format checks is marked damaged (a notification, a status in Live and
   Folder details, no TXY) and never holds up later shots.
@@ -236,15 +236,17 @@ parameter scan over profiles scored on real signals.
 In [DECISIONS_TODO](../.ai/DECISIONS_TODO.md):
 
 - Q6.7: how other HeLabs get the acquisition PC's TXY (postponed with Q6.2).
-- Q6.9: store HeLab's TXY, or only cache them (proposed: answered by caching v2, Q19.1 to decide).
+- Q6.9: store HeLab's TXY, or only cache them (proposed: answered by caching v2 and Q19.1, decided 2026-11-02).
 - Q6.10: the exact 2022 plate swap date. Q6.11: a calibration set, and whether 2025 has MCP pulses.
 - Q12.6 (Convert anyway: an idea, not built). Decided 2026-10-29: Q12.1, Q12.3 (= Q19.2, their own
   budget), Q12.4.
 - Q25.2: channel 7 (proposed: ignored in every profile). Q25.4: the logs' posixtime.
-- Q14.2 (= Q23.4): save a plot's source and profile with presets and arrangements.
-- Q14.4: count HeLab's TXY in a folder's status. Q15.3: the low-count threshold (later).
-- Q23.1 (tags `m23v1`, `p17v1`, frozen once released: before v0.0.7 ships), Q23.2, Q23.3, Q23.5,
-  Q23.6, Q23.7.
+- Q14.2 (= Q23.4), decided yes 2026-11-02: save a plot's source and profile with presets, arrangements and
+  reopened plots, with a toggle to turn it off (A47.5).
+- Q14.4: count HeLab's TXY in a folder's status (Tony, 2026-11-02: after caching v2's stage 3, which has
+  landed: to ask again). Q15.3: the low-count threshold, kept (Tony, 2026-11-02).
+- Q23.1 (tags `m23v1`, `p17v1`, frozen once released: before v0.0.7 ships), Q23.6, Q23.7; Q23.2, Q23.3 and
+  Q23.5 kept as built (Tony, 2026-11-02).
 
 Here only: which channel starts a raw file in each era (`start_channel` was switched between `5`
 and `4` in 2023).

@@ -643,8 +643,8 @@ on Windows and turned the dev branch red):
       --is-ancestor dev/v0.0.7 agent/<task>`), so what was tested is what
       lands.
 - [ ] The branch's latest CI run, on the commit that lands, is green on
-      macOS, Windows and Ubuntu: every job, both test groups ("Tests (1/2)",
-      "Tests (2/2)"), "Converter backends" and "Build". Check it by run ID
+      macOS, Windows and Ubuntu: every job, all three test groups ("Tests (1/3)",
+      "Tests (2/3)", "Tests (3/3)"), "Converter backends" and "Build". Check it by run ID
       and quote the ID when asking Tony:
       `gh run list --workflow "CI CD" --branch agent/<task> --limit 1 --json databaseId,headSha,conclusion`
       (its `headSha` is `git rev-parse agent/<task>`), then

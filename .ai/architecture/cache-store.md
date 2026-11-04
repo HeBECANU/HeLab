@@ -8,7 +8,7 @@ on Ground, update it in the same commit as the code; on a floor, propose the cha
 
 ## Caching
 
-**Caching:** The disk cache is `DIR_CACHES/store-v3` (`helab/utils/cache_store.py`, `CacheStore`): SQLite records in `records.sqlite` (WAL, JSON text) and one Blosc-compressed dataset file per folder in `datasets/` (planned: caching v2 in a new `store-v4`, Q19.4, [`roadmaps/caching-v2.md`](../../roadmaps/caching-v2.md); this file describes store-v3 as built). **Only helpers (and `helab convert`, a headless process without the GUI) open it**; the GUI sends `store_options()` (`helab/utils/folder_cache.py`) with each request and never opens the store, at startup or in Settings. Reads answer found / missing / error, and an error is never "nothing saved". Every write checks a save guard taken when its job started (per-kind generations, the folder's epoch, and for datasets a `job_seq`), so a save that was already running can't bring back removed data or overwrite newer data. Replaced dataset files are retired, never deleted at once; a `cache_admin sweep` helper on the local lane deletes them later (it also expires pending saves and results held over an hour, and deletes store files no row names once they are over an hour old, `_sweep_orphans`) (at startup, then by the deadline each helper reports, via one `FolderCache` timer), and at startup also deletes the old diskcache folders (`data_ram_cache`, `status_cache`, `os_file_system_cache`). **Apart from the housekeeping AGENTS.md lists, nothing is removed without the user asking.** Maintenance goes through `FolderCache.cache_admin(action, …)` (the actions are `ADMIN_ACTIONS` in `helab/io_ops/admin.py`; `clear_prefs` is Settings → Cache's Clear folder preferences; results on `cacheAdminResult`). Every removal sends `removed` (kinds, paths); `FolderCache.removed()` resets exactly those flags and saved results in memory, and ignores results read before the removal.
+**Caching:** The disk cache is `DIR_CACHES/store-v3` (`helab/utils/cache_store.py`, `CacheStore`): SQLite records in `records.sqlite` (WAL, JSON text) and one Blosc-compressed dataset file per folder in `datasets/` (caching v2's `store-v4`, Q19.4, [`roadmaps/caching-v2.md`](../../roadmaps/caching-v2.md), is on from v0.0.8 (the switch-on landed `92f9d1a`; `store_v4=false` falls back here for one release): [below](#store-v4-caching-v2-behind-the-switch); the rest of this file, outside that section, describes store-v3, which `store_v4=false` still uses, and what both stores share; store-v4's own tables, layers and Settings › Cache rows are in that section). **Only helpers, `helab convert` (a headless process without the GUI) and, read only, `helab cache` open it**; the GUI sends `store_options()` (`helab/utils/folder_cache.py`) with each request and never opens the store, at startup or in Settings. Reads answer found / missing / error, and an error is never "nothing saved". Every write checks a save guard taken when its job started (per-kind generations, the folder's epoch, and for datasets a `job_seq`), so a save that was already running can't bring back removed data or overwrite newer data; a save whose guard names a folder re-keyed since (a nested root found) is `SaveRejected("cleared", REKEYED)` and its file retired at once, like any other rejected save (cache-5). Replaced dataset files are retired, never deleted at once; a `cache_admin sweep` helper on the local lane deletes them later (it also expires pending saves and results held over an hour, and deletes store files no row names once they are over an hour old, `_sweep_orphans`: in store-v4 the same rule covers `raw/`'s layer files, no new removal) (at startup, then by the deadline each helper reports, via one `FolderCache` timer), and at startup also deletes the old diskcache folders (`data_ram_cache`, `status_cache`, `os_file_system_cache`). **Apart from the housekeeping AGENTS.md lists, nothing is removed without the user asking.** Maintenance goes through `FolderCache.cache_admin(action, …)` (the actions are `ADMIN_ACTIONS` in `helab/io_ops/admin.py`; `clear_prefs` is Settings → Cache's Clear folder preferences; results on `cacheAdminResult`). Every removal sends `removed` (kinds, paths); `FolderCache.removed()` resets exactly those flags and saved results in memory, and ignores results read before the removal.
 
 ## Disk budget and pending saves
 
@@ -24,7 +24,7 @@ Folder flags (right-click › Don't cache / Don't auto-load this folder; store `
 
 ## Converted TXY in the cache folder
 
-HeLab's own TXY under the cache and temp folders (`converted-txy/`, Q27.5) aren't in the store: outside the disk budget, and nothing removes them without asking (Q12.3, Tony 2026-10-29: they get their own budget, separate from the dataset budget, built with caching v2; until then none). Settings → Cache shows their size per folder and when last used (`inventory.converted_txy`, `events.ConvertedSummaryField`, through each base's `converted-txy/index.sqlite`) and clears them when asked (`cache_admin clear_converted_txy` with the temp folder as `temps`; `removed` kind `converted_txy`; rows and old records of beside TXY stay; damaged set-aside indexes go; a newer HeLab's index is left alone); Clear folder preferences names `write_beside`. A dataset's `info.txy` records its source and HeLab shots' origins; shots are reused only from the same kind of TXY; data of MATLAB's TXY alone is as before.
+HeLab's own TXY under the cache and temp folders (`converted-txy/`, Q27.5) aren't in the store: outside the disk budget, and nothing removes them without asking (Q12.3, Tony 2026-10-29: they get their own budget, separate from the dataset budget, built with caching v2; until then none). Settings → Cache shows their size per folder and when last used (`inventory.converted_txy`, `events.ConvertedSummaryField`, through each base's `converted-txy/index.sqlite`) and clears them when asked (`cache_admin clear_converted_txy` with the temp folder as `temps`; `removed` kind `converted_txy`; rows and old records of beside TXY stay; damaged set-aside indexes go; a newer HeLab's index is left alone; their leftover temporaries go only once over an hour old, since a younger one may be a conversion's write in progress, S0-1). Clear fences conversions already running (A19.2): it first sets a new token in the index's `fence` table, and a conversion that started before writes no TXY after it (its shots wait as `cleared` and convert at the next check); a base with no index yet, a damaged or busy index, and 0.0.7a1's Clear or conversions aren't fenced ([converter](converter.md#provenance-helabconvertprovenance)); Clear folder preferences names `write_beside`. A dataset's `info.txy` records its source and HeLab shots' origins; shots are reused only from the same kind of TXY; data of MATLAB's TXY alone is as before.
 
 ## Folder constants
 
@@ -40,7 +40,7 @@ Shot times are the `datasets.raw_times` column (`[shot, mtime_ns]`), not `info`,
 
 ## Tables added within store-v3
 
-Tables and columns added within `store-v3` (`folder_constants`, `datasets.raw_times`, `presets`, `results`, `listings`, `mount_hints`, `convert_prefs`) are added to older stores on every writable open (`cache_store._migrate`, once, under the write lock), never only in `SCHEMA`, which runs for a new store alone; read-only stores without them read as empty. While lab machines run mixed versions, an older HeLab's save resets a folder's `raw_times` to `[]` (refilled by the next listing check), and its re-key of a nested root leaves the subtree's constants behind. File kinds (TXY, raw `d*.txt`) are matched, counted and sized from one table, `FILE_KINDS` (`helab/utils/file_kinds.py`). Design and later sessions (large-folder warning, cache move, folder flags): `roadmaps/cache-storage-and-settings.md`.
+Tables and columns added within `store-v3` (`folder_constants`, `datasets.raw_times`, `presets`, `results`, `listings`, `mount_hints`, `convert_prefs`) are added to older stores on every writable open (`cache_store._migrate`, once, under the write lock), never only in `SCHEMA`, which runs for a new store alone; read-only stores without them read as empty. While lab machines run mixed versions, an older HeLab's save resets a folder's `raw_times` to `[]` (refilled by the next listing check), and its re-key of a nested root leaves the subtree's constants (0.0.5) and converter flags (0.0.6) behind, and a 0.0.6 HeLab's Clear folder preferences leaves `write_beside` on. File kinds (TXY, raw `d*.txt`) are matched, counted and sized from one table, `FILE_KINDS` (`helab/utils/file_kinds.py`). Design and later sessions (large-folder warning, cache move, folder flags): `roadmaps/cache-storage-and-settings.md`.
 
 ## Saved analysis results
 
@@ -56,7 +56,259 @@ Tables and columns added within `store-v3` (`folder_constants`, `datasets.raw_ti
 
 ## Cache folders and moving them
 
-Cache dirs resolve via `QSettings` (`dir_caches` / `dir_temps`) to `DIR_CACHES` / `DIR_TEMPS` in `helab/utils/constants.py`; the cache folder can change while HeLab runs, so read it with `cache_dir()` (never `DIR_CACHES`). It changes only by moving the cache (Settings → General → Change…, `helab/views/CacheMover.py`, `helab/utils/cache_move.py`): every helper that opens the cache is held (`IOService.hold_cache`), the folder is renamed or copied and verified, `dir_caches` is saved and synced before the switch (`set_cache_dir`), and a crash at any step is recovered at the next start (in a helper) from `cache-move.json` in the app folder (`app_folder()`), before any cache opens. OS file locks there (`cache.lock`, `move.lock`, `instances/<pid>.lock`; `helab/utils/cache_locks.py`) keep other HeLabs away from a move; tests set `HELAB_APP_DIR_OVERRIDE`. Defaults are persistent per-user folders (`default_app_dir`): macOS `~/Library/Caches/HeLab/{caches,temps}`, Windows `%LOCALAPPDATA%\HeLab\{caches,temps}`, else `~/.cache/HeLab`. A saved path is used only if a probe file can be written there. A cache folder on a network or synced folder (`helab/utils/cache_location.py`) is refused at startup: HeLab uses the default for that session and says why (`cache_dir_refused()`), leaving the setting for the user to change. Older `helab_<kind>_*` folders in the system temp dir (which the OS may delete) are renamed to the default on launch. Tests never touch these: `tests/conftest.py` sets `HELAB_DIR_*_OVERRIDE` to private temp folders.
+Cache dirs resolve via `QSettings` (`dir_caches` / `dir_temps`) to `DIR_CACHES` / `DIR_TEMPS` in `helab/utils/constants.py`; the cache folder can change while HeLab runs, so read it with `cache_dir()` (never `DIR_CACHES`). It changes only by moving the cache (Settings → General → Change…, `helab/views/CacheMover.py`, `helab/utils/cache_move.py`): every helper that opens the cache is held (`IOService.hold_cache`), the folder is renamed or copied and verified, `dir_caches` is saved and synced before the switch (`set_cache_dir`), and a crash at any step is recovered at the next start (in a helper) from `cache-move.json` in the app folder (`app_folder()`), before any cache opens. OS file locks there (`cache.lock`, `move.lock`, `instances/<pid>.lock`; `helab/utils/cache_locks.py`) keep other HeLabs (since Q39.1, `helab convert` runs) away from a move; `running.lock` keeps one HeLab app per computer (`take_running`, taken in `main()` right after the `QApplication`, before anything opens; held for the process's life, not released at quit; a second start says so and exits 1; `helab convert` doesn't take it; Q39.1, A39.3); tests set `HELAB_APP_DIR_OVERRIDE`. Defaults are persistent per-user folders (`default_app_dir`): macOS `~/Library/Caches/HeLab/{caches,temps}`, Windows `%LOCALAPPDATA%\HeLab\{caches,temps}`, else `~/.cache/HeLab`. A saved path is used only if a probe file can be written there. A cache folder on a network or synced folder (`helab/utils/cache_location.py`) is refused at startup: HeLab uses the default for that session and says why (`cache_dir_refused()`), leaving the setting for the user to change. Older `helab_<kind>_*` folders in the system temp dir (which the OS may delete) are renamed to the default on launch. Tests never touch these: `tests/conftest.py` sets `HELAB_DIR_*_OVERRIDE` to private temp folders.
+
+## store-v4 (caching v2, behind the switch)
+
+Built on `agent/caching-v2` (stage 0 and checkpoint 2, landed `ad86bd3`; checkpoint 3, landed `c2d0ece`;
+stage 2, landed `1cd586c`; the A47 checkpoint, landed `1d91897`; stage 3, landed `d4f28f3`; stage 4 and the
+switch-on blockers, landed `8071c04`, with `65ee050` landed `9f92daf`; design: the
+[stage 1 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage1.md), the
+[stage 2 addendum](../sessions/2026-10-31-claude-caching-v2/design-stage2.md), the
+[purge note](../sessions/2026-10-31-claude-caching-v2/design-purge.md) and the
+[stage 3 note](../sessions/2026-10-31-claude-caching-v2/design-stage3.md)). Stages 1–4 are complete behind the
+switch. **On by default since the switch-on landed (`agent/v4-switch-on`, `92f9d1a`, Tony 2026-11-03: before the PR,
+with his Q50.18 check still before the PR), so v0.0.8 ships with store-v4 on (Q28.3, Q45.11, Q47.4); the row is
+kept one release as a hidden fallback to store-v3 (V-2, Q50.14).** Keep's read-through of store-v3 lasts through
+v0.0.8 only (`legacy_read_through`, `LEGACY_READ_UNTIL` 0.0.9; V-3, Q50.15): from v0.0.9 it is neither read,
+counted nor asked about, and Settings › Cache › Older cache (store-v3) › Clear… or Make room's Clear old stores…
+removes it. The store-v3 question is asked only when an older HeLab's store-v3 is in the cache folder.
+
+- **The switch:** the `store_v4` settings row (bool, default on from v0.0.8, no control). `cache_store.store_root()`
+  reads it once per process (`live_layout`, through `cache_setting.store_v4_enabled(app_settings())`), so
+  the GUI and `helab convert` pick `store-v3` or `store-v4`; helpers never read it and open the directory
+  they are sent. `store_root_for(dir, layout)` and `layout_of(root)`: the folder's name decides (`store-v4` is
+  layout 4). Off: store-v3 as above, and no `store-v4` folder is ever made (a test).
+- **Tables:** every store-v3 table (`datasets` included through stage 1, Q42.3) plus `makers`, `raw_layers` and
+  a `maker` column on `datasets` and `results`; `meta.format` 1 (a newer format opens read only), `gen_raw`,
+  `imported_v3`, `legacy_v3` (the store-v3 choice, step 6; unset means Keep), `legacy_bytes`,
+  `legacy_purged`, `forgotten_before_import`. A table added within layout 4 goes in through `store_v4.migrate`
+  on every writable open, as `_migrate` does for store-v3. **Per-kind epochs** (cache-2): removing a record
+  kind bumps `<kind>:<key>` (`store_v4.epoch_key`); datasets keep the folder's own row.
+- **Makers** (Q28.4): one row per HeLab session (version, commit, modified, machine, environment), its id in
+  each stored row. The session's maker is `HELAB_STORE_MAKER` in the environment, made at the GUI's (or `helab
+  convert`'s) first `store_root()` under v4 and inherited by its helpers; its row goes in with the first data
+  row. The machine id is a random UUID in `app_folder()/machine-id`. **Privacy:** the record holds the
+  machine's hostname, and every `.hlb` header carries the maker's record, so a `.hlb` or saved result shared
+  off the machine carries the hostname.
+- **`.hlb`** (`helab/utils/hlb.py`, Qt-free, `PURE`): magic `\x89HLB\r\n\x1a\n`, a `<u4` header length (at most
+  16 MiB) and the header's CRC32, a JSON header (`format` 1, `kind`, `maker`, `meta`, `arrays` with explicit
+  dtypes `|i1 |u1 <i8 <f8`, codec, chunks with offset, length, size and CRC32), then Blosc chunks of at most 64 MiB
+  that tile the body. Unknown header fields are ignored; a newer `format`, an unknown dtype or codec, or any
+  damage is `HlbError`, never data. The raw layer's encoding: [converter](converter.md).
+- **Raw layers:** `write_raw_file`, `start_raw_job` (`gen_raw`,
+  `raw:<key>`, the root's epoch, the folder's `job_seq`), `save_raw_batch` (one transaction and fit check per
+  batch; a later job's version replaces, changes in place named in `overwritten` for Q28.6; over the budget
+  nothing is saved and nothing waits, Q42.1), `mark_raw_seen` (`gone_at` marks an only copy, by when its
+  evidence was taken), `read_raw`, `remove_raw`; raw bytes count in the usage; `inventory()` adds `raw` and
+  `older_stores` (Q28.5). Make room's order: other folders' datasets, then raw layers whose files were seen,
+  then only copies, named (D8). A root's Clear takes its raw layers; Don't cache with "remove cached data"
+  takes the folder's seen raw layers and keeps only copies (Q42.4); the admin's `clear_raw`, `removed` kind
+  `raw`; Settings › Cache's Clear all takes `raw` too. With TXY layers, Make room has five groups ([TXY
+layers](#txy-layers-stage-2) below).
+- **Filling them** (`raw_fill`, `helab/io_ops/raw_fill.py`; checkpoint 3): a background-lane operation after a
+  valid `cache_saved` (Load, auto-load, presets' and reopened plots' loads, Live's saves), one per folder
+  ([io-and-browsing](io-and-browsing.md)); never for listings or scans, a Don't cache folder, a folder
+  without a data root, or in store-v3. Batches of at most 50 shots or 64 MB of raw text (`BATCH_SHOTS`,
+  `BATCH_BYTES`), each `.hlb` published just before its batch's save (an unsaved file is an orphan the sweep
+  deletes); each entry's `read_at` (when the file was read) is the evidence C2-10's ordering uses. It yields
+  after about 30 s of work (`more`) and is queued again at the back. Over the budget it saves nothing and
+  asks nothing (Q42.1). A raw file that is blank or doesn't end with a newline waits, as in the converter
+  (`raw.not_done`'s checks that need no profile; C3-2; the trigger check runs when a load converts from the
+  layer, C-3). Each shot encodes under the converter's ticker
+  (`_Ticker`, `compute_budget` of its size), so heartbeats go on during a large encode (C3-1). It isn't
+  retried after an error until the next save asks. **A conversion** into the cache or beside, with a data
+  root and store-v4 live and online, saves its shots' raw rows through the same `raw_fill.save_batch`, by
+  50 shots or 64 MB (`convert._RawRows`; [converter](converter.md)).
+- **An overwritten raw file** (Q28.6): a raw file changed in place since it was cached is replaced, and the
+  save names it (`raw_overwritten`, `events.RAW_OVERWRITTEN`): a desktop notification once per shot per
+  session, a log warning naming the folder, and Folder details' Problems line in amber ("N raw file(s)
+  overwritten since cached", the files in its tooltip; `FolderCache.raw_overwrites`, session only).
+- **store-v3 under v4:** once v4 is live, only `LegacyStore` (`helab/utils/legacy_store.py`) opens store-v3:
+  `mode=ro`, else `mode=rw` with `query_only`, `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`; never `makedirs`, `_migrate`
+  or a write (`test_only_legacy_store_ever_opens_store_v3_once_store_v4_is_live` watches every open and hashes
+  v3's files). The user's state (flags, converter flags, constants, presets, roots, volume and mount hints, the
+  budget) is imported once at v4's creation (Q22.4; retried while v3 can't be read; a v3 appearing later isn't
+  imported; roots forgotten in v4 meanwhile stay forgotten). **Keep** (also while the question below is
+  unanswered): records and results are read from v4 first, then from v3 for a key v4 never removed that kind for (a
+  `None` save's tombstone `legacy-hidden:<kind>:<key>`; purges by age in `meta.legacy_purged`), answered under
+  v4's `store_id` with `legacy: true`; a result found there is copied into v4 as `result_find` returns it (A42.1,
+below). v3's live bytes count in
+  v4's fit checks (`meta.legacy_bytes`, measured at each inventory). Ignore and Clear never open v3. **How long:**
+store-v3 is read through Keep in v0.0.8 only; Keep's read-through ends when v0.0.9 starts, and from then on only
+"Clear old stores…" removes it, asked first (Q50.15; nothing built yet). No bulk import at the first start:
+folders seed when used (Q50.16).
+- **The store-v3 question** (Q19.4, Q22.3, Q44.1; `CacheDialogs`): with store-v4 live and a store-v3 not
+  answered yet, asked once a session: "An older disk cache" with Keep using it / Ignore it / Clear it…. The
+  choice goes in `meta.legacy_v3` with v3's `store_id` (admin `legacy_choice`), and Settings › Cache's Older
+  cache row changes it later. It holds for the store-v3 it was made for: after Clear, a store-v3 there again
+  is unanswered, and under Keep one with another `store_id` is; Ignore holds for whatever is there, never
+  opened to tell (C3-3). **Clear** (`clear_legacy`; Settings › Cache's Clear…, or Make room's "Clear old
+  stores…", Q28.5) asks first, is refused while `cache_locks.other_instances` names another HeLab ("Another
+  HeLab is running…"), renames store-v3 aside (`store-v3.clearing-<8 hex>`) and deletes it, never through a
+  link ("isn't a folder here"; store-v3 itself refuses it), returns the bytes actually removed and sends
+  `removed` kind `legacy`. What a Clear cut short leaves is listed by `measure_legacy` (`leftover`,
+  `leftover_bytes`) and shown in the Older cache row; only the next asked Clear removes it, never
+  housekeeping (C3-4).
+- **Make room under v4** names what it would remove: raw pulses ("raw pulses of N folders") and only copies
+  ("only copy: their raw files are gone from …"), and while store-v3 counts in the budget it also offers
+  "Clear old stores…"; `room_paths` is exactly what it named (`room_items`). `trim` (a lowered budget) follows
+  the same planner (A42.2, below).
+- **Reading `.hlb` outside HeLab:** `helab.utils.hlb.read(path)`, `raw_layer.columns(layer, bin_time=25e-12)`
+  (`channel`, absolute `time_bins`, `time_s`, in stored order), and `helab cache dump FILE` / `helab cache
+  export FILE|--folder FOLDER --to npz|mat|csv` (`helab/cache_cli.py`, dispatched in `helab/main.py` after
+  the frozen helper entry point, beside convert's): read only; `--folder` keys the folder by its nearest
+  `.helab-root` and reads store-v4 through a `mode=ro`, `NO_CKPT_ON_CLOSE`, `query_only` connection (the
+  store's files stay byte-identical); never writes into a `store-v*` folder, never replaces a file without
+  `--force`; a store it can't open is "can't be opened read only (…)", exit 2 (C3-6); exit codes 0 done,
+  1 nothing to export, 2 an error. It loads no PyQt6 module (A44.2): `--folder` without `--cache` finds the
+  cache folder from `HELAB_DIR_CACHES_OVERRIDE`, else `<app folder>/cache-folder.json` if the folder it names
+  exists, else the setting through QtCore. The GUI writes that file (`constants.record_cache_folder`,
+  atomically; a failure logged, never raised) right after `start_cache_dir` and after a cache move
+  (`CacheMover._switch`); the GUI never reads it, `helab convert` never writes it, and it isn't housekeeping
+  (`tests/test_cache_folder_record.py`). `--kind txy [--layer matlab|<tag>|helab:<hash>]` exports a TXY layer
+  instead (A44.1, below). The format page, for users:
+  [`docs/hlb-format.md`](../../docs/hlb-format.md) (Q44.2).
+- **Cache moves with two stores:** `cache_move` verifies every store folder present (`store_ids_at`, the record's
+  `store_ids` beside `store_id`), the live layout (sent by `CacheMover` as `layout`) is the primary
+  (`primary`), `checkpoint` writes the primary only, and a v3 beside a v4 is read through `LegacyStore`. Older
+  records recover as before.
+
+### TXY layers (stage 2)
+
+Store-v4 only; under store-v3 every path is what it was. Built on `agent/caching-v2` (`b691d26`, `a70d261`,
+step 3 `7d185eb`–`6f57918`, step 4 `8be1be6`, step 5 `102c027`, `d849372`; review fixes S2-1–S2-3, S3-1,
+S3-2, C2S2-1–C2S2-3). Decisions Q45.1–Q45.11; CoCo's answers to the addendum's S~1–S~5 (raw-keyed wherever a
+raw file is listed; the two priority modes share one view; whole rows in Make room; `cache-folder.json`).
+
+- **Tables** (`store_v4.STAGE2_SCHEMA`, added to stage 1's v4 stores by `migrate`, `seen_at` as its own
+  addition):
+  - `txy_layers`: one row per folder and layer, `matlab` or `helab:<profile content hash>` (Q22.2), with
+    `tags` (names seen, display only), per-shot `entries` `[shot, size, mtime_ns, kind, seq, rows,
+    problematic, job_seq]`, sizes, `precision` (`g8` or `f64`), `maker`, `last_used`, and `gone_at` /
+    `seen_at` (the only-copy mark, by the time its evidence was taken, C2-10's rule; S2-2, S2-3). A listing
+    checks a raw-keyed entry against the raw files and a TXY-keyed one against its own layer's TXY only
+    (`mark_txy_seen`'s `present` by layer name; C-2, `49726d1`): HeLab's TXY of a shot never makes a `matlab`
+    layer recoverable, nor the reverse.
+    **Fingerprint kinds** (Q45.3): `raw` (the raw file's) for a HeLab shot whose raw file is listed, however
+    it was read; `txy` (the TXY file's) for every `matlab` shot and a HeLab shot without a raw file.
+  - `txy_segments`: a layer's append-only files (`txy/<uuid>.hlb`, `.hlb` kind `txy`,
+    `helab/convert/txy_layer.py`); the highest `seq` holding a shot wins; `live_shots` / `all_shots`.
+  - `txy_views`: what one source mode and tag loads for the folder (key `(path, identity source, tag)`; the
+    two priority modes share one), holding no data: each shot's layer and fingerprint and the layer entry key it was saved with
+    (`[…, layer, [size, mtime_ns, kind]]`; C-1, `0d2b9c7`), `problematic`,
+    `raw_times`, and the folder facts `datasets.info` held (listing, signature, TXY record). A view whose
+    layer entry is gone or doesn't match is incomplete, and those shots come from the next step of the
+    loading order: a shot whose entry another view's save replaced is left out of a cached read and read again
+    by a load (`read_txy_shots(keys=)`). A view saved before the key (five items) derives a MATLAB shot's key from
+    its TXY fingerprint; its HeLab shots serve no cached read and are read again once by its next load ("Cached
+    dataset invalid"), which saves the keys (PR #11's review, PR-1). Removing a layer deletes its folder's views (derived rows). A TXY list that isn't a mode
+    (Q53.2) has its own view, keyed by its text and its HeLab entries' profile hashes joined by `>`
+    (`txy_cache.view_key`). The view's TXY record of a list adds `entries`, `fallback_entries` and
+    `fallback` (the shots taken beyond the own list, Q55.2); `wanted_key`/`saved_wanted` include the
+    fallback, so a change to Settings' list is never taken as unchanged.
+  - `cache_policy` (`raw+used` | `raw` | `txy`, Q45.1) and `txy_source_prefs` (`source`, `tag`, Q45.2): the
+    folder's own choices, the user's state (Clear folder preferences resets them; Clear all keeps them).
+    `txy_source_prefs` holds a mode + tag or a list's text with tag "" (`txy_sources.folder_row`); no schema
+    change, and `set_txy_source_pref` refuses what is neither.
+  - `pending_saves.parts` (Q45.8) and `meta.gen_txy`; epochs `txy:<key>`.
+- **Saves** (`save_txy`, after `start_txy_job`): one unit per job, one transaction and one fit check: a new
+  segment per layer touched holding only its new or changed shots, the layer rows, the view. A shot's entry is
+  replaced only by a job with `job_seq` ≥ its own; segments left empty are retired. The **TXY guard** holds
+  `gen_txy`, `gen_datasets` (store-v4's `datasets` rows seed layers), the `txy:` epoch, the folder's and the
+  root's. `hold` (a plot's own load, never waiting); `seen_at` (the job's listing time). **The policy** is read
+  in the save's transaction (`policy_of`: the folder's row, else the request's `policy`, Settings' global
+  row): `raw` writes no HeLab layer, `txy` keeps no raw rows (`raw_fill` ends with reason `policy`,
+  conversions' `_RawRows` doesn't start). A policy decides only what new saves write. Loads never write
+  store-v4's `datasets` (Q45.4; `save_dataset` isn't refused there, tested).
+- **One waiting unit per folder** (Q45.8): a save over the budget becomes a pending row whose `parts` (one
+  segment per layer plus the view record) merge with a newer job's, layer by layer; `adopt_pending` applies
+  each part under its own guard, dropping a fenced part with its file. A merged unit keeps the later job's view
+  only. Raw stays never-pending (Q42.1).
+- **Compaction** (Q45.7, `compact_txy`, after any unit is saved, in the same job): a layer with more than 8
+  segments, or more than half its bytes superseded, is rewritten as one segment only if that fits beside the old
+  ones; otherwise it waits for a later save and never asks. Under the converter's `_Ticker`. The old segments
+  are retired and swept as any retired file.
+- **A40.3:** `confirm_view` writes only the view's signature and TXY record (`txy.folders` included) when
+  every shot is unchanged; nothing is rewritten.
+- **Make room and `trim`** (Q45.6, A42.2): one planner, `_free_space`, least recently used first within each
+  group, a whole row at a time, never the folder being saved, exact or rolled back: (1) store-v4 `datasets`
+  rows; (2) HeLab layers whose entries are raw-keyed with their raw rows held; (3) `matlab` and TXY-keyed
+  layers whose files were seen; (4) raw layers seen; (5) only copies, named. Items: the path for a dataset,
+  `txy:`, `txy-seen:`, `raw:`, `raw-only:`, `txy-only:<layer>:<path>` (`cache_store.room_items`, which the
+  dialog uses too). **`trim`** stops before group 5 unless given the plan the user was shown: `trim_plan`
+  (the admin's `trim` with `plan_only`) gives it, and `trim(…, expected)` removes exactly those items or
+  nothing (S2-1); `trim_estimate` is store-v3's.
+- **Clear:** `remove_txy` (admin `clear_txy`, `removed` kind `txy` with `layers` and `bytes`) joins Clear all,
+  `clear_root` and Don't cache's "remove cached data" (only copies kept, C2-9). A folder's Clear data cache
+  (`invalidate`, `clear_folder_data`) takes its layers, views and seen raw layers, only copies kept (S3-1).
+  **The purge by age** is per kind (A47.4, `5cbf1d4`, landed `1d91897`; Q47.1, Q50.12, Q50.13; the
+  [purge note](../sessions/2026-10-31-claude-caching-v2/design-purge.md)): `purge_cached(cutoff, kinds)` over
+  `PURGE_KINDS` (`datasets`, `txy`: TXY layers with their segments and their folders' views, `raw`: raw layers),
+  in one transaction with the same epochs and generations, taking only layers with `last_used < cutoff AND
+  gone_at IS NULL`, so only copies stay; `purge_datasets` takes datasets only; `purge_estimate(…, kinds=)` uses
+  the same comparison (C2S2-2's per-part counts). The helper's `purge` takes `what` from `PURGES` (`datasets`,
+  `txy`, `raw`, `records`, `results`, `all`); `all` takes every cached kind the store has, folder records (scan
+  failures only when asked) and cached analysis, sending each purge's `removed` events; the result's `bytes`
+  counts layers too, and an empty removal sends no event. store-v3 has only `datasets`. The inventory's `txy` (shots, folders, bytes, tags,
+  `only_copy_folders`) and `ages` (`txy`, `raw`) feed Settings › Cache.
+- **Seeds** (Q45.4, Q45.5): a folder with no view yet reuses store-v4's own `datasets` row, else store-v3's
+  under Keep (`LegacyStore.dataset_row`, `CacheStore.legacy_dataset`; never one store-v4 removed); the load's
+  save then writes them into the layers. **A42.1:** a store-v3 result `result_find` returns is copied into
+  v4 (`save_result(only_new=True)`, under the find's guard, within the budget, never over a newer one; the
+  event carries v4's `result_id`).
+- **The sweep, `_live`, the inventory and cache moves** cover `txy/` (segments named by a row or a waiting
+  part are kept; `cache_move` verifies `txy_segments`). **`rekey_subtree`** (a nested marker) moves raw
+  layers per shot and a folder's TXY layers, segments, views and choices as one set (S2-0).
+- **TXY only's offer** (stage 4, S4-1, Q50.9; `1ad31a9`, review fixes `73f49cb`, `3085e53`, `eb38718`; landed
+  `8071c04`): the admin's `folder_choice` with policy `txy` reports the folder's raw pulses
+  (`CacheStore.folder_raw`: shots, bytes, only copies) as `folder_raw`, and the app asks before `clear_raw` for
+  that folder; Settings' TXY only asks for the folders following the setting (`clear_raw` with `following`,
+  `CacheStore.remove_raw_following`: their raw layers, each folder's `raw:` epoch bumped). The inventory's raw
+  summary counts `following` by `remove_raw_following`'s own condition (`_FOLLOWING`: no policy of its own), so
+  the question names exactly what a yes removes. A policy change alone removes nothing (Q50.10); what users see:
+  [app-runtime-and-ui](app-runtime-and-ui.md).
+- **A new store opened by several helpers at once** (found by the switch-on run; `c06f342`, `768ac40`; store-v3
+  too): with store-v4 on, a first start opens the new store from several helpers together. `CacheStore._create`
+  checks the layout again under `BEGIN IMMEDIATE`, so only one runs the schema (store-v4's `ALTER TABLE … ADD
+  COLUMN maker` can't run twice: "duplicate column name: maker"; store-v3's schema is all `IF NOT EXISTS`). The
+  switch to WAL (`_wal`), which SQLite doesn't let wait `busy_timeout` ("database is locked" at once), is
+  skipped when the store is WAL already and otherwise retried on BUSY or LOCKED until `busy_timeout` (SR-1).
+- **Cached data in listings, scans and adopt** (`4afa96a`, SV-1 `48e3656`, `65ee050`): store-v4's
+  `read_dataset_infos` answers from the folder's view (`_view_infos`: the view `wanted` names, else the most
+  recently used; listings send none, so the latest), with that view's info, its layers' bytes, its RAM by the
+  share of the layers' shots it names, and its TXY bytes; a folder with only a stage 1 dataset (a seed) still
+  answers from that. So "disk cached", `cache_info`, badges, cache-first and offline browsing hold after a
+  restart. A scan's `cache_mismatch` reads `CacheStore.cached_matlab_shots` (the latest view's MATLAB shots),
+  and adopt's `cache_info` goes through `read_dataset_infos`. Each folder's view is parsed in its own try: a
+  damaged view is an error for that folder only (SV-1). A load of a TXY choice the folder has no view of yet
+  still says `disk_cached` when the folder has any view (`folder_views`; `had_dataset` unchanged), so an
+  eviction before its first save doesn't show the folder uncached (`65ee050`). Left on `datasets` on purpose:
+  the inventory's Cached data row and its purge (store-v4's own datasets are stage 1's seeds; layers have their
+  own rows and purges), Make room and `trim` (their layer groups), the file accounting (`_known_files`, `_live`,
+  `_dataset_bytes`), `cache_move`'s verify (covers `txy_segments`) and `txy_cache.Access` (store-v3, or seeds).
+- **Export** (A44.1): `helab cache export --folder F --kind txy [--layer matlab|<tag>|helab:<hash>]` writes the
+  layer's shots as `d_txy<N>.<ext>` (`t_s`, `x_m`, `y_m`); without `--layer`, the only layer, or a list of
+  them. A segment `.hlb` exports as one file with a `shot` column. Format: [`docs/hlb-format.md`](../../docs/hlb-format.md).
+
+### Convert on read (stage 3)
+
+Store-v4 only, the switch off (`912f928`, `4e86094`, `0cd133f`, `4e14535`, review fixes `97c2554`; landed
+`d4f28f3`; the [stage 3 note](../sessions/2026-10-31-claude-caching-v2/design-stage3.md); Q50.1–Q50.8). A load or
+Live check whose source reads HeLab's TXY converts in the helper a shot that has a raw file and no current HeLab
+text of the profile asked for, and saves only a TXY layer entry, kind `raw` (keyed by the raw file); a load alone
+never writes text or a raw row (R~1, R~2: `raw_fill` still fills the raw layer after it). The order per shot is its
+TXY layer, the raw layer, a current HeLab text, then converting the raw file (Q50.5). A raw layer is used only if
+`raw_layer.not_done` passes for the profile's trigger channel (`raw_fill` can't check it); otherwise the file is
+judged as `convert_raw_file` judges it (C-3, `eafc3fc`). A shot converts on read
+only when nothing in its list's chain has a TXY file of it, with the own list's first HeLab entry that can
+convert (Q55.1, Q55.2; landed `9bf99ff`). For the modes this is Q50.1 (a) (`ced04aa`): under HeLab priority only
+the shots MATLAB's TXY lacks; HeLab only always converts, MATLAB's sources never
+(`txy_sources.converts_over_matlab`; `CONVERT_OVER_MATLAB = True` would bring back converting over MATLAB's TXY).
+Live keeps a shot it converted on read as HeLab's (SQ-1, `9be3e12`). Mechanics:
+[io-and-browsing](io-and-browsing.md#loads-with-txy-layers), [converter](converter.md), [live](live.md).
+`tests/test_caching_v2_session.py`'s stage 3 session checks it with the switch on, beside store-v3
+([testing](testing.md)).
 
 ## Folder metadata and scan history
 

@@ -373,6 +373,7 @@ class PlotReopen(QObject):
         self._saved_text = read_setting(store, OPEN_PLOTS_SETTING, typed=True)
         self._stopped = False
         self._restoring = False
+        self._deferred = False  # Waiting for the Scripts panel's remembered folders (``restore``)
         # Plots that couldn't reopen, kept in the record (Keep, or not answered yet).
         self.kept: List[SavedPlot] = []
         # Asks Keep or Drop for these plots (names with why); ``answer`` takes the reply.
@@ -381,7 +382,14 @@ class PlotReopen(QObject):
         scripts.plotsChanged.connect(self.record)
 
     def restore(self) -> List[AnalysisInstance]:
-        """Open the plots recorded last time (if the setting says so); the plots opened."""
+        """Open the plots recorded last time (if the setting says so); the plots opened. While the Scripts
+        panel's remembered folders haven't loaded yet (they load once the window has shown), it waits for
+        them (``foldersRestored``), so plots of the user's scripts reopen too, and opens none now."""
+        if self.scripts.folders_pending and not self._stopped:
+            if not self._deferred:
+                self._deferred = True
+                self.scripts.foldersRestored.connect(self._folders_restored)
+            return []
         text, self._saved_text = self._saved_text, ""
         if not self.enabled or not text or self._stopped:
             return []
@@ -410,6 +418,14 @@ class PlotReopen(QObject):
             self.ask(names)
         self.record()
         return [instance for instance, _ in opened]
+
+    @pyqtSlot()
+    def _folders_restored(self) -> None:
+        try:
+            self.scripts.foldersRestored.disconnect(self._folders_restored)
+        except TypeError:
+            pass
+        self.restore()
 
     def _ask(self, names: List[str]) -> None:
         count = len(names)
@@ -447,6 +463,8 @@ class PlotReopen(QObject):
         being reopened, nor once HeLab quits)."""
         if self._stopped or self._restoring or sip.isdeleted(self.plots.middle_mainwindow):
             return
+        if self._deferred and self._saved_text:
+            return  # (Not reopened yet, waiting for the script folders: the record of last time stays.)
         instances = self.scripts.instances()
         try:
             arrangement = capture(self.plots, instances) if instances else Arrangement()

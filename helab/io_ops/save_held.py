@@ -5,12 +5,12 @@ import os
 import time
 from typing import Any, TYPE_CHECKING
 
-from helab.io_ops import fingerprints, helab_txy, infra
+from helab.io_ops import fingerprints, helab_txy, infra, txy_cache
 from helab.io_ops.events import RawMtimeField
 from helab.io_ops.fingerprints import _clock_ahead, _fingerprint_signature, _raw_list, _settled
 from helab.io_ops.identity import _folder_identity, _location_identity
 from helab.io_ops.infra import Emit, Heartbeat, Pause, _entry_stat, _is_dir, _read_gate, _scandir, _stat
-from helab.io_ops.loading import _save_failed, _write_dataset
+from helab.io_ops.loading import _dataset_info, _save_failed, _write_dataset
 from helab.io_ops.stores import _data_root, _open_store
 from helab.io_ops.summary import _summary
 from helab.utils import file_kinds, txy_sources
@@ -40,7 +40,8 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
     Except, by Tony's decision, the shots Live itself read recently (``recent``, as for
     ``live_check``): one of those that changed is read again before the save, if settled by age and
     unchanged while read (its new data sent as a ``shot`` artifact in ``output``; ``live_reread``),
-    else saved as held and counted as unsettled; it isn't a mismatch.
+    else saved as held and counted as unsettled; it isn't a mismatch. Nor is a held shot with no data (one
+    found unreadable, kept known): changed, it is read again the same way; gone, it is dropped.
 
     HeLab's TXY (Q6.6): a held shot read from one (``held_txy``: the held data's ``txy`` record) is
     checked against that TXY, found as a load finds it (``helab_txy``, the load's ``txy``), and the
@@ -52,9 +53,12 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
     store = _open_store(cache_options, send, path)
     try:
         guard: SaveGuard | None = None
+        txy_guard: SaveGuard | None = None
         if store is not None:
             try:
                 guard = store.start_dataset_job(path, ("summaries",))
+                if txy_cache.layered(store):  # (store-v4: the layers' and views' guard, stage 2.)
+                    txy_guard = store.start_txy_job(path)
             except StoreError as exc:
                 send({"kind": "cache_warning", "message": f"Disk cache can't be updated: {exc}"})
             prefs = store.read_prefs([path])[path]
@@ -73,9 +77,9 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         file_names: dict[int, str] = {}
         matlab: dict[int, str] = {}
         matlab_stats: dict[int, tuple[int, int]] = {}
-        beside_entries: dict[int, os.DirEntry[str]] = {}
+        beside: helab_txy.Beside = {}
         raw_entries: dict[int, os.DirEntry[str]] = {}  # For the times of shots read again.
-        found: dict[str, set[int]] = {}  # (For the summary of a save that reads shots again.)
+        found: dict[str, set[int]] = {}  # (For the save's summary.)
         has_dirs = False
         listed_at = time.time()
         beat = Heartbeat(send, "listing")
@@ -90,27 +94,38 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
                         matlab[matched[1]] = entry.path
                     elif matched[0] is file_kinds.RAW:
                         raw_entries[matched[1]] = entry
-                    elif matched[0] is file_kinds.HELAB_TXY and helab_txy.beside_wanted(entry.name, txy):
-                        beside_entries[matched[1]] = entry
+                    elif matched[0] is file_kinds.HELAB_TXY:
+                        helab_txy.add_beside(beside, entry.name, matched[1], entry, txy)
                 elif not has_dirs and _is_dir(entry):
                     has_dirs = True
         helab_key = helab_txy.store_key(store, path) or str(txy.get("key") or "")
         helab_state: list[list[Any]] = []
         helab_found: dict[int, helab_txy.HelabShot] = {}
+        listed_found: helab_txy.Found | None = None
         if txy_sources.wants_helab(txy_source):
             helab_state = helab_txy.folder_state(helab_txy.folders(path, txy, helab_key), listed_at)
             by_shot = {shot: (size, modified) for shot, size, modified in fingerprint}
             trusted = {shot: (*by_shot[shot], origin) for shot, origin in held_origins.items()}
-            helab_found = helab_txy.find(path, txy, helab_key, beside_entries, raw_entries, trusted,
-                                         helab_txy.could_take(txy_source, raw_entries, matlab, held_origins))
+            listed_found = helab_txy.find_list(path, txy, helab_key, beside, raw_entries, matlab, trusted,
+                                               held_origins)
+            helab_found = listed_found.texts()
         # Each shot's TXY as the source asks; a held one is checked against the kind it was read from (MATLAB's
         # too: "" its origin).
         held_kinds = {shot: held_origins.get(shot, "") for shot in known}
-        chosen = helab_txy.compose(txy_source, matlab, helab_found, held_kinds)
+        helab_chosen: dict[int, helab_txy.HelabShot] = {}
+        fell_back: set[int] = set()  # (Shots taken from beyond the list's own entries, Q~2.)
+        if listed_found is not None:
+            # (A save keeps every held shot's TXY while it is there; Live reads a reclaimed one again, TP-3.)
+            chosen, helab_chosen, fell_back = helab_txy.compose_list(listed_found, matlab, held_kinds,
+                                                                     reclaim=False)
+        else:
+            chosen = helab_txy.compose(txy_source, matlab, {}, held_kinds)
         origins = {shot: origin for shot, (_, origin) in chosen.items() if origin}
         for shot, (filename, origin) in chosen.items():
-            listed[shot] = matlab_stats[shot] if not origin else (helab_found[shot].size, helab_found[shot].mtime_ns)
-            file_names[shot] = filename if origin and shot not in beside_entries else os.path.basename(filename)
+            listed[shot] = (matlab_stats[shot] if not origin
+                            else (helab_chosen[shot].size, helab_chosen[shot].mtime_ns))
+            file_names[shot] = (filename if origin and not helab_txy.is_beside(beside, shot, filename)
+                                else os.path.basename(filename))
 
         def mismatch(reason: str, shots: list[int]) -> None:
             send({"kind": "shots_missing", "reason": reason, "missing": shots[:20], "missing_count": len(shots),
@@ -121,6 +136,14 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         held_helab = set(held_origins)
         helab_off = {shot for shot, size, modified in fingerprint
                      if shot in held_helab and listed.get(shot) != (size, modified)}
+        # Held shots with no data (unreadable when Live or a load read them, kept known) are no mismatch
+        # either, as for a Live check: one changed is read again like a new file, once settled (its writer
+        # paused past the settle time, then finished it), and one gone is dropped (area review io-4).
+        unread = {shot for shot in known - held_helab if not os.path.exists(os.path.join(held_dir, f"{shot}.npy"))}
+        if gone := unread - set(listed):
+            fingerprint = [entry for entry in fingerprint if entry[0] not in gone]
+            known -= gone
+            unread -= gone
         if missing := sorted(known - set(listed) - held_helab):
             mismatch("missing", missing)
             return
@@ -131,8 +154,8 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
                 return
         changed = [shot for shot, size, modified in fingerprint
                    if shot not in held_helab and listed[shot] != (size, modified)]
-        rereadable = {int(shot) for shot in recent or ()} if output else set()
-        if stale := [shot for shot in changed if shot not in rereadable]:
+        rereadable = {int(shot) for shot in recent or ()} | unread if output else set()
+        if stale := [shot for shot in changed if shot not in rereadable and shot not in unread]:
             mismatch("changed", stale)
             return
         data = {shot: np.load(os.path.join(held_dir, f"{shot}.npy"), allow_pickle=False)
@@ -154,8 +177,8 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         for item in items:
             shot = item[0]
             filename = os.path.join(path, file_names[shot])  # (HeLab's in their own folder: named in full.)
-            if shot not in settled:
-                unsettled += 1
+            if shot not in settled or shot not in rereadable:
+                unsettled += 1  # (Saved as held: an unreadable one with nowhere to put its new data.)
                 continue
             Pause.checkpoint(send)
             try:
@@ -199,9 +222,10 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         names = [file_names.get(shot) or txy_name(tag, shot) for shot, _, _ in fingerprint]
         saving = store is not None and guard is not None and not no_cache and bool(data)
         had_dataset = False
+        access = txy_cache.Access(store, txy_source, txy) if store is not None else None
         if saving:
-            assert store is not None
-            row = store.read_dataset_row(path)
+            assert access is not None
+            row = access.row(path)
             had_dataset = row.value is not None
         kept = sorted(set(data) - set(replaced))
         again = [entry for entry in reread if entry["read"]]
@@ -210,20 +234,23 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
         # Held shots keep their origin; one read again is the TXY chosen now.
         data_origins = {**{shot: origin for shot, origin in held_origins.items() if shot not in replaced},
                         **{shot: origins[shot] for shot in replaced if shot in origins}}
-        record = helab_txy.record(txy_source, data_origins, helab_found, held_record.get("profiles"), txy,
-                                  helab_state)
+        record = helab_txy.record(txy_source, data_origins, {**helab_found, **helab_chosen},
+                                  held_record.get("profiles"), txy,
+                                  helab_state, (), fell_back, {int(entry[0]) for entry in fingerprint})
         # The folder's MATLAB TXY as this data stands for them (``helab_txy.folder_print``, as Live's): its
         # summary's and its signature, so the tab finds it matches the folder.
         matlab_print = helab_txy.folder_print(fingerprint, data_origins,
                                               {shot: (shot, *matlab_stats[shot]) for shot in matlab_stats})
         signature = _fingerprint_signature([list(entry) for entry in matlab_print])
-        if replaced:
-            # A new fingerprint: the folder's summary as of this listing, before ``loaded``, as a Live
-            # check sends it (the app adopts it as Live's, so the folder's status matches the data).
-            summary = _summary(path, found, {file_kinds.TXY.name: sum(entry[1] for entry in matlab_print)}, has_dirs,
-                               False, matlab_print, listed_at)
-            summary["unsettled"] = unsettled
-            send({"kind": "scan_summary", "status": summary})
+        # The folder's summary as of this listing, before ``loaded``, as a Live check sends it: the app adopts
+        # it as Live's, so the folder's status matches the data, unless a newer listing ran (another tab's
+        # check, Refresh), whose status it keeps (``behind_listing``). Sent even when no shot was read again:
+        # the data's signature differs from such a listing's when the folder has shots Live hasn't read yet,
+        # and the save would otherwise be taken for an old load (area review io-3, 2026-10-31).
+        summary = _summary(path, found, {file_kinds.TXY.name: sum(entry[1] for entry in matlab_print)}, has_dirs,
+                           False, matlab_print, listed_at)
+        summary["unsettled"] = unsettled
+        send({"kind": "scan_summary", "status": summary})
         send({"kind": "load_source", "source": "updated", "cache_reason": ""})
         send({"kind": "loaded", "rows": sum(len(data[entry["shot"]]) for entry in again),
               "bytes": sum(data[entry["shot"]].nbytes for entry in again), "files": len(data),
@@ -241,8 +268,21 @@ def save_held(path: str, send: Emit, cache_options: dict[str, Any] | None, held:
               "folder_mtime_ns": None})
         if not saving:
             return
-        assert store is not None and guard is not None
+        assert store is not None and guard is not None and access is not None
         try:
+            if access.layered:
+                # (Live's save in store-v4: a segment of the shots its layers lack, one per save, Q45.7.)
+                if txy_guard is None:
+                    return
+                access.mark_seen(path, raw_entries, matlab,
+                                 {shot: found.profile_hash for shot, found in helab_found.items()}, listed_at)
+                access.write(path, txy_guard, data, fingerprint, problematic,
+                             _dataset_info(data, fingerprint, names, listed_at, counts, unsettled, had_dataset, None,
+                                           record, signature),
+                             txy_cache.entry_keys(fingerprint, data_origins, raw_entries), data_origins,
+                             _raw_list(times, (entry[0] for entry in fingerprint)), record, cache_options or {}, send,
+                             seen_at=listed_at)
+                return
             _write_dataset(store, path, guard, data, fingerprint, problematic, names, listed_at, counts, unsettled,
                            had_dataset, (cache_options or {}).get("budget"), (cache_options or {}).get("budget_set_at"),
                            send, times, txy_record=record, signature=signature)

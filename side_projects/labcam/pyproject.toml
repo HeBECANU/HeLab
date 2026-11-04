@@ -7,6 +7,7 @@ dependencies = [
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
     "plotly>=5.18",  # its plotly.min.js, served to the page for the history plots
+    "rapidocr-onnxruntime>=1.4",  # the wavemeter's OCR (Tesseract, if installed, only without it)
 ]
 
 [project.optional-dependencies]

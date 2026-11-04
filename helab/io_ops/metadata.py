@@ -59,6 +59,8 @@ def _read_saved(store: CacheStore, paths: list[str], send: Emit) -> dict[str, di
     subtrees = store.read_records("subtrees", paths)
     datasets = store.read_dataset_infos(paths)
     prefs = store.read_prefs(paths)
+    # store-v4: each folder's own cache policy and TXY source (A47.2), so Live and a first load follow them at once.
+    choices = store.read_folder_choices(paths)
     constants = store.read_constants(paths)
     saved: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
@@ -79,6 +81,10 @@ def _read_saved(store: CacheStore, paths: list[str], send: Emit) -> dict[str, di
         else:
             # The user's choices for this folder alone (never inherited).
             entry["prefs"] = prefs[path].value or {}
+        if choices[path].failed:
+            errors.append(choices[path].error)
+        elif choices[path].value is not None:
+            entry["choices"] = choices[path].value  # (Only when set: no key means the global choices.)
         if constants[path].failed:
             errors.append(constants[path].error)
         elif constants[path].value is not None:
@@ -132,6 +138,8 @@ def _send_saved(store: CacheStore | None, path: str, send: Emit) -> tuple[Any, d
         send({"kind": "subtree_cached", "subtree": saved["subtree"]})
     if "prefs" in saved:
         send({"kind": "folder_prefs", "path": path, "prefs": saved["prefs"]})
+    if "choices" in saved:
+        send({"kind": "folder_choices", "path": path, "choices": saved["choices"]})
     _send_constants(store, path, saved, send)
     return saved["scan_history"], saved
 

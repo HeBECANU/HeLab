@@ -56,7 +56,7 @@ def scan_folder(cache: FolderCache, path: str, children: list[str] | None = None
     cache.service.resultReady.emit(request, {"kind": "entries", "entries": [
         {"path": p, "modified": None} for p in (children or [])]})
     # A complete status, as a details scan or load supplies it: no step 2 follows.
-    cache.service.resultReady.emit(request, {"kind": "status", "status": "ok", "count": 1, "raw": [1], "details": True,
+    cache.service.resultReady.emit(request, {"kind": "status", "status": "ok", "count": 1, "raw": [1] if data else [], "details": True,
                                            "txy": [1] if data else [], "modified": 0, "signature": "v1"})
     cache.service.resultReady.emit(request, {"kind": "done"})
     retire(cache, request)

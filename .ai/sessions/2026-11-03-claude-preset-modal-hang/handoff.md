@@ -1,0 +1,104 @@
+# Handoff: the arrangement preset hang (`agent/preset-modal-hang`)
+
+Worker Lumen (claude, Opus 5.5), 2026-11-03, on the Live Scripts floor. Branch from `dev/v0.0.8` `db6b32e`. Brief
+(CoCo, in Chat):
+- **The hang:** on the switch-on branch (store-v4 the default), CI 41484277419, Ubuntu Tests 2/3, job 125410633098.
+  `tests/test_presets_plots.py::test_an_arrangement_preset_round_trips_every_bundled_script` hung on a modal
+  `QMessageBox.warning` ("Preset can't be read", from `read_arrangement`'s `RecordError`), raised right after the
+  test's simulated restart had re-read the presets. The worker was killed at 100 s.
+- **The asks:** find why `read_arrangement` raised and fix it, and add a `_warn` seam, so a test fails instead of
+  hanging.
+
+## Cause
+
+**The test's restart lost a preset write that was still owed. A47.5's format isn't at fault, and the app handles
+it.**
+
+- **Which error it was.** The job's log has no "Preset … can't be read" warning, which `read_arrangement` logs for a
+  record that can't be parsed. So the `RecordError` was "it isn't saved now": "all plots" wasn't in the store's
+  memory after the re-read.
+- **How a save can wait.** While the cache folder is being asked which store it holds (an identity probe, which
+  `FolderCache` starts when a helper's answer names another store than the one in use), `_write_presets` doesn't
+  write a change. It marks the change owed (`presets_unsaved[key] = ""`, `_presets_again = True`), starts no job,
+  and writes it once the probe answers.
+- **How the test lost it.** The test's `stored()` waited only for `presets_read and not _preset_jobs`. A save made
+  during a probe therefore passed `stored()` at once, the simulated restart (`get_io_service().shutdown()`) dropped
+  the owed write, and the re-read didn't find it. On CI, with store-v4 on and other tests' jobs answering late, a
+  probe at that moment is plausible. Locally the test passed 72 runs on `e4967ec` under load (24 copies, `-n 8`,
+  4 CPU hogs, 3 times).
+- **The app is fine.** A real quit waits for an owed write: `presets_saving()` covers `_presets_again`, and the quit
+  window holds it.
+
+## Fix (tests, plus a seam in the app)
+
+- **`stored()`** (in `tests/test_presets_plots.py`) also waits for `not _presets_again and not _probe_owner`.
+- **`restart_presets`** asserts `not presets_saving()` before it shuts the helpers down, so a lost write fails the
+  test there.
+- **The seam:** `helab/views/plots/presets.py` gains `warning_box(parent, title, text)`, a module function that
+  `ArrangementPresets._warn` calls by its module name. That is the plots area's only static modal. An autouse
+  fixture in `test_presets_plots.py`, `no_modal_warnings`, replaces it with one that raises
+  `AssertionError("a modal warning would wait here: …")`. A test that expects a warning still sets
+  `presets.warn`, as before.
+
+## Tests (each run on `db6b32e`'s code too)
+
+| Test | Before | Now |
+|---|---|---|
+| `test_an_arrangement_saved_while_the_store_is_probed_survives_a_restart`: save while a probe is out (owed, no job); the probe answers 0.5 s later; restart; apply | fails with CI's message: "The preset “probed” can't be read (it isn't saved now)" | passes |
+| `test_an_unexpected_preset_warning_fails_the_test_instead_of_waiting`: `apply` of a preset never saved | **hangs on the modal**, until a 20 s timeout | raises with the warning's text |
+
+## Checks
+
+- **Full suite** (`-n 4 --reruns 5 --reruns-delay 1`): 9159 passed, 673 skipped, **no RERUN**.
+- **Type checks:** the five are clean.
+- **CI:** CI: run 41490372206 on `142e192`, success. I read all twelve Tests (three groups, three OSes) and Converter
+backends logs. Ten had 0 RERUN. Two Windows jobs had 1 rerun each, both unrelated to this change, both passed
+on retry:
+  - **Windows Tests (3/3)** (job 125431695003):
+    `test_release_recovery.py::test_detached_pr_stamp_records_source_branch_and_merge_ref_without_replacing_commit`,
+    `assert 'unknown' == 'detached'`. This is QF9's open known-issues proposal.
+  - **Windows Tests (1/3)** (job 125431695082):
+    `test_plot_backends.py::test_2d_plots_draw_with_every_library[values1-Plotly-CountsPerShot]`, "worker 'gw2'
+    crashed". This is the known-issues entry for that test, and `dev/v0.0.8`'s `b0eb914` ("a Plotly plot no
+    longer aborts its worker") fixes it. `b0eb914` came after this branch's base, `db6b32e`, so a merge with
+    `dev/v0.0.8` brings the fix in.
+
+## Proposals (provisional)
+
+- **A~1:** other tests that make a real "restart" (shut the helpers down) should wait for owed writes the same way.
+  A shared helper in `tests/` would do it (`testing.md`).
+- **A~2:** a guard against other modals no test closes. The presets have three more defaults that open
+  real dialogs unless a test stubs them: `presets.ask_name` (`QInputDialog`), `presets.replace_or_add` (a
+  Replace / Add / Cancel `QMessageBox`, `exec`) and `presets.confirm` (`QMessageBox`, `exec`). `PresetBar`
+  and `ArrangementPresets` take them as instance attributes (`self.ask_name`, `self.confirm`,
+  `self.replace_or_add`). Today the tests stub them per instance (`presets_for`). A test that forgets one
+  hangs as this one did. Proposed: make them fail in `conftest.py` the way `warning_box` now does, after
+  checking that every test that reaches them stubs them. A broader option is a conftest guard on
+  `QMessageBox.exec` / `QDialog.exec` that fails unless a test allows it.
+
+## Review fix (Prismo, `498c584`: L1)
+
+`no_modal_warnings` moved from `test_presets_plots.py` into `tests/conftest.py`, autouse for every test, so
+an unexpected `warning_box` fails fast in every file. Before, `test_presets_window.py` and
+`test_preset_folder_live.py` apply arrangement presets without it. A test that expects a warning sets the
+presets' `warn`, or patches `warning_box` itself.
+
+- **New test:** `test_presets_window.py::test_applying_a_missing_preset_in_the_window_fails_fast_instead_of_waiting`
+  applies a preset never saved in a real `HelabMainWindow`, and fails with the warning's text.
+- **Checked against the old conftest:** without the fixture, the test hung on the modal until I killed it.
+- **Checks:** full suite 9160 passed, 673 skipped, **no RERUN**; the five type checks clean. CI: run 41500431969 on `767418c`.
+  - **Attempt 1 failed.** Windows Converter backends (job 125466332080) had **1 failed after 5 reruns**, and
+    Windows Tests (3/3) (job 125466332092) **4 reruns, passed**, all in one converter test that this change
+    doesn't touch: `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer missing its window]`,
+    `IndexUnavailable: HeLab's TXY index couldn't be written/opened (database is locked) (… SQLITE_BUSY) … attempt
+    4`. That is SQLite contention on the converted-TXY index, outlasting the test's own retry (`324ad79`). The
+    other ten jobs: 0 RERUN.
+  - **Attempt 2** (the failed job re-run; the others copied, with new IDs): success. The Windows Converter
+    backends job (125473590950) had **1 rerun**, the same test and error (shot 134), and passed on retry. I read
+    all twelve logs; the copies match attempt 1.
+  - The same test passed in this branch's previous run (41490372206) and in `dev/v0.0.8`'s latest Windows jobs
+    (41498972254), and it is not in known-issues.
+  - Proposed entry (A~3): "[ ] `test_convert_helab.py::test_two_writers_side_by_side_lose_nothing[a writer
+    missing its window]` on Windows CI: SQLITE_BUSY on the converted-TXY index past its 4 attempts
+    (`agent/preset-modal-hang` CI 41500431969: failed in Converter backends after 5 reruns, 4 reruns in Tests
+    3/3; attempt 2, 1 rerun). The converter area's: a longer busy wait, or the test's writers further apart."

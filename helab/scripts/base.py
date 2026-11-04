@@ -1,3 +1,15 @@
+"""The script contract: the base classes every HeLab analysis script derives from.
+
+A script is a Python file whose class derives from ``DatasetAnalysis`` (an analysis of one
+loaded dataset) and names itself with ``ScriptMetadata``. HeLab lists its actions in the Scripts
+panel; running one calls ``compute`` on the analysis worker thread with an ``AnalysisContext``
+(the read-only ``DatasetView`` and the effective parameters), then ``render`` on the GUI thread to
+draw the result in a plot dock. Every other method has a default, so a script overrides only what
+it needs.
+
+This module imports no Qt at run time (``tests/test_headless_imports.py``): a script's
+``compute`` and its tests run without a display.
+"""
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -21,10 +33,29 @@ if TYPE_CHECKING:
 # read: about a fifth of a 1080-pixel screen's height. Scripts with more in a plot (stacked
 # plots, long titles) ask for more (``DatasetAnalysis.minimum_size``); not a user setting.
 PLOT_MINIMUM_SIZE = (200, 200)
+"""A plot's least size in its dock, (width, height) in Qt's logical pixels; the default of
+``DatasetAnalysis.minimum_size``."""
 
 @dataclass
 class ScriptMetadata:
-    """Metadata for a HeLab analysis script"""
+    """Metadata for a HeLab analysis script.
+
+    Attributes:
+        name: What the Scripts panel and the plot dock call the script.
+        description: One sentence on what it shows, for the Scripts panel's tooltip.
+        group: The Scripts panel section it is listed under.
+        file_path: The script's file.
+        script_id: The ID HeLab gives the loaded script, ``<file path>::<class name>`` (""
+            until it is loaded).
+        analysis_id: A stable ID that never changes, across renames and versions; results
+            record it.
+        version: A version the author bumps whenever the output changes; results record it
+            beside the ID.
+        file_hash: SHA-256 of the script file as loaded (set by HeLab; "" if unreadable). When
+            the folder has helper modules the scripts import, it is instead a SHA-256 of the
+            file's hash and every helper's path and hash, so a change to a helper counts too; it
+            then differs from the file's own SHA-256.
+    """
     name: str
     description: str
     group: str
@@ -37,28 +68,50 @@ class ScriptMetadata:
     file_hash: str = ""
 
     def identity(self) -> AnalysisIdentity:
+        """What a result records about the script that made it.
+
+        Returns:
+            The analysis ID (else the script ID, else the name), the version, the file's name
+            and its hash.
+        """
         return AnalysisIdentity(self.analysis_id or self.script_id or self.name, self.version,
                                 file_name(self.file_path), self.file_hash)
 
 class HelabAnalysisScript(ABC):
     """Base class for HeLab analysis scripts.
 
-    All analysis scripts must inherit from this class and implement its methods.
+    All analysis scripts must inherit from this class and implement its methods. A script of
+    loaded data derives from ``DatasetAnalysis``, which implements ``execute_action``.
     """
 
     @abstractmethod
     def get_metadata(self) -> ScriptMetadata:
-        """Return metadata about the script"""
+        """Return metadata about the script.
+
+        Returns:
+            Its name, description, group and file, with its ``analysis_id`` and ``version``
+            (``create_metadata`` builds one).
+        """
         pass
 
     @abstractmethod
     def get_actions(self) -> List[str]:
-        """Return list of available action names"""
+        """Return list of available action names.
+
+        Returns:
+            The actions the Scripts panel lists under the script; each is passed back as
+            ``action_name`` to every other method.
+        """
         pass
 
     @abstractmethod
     def execute_action(self, action_name: str, **kwargs: Any) -> None:
-        """Execute a named action with optional parameters"""
+        """Execute a named action with optional parameters.
+
+        Args:
+            action_name: One of ``get_actions``.
+            **kwargs: The action's inputs.
+        """
         pass
 
     @classmethod
@@ -69,7 +122,19 @@ class HelabAnalysisScript(ABC):
                        file_path: str,
                        analysis_id: str = "",
                        version: str = "") -> ScriptMetadata:
-        """Helper to create metadata object"""
+        """Helper to create metadata object.
+
+        Args:
+            name: What the Scripts panel calls the script.
+            description: One sentence on what it shows.
+            group: The Scripts panel section it is listed under.
+            file_path: The script's file (``__file__``).
+            analysis_id: A stable ID that never changes.
+            version: The version, bumped whenever the output changes.
+
+        Returns:
+            The script's ``ScriptMetadata``.
+        """
         return ScriptMetadata(
             name=name,
             description=description,
@@ -106,7 +171,11 @@ class DatasetAnalysis(HelabAnalysisScript):
     """
 
     def parameters(self, action_name: str) -> List[ParameterSpec]:
-        """The action's parameters (defaults, limits, units)."""
+        """The action's parameters (defaults, limits, units).
+
+        The plot's settings show them as a tree, and ``compute`` gets their values, checked and
+        clamped (``ParameterSpec.coerce``), in ``context.parameters``. Default: none.
+        """
         return []
 
     def describe_run(self, action_name: str, values: Mapping[str, Any], view: DatasetView) -> tuple[str, str]:
@@ -206,11 +275,30 @@ class DatasetAnalysis(HelabAnalysisScript):
 
     @abstractmethod
     def compute(self, action_name: str, context: AnalysisContext) -> Any:
-        """The numerical result (no Qt). Check ``context.cancelled()`` in long loops."""
+        """The numerical result (no Qt). Check ``context.cancelled()`` in long loops.
+
+        Runs on the analysis worker thread. It reads the data only from ``context.view`` and
+        never changes its arrays (copy one first).
+
+        Args:
+            action_name: The action the user ran (one of ``get_actions``).
+            context: The view, the effective parameter values and the run's constants.
+
+        Returns:
+            Anything ``render`` can draw; HeLab keeps it as the result's ``data``.
+        """
 
     @abstractmethod
     def render(self, result: AnalysisResult, parent: Optional[QWidget] = None) -> QWidget:
-        """The plot for a completed result (GUI thread)."""
+        """The plot for a completed result (GUI thread).
+
+        Args:
+            result: The completed run; ``result.data`` is what ``compute`` returned.
+            parent: The widget the plot goes in, if any.
+
+        Returns:
+            The widget the plot dock shows.
+        """
 
     def backends(self, action_name: str) -> Sequence[str]:
         """The plotting libraries (``helab.analysis.backends``) this action's plot can be drawn
@@ -278,6 +366,15 @@ class DatasetAnalysis(HelabAnalysisScript):
         return False
 
     def execute_action(self, action_name: str, **kwargs: Any) -> None:
+        """Run ``compute`` directly, outside the Scripts panel (its result isn't kept).
+
+        Args:
+            action_name: The action to run.
+            **kwargs: ``context``, the ``AnalysisContext`` to run on.
+
+        Raises:
+            ValueError: No ``context`` was given: the analysis needs loaded data.
+        """
         context = kwargs.get("context")
         if not isinstance(context, AnalysisContext):
             raise ValueError(f"{action_name} needs loaded data: run it from the Scripts panel")

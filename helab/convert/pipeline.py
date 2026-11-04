@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import time
 
 from helab.convert.profile import DetectorProfile
-from helab.convert.raw import parse_raw
+from helab.convert.raw import ReadStop, parse_raw
 from helab.convert.reconstruct import DEFAULT_BACKEND, reconstruct
 from helab.convert.split import reconstruct_split
 from helab.convert.txy import format_txy
@@ -38,12 +38,15 @@ def convert_raw(data: bytes, profile: DetectorProfile, backend: str = DEFAULT_BA
 
 @dataclass(frozen=True)
 class Converted:
-    """A shot converted for HeLab: its TXY bytes (empty for no hits), hit count and seconds per step."""
+    """A shot converted for HeLab: its TXY bytes (empty for no hits), hit count and seconds per step;
+    ``read_stop``: where the raw file's read stopped before its end, as MATLAB's textscan stops (A37.1;
+    the TXY holds the hits of the rows before it), None when it read to the end."""
     txy: bytes
     hits: int
     parse_seconds: float
     reconstruct_seconds: float
     format_seconds: float
+    read_stop: ReadStop | None = None
 
 
 def convert_shot(data: bytes, profile: DetectorProfile, backend: str = APP_BACKEND, *,
@@ -61,4 +64,5 @@ def convert_shot(data: bytes, profile: DetectorProfile, backend: str = APP_BACKE
     reconstructed = time.perf_counter()
     txy = format_txy(hits)
     return Converted(txy=txy, hits=int(hits.shape[0]), parse_seconds=parsed - started,
-                     reconstruct_seconds=reconstructed - parsed, format_seconds=time.perf_counter() - reconstructed)
+                     reconstruct_seconds=reconstructed - parsed, format_seconds=time.perf_counter() - reconstructed,
+                     read_stop=pulses.stop)

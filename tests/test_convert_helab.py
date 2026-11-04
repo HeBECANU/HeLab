@@ -15,6 +15,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator
@@ -218,6 +219,30 @@ def test_write_atomic_calls_before_rename_with_the_files_stat(tmp_path: Path) ->
     assert target.read_bytes() == b"new\n" and [path.name for path in folder.iterdir()] == [target.name]
 
 
+def test_write_atomic_calls_after_rename_between_the_rename_and_the_folders_fsync(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A19.2: ``after_rename`` (a converter lets go of the index's lock there) runs once the file is in
+    place and before the folder's fsync; without it nothing changes. Raising, the file stays."""
+    folder = tmp_path / "out"
+    folder.mkdir()
+    target = folder / "d_txy_helab_m19v1_1.txt"
+    order: list[str] = []
+    monkeypatch.setattr(txy, "_fsync_folder", lambda folder: order.append("fsync"))
+    txy.write_atomic(target, b"new\n")
+    assert target.read_bytes() == b"new\n" and order == ["fsync"]
+    order.clear()
+    txy.write_atomic(target, b"again\n", before_rename=lambda info: order.append("before"),
+                     after_rename=lambda: order.append("after: " + target.read_text().strip()))
+    assert order == ["before", "after: again", "fsync"]
+    order.clear()
+
+    def raises() -> None:
+        raise RuntimeError("after the rename")
+    with pytest.raises(RuntimeError, match="after the rename"):
+        txy.write_atomic(target, b"third\n", after_rename=raises)
+    assert target.read_bytes() == b"third\n" and order == [] and [path.name for path in folder.iterdir()] == [target.name]
+
+
 def test_write_atomic_without_replace_never_touches_an_existing_file(tmp_path: Path) -> None:
     target = tmp_path / "d_txy_helab_m19v1_1.txt"
     txy.write_atomic(target, b"new\n", replace=False)
@@ -408,6 +433,183 @@ def test_done_shots_whose_txy_went_convert_again(source: Path, tmp_path: Path, p
     elsewhere = again(cleared, "temp")
     assert sorted(event["shot"] for event in of(elsewhere, "shot_converted")) == [1, 2]
     assert of(again(elsewhere, "temp"), "shot_converted") == []
+
+
+# The Clear fence (A19.2): Settings › Cache's Clear never leaves a TXY a running conversion wrote.
+
+def temp_base(tmp_path: Path) -> str:
+    """The temp folder's ``converted-txy`` (``request_for``'s destination)."""
+    return str(tmp_path / "temps" / convert.FOLDER_NAME)
+
+
+def reasons(events: list[dict[str, Any]]) -> dict[int, str]:
+    return {event["shot"]: event["reason"] for event in of(events, "shot_waiting")}
+
+
+def test_a_clear_after_a_conversion_started_refuses_its_rows_and_its_shots_wait(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fence moved before the row: nothing is written, the shot waits (``cleared``) and so does every
+    shot after it, unread; the next check converts them."""
+    write_raw(source, 1, raw_bytes(10_000))
+    assert [event["shot"] for event in of(run(source, request_for(source, tmp_path)), "shot_converted")] == [1]
+    for shot in (2, 3):
+        write_raw(source, shot, raw_bytes(10_000 * shot))
+    fence_of = provenance.fence_of
+
+    def then_cleared(root: str) -> str:
+        token = fence_of(root)
+        helab_txy.clear_converted(root)  # (The user clears just after the conversion started.)
+        return token
+    monkeypatch.setattr(provenance, "fence_of", then_cleared)
+    events = run(source, request_for(source, tmp_path, shots=[2, 3]))
+    monkeypatch.undo()
+    folder = of(events, "convert_plan")[0]["folder"]
+    assert of(events, "shot_converted") == [] and reasons(events) == {2: convert.CLEARED, 3: convert.CLEARED}
+    assert summary(events)["converted"] == 0 and of(events, "convert_progress")[-1]["raw_bytes"] == 0  # (Unread.)
+    assert not os.path.isdir(folder) or os.listdir(folder) == []  # (Shot 1's TXY cleared; none written after.)
+    assert index_rows(folder) == {}
+    assert provenance.read_shots(temp_base(tmp_path), os.path.basename(folder)) == {}
+    later = run(source, request_for(source, tmp_path, seen=summary(events)["waiting"], shots=[2, 3]))
+    assert sorted(event["shot"] for event in of(later, "shot_converted")) == [2, 3]
+
+
+@pytest.mark.parametrize("order", ["before the lock", "while the rename holds it"])
+def test_a_clear_between_the_row_and_the_rename(source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                order: str) -> None:
+    """CoCo's case: the Clear lands after the shot's row is written. Before the rename's lock: the
+    rename is refused (no TXY, the row forgotten). While the lock is held: the Clear waits for the
+    rename and then removes the TXY with its row. Either way nothing is left, and the next shot waits
+    unread."""
+    for shot in (1, 2):
+        write_raw(source, shot, raw_bytes(10_000 * shot))
+    base = temp_base(tmp_path)
+    hold, release = provenance.TxyIndex.hold, provenance.TxyIndex.release
+    clearing: list[threading.Thread] = []
+    cleared: list[bool] = []
+
+    def then_clear(self: provenance.TxyIndex, fence: str) -> None:
+        if cleared:
+            return hold(self, fence)
+        cleared.append(True)
+        if order == "before the lock":
+            helab_txy.clear_converted(base)
+            return hold(self, fence)  # (Refused: Cleared.)
+        hold(self, fence)
+        clear = threading.Thread(target=helab_txy.clear_converted, args=(base,), daemon=True)
+        clearing.append(clear)
+        clear.start()
+        time.sleep(0.5)
+        # Held off by the lock: its token isn't set until the rename is done.
+        assert clear.is_alive() and provenance.fence_of(base) == fence
+        return None
+
+    def then_done(self: provenance.TxyIndex) -> None:
+        release(self)
+        while clearing:  # (The Clear then runs to its end before the next shot.)
+            clearing.pop().join(30)
+    monkeypatch.setattr(provenance.TxyIndex, "hold", then_clear)
+    monkeypatch.setattr(provenance.TxyIndex, "release", then_done)
+    events = run(source, request_for(source, tmp_path))
+    monkeypatch.undo()
+    assert cleared and not clearing
+    folder = of(events, "convert_plan")[0]["folder"]
+    converted = [event["shot"] for event in of(events, "shot_converted")]
+    assert converted == ([] if order == "before the lock" else [1])
+    assert reasons(events) == ({1: convert.CLEARED, 2: convert.CLEARED} if order == "before the lock"
+                               else {2: convert.CLEARED})
+    assert not os.path.isdir(folder) or os.listdir(folder) == []
+    assert index_rows(folder) == {}
+    later = run(source, request_for(source, tmp_path, seen=summary(events)["waiting"]))
+    assert 2 in [event["shot"] for event in of(later, "shot_converted")]
+
+
+def test_a_clear_still_running_leaves_a_later_conversions_temporary_alone(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S0-1 (Assay): a conversion that starts after a Clear set its token, while the Clear is still
+    removing, isn't broken mid-write: Clear leaves temporaries under ``PARTIAL_MAX_AGE`` (A~1), so the
+    TXY is written and Live's auto-convert goes on. (Before, Clear took the temporary, the rename raised
+    FileNotFoundError while the token was the conversion's own, and the conversion ended in an error.)"""
+    for shot in (1, 2):
+        write_raw(source, shot, raw_bytes(10_000 * shot))
+    run(source, request_for(source, tmp_path, shots=[1]))  # (The base's index exists, as after any conversion.)
+    base = temp_base(tmp_path)
+    fence_of, record = provenance.fence_of, provenance.TxyIndex.record
+    set_fence = provenance.TxyIndex.set_fence
+
+    def after_the_clears_token(root: str) -> str:
+        with provenance.open_index(root, write=True) as index:
+            set_fence(index, time.time())  # (The Clear's first step, just before this conversion starts.)
+        return fence_of(root)
+
+    def clear_meanwhile(self: provenance.TxyIndex, *args: Any, **kwargs: Any) -> None:
+        # The rest of that Clear runs while this conversion's temporary is on disk (its token is set).
+        monkeypatch.setattr(provenance.TxyIndex, "set_fence", lambda index, now: "")
+        helab_txy.clear_converted(base)
+        monkeypatch.setattr(provenance.TxyIndex, "set_fence", set_fence)
+        record(self, *args, **kwargs)
+    monkeypatch.setattr(provenance, "fence_of", after_the_clears_token)
+    monkeypatch.setattr(provenance.TxyIndex, "record", clear_meanwhile)
+    events = run(source, request_for(source, tmp_path, shots=[2]))
+    monkeypatch.undo()
+    [converted] = of(events, "shot_converted")
+    assert converted["shot"] == 2 and Path(converted["txy"]).exists() and reasons(events) == {}
+    assert not (Path(converted["txy"]).parent / provenance.txy_name("m19v1", 1)).exists()  # (Cleared.)
+
+
+def test_a_busy_lock_for_the_rename_fails_the_conversion_and_loses_no_txy(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rename's lock busy past ``BUSY_SECONDS``: ``IndexUnavailable`` as for any index write, and
+    the conversion is tried again. The TXY already there stays as it was, no temporary is left, and
+    the row (if it couldn't be forgotten) matches no TXY: the shot converts again."""
+    write_raw(source, 1, raw_bytes(10_000))
+    [first] = of(run(source, request_for(source, tmp_path)), "shot_converted")
+    before = Path(first["txy"]).read_bytes()
+    age(Path(first["txy"]), 600)
+    base = temp_base(tmp_path)
+    record = provenance.TxyIndex.record
+    holder: list[sqlite3.Connection] = []
+
+    def then_busy(self: provenance.TxyIndex, *args: Any, **kwargs: Any) -> None:
+        record(self, *args, **kwargs)
+        other = sqlite3.connect(os.path.join(base, provenance.INDEX_NAME), isolation_level=None)
+        other.execute("BEGIN IMMEDIATE")  # (Another process's write, past the timeout.)
+        holder.append(other)
+    monkeypatch.setattr(provenance.TxyIndex, "record", then_busy)
+    monkeypatch.setattr(provenance, "BUSY_SECONDS", 0.3)
+    try:
+        with pytest.raises(provenance.IndexUnavailable, match="couldn't be locked"):
+            run(source, request_for(source, tmp_path, redo="always"))
+    finally:
+        for other in holder:
+            other.close()
+    monkeypatch.undo()
+    assert Path(first["txy"]).read_bytes() == before
+    assert [path.name for path in Path(first["txy"]).parent.iterdir()] == [Path(first["txy"]).name]
+    assert [event["shot"] for event in of(run(source, request_for(source, tmp_path)), "shot_converted")] == [1]
+
+
+def test_the_fence_table_is_added_within_schema_1(tmp_path: Path) -> None:
+    """An additive table keeps ``user_version`` 1 (convert-3: HeLab 0.0.7a1 sets a newer index aside):
+    an index made before it reads as never cleared, and its first Clear adds the table."""
+    root = str(tmp_path / "converted-txy")
+    with provenance.open_index(root, write=True) as index:
+        index.conn.execute("DROP TABLE fence")  # (As 0.0.7a1 made it.)
+        assert index.fence() == provenance.NO_FENCE == provenance.fence_of(root)
+        index.record("f", "", "/src", provenance_record(), 1.0, fence=provenance.NO_FENCE)
+        token = index.set_fence(2.0)
+        assert token != provenance.NO_FENCE and index.fence() == token == provenance.fence_of(root)
+        with pytest.raises(provenance.Cleared):
+            index.record("f", "", "/src", provenance_record(shot=2), 3.0, fence=provenance.NO_FENCE)
+        with pytest.raises(provenance.Cleared):
+            index.hold(provenance.NO_FENCE)
+        assert not index.conn.in_transaction
+        index.hold(token)
+        assert index.conn.in_transaction
+        index.release()
+        assert not index.conn.in_transaction
+        index.release()  # (Nothing held: nothing.)
+    assert provenance.index_schema(root) == provenance.SCHEMA == 1
+    assert set(index_rows(Path(root) / "f")) == {(provenance_record().profile_tag, provenance_record().shot)}
 
 
 def test_files_that_may_still_be_written_wait(source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -624,6 +826,32 @@ def test_workers_give_the_same_bytes(source: Path, tmp_path: Path) -> None:
     assert of(events, "convert_plan")[0]["workers"] == 3
     converted = {event["shot"]: Path(event["txy"]).read_bytes() for event in of(events, "shot_converted")}
     assert converted == {shot: convert_raw(data, MATLAB_2019, "reference") for shot, data in datas.items()}
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_read_stopped_early_is_said_with_its_line(source: Path, tmp_path: Path, workers: int,
+                                                    caplog: pytest.LogCaptureFixture) -> None:
+    """A raw file with a line textscan can't read converts as MATLAB's reading does (the hits before it), and
+    its ``shot_converted`` says where the read stopped (A37.1), from a worker too; ``helab convert`` logs it."""
+    from helab import convert_cli
+    good = raw_bytes(10_000, 50_000)
+    garbage = good + b"2,145062644not,a,number\r\n" + raw_bytes(90_000)[len(b"5,1000\r\n"):]
+    write_raw(source, 1, good)
+    write_raw(source, 2, garbage)
+    events = run(source, request_for(source, tmp_path, workers=workers))
+    converted = {event["shot"]: event for event in of(events, "shot_converted")}
+    assert converted[1]["read_stop"] is None
+    stop = converted[2]["read_stop"]
+    assert stop == {"line": 10, "offset": len(good) + len(b"2,145062644"), "text": "not,a,number",
+                     "unread": len(garbage) - len(good) - len(b"2,145062644")}
+    assert Path(converted[2]["txy"]).read_bytes() == convert_raw(garbage, MATLAB_2019, "reference")
+    assert converted[2]["hits"] == 2  # (The hit after the line isn't read, as MATLAB.)
+    log = convert_cli._Log()
+    with caplog.at_level("INFO", logger="helab.convert"):
+        for event in events:
+            log(event)  # type: ignore[arg-type]
+    [warning] = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert warning.startswith('d2.txt: read stopped at line 10, at "not,a,number"') and warning.isascii()
 
 
 def test_one_large_shot_is_cut_into_pieces_and_stays_byte_identical(source: Path, tmp_path: Path,
@@ -1101,11 +1329,12 @@ def test_a_write_killed_after_its_row_is_converted_again(source: Path, tmp_path:
         request = request_for(source, tmp_path, redo="always")
     original = txy.write_atomic
 
-    def killed(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None) -> None:
+    def killed(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None,
+               after_rename: Any = None) -> None:
         def then_killed(info: os.stat_result) -> None:
             before_rename(info)
             raise KeyboardInterrupt  # (Killed between the row and the rename.)
-        original(path, data, replace=replace, before_rename=then_killed)
+        original(path, data, replace=replace, before_rename=then_killed, after_rename=after_rename)
     monkeypatch.setattr(txy, "write_atomic", killed)
     monkeypatch.setattr(provenance.TxyIndex, "forget", lambda *args: False)  # (A kill runs no clean-up.)
     with pytest.raises(KeyboardInterrupt):
@@ -1128,15 +1357,24 @@ def test_a_failed_write_removes_its_row_only_if_still_its_own(source: Path, tmp_
     original = txy.write_atomic
     theirs = provenance_record(shot=1, txy_name="d_txy_helab_m19v1_1.txt", txy_sha256="theirs")
 
-    def failing(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None) -> None:
+    def failing(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None,
+                after_rename: Any = None) -> None:
         def then_fail(info: os.stat_result) -> None:
             before_rename(info)
-            if overtaken:  # Another conversion writes its own row meanwhile: it stands.
-                with provenance.open_index(str(folder.parent), write=True) as index:
-                    index.record(folder.name, "", str(source), theirs, 1.0)
             raise OSError(28, "No space left on device")
-        original(path, data, replace=replace, before_rename=then_fail)
+        original(path, data, replace=replace, before_rename=then_fail, after_rename=after_rename)
+    release = provenance.TxyIndex.release
+
+    def then_theirs(self: provenance.TxyIndex) -> None:
+        """Another conversion's row lands meanwhile: once the failed write let go of the index's lock
+        (A19.2), before it forgets its row. It stands."""
+        held = self._held
+        release(self)
+        if held and overtaken:
+            with provenance.open_index(str(folder.parent), write=True) as index:
+                index.record(folder.name, "", str(source), theirs, 1.0)
     monkeypatch.setattr(txy, "write_atomic", failing)
+    monkeypatch.setattr(provenance.TxyIndex, "release", then_theirs)
     for overtaken in (False, True):
         with pytest.raises(OSError, match="No space"):
             run(source, request_for(source, tmp_path))
@@ -1392,7 +1630,8 @@ def test_a_lost_beside_race_leaves_the_other_conversions_record(source: Path, tm
     original = txy.write_atomic
     rival_row = True
 
-    def raced(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None) -> None:
+    def raced(path: Any, data: bytes, *, replace: bool = True, before_rename: Any = None,
+              after_rename: Any = None) -> None:
         def then_theirs(info: os.stat_result) -> None:
             before_rename(info)
             # The other conversion: its row and then its TXY land between ours.
@@ -1400,7 +1639,7 @@ def test_a_lost_beside_race_leaves_the_other_conversions_record(source: Path, tm
                 with provenance.open_index(str(folder.parent), write=True) as index:
                     index.record(folder.name, "", str(source), theirs, 1.0)
             Path(path).write_bytes(b"the other conversion's\n")
-        original(path, data, replace=replace, before_rename=then_theirs)
+        original(path, data, replace=replace, before_rename=then_theirs, after_rename=after_rename)
     monkeypatch.setattr(txy, "write_atomic", raced)
     events = run(source, request)
     assert [event["shot"] for event in of(events, "shot_kept")] == [1]
@@ -1700,6 +1939,12 @@ WRITER = """
 import sys, time
 from helab.convert import provenance
 root, name, count, start, pause = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+if len(sys.argv) > 6:
+    provenance.BUSY_SECONDS = float(sys.argv[6])  # (A writer that waits less: the test's repro of a slow runner.)
+# A conversion whose index is busy fails and is tried again later (IndexUnavailable), for as long as it takes: so is
+# a shot here, until RETRY_SECONDS (longer than the other writer needs for all its shots). Four tries weren't enough
+# for shot 0 on Windows CI 41483647539 with the 1 ms case, both writers making the index at once.
+RETRY_SECONDS = 30.0
 while time.time() < start:
     time.sleep(0.001)
 for shot in range(count):
@@ -1709,16 +1954,22 @@ for shot in range(count):
         output="temp", txy_name=provenance.txy_name("m19v1", shot), txy_size=shot, txy_mtime_ns=shot,
         txy_sha256="", hits=1, converted_at=time.time(), helab_version="0", read_seconds=0.0, parse_seconds=0.0,
         reconstruct_seconds=0.0, format_seconds=0.0, write_seconds=0.0)
-    began = time.monotonic()
-    try:
-        with provenance.open_index(root, write=True) as index:
-            index.record(name, "", "/data/" + name, record, time.time())
-    except Exception as error:  # (Said in one line, so the test's message shows it whole.)
-        cause = error.__cause__ or error.__context__
-        print(f"shot {shot}: {type(error).__name__}: {error} (cause {type(cause).__name__}: {cause}; "
-              f"code {getattr(cause, 'sqlite_errorname', None)}) after {time.monotonic() - began:.2f} s",
-              file=sys.stderr)
-        raise
+    give_up, attempt = time.monotonic() + RETRY_SECONDS, 0
+    while True:
+        began, attempt = time.monotonic(), attempt + 1
+        try:
+            with provenance.open_index(root, write=True) as index:
+                index.record(name, "", "/data/" + name, record, time.time())
+            break
+        except Exception as error:  # (Said in one line, so the test's message shows it whole.)
+            if isinstance(error, provenance.IndexUnavailable) and time.monotonic() < give_up:
+                time.sleep(0.2)
+                continue
+            cause = error.__cause__ or error.__context__
+            print(f"shot {shot}: {type(error).__name__}: {error} (cause {type(cause).__name__}: {cause}; "
+                  f"code {getattr(cause, 'sqlite_errorname', None)}) after {time.monotonic() - began:.2f} s, "
+                  f"attempt {attempt}", file=sys.stderr)
+            raise
     # A conversion reads, converts and writes a TXY between two rows (tens of milliseconds or more), so
     # two converters leave each other gaps. Back to back, with no pause, the test measured SQLite's
     # write lock, which isn't fair: on Windows one writer could miss every gap for BUSY_SECONDS (CI
@@ -1728,12 +1979,19 @@ for shot in range(count):
 PAUSE = 0.005
 
 
-def test_two_writers_side_by_side_lose_nothing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("busy", ["", "0.001"], ids=["as configured", "a writer missing its window"])
+def test_two_writers_side_by_side_lose_nothing(tmp_path: Path, busy: str) -> None:
     """The app's helper and ``helab convert`` (two processes) writing one index at once: every row lands,
-    and the file stays sound. Each opens it per shot, harder than a conversion (one connection per run)."""
+    and the file stays sound. Each opens it per shot, harder than a conversion (one connection per run).
+
+    A shot whose index stays busy past ``BUSY_SECONDS`` is tried again until it lands, as a conversion is
+    (IndexUnavailable):
+    on Windows CI 41476107464 one writer's open took 26-27 s and failed the test, though nothing was lost.
+    ``busy``: the writers wait only that long (a slow runner's case, made on any machine)."""
     root = str(tmp_path / "converted-txy")
     start = time.time() + 1.0
-    writers = [subprocess.Popen([sys.executable, "-c", WRITER, root, name, "150", str(start), str(PAUSE)],
+    writers = [subprocess.Popen([sys.executable, "-c", WRITER, root, name, "150", str(start), str(PAUSE),
+                                 *([busy] if busy else [])],
                                 stderr=subprocess.PIPE, text=True) for name in ("helper", "command line")]
     for writer in writers:
         _, errors = writer.communicate(timeout=120)
@@ -1894,6 +2152,57 @@ def test_a_typed_output_cache_asks_before_writing_a_dont_cache_folder_to_the_cac
     assert Path(plan["folder"], "d_txy_helab_m19v1_1.txt").is_file()
 
 
+@pytest.mark.parametrize("share, output, terminal, answer, beside", [
+    ("//labserver/data", "beside", True, True, True), ("//labserver/data", "beside", True, False, False),
+    ("//labserver/data", "beside", False, None, False), ("//labserver/data", "beside-forced", False, None, True),
+    ("//labserver/data", "beside-forced", True, None, True), ("", "beside", True, None, True),
+    ("", "beside-forced", True, None, True)],
+    ids=["terminal-y", "terminal-N", "no-terminal", "forced", "forced-on-terminal", "not-a-share", "forced-not-a-share"])
+def test_a_typed_output_beside_on_a_share_warns_and_asks_first(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        share: str, output: str, terminal: bool, answer: bool | None, beside: bool) -> None:
+    """A39.5 (Q39.2): ``--output beside`` on a network share warns once (the share named, the converter
+    belongs on the acquisition PC) and asks on a terminal, no by default; without one it converts to HeLab's
+    folder and names ``--output beside-forced``. Q48.3: ``beside-forced`` asks nothing and still warns.
+    Detection is patched: no real share."""
+    from helab.utils import cache_location
+    write_raw(source, 1, raw_bytes(10_000))
+    resolved: list[bool] = []
+
+    def share_of(path: str, mounts: Any = None, *, resolve: bool = False) -> str:
+        resolved.append(resolve)
+        return share if path == str(source) else ""
+    monkeypatch.setattr(cache_location, "share_of", share_of)
+    with caplog.at_level("WARNING", logger="helab.convert"):
+        request, asked = typed(source, tmp_path, private_store, monkeypatch, "--output", output,
+                               terminal=terminal, answer=answer)
+    assert resolved == [True]  # (The command line may resolve the source path; the GUI never does.)
+    assert asked == (["Write the TXY beside the raw files on the share anyway? [y/N] "] if answer is not None else [])
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert bool(warnings) == bool(share)
+    if share:
+        assert "//labserver/data" in warnings[0] and "acquisition PC" in warnings[0]
+        assert any("beside-forced" in warning for warning in warnings) == (not beside or output == "beside-forced")
+        assert not any("--yes" in warning for warning in warnings)
+    assert bool(request.get("beside_confirmed")) is beside
+    [plan] = of(run(source, request), "convert_plan")
+    assert plan["output"] == ("beside" if beside else "cache")
+    assert (source / "d_txy_helab_m19v1_1.txt").is_file() is beside
+
+
+def test_yes_is_gone_and_names_beside_forced(capsys: pytest.CaptureFixture[str]) -> None:
+    """Q48.3: ``--yes`` was replaced by ``--output beside-forced``; passing it is a usage error naming it,
+    and the help lists ``beside-forced`` but not ``--yes``."""
+    from helab import convert_cli
+    with pytest.raises(SystemExit) as exit_:
+        convert_cli._arguments(["--watch", "folder", "--output", "beside", "--yes"])
+    assert exit_.value.code == 2 and "--output beside-forced" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        convert_cli._arguments(["--help"])
+    shown = capsys.readouterr().out
+    assert "beside-forced" in shown and "--yes" not in shown
+
+
 @pytest.mark.parametrize("argv", [(), ("--output", "temp")], ids=["setting", "temp"])
 def test_the_output_settings_default_leaves_dont_cache_the_last_word(
         source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -1931,6 +2240,128 @@ def test_the_answer_is_no_unless_yes(monkeypatch: pytest.MonkeyPatch, capsys: py
         monkeypatch.setattr(sys, "stdin", io.StringIO(typed_answer))
         assert convert_cli._ask("Write? [y/N] ") is yes
         assert capsys.readouterr().err == "Write? [y/N] "
+
+
+@pytest.mark.parametrize("argv, converted", [(("--once",), [1]), ((), [0, 1, 0, 0])], ids=["once", "watch"])
+def test_again_converts_each_shot_once_more(source: Path, tmp_path: Path, private_store: str,
+                                            monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...],
+                                            converted: list[int]) -> None:
+    """convert-1 (area review): ``--watch``'s first pass only records (seen=[]), so ``--again`` holds for
+    the pass after it, which converts the current shot once more; later passes leave it current. Shots
+    converted per pass, ``helab convert`` run in this process until the fourth pass (``--once``: one)."""
+    from helab import convert_cli
+    from helab.utils import app_log
+    write_raw(source, 1, raw_bytes(10_000))
+    assert len(of(run(source, request_for(source, tmp_path, private_store)), "shot_converted")) == 1
+    passes: list[int] = []
+    real = convert.convert_folder
+
+    def counting(path: str, request: ConvertRequest, send: Any) -> None:
+        request["temps"], request["workers"] = str(tmp_path / "temps"), 1
+        events: list[dict[str, Any]] = []
+
+        def both(event: Any) -> None:
+            events.append(event)
+            send(event)
+        real(path, request, both)
+        passes.append(len(of(events, "shot_converted")))
+
+    def sleep(seconds: float, real_sleep: Callable[[float], None] = time.sleep) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            real_sleep(seconds)  # (Not the watch loop's: its sleep is the one patched.)
+        elif len(passes) >= 4:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(convert_cli, "_start_cache", lambda: (options(private_store), None))
+    monkeypatch.setattr(app_log, "start_log_file", lambda folder: None)
+    monkeypatch.setattr(convert, "convert_folder", counting)
+    monkeypatch.setattr(time, "sleep", sleep)
+    assert convert_cli.main(["--watch", str(source), "--output", "temp", "--again", "--interval", "0.01", *argv]) == 0
+    assert passes == converted
+
+
+def refusing_beside(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file system with neither hard links nor a rename that refuses an existing name (Q38.1)."""
+    monkeypatch.setattr(txy, "PLATFORM", "linux")
+    monkeypatch.setattr(txy, "_exclusive_rename", lambda platform: None)
+    no_links(monkeypatch)
+
+
+def test_a_beside_write_that_cant_rename_safely_is_said_before_the_run_fails(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Q38.1: the refusal stays (nothing written, the run fails with the reason), and ``beside_refused``
+    names it first, so the app and ``helab convert`` can offer Retry or HeLab's cache or temp folder."""
+    write_raw(source, 1, raw_bytes(10_000))
+    refusing_beside(monkeypatch)
+    events: list[dict[str, Any]] = []
+    request = request_for(source, tmp_path, private_store, beside=True, beside_confirmed=True)
+    with pytest.raises(OSError) as failed:
+        convert_folder(str(source), request, events.append)  # type: ignore[arg-type]
+    assert convert.unsafe_rename(failed.value)
+    [refused] = of(events, "beside_refused")
+    assert refused["shot"] == 1 and refused["txy"] == str(source / "d_txy_helab_m19v1_1.txt")
+    assert refused["message"].startswith("Not written: this folder's file system can't add a file")
+    assert sorted(path.name for path in source.iterdir()) == ["d1.txt"]
+    # Another refusal (a cache folder, say) isn't one: only a beside write is the user's to redirect.
+    assert not convert.unsafe_rename(OSError(errno.ENOTSUP, "Operation not supported"))
+    assert not convert.unsafe_rename(FileExistsError(errno.EEXIST, "Not written: x"))
+
+
+@pytest.mark.parametrize("terminal, answers, status, where", [
+    (False, [], 1, ""), (True, ["c"], 0, "cache"), (True, ["t"], 0, "temp"), (True, ["r", "c"], 0, "cache"),
+    (True, ["q"], 1, ""), (True, [""], 1, "")],
+    ids=["no-terminal", "cache", "temp", "retry-then-cache", "quit", "enter"])
+def test_helab_convert_offers_retry_or_hellabs_folders_after_a_refused_beside_write(
+        source: Path, tmp_path: Path, private_store: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        terminal: bool, answers: list[str], status: int, where: str) -> None:
+    """Q38.1 (Tony): ``helab convert --output beside`` where the write can't be made safely asks on a terminal:
+    Retry, HeLab's cache or temp folder instead, or quit (the default); without one the refusal stands
+    (exit 1) with a line naming ``--output cache`` and ``--output temp``. Never a silent fallback."""
+    from helab import convert_cli
+    from helab.utils import app_log
+    write_raw(source, 1, raw_bytes(10_000))
+    refusing_beside(monkeypatch)
+    real = convert.convert_folder
+    asked: list[str] = []
+    sent: list[dict[str, Any]] = []
+
+    def converting(path: str, request: ConvertRequest, send: Any) -> None:
+        request["temps"], request["workers"] = str(tmp_path / "temps"), 1
+
+        def both(event: Any) -> None:
+            sent.append(event)
+            send(event)
+        real(path, request, both)
+
+    def choose(question: str) -> str:
+        asked.append(question)
+        return answers[len(asked) - 1]
+    monkeypatch.setattr(convert_cli, "_start_cache", lambda: (options(private_store), None))
+    monkeypatch.setattr(app_log, "start_log_file", lambda folder: None)
+    monkeypatch.setattr(convert, "convert_folder", converting)
+    monkeypatch.setattr(convert_cli, "_on_terminal", lambda: terminal)
+    monkeypatch.setattr(convert_cli, "_choose", choose)
+    with caplog.at_level("WARNING", logger="helab.convert"):
+        assert convert_cli.main(["--watch", str(source), "--output", "beside", "--once"]) == status
+    assert len(asked) == len(answers)
+    assert all(question.startswith("[r]etry, write to HeLab's [c]ache or [t]emp folder instead") for question in asked)
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert any("can't add a file without risking" in warning for warning in warnings)
+    assert any("--output cache or --output temp" in warning for warning in warnings) == (not terminal)
+    assert sorted(path.name for path in source.iterdir()) == ["d1.txt"]  # (Never beside.)
+    plans = of(sent, "convert_plan")
+    assert plans[0]["output"] == "beside" and len(of(sent, "beside_refused")) == 1 + answers.count("r")
+    converted = of(sent, "shot_converted")
+    assert len(converted) == (1 if where else 0)
+    if where:
+        assert plans[-1]["output"] == where and Path(converted[0]["txy"]).is_file()
+
+
+def test_the_choice_reads_one_letter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from helab import convert_cli
+    for typed_answer, letter in (("Cache\n", "c"), ("\n", ""), ("", ""), (" t \n", "t")):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(typed_answer))
+        assert convert_cli._choose("Which? ") == letter
+    assert capsys.readouterr().err == "Which? " * 4
 
 
 @pytest.mark.parametrize("method", ["rename", "copy"])

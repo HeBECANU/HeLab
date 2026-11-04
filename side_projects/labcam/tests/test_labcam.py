@@ -75,7 +75,12 @@ def test_locks() -> None:
     lock = locks.evaluate(specs, instruments, readings)
     assert (lock.state, lock.confidence) == ("lost", 0.95) and "block" in lock.summary
     readings["top"] = Reading("unknown", "no signal", {"shape": "none"}, 0.5)
-    assert locks.evaluate(specs, instruments, readings).state == "unknown"
+    lock = locks.evaluate(specs, instruments, readings)  # one sign unknown among three: left out
+    assert (lock.state, lock.confidence) == ("locked", round(0.7 * 2 / 3, 2)) and "left out" in lock.summary
+    readings["dot"] = Reading("unknown", "covered?", {}, 0.0)
+    readings["needle"] = Reading("unknown", "covered?", {}, 0.0)
+    assert locks.evaluate(specs, instruments, readings).state == "unknown"  # none told
+    assert locks.evaluate(["top:flat"], instruments, readings).state == "unknown"  # its only sign
 
 
 def test_history_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,6 +196,7 @@ def test_hand_in_front_holds_the_lock(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(history, "DATA", tmp_path)
     cfg = config.load(HOME / "config.json")
     cfg.analysis_hz = 100
+    monkeypatch.setattr(engine, "ANCHORS", tmp_path / "anchors")  # not the real ones
     eng = engine.Engine(cfg, FrameSource(str(SAMPLE)))
     frame = cv2.imread(str(SAMPLE))
     hand = cv2.flip(frame, 1)
@@ -210,6 +216,64 @@ def test_hand_in_front_holds_the_lock(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "left_top" in eng.covered
     assert eng.readings["left_top"].status == "unknown"
     assert eng.locks["He4"].state == he4 and "covered" in eng.locks["He4"].summary
+
+
+def test_lost_is_unknown_while_someone_moves_or_covers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing sign while someone moves (or a box is covered) reads unknown, lost once it's quiet; alignment
+    waits for the room to be quiet."""
+    from unittest import mock
+
+    from labcam import engine
+    from labcam.source import FrameSource
+
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    monkeypatch.setattr(engine, "ANCHORS", tmp_path / "anchors")
+    instruments = {"top": config.Instrument("top", "trace", "Top", config.rect_corners(0, 0, 1, 1), {}),
+                   "people": config.Instrument("people", "motion", "People", config.rect_corners(0, 0, 1, 1), {})}
+    cfg = config.load(HOME / "config.json")
+    cfg.instruments, cfg.locks = instruments, {"L": ["top:flat"]}
+    eng = engine.Engine(cfg, FrameSource(str(tmp_path / "none.jpg")))
+    eng.raw_readings["top"] = Reading("ok", "wavy", {"shape": "wavy"}, 0.9)
+    clock = [time.time()]
+
+    def run(present: str, covered: dict[str, str], times: int = 6) -> str:
+        eng.readings["people"] = Reading("off" if present == "yes" else "ok", "", {"present": present}, 1.0)
+        eng.covered = covered
+        with mock.patch("time.time", lambda: clock[0]):
+            for _ in range(times):
+                eng._update_locks()
+                clock[0] += 0.5
+        return eng.locks["L"].state
+
+    assert run("yes", {}) == "unknown" and "someone is moving" in eng.locks["L"].summary
+    assert run("no", {"top": "movement in front"}) == "unknown" and "covered: Top" in eng.locks["L"].summary
+    assert run("no", {}) == "lost"
+    assert run("yes", {}) == "unknown"  # a loss seen before doesn't stay while someone moves
+
+    frame = np.zeros((40, 40, 3), np.uint8)
+    with mock.patch.object(eng.aligner, "update") as update:
+        eng.readings["people"] = Reading("off", "", {"present": "yes"}, 1.0)
+        eng._last_align = 0.0
+        eng._analyse(frame, time.time())
+        assert not update.called and eng.align_paused
+        eng.readings["people"] = Reading("ok", "", {"present": "no"}, 1.0)
+        eng._analyse(frame, time.time())
+        assert update.called and not eng.align_paused
+
+
+def test_motion_says_how_sure() -> None:
+    """Quiet: sure; a large moving patch: sure it's movement, with the share of the view that changed."""
+    from labcam.detectors import Motion
+
+    motion = Motion(config.Instrument("people", "motion", "People", config.rect_corners(0, 0, 400, 300), {}))
+    quiet = np.full((300, 400, 3), 90, np.uint8)
+    for _ in range(30):
+        reading = motion.update(quiet)
+    assert reading.status == "ok" and reading.confidence == 1.0
+    person = quiet.copy()
+    cv2.rectangle(person, (100, 60), (220, 280), (220, 200, 180), -1)
+    reading = motion.update(person)
+    assert reading.status == "off" and reading.confidence == 1.0 and reading.values["moved"] > 0.15
 
 
 def test_history_thins_rows_and_reads_gzip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,3 +309,239 @@ def test_old_days_deleted_and_compressed(tmp_path: Path, monkeypatch: pytest.Mon
     history.compress_old()
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
         [f"history-{day(0)}.csv", f"history-{day(2)}.csv.gz"])
+
+
+def test_compress_twice_at_once_keeps_every_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two compress runs at midnight (one per writer) once deleted each other's .gz (2026-11-01).
+    import gzip
+    import threading
+
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    day = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+    body = "time,He3\n" + "".join(f"{day}T00:00:{i:02d},locked\n" for i in range(60)) * 200
+    for kind in ("history", "locks"):
+        (tmp_path / f"{kind}-{day}.csv").write_text(body)
+    runs = [threading.Thread(target=history.compress_old) for _ in range(4)]
+    for t in runs:
+        t.start()
+    for t in runs:
+        t.join()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+    assert gzip.decompress((tmp_path / f"history-{day}.csv.gz").read_bytes()).decode() == body
+    # A CSV whose .gz already exists with the same content (a run stopped before deleting it) just goes.
+    (tmp_path / f"locks-{day}.csv").write_text(body)
+    history.compress_old()
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"history-{day}.csv.gz", f"locks-{day}.csv.gz"]
+
+
+def test_series_breaks_lines_across_gaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(history, "DATA", tmp_path)
+    now = time.time()
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))  # noqa: E731
+    rows = [now - 3000, now - 2995, now - 100, now - 95]  # labcam off for about 48 min between
+    (tmp_path / f"history-{time.strftime('%Y-%m-%d')}.csv").write_text(
+        "time,He3\n" + "".join(f"{stamp(t)},locked\n" for t in rows))
+    if time.strftime("%Y-%m-%d", time.localtime(now - 3000)) != time.strftime("%Y-%m-%d"):
+        pytest.skip("just after midnight")
+    c = history.series(1)["columns"]
+    assert c["He3"] == ["locked", "locked", None, "locked", "locked"]
+
+
+def test_duration() -> None:
+    from labcam.detectors import duration
+
+    assert [duration(s) for s in (0, 45, 192, 3600, 7500, 97200, 86400 * 3 + 59)] == [
+        "0s", "45s", "3m 12s", "1h", "2h 5m", "1d 3h", "3d"]
+
+
+def test_relocate_finds_a_moved_instrument(tmp_path: Path) -> None:
+    from labcam import relocate
+
+    rng = np.random.default_rng(1)
+    scene = cv2.GaussianBlur(rng.integers(0, 255, (300, 400, 3), np.uint8), (0, 0), 3)
+    scene = cv2.normalize(scene, None, 0, 255, cv2.NORM_MINMAX)
+
+    def with_scope(dx: int, dy: int, screen: int) -> np.ndarray:
+        frame = scene.copy()
+        x, y = 150 + dx, 110 + dy
+        frame[y - 25:y + 85, x - 30:x + 120] = 200  # the bezel
+        cv2.putText(frame, "SCOPE", (x - 20, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (40, 40, 40), 1)
+        for k in range(4):  # buttons
+            cv2.circle(frame, (x + 105, y + 10 + 15 * k), 4, (60, 60, 60), -1)
+        frame[y:y + 60, x:x + 90] = screen  # the screen; what it shows changes
+        return frame
+
+    corners = [(150.0, 110.0), (240.0, 110.0), (240.0, 170.0), (150.0, 170.0)]
+    anchor = relocate.anchor(with_scope(0, 0, 90), corners)
+    assert anchor is not None
+    still = relocate.find(anchor, with_scope(0, 0, 30), corners)  # only the screen changed
+    assert still is not None and not still.moved
+    found = relocate.find(anchor, with_scope(14, -17, 30), corners)
+    assert found is not None and found.moved and found.shift == (14.0, -17.0)
+    gone = relocate.find(anchor, scene, corners)  # nothing like it nearby: the box stays
+    assert gone is not None and not gone.moved
+    relocate.save(anchor, tmp_path / "a.npz")
+    again = relocate.load(tmp_path / "a.npz")
+    assert again is not None and again.origin == anchor.origin
+    assert relocate.find(again, with_scope(14, -17, 30), corners).shift == (14.0, -17.0)  # type: ignore[union-attr]
+
+
+def test_seven_segment_display() -> None:
+    from labcam import segments
+
+    # Dark segments on a light LCD: "0", "1" and "8" side by side, 40 x 80 px cells, upright.
+    image = np.full((80, 120), 190, np.float32)
+    bars = {"a": (8, 2, 32, 8), "b": (30, 4, 36, 40), "c": (30, 40, 36, 76), "d": (8, 72, 32, 78),
+            "e": (4, 40, 10, 76), "f": (4, 4, 10, 40), "g": (8, 37, 32, 43)}
+    for k, on in enumerate(("abcdef", "bc", "abcdefg")):
+        for seg in on:
+            x0, y0, x1, y1 = bars[seg]
+            image[y0:y1, 40 * k + x0:40 * k + x1] = 110
+    read, contrast = segments.read_cells(image, [(0, 1 / 3), (1 / 3, 2 / 3), (2 / 3, 1)], 0.0)
+    assert read == "018" and contrast > 50
+    within = inst("segments", point=1, tolerance=0.3)
+    # Unreadable checks don't vote but lower how sure; an unsure digit shows as "?".
+    reading = segments.tally(within, "018", ["018", "018", "???", "018"], contrast)
+    assert reading.status == "ok" and reading.values["value"] == 0.18 and reading.confidence == 0.75
+    assert segments.tally(within, "048", ["018", "048"], contrast).status == "unknown"  # 0.18 or 0.48?
+    unsure_last = segments.tally(within, "013", ["012", "013"], contrast)  # 0.1? is within ±0.3 either way
+    assert unsure_last.status == "ok" and unsure_last.text.startswith("0.1?")
+    assert segments.tally(within, "048", ["048"], contrast).status == "off"  # 0.48 is beyond ±0.3
+
+
+def test_power_modes() -> None:
+    from labcam import engine
+
+    eng = engine.Engine.__new__(engine.Engine)  # only the power state, no camera
+    now = time.time()
+    eng.power_mode, eng._low_until_input = "auto", False
+    eng._last_focused = eng._last_input = now
+    assert eng.power() == (False, "a page is in use")
+    eng._last_focused = now - engine.UNFOCUSED_LOW - 1  # 10 min with no page in focus
+    assert eng.power()[0]
+    eng.presence(focused=True, active=False)
+    assert not eng.power()[0]
+    eng._last_input = now - engine.IDLE_LOW - 1  # in focus but 1 h without input
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)
+    eng.low_power_now()
+    assert eng.power()[0]
+    eng.presence(focused=True, active=True)  # the next input ends "low power now"
+    assert not eng.power()[0]
+    eng.power_mode = "low"
+    assert eng.power() == (True, "kept at low power")
+    eng.power_mode = "full"
+    eng._last_focused = 0.0
+    assert not eng.power()[0]
+
+
+def test_slanted_line_is_flat_and_corners_ordered() -> None:
+    # A flat trace seen at a slant (the box a little steeper than the screen) is still a flat line ...
+    image = np.full((60, 100, 3), 40, np.uint8)
+    cv2.line(image, (0, 24), (99, 36), (220, 220, 220), 2)
+    reading = TraceLevel(inst("trace", tolerance=0.15)).update(image)
+    assert reading.values["shape"] == "line"
+    # ... but a steep one (a ramp across the screen) isn't.
+    steep = np.full((60, 100, 3), 40, np.uint8)
+    cv2.line(steep, (0, 5), (99, 55), (220, 220, 220), 2)
+    assert TraceLevel(inst("trace", tolerance=0.15)).update(steep).values["shape"] == "wavy"
+    # Corners clicked in any order come out top-left, top-right, bottom-right, bottom-left.
+    tl, tr, br, bl = (298.0, 274.0), (373.0, 302.0), (370.0, 352.0), (298.0, 326.0)
+    assert config.ordered([bl, br, tr, tl]) == [tl, tr, br, bl]
+    assert config.ordered([tr, bl, tl, br]) == [tl, tr, br, bl]
+
+
+def test_screen_outline_found_from_a_rough_box() -> None:
+    from labcam import screens
+
+    frame = np.full((300, 400, 3), (170, 180, 185), np.uint8)  # a light bezel
+    screen = np.array([[120, 90], [290, 105], [288, 215], [118, 205]], np.int32)  # seen a little at an angle
+    cv2.fillPoly(frame, [screen], (90, 60, 40))
+    cv2.line(frame, (125, 150), (285, 162), (230, 200, 120), 2)  # the trace across it
+    rough = [(135.0, 100.0), (270.0, 110.0), (272.0, 200.0), (130.0, 195.0)]  # drawn a bit off
+    found = screens.find(frame, rough)
+    assert found.ok
+    assert max(np.hypot(*(np.array(a) - b)) for a, b in zip(found.corners, screen)) < 4
+    assert not screens.find(np.full((300, 400, 3), 128, np.uint8), rough).ok  # no screen: kept as it is
+
+
+def test_drawn_box_snaps_to_the_screen_near_it() -> None:
+    from labcam import screens
+
+    frame = np.full((300, 400, 3), (170, 180, 185), np.uint8)  # a light bezel ...
+    cv2.rectangle(frame, (60, 50), (340, 260), (60, 60, 60), 3)  # ... with a dark rim further out
+    screen = np.array([[120, 90], [290, 105], [288, 215], [118, 205]], np.int32)
+    cv2.fillPoly(frame, [screen], (90, 60, 40))
+    cv2.line(frame, (125, 150), (285, 162), (230, 200, 120), 2)
+    drawn = [(272.0, 200.0), (130.0, 195.0), (135.0, 100.0), (270.0, 110.0)]  # rough, clicked in any order
+    snapped = screens.snap_drawn(frame, drawn)
+    assert all(snapped.sides)
+    assert max(np.hypot(*(np.array(a) - b)) for a, b in zip(snapped.corners, screen)) < 3  # the screen, not the rim
+
+
+def test_align_boxes_follow_their_own_surroundings() -> None:
+    """A bump that shifts the near part of the view more than the far part (parallax): each box follows what's
+    around it, a new place is taken once two checks agree, and storing back gives the same place."""
+    import cv2
+    import numpy as np
+
+    from labcam.align import Aligner
+
+    rng = np.random.default_rng(3)
+    ref = cv2.GaussianBlur(rng.integers(0, 256, (480, 640, 3), dtype=np.uint8), (0, 0), 1.2)
+    far = np.float32([[1, 0, 4], [0, 1, 3]])
+    near = np.float32([[1, 0, 24], [0, 1, 15]])
+    cur = cv2.warpAffine(ref, far, (640, 480), borderMode=cv2.BORDER_REFLECT)
+    cur[:, :260] = cv2.warpAffine(ref, near, (640, 480), borderMode=cv2.BORDER_REFLECT)[:, :260]
+    left = [(80.0, 200.0), (140.0, 200.0), (140.0, 250.0), (80.0, 250.0)]
+    right = [(440.0, 200.0), (500.0, 200.0), (500.0, 250.0), (440.0, 250.0)]
+    a = Aligner()
+    a.set_reference(ref)
+    for frame in (ref, cur, cur):
+        a.update(frame)
+        a.refine("left", left)
+        a.refine("right", right)
+        if frame is ref:
+            assert np.allclose(a.for_box("left").move(left), left, atol=1.0)
+    shift_l = np.mean(np.array(a.for_box("left").move(left)) - left, axis=0)
+    shift_r = np.mean(np.array(a.for_box("right").move(right)) - right, axis=0)
+    assert np.allclose(shift_l, (24, 15), atol=1.5), shift_l
+    assert np.allclose(shift_r, (4, 3), atol=1.5), shift_r
+    moved = a.for_box("left").move(left)
+    assert np.allclose(a.for_box("left").back(moved), left, atol=1e-6)
+
+
+def test_align_holds_still_when_the_camera_does() -> None:
+    """A still camera isn't estimated again (so the boxes don't wander with the estimate's noise); a shifted one is."""
+    import cv2
+    import numpy as np
+
+    from labcam.align import Aligner
+
+    rng = np.random.default_rng(5)
+    ref = cv2.GaussianBlur(rng.integers(0, 256, (480, 640, 3), dtype=np.uint8), (0, 0), 1.2)
+    a = Aligner()
+    a.set_reference(ref)
+    a.update(ref)
+    assert a._matches is not None
+    a.update(ref)
+    assert a._matches is None and not a.moved
+    shifted = cv2.warpAffine(ref, np.float32([[1, 0, 9], [0, 1, -6]]), (640, 480), borderMode=cv2.BORDER_REFLECT)
+    a.update(shifted)
+    assert a.moved and np.allclose(a.current.shift, (9, -6), atol=1.0)
+
+
+def test_trace_darker_exposure_and_bezel_strip() -> None:
+    """A darker exposure of the empty screen isn't a block, a block of another colour still is, and a strip of
+    bezel along the box's bottom (where the trace fades) doesn't make a flat line wavy (2026-11-03)."""
+    trace = inst("trace", background=[150, 150, 150], contrast=30)  # type: ignore[arg-type]
+    dark = screen(30, background=60, colour=200)  # the empty screen at 0.4 of its colour
+    assert TraceLevel(trace).update(dark).status == "ok"
+    block = screen(None, background=60)
+    cv2.rectangle(block, (0, 0), (99, 59), (30, 160, 200), -1)
+    assert TraceLevel(trace).update(block).values["shape"] == "block"
+    strip = screen(None, background=150)
+    cv2.line(strip, (40, 30), (99, 30), (240, 240, 240), 2)  # the trace, faded on the left
+    cv2.rectangle(strip, (0, 52), (99, 55), (10, 10, 10), -1)  # the bezel, inside the margin's cut
+    reading = TraceLevel(trace).update(strip)
+    assert reading.values["shape"] == "line" and reading.status == "ok", reading

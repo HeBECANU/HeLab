@@ -464,7 +464,7 @@ class SnapshotFileSystemModel(QAbstractItemModel):
             lines.append("Not cached: your choice")
         if prefs["no_auto_load"]:
             lines.append("Not auto-loaded: your choice")
-        lines.append("Here: " + self._own_text(node))
+        lines.append("Here: " + self._own_text(node) + self._on_read_text(node))
         lines.append("Subfolders: " + self._subfolders_text(node))
         # Each cache: its date and its freshness against the folder's modified time, stated once.
         disk_cached = self.cache.disk_cached(node.path)
@@ -510,6 +510,11 @@ class SnapshotFileSystemModel(QAbstractItemModel):
             elif clock or node.cached_report or (node.subtree and not node.subtree_live):
                 lines.append("Select the folder to check it again.")
         return "\n".join(lines)
+
+    def _on_read_text(self, node: FolderNode) -> str:
+        """Stage 3 (S3~5): the shots a load would convert from their raw files, in store-v4."""
+        count = self.cache.on_read_shots(node.path, node.raw_count, node.txy_count) if node.report else 0
+        return f" · {count:,} converted when loaded" if count else ""
 
     @staticmethod
     def _own_text(node: FolderNode) -> str:

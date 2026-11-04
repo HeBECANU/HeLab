@@ -8,7 +8,7 @@ import logging
 import math
 import os
 import time
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
 from uuid import uuid4
 import weakref
 
@@ -19,8 +19,9 @@ from PyQt6.QtGui import QIcon, QPixmap
 
 from helab.analysis.constant_layers import clean_layer, folder_layer
 from helab.utils.ram_buffers import Buffers, dataset_buffers
-from helab.utils import app_log, file_kinds, large_folder, txy_sources
+from helab.utils import app_log, file_kinds, large_folder, store_v4, txy_sources
 from helab.utils.cache_store import APPROVAL_SHARE, KINDS, store_root
+from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.constants import (
     DEFAULT_CHECK_LEVEL, DEFAULT_DISK_BUDGET, DEFAULT_LIVE_AUTOSAVE, DEFAULT_LIVE_INTERVAL, DEFAULT_RAM_STEPS,
     DISK_CACHE_ENABLED, cache_dir, cache_dir_enabled, cache_dir_refused, ram_step_bytes,
@@ -86,6 +87,11 @@ class CacheStatus:
     error: str = ""
 
 
+def job_key(operation: str, path: str, live: bool = False, choice: str | None = None) -> tuple[str, str]:
+    """Where ``FolderCache.jobs`` files a job: one derivation, for filing and forgetting it."""
+    return ("live" if live else operation if choice is None else f"{operation}:{choice}"), path
+
+
 @dataclass
 class SharedJob:
     owner: str
@@ -126,10 +132,12 @@ class SharedJob:
     # A Live save's summary older than the folder's snapshot (a newer listing ran meanwhile): not
     # adopted, and its data is kept without the signature check, not counted as checked.
     behind_listing: bool = False
+    # A load of a plot's own TXY choice (``FolderCache.payload_key_choice``): keyed apart from the tab's.
+    choice: str | None = None
 
     @property
     def key(self) -> tuple[str, str]:
-        return ("live" if self.live else self.operation), self.path
+        return job_key(self.operation, self.path, self.live, self.choice)
 
     def saves(self) -> bool:
         """Whether a subscriber asked for a save (``FolderCache.save``), whatever the job's own payload."""
@@ -148,9 +156,32 @@ def set_disk_budget(budget: int) -> None:
     _disk_budget, _disk_budget_set_at = int(budget), time.time()
 
 
+# Caching v2's global cache policy (store-v4, Q45.1): read from its setting on first use, set by Settings ›
+# Cache; sent with every store-v4 request ("policy"), a folder's own choice winning in the store.
+_cache_policy: str | None = None
+
+
+def cache_policy() -> str:
+    global _cache_policy
+    if _cache_policy is None:
+        from helab.utils.settings_defaults import CACHE_POLICY_SETTING, read_setting
+        from helab.utils.settings_store import app_settings
+        _cache_policy = str(read_setting(app_settings(), CACHE_POLICY_SETTING, typed=True) or "")
+    return _cache_policy if _cache_policy in store_v4.POLICIES else store_v4.DEFAULT_POLICY
+
+
+def set_cache_policy(policy: str) -> None:
+    global _cache_policy
+    _cache_policy = policy
+
+
 # Work Offline (cache-only browsing, ``FolderCache.set_offline``): sent with every request's cache
 # options, so helpers key a folder on an unmounted share or volume through its mount hint.
 _offline = False
+
+
+# The owner of a folder's raw fill (caching v2), with its path: one per folder (``schedule_raw_fill``).
+RAW_FILL_OWNER = "raw_fill:"
 
 
 def store_options() -> dict[str, Any]:
@@ -158,8 +189,10 @@ def store_options() -> dict[str, Any]:
     cache is off for this session. The GUI process never opens the store."""
     if not (DISK_CACHE_ENABLED and cache_dir_enabled()):
         return {}
-    return {"directory": store_root(cache_dir()), "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
-            **({"offline": True} if _offline else {})}
+    root = store_root(cache_dir())
+    return {"directory": root, "budget": _disk_budget, "budget_set_at": _disk_budget_set_at,
+            **({"offline": True} if _offline else {}),
+            **({"policy": cache_policy()} if os.path.basename(root) == STORE_V4_DIRNAME else {})}
 
 
 class FolderCache(QObject):
@@ -171,6 +204,8 @@ class FolderCache(QObject):
     folderIconChanged = pyqtSignal(str)
     # A folder's flags (S10: Don't cache, Don't auto-load) changed.
     folderPrefsChanged = pyqtSignal(str)
+    # A folder set to keep no raw pulses still has some (S4~1): (the tab's owner, path, bytes, only copies).
+    rawRemovalOffered = pyqtSignal(str, str, int, int)
     # A flag couldn't be saved (path, why, the owner that set it); memory shows the saved state again.
     folderPrefsFailed = pyqtSignal(str, str, str)
     # Constants the analyses use changed: a folder's own (its path; its subfolders inherit them),
@@ -224,6 +259,10 @@ class FolderCache(QObject):
     # A folder's files dated ahead of this computer's clock (path, seconds): once per share or volume
     # (the helper's ``location``) per session (``clock_skew_seen``).
     clockSkew = pyqtSignal(str, float)
+    # A raw file of this folder was overwritten in place since store-v4 cached it (Q22.5, Q28.6).
+    rawOverwritten = pyqtSignal(str)
+    # What store-v4 last said about store-v3 beside it (``legacy``): its question, Settings › Cache's row.
+    legacyChanged = pyqtSignal()
     # The saves the quit window waits for changed (``quit_saves``).
     quitSavesChanged = pyqtSignal()
     # Work Offline turned on (True) or off (False): ``set_offline``.
@@ -286,6 +325,9 @@ class FolderCache(QObject):
         # Each folder's converter flags as the store last said ({"write_beside", "set_at"}; TXY
         # converter stage 4): only folders asked about (``read_convert_prefs``) or set this session.
         self.convert_prefs: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # Each folder's stage 2 choices as the store last said (store-v4: ``folder_choices``, Q45.1, Q45.2):
+        # {"policy", "source", "tag", …}; the source and tag override the tab's for that folder.
+        self.folder_choices: dict[str, dict[str, Any]] = {}
         # Live auto-convert (TXY converter stage 4): the folders whose Live converts new raw shots
         # this session (Q9.6: reset each session, except the folders set to start at launch), and
         # each folder's last conversion's lists (``convert_summary``), sent back with the next one
@@ -297,6 +339,10 @@ class FolderCache(QObject):
         self.convert_reasons: OrderedDict[str, dict[str, str]] = OrderedDict()
         # Flag saves in flight: job owner → (path, the choice's set_at, who set it).
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
+        # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
+        self._choice_writes: dict[str, str] = {}
+        # And the tab that set each (S4~1: its offer to remove raw pulses goes to that tab): job → owner.
+        self._choice_owners: dict[str, str] = {}
         # Constants (F0b): the lab's (Settings → Lab parameters, set by the main window), and each
         # folder's own, as the store or this session last said: {"values": {key: float}, "set_at"}.
         # Folders with no disk cache keep theirs for the session only (``constants_session_only``).
@@ -361,6 +407,15 @@ class FolderCache(QObject):
         # found them (sent back as ``helab_since``).
         self._convert_profile: DetectorProfile | None = None
         self._tab_source: str | None = None  # The ``txy_source`` setting, read when first needed.
+        # User profiles by tag (Q53.2: a list may name one), read from the profile folder when first needed.
+        # Memory only (TP-2): read on a request's path (``with_txy``, once) or handed over by Settings' Save
+        # (``set_user_profiles``), never while rendering.
+        self._user_profiles: dict[str, dict[str, Any]] = {}
+        self._user_profile_objects: dict[str, DetectorProfile] = {}  # (The same, as profiles.)
+        self._user_profiles_read = False
+        # Folders whose Auto-convert converts with their one-entry TXY list's profile, taken from Live's offer
+        # (Q~2.2; this session only).
+        self.convert_with: dict[str, DetectorProfile] = {}
         self._live_helab: dict[str, dict[str, Any]] = {}
         # The RAM budget for datasets no tab shows (Settings → Cache; ``set_ram_budget``).
         self.max_data_bytes = DEFAULT_RAM_STEPS * ram_step_bytes()
@@ -534,6 +589,15 @@ class FolderCache(QObject):
         self.foreground_owners: set[str] = set()
         # Shares and volumes whose clock this session found ahead of ours (``clockSkew``).
         self.clock_skew_seen: set[str] = set()
+        # Caching v2's raw fills (store-v4 only): the owners running (one per folder, ``RAW_FILL_OWNER``
+        # + its path) and the folders to fill again once theirs ends; raw files overwritten in place
+        # since they were cached, this session, by folder and shot (Q28.6).
+        self._raw_fills: set[str] = set()
+        self._raw_fill_again: set[str] = set()
+        self.raw_overwrites: dict[str, dict[int, dict[str, Any]]] = {}
+        # store-v3 beside store-v4 (``CacheStore.measure_legacy``: present, choice, bytes, counted), as the
+        # last inventory or answer said; None in store-v3 or before any.
+        self.legacy: dict[str, Any] | None = None
         service.is_foreground = self._is_foreground
         service.owners_of = self._owners_of
         service.before_start = self._before_start
@@ -625,6 +689,7 @@ class FolderCache(QObject):
         known = self.data_roots.get(path)
         if known is not None and known[0] != identifier:
             self._root_constants_gone(path)  # Another root at this folder now (any event saying so).
+            self._root_prefs_gone(path)
             self._root_results_gone(path)
         if known != (identifier, label) or cleared:
             self.data_roots[path] = (identifier, label)
@@ -699,6 +764,7 @@ class FolderCache(QObject):
     def _root_gone(self, path: str) -> None:
         if path in self.data_roots:
             self._root_constants_gone(path)
+            self._root_prefs_gone(path)
             self._root_results_gone(path)
         if self.data_roots.pop(path, None) is not None:
             self.dataRootsChanged.emit(path)
@@ -852,20 +918,42 @@ class FolderCache(QObject):
     # key (its choice), never a base for, or answer to, the tab's load. A tab load asking for another choice
     # than the tab's running load waits for it, then runs as its own (``submit``).
 
-    def tab_source(self) -> str:
-        """The TXY source tabs and Live load (the ``txy_source`` setting, Q18.2)."""
+    # Priority lists (Q53.2): the setting, a folder's row and a plot's choice are lists (``txy_sources``), which
+    # may name ``Conversion`` (the conversion profile); ``resolved`` makes a list a load's options, a mode's
+    # exactly as before.
+
+    def tab_list(self) -> txy_sources.Entries:
+        """The TXY list tabs and Live load (the ``txy_source`` setting, Q18.2, Q53.2), as saved."""
         if self._tab_source is None:
             from helab.utils.constants import read_txy_source
             from helab.utils.settings_store import app_settings
             self._tab_source = read_txy_source(app_settings())
-        return self._tab_source
+        return txy_sources.parse_list(self._tab_source) or txy_sources.list_of(txy_sources.DEFAULT_SOURCE)
 
     def set_tab_source(self, source: str) -> None:
-        """The tabs' and Live's TXY source changed (Settings → TXY converter): new loads use it."""
-        self._tab_source = txy_sources.normal_source(source) or txy_sources.DEFAULT_SOURCE
+        """The tabs' and Live's TXY list changed (Settings → TXY converter; a mode or a list's text): new loads
+        use it."""
+        entries = txy_sources.parse_list(source) or txy_sources.list_of(txy_sources.DEFAULT_SOURCE)
+        self._tab_source = txy_sources.setting_text(entries)
+
+    def conversion_options(self) -> dict[str, Any]:
+        """The conversion profile as a load's options (``Conversion``'s entry)."""
+        profile = self.convert_profile()
+        return {"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
+                "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+
+    def resolved(self, entries: Sequence[str]) -> dict[str, Any]:
+        """A list as a load's options (``txy_sources.with_list``): ``source`` (a mode, or a list's text),
+        the mode's profile, a list's ``entries``."""
+        return txy_sources.with_list(self.conversion_options(), entries, self._profile_for_tag)
+
+    def tab_source(self) -> str:
+        """The TXY source tabs and Live load: the setting's list, resolved (a mode, or a list's text)."""
+        return str(self.resolved(self.tab_list())["source"])
 
     def tab_choice(self) -> str:
-        return txy_sources.choice_text(self.tab_source(), self.convert_profile_tag())
+        found = self.resolved(self.tab_list())
+        return txy_sources.choice_text(str(found["source"]), str(found.get("profile_tag") or ""))
 
     @staticmethod
     def choice_suffix(choice: str | None) -> str:
@@ -929,15 +1017,45 @@ class FolderCache(QObject):
         given = payload.get(txy_sources.TXY_FIELD)
         txy = dict(given) if isinstance(given, Mapping) else {}
         options = store_options()
+        self.read_user_profiles()  # (A request, not rendering: the first one reads the profile folder, TP-2.)
         root = self.root_of(path)
+        # A plot's own list (Q53.2: ``list``, its entries as saved, ``Conversion`` among them).
+        listed = txy.pop("list", None)
         # Asked for no choice: the tab's (its dataset is the tab's, ``is_tab_dataset``).
-        txy.setdefault("tab", not txy.get("source") and not txy.get("profile_hash"))
+        txy.setdefault("tab", listed is None and not txy.get("source") and not txy.get("profile_hash"))
         if not txy.get("profile_hash"):
-            profile = self.convert_profile()
-            txy.update({"profile_hash": profile.content_hash(), "profile_tag": self.convert_profile_tag(),
-                        "profile": {"name": profile.name, "version": profile.version,
-                                    "calibrated": profile.calibrated}})
-        txy.update({"source": txy_sources.normal_source(txy.get("source")) or self.tab_source(),
+            txy.update(self.conversion_options())
+        txy["conversion"] = self.conversion_options()  # (``Conversion``'s profile, whatever the list resolved to.)
+        # Q~2: a list of several entries falls back to the levels above it (a plot's: the folder's own list, then
+        # Settings'; a folder's own: Settings'), then to any TXY in the folder (the helper's last stages).
+        own_folder = self.folder_own_list(path)
+        if listed is not None:
+            entries = txy_sources.valid_list(listed)
+            txy = txy_sources.with_list(txy, entries or self.tab_list(), self._profile_for_tag)
+            above = [*(own_folder or ()), *self.tab_list()]
+        elif txy["tab"]:
+            # The folder's own TXY list (store-v4, Q45.2, Q53.2), else Settings', for the tab's loads, Live and
+            # cached reads.
+            txy = txy_sources.with_list(txy, self.folder_list(path), self._profile_for_tag)
+            above = list(self.tab_list()) if own_folder is not None else []
+        else:
+            above = []
+        if above:
+            txy["fallback"] = txy_sources.items_of(txy, list(dict.fromkeys(above)), self._profile_for_tag)
+        txy["known"] = self.known_profiles()
+        if "profile_def" not in txy and (profile := self.convert_profile()).content_hash() == str(txy["profile_hash"]):
+            # The conversion profile whole (A47.1): a user profile then converts from raw too (stage 3; the
+            # built-ins the helper knows itself; another user profile's TXY is read from its text).
+            txy["profile_def"] = profile.to_dict()
+        if "on_read" not in txy and "policy" in options:
+            # store-v4 (its options carry the policy): Live converts raw files on read too (stage 3, S3~4, R~1).
+            txy["on_read"] = True
+        if "backend" not in txy:
+            # The converter backend a shot made from the raw layer runs on (A47.6): Settings', as conversions use.
+            from helab.utils import constants
+            from helab.utils.settings_store import app_settings
+            txy["backend"] = constants.read_convert_backend(app_settings())
+        txy.update({"source": txy_sources.source_text(txy.get("source")) or self.tab_source(),
                     "profile_hash": str(txy["profile_hash"]), "profile_tag": str(txy.get("profile_tag") or ""),
                     "cache_base": os.path.dirname(os.path.abspath(options["directory"])) if options else "",
                     "cache_directory": str(options.get("directory") or ""),
@@ -956,9 +1074,138 @@ class FolderCache(QObject):
                 return str(metadata["key"])
         return str((self._live_helab.get(key) or {}).get("key") or "")
 
+    def folder_own_list(self, path: str) -> txy_sources.Entries | None:
+        """A folder's own TXY list (Q45.2, Q53.2), None when it follows Settings'. Memory only."""
+        choices = self.folder_choices.get(path) or {}
+        return txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+
+    def known_profiles(self) -> dict[str, dict[str, Any]]:
+        """The conversion profile and the user's by tag (``profile_hash``, ``profile``), for a load's last
+        fallback stage to name HeLab's TXY beside the raw files (Q~2; the built-ins the helper knows)."""
+        found = {tag: {"profile_hash": item["profile_hash"], "profile": item["profile"]}
+                 for tag, item in self._user_profiles.items()}
+        conversion = self.conversion_options()
+        found[str(conversion["profile_tag"])] = {"profile_hash": conversion["profile_hash"],
+                                                 "profile": conversion["profile"]}
+        return found
+
+    def folder_list(self, path: str) -> txy_sources.Entries:
+        """The TXY list a tab load of ``path`` reads, as saved: the folder's own (Q45.2, Q53.2), else Settings'.
+        Memory only."""
+        choices = self.folder_choices.get(path) or {}
+        return txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or "")) or self.tab_list()
+
+    def folder_source(self, path: str) -> str:
+        """The TXY source a load of ``path`` reads (a mode, or a list's text): the folder's own (Q45.2), else the
+        tabs'. Memory only."""
+        return str(self.resolved(self.folder_list(path))["source"])
+
+    def converts_on_read(self, path: str) -> bool:
+        """Whether a load of ``path`` converts its raw files on read (caching v2 stage 3, S3~5): store-v4 (the
+        switch on), a TXY source that reads HeLab's (the folder's own, else the tabs'), and the folder cached.
+        Memory only."""
+        if "policy" not in store_options():
+            return False
+        return txy_sources.wants_helab(self.folder_source(path)) and not self.folder_prefs(path).get("no_cache")
+
+    def on_read_shots(self, path: str, raw: int, txy: int) -> int:
+        """How many of a folder's shots a load converts from their raw files, when it converts on read; else 0.
+        Memory only. As the load decides (S3R-2; Q50.1): the raw files without a current HeLab TXY, given the
+        source. Those MATLAB's TXY lacks (``raw - txy``), unless the source converts over MATLAB's
+        (``txy_sources.converts_over_matlab``: HeLab only; HeLab priority only with Q50.1's flag): then every raw
+        file. Once the folder's data is loaded, its load's own count (a HeLab TXY in HeLab's TXY folder, which only
+        a load looks for, is read instead)."""
+        if not raw or not self.converts_on_read(path):
+            return 0
+        dataset = self.latest_dataset(path)
+        counts = dataset.metadata.get("load_counts") if dataset is not None else None
+        if isinstance(counts, Mapping) and isinstance(counts.get("txy_helab"), int):
+            return int(counts.get("helab_on_read") or 0)  # (A load of a HeLab source counted them.)
+        return raw if txy_sources.converts_over_matlab(self.folder_source(path)) else max(0, raw - txy)
+
+    def remember_choices(self, path: str, choices: object) -> None:
+        """Keep a folder's stage 2 choices (``folder_choices``, store-v4: a load's, a listing's, A47.2, or the
+        admin's). Each part (the policy; the TXY source with its tag) keeps its later one by its own set time, so a
+        listing read before a change was saved never brings back the choice it replaced."""
+        if not isinstance(choices, dict):
+            return
+        saved = self.folder_choices.get(path)
+        merged: dict[str, Any] = dict(saved or {"policy": "", "source": "", "tag": ""})
+        for fields, stamp in ((("policy",), "policy_set_at"), (("source", "tag"), "source_set_at")):
+            if saved is None or float(choices.get(stamp, 0)) >= float(saved.get(stamp, 0)):
+                merged.update({field: choices[field] for field in (*fields, stamp) if field in choices})
+        if merged != saved:
+            self.folder_choices[path] = merged
+            self.folderPrefsChanged.emit(path)  # (Only on a change: a listing names each child's every time.)
+
+    def set_folder_list(self, path: str, entries: Sequence[str] | None, owner: str = "") -> str:
+        """Set a folder's own TXY list (Q53.2; None follows Settings'), saved in its old form when it is a mode
+        (``txy_sources.folder_row``). The job's owner, "" if it couldn't be queued."""
+        source, tag = txy_sources.folder_row(entries) if entries else ("", "")
+        self.convert_with.pop(self.key(path), None)  # (Live's offer was for the list it replaces, TP-7.)
+        return self.set_folder_choice(path, source=source, tag=tag, owner=owner)
+
+    def set_folder_choice(self, path: str, *, policy: str | None = None, source: str | None = None,
+                          tag: str | None = None, owner: str = "") -> str:
+        """Set a folder's own cache policy or TXY source and tag (store-v4, Q45.1, Q45.2; "" follows the global
+        one): kept now (the tab's next load and Live follow it), then saved; the store's answer
+        (``folder_choices``) wins. The job's owner, "" if it couldn't be queued."""
+        set_at = time.time()
+        choices: dict[str, Any] = dict(self.folder_choices.get(path) or {"policy": "", "source": "", "tag": ""})
+        if policy is not None:
+            choices.update(policy=policy, policy_set_at=set_at)
+        if source is not None:
+            choices.update(source=source, tag=(tag or "") if source else "", source_set_at=set_at)
+        self.folder_choices[path] = choices
+        self.folderPrefsChanged.emit(path)
+        params: dict[str, Any] = {"path": path, "set_at": set_at}
+        if policy is not None:
+            params["policy"] = policy
+        if source is not None:
+            params.update(source=source, tag=tag or "")
+        job = self.cache_admin("folder_choice", **params)
+        if job:
+            self._choice_writes[job] = path
+            if owner:
+                self._choice_owners[job] = owner
+        return job
+
+    def _profile_for_tag(self, tag: str) -> dict[str, Any] | None:
+        """A list entry's tag as a load's profile options: the conversion profile's, else a built-in's, else a
+        user profile's (Q53.2). Memory only (TP-2): tooltips resolve lists with it."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                        "profile": {"name": profile.name, "version": profile.version, "calibrated": profile.calibrated}}
+        return self._user_profiles.get(tag)
+
+    def set_user_profiles(self, profiles: Iterable[DetectorProfile]) -> None:
+        """The user's profiles as Settings › TXY converter holds them (its Save; no read here)."""
+        from helab.convert.profile import file_tag
+        self._user_profile_objects = {file_tag(profile): profile for profile in profiles}
+        self._user_profiles = {tag: {"profile_hash": profile.content_hash(), "profile_tag": tag,
+                                     "profile": {"name": profile.name, "version": profile.version,
+                                                 "calibrated": profile.calibrated}}
+                               for tag, profile in self._user_profile_objects.items()}
+        self._user_profiles_read = True
+
+    def read_user_profiles(self) -> None:
+        """Read the user's profile folder (the app folder's, not a source folder) the first time a request needs
+        them (``with_txy``); never from rendering (TP-2)."""
+        if self._user_profiles_read:
+            return
+        from helab.convert.user_profiles import ProfileLibrary
+        from helab.utils.constants import profiles_folder
+        try:
+            library = ProfileLibrary(profiles_folder()).profiles()
+        except OSError:
+            library = {}
+        self.set_user_profiles(library.values())
+
     def payload_source(self, payload: Mapping[str, Any]) -> str:
         txy = payload.get(txy_sources.TXY_FIELD)
-        return txy_sources.normal_source(txy.get("source") if isinstance(txy, Mapping) else None) or self.tab_source()
+        return txy_sources.source_text(txy.get("source") if isinstance(txy, Mapping) else None) or self.tab_source()
 
     def payload_key_choice(self, payload: Mapping[str, Any]) -> str | None:
         """The choice a load's dataset and job are found by: None for the tab's, else its own."""
@@ -979,7 +1226,7 @@ class FolderCache(QObject):
         choice it was loaded for."""
         given = event.get(txy_sources.TXY_FIELD)
         record: dict[str, Any] = dict(given) if isinstance(given, Mapping) else {"origins": {}}
-        if txy_sources.normal_source(record.get("source")) is None:
+        if txy_sources.source_text(record.get("source")) is None:
             record["source"] = self.payload_source(payload)
         asked = payload.get(txy_sources.TXY_FIELD)
         asked = asked if isinstance(asked, Mapping) else {}
@@ -1145,12 +1392,80 @@ class FolderCache(QObject):
                     "loaded_at": time.time(), "checked_at": time.monotonic(), "verified": True,
                     # The tab's TXY choice, as its Live checks' data will name it.
                     txy_sources.TXY_FIELD: {"source": self.tab_source(), "origins": {},
-                                            "profile_tag": self.convert_profile_tag(), "tab": True}}
+                                            "profile_tag": txy_sources.choice_tag(self.tab_source(), str(
+                                                self.resolved(self.tab_list()).get("profile_tag") or "")),
+                                            "tab": True}}
         return Dataset(path, "", {}, metadata, self._epochs.get(path, 0))
 
     def release(self, owner: str) -> None:
         self.pins.pop(owner, None)
         self._evict()
+
+    # Caching v2's raw fills (store-v4; ``io_ops.raw_fill``)
+
+    def schedule_raw_fill(self, path: str) -> None:
+        """Queue ``path``'s raw fill on the background lane, once its data was saved to the disk cache
+        (Q19.10, Q22.1): only in store-v4, never offline, quitting, or for a Don't cache folder; one per
+        folder (``IOService`` drops a second; one running is filled again when it ends)."""
+        options = store_options()
+        if (not options or options.get("offline") or self.quitting or self.service.closed
+                or os.path.basename(os.path.normpath(str(options["directory"]))) != STORE_V4_DIRNAME
+                or self.folder_prefs(path).get("no_cache")):
+            return
+        owner = RAW_FILL_OWNER + path
+        if owner in self._raw_fills:
+            self._raw_fill_again.add(path)
+            return
+        if self.service.submit(owner, 0, path, "raw_fill", {"cache": options},
+                               timeout=self.service.NO_PROGRESS_TIMEOUT):
+            self._raw_fills.add(owner)
+
+    def _on_raw_fill_event(self, producer: IORequest, event: dict[str, Any]) -> None:
+        kind, path = event["kind"], producer.path
+        if kind == "raw_overwritten":
+            self._raw_overwritten(path, event)
+        elif kind == "raw_fill_done":
+            self._note_usage(event.get("usage"), event.get("usage_seq"))
+            if "next_deadline" in event:
+                self._schedule_sweep(event["next_deadline"])
+            if event["more"]:
+                self._raw_fill_again.add(path)  # (It yielded: the rest at the back of the lane.)
+            if event["reason"] and event["reason"] not in ("store_v3",):
+                logging.info("Raw pulse caching %s: %s", path, event["reason"])
+        elif kind == "error":
+            logging.warning("Raw pulse caching %s: %s", path, event.get("message", ""))
+        if kind in ("done", "error", "cancelled"):
+            self._raw_fills.discard(producer.owner)
+            if path in self._raw_fill_again and kind == "done":
+                self._raw_fill_again.discard(path)
+                QTimer.singleShot(0, lambda: self.schedule_raw_fill(path))
+            else:
+                self._raw_fill_again.discard(path)
+
+    def _note_legacy(self, legacy: object) -> None:
+        """store-v3's state as store-v4 said it (``legacyChanged``: the question, Settings › Cache)."""
+        found = dict(legacy) if isinstance(legacy, dict) else None
+        if found != self.legacy:
+            self.legacy = found
+            self.legacyChanged.emit()
+
+    def _raw_overwritten(self, path: str, event: Mapping[str, Any]) -> None:
+        """Q28.6: a raw file overwritten in place since store-v4 cached it (it only happens when the TDC is
+        misconfigured, Q22.5): said once per shot per session, by a notification, a log warning and its
+        folder's Folder details line (``raw_overwrites``). Live goes on."""
+        shot = int(event["shot"])
+        seen = self.raw_overwrites.setdefault(path, {})
+        if shot in seen:
+            return
+        seen[shot] = {"raw_name": str(event["raw_name"]), "old": list(event["old"]), "new": list(event["new"]),
+                      "at": time.time()}
+        message = (f"Raw file {event['raw_name']} in {os.path.basename(os.path.normpath(path)) or path} was overwritten "
+                   "since HeLab cached it: it is read again. The TDC may be misconfigured.")
+        logging.warning("%s (%s)", message, path)
+        from helab.utils import events
+        events.notify(events.RAW_OVERWRITTEN, message, title="HeLab: raw file overwritten",
+                      key=(events.RAW_OVERWRITTEN, path, shot), desktop=True, path=path, shot=shot)
+        self.rawOverwritten.emit(path)
 
     def folder_prefs(self, path: str) -> dict[str, Any]:
         """A folder's flags (never its parent's or subfolders'): no_cache, no_auto_load."""
@@ -1216,31 +1531,101 @@ class FolderCache(QObject):
         if self.write_beside(path) != before:
             self.folderPrefsChanged.emit(path)
 
-    def convert(self, owner: str, path: str) -> bool:
+    def auto_convert_profile(self, path: str) -> DetectorProfile:
+        """The profile Live's Auto-convert converts ``path`` with: the one its Live line's offer set this session
+        (``convert_with``, Q~2.2), else Settings' conversion profile. Memory only."""
+        return self.taken_convert_with(path) or self.convert_profile()
+
+    def taken_convert_with(self, path: str) -> DetectorProfile | None:
+        """Live's offer as taken for ``path`` this session, while the folder's list is still that one profile
+        (TP-7: a list changed since drops it). Memory only."""
+        from helab.convert.profile import file_tag
+        key = self.key(path)
+        chosen = self.convert_with.get(key)
+        if chosen is None:
+            return None
+        if txy_sources.resolve(self.folder_list(path), self.convert_profile_tag()) != (file_tag(chosen),):
+            del self.convert_with[key]
+            return None
+        return chosen
+
+    def auto_convert_offer(self, path: str) -> DetectorProfile | None:
+        """The profile Live's line offers to convert ``path`` with (Q~2.2): its TXY list's one entry, when that
+        is a HeLab profile Auto-convert doesn't convert with now and HeLab knows it; else None. A list of
+        several entries falls back to the conversion profile's TXY (Q~2.1), so it offers nothing."""
+        entries = txy_sources.resolve(self.folder_list(path), self.convert_profile_tag())
+        if len(entries) != 1 or entries[0] == txy_sources.EXTERNAL:
+            return None
+        from helab.convert.profile import file_tag
+        if file_tag(self.auto_convert_profile(path)) == entries[0]:
+            return None
+        return self.profile_by_tag(entries[0])
+
+    def set_convert_with(self, path: str, profile: DetectorProfile | None) -> None:
+        """Live's offer taken (``profile``) or undone (None): this session's Auto-convert profile for ``path``."""
+        if profile is None:
+            self.convert_with.pop(self.key(path), None)
+        else:
+            self.convert_with[self.key(path)] = profile
+
+    def profile_by_tag(self, tag: str) -> DetectorProfile | None:
+        """The conversion profile, a built-in or a user profile whose TXY carry ``tag`` (``file_tag``). Memory
+        only: the user's as a load last read them (``_profile_for_tag``); a Live line renders with it."""
+        from helab.convert.profile import BUILTIN_PROFILES, file_tag
+        for profile in (self.convert_profile(), *BUILTIN_PROFILES.values()):
+            if file_tag(profile) == tag:
+                return profile
+        return self._user_profile_objects.get(tag)
+
+    def converting_with(self, path: str, profile: DetectorProfile | None = None) -> str:
+        """The name of the profile a conversion of ``path`` running now converts with ("" for none); with
+        ``profile``, only when it isn't that very profile (its whole definition, as ``convert`` compares: TP-11).
+        One conversion per folder (a second asker joins it), so another profile's waits for it (TP-5). Memory only."""
+        job = self.jobs.get(job_key("convert", self.key(path)))
+        running = job.payload.get("profile") if job is not None else None
+        if not isinstance(running, Mapping) or profile is not None and running == profile.to_dict():
+            return ""
+        return str(running.get("name") or "?")
+
+    def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
+                profile_used: DetectorProfile | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
         background lane, pausable, refused while working offline: answered ``offline``). Sends
         the folder's last conversion's lists back (``seen``, ``done``, ``kept``, ``skip``; ``seen``
         is ``[]`` for its first this session, which only records), so done shots aren't checked
         again and a file is taken as finished only after two conversions saw it unchanged. One
-        conversion per folder at a time (a second asker joins it). Whether it was accepted."""
+        conversion per folder at a time (a second asker joins it). Whether it was accepted.
+        ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` the folder's flag as this
+        memory knows it, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a
+        refused beside write); None: as set. The helper still writes beside only while the store's flag is on.
+        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam)."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
         settings = app_settings()
-        profile = self.convert_profile().to_dict()  # (Settings → TXY converter; follows its Save.)
+        # (Settings → TXY converter, following its Save, unless another is asked for.)
+        profile = (profile_used or self.convert_profile()).to_dict()
+        running = self.jobs.get(job_key("convert", path))
+        if running is not None and running.payload.get("profile") != profile:
+            return False  # (Another profile's conversion runs: never joined, TP-5; the asker waits or says so.)
         payload: dict[str, Any] = {"path": path, "profile": profile,
                                    "backend": constants.read_convert_backend(settings), "temps": constants.DIR_TEMPS,
                                    "cache": store_options(),
                                    # (The setting, cache or temp: ``destination``, since every helper's
                                    # ``output`` is its private folder, set by IOService.)
-                                   "destination": constants.read_convert_output(settings),
-                                   "beside": self.write_beside(path), "seen": []}
+                                   "destination": destination or constants.read_convert_output(settings),
+                                   "beside": self.write_beside(path) if beside is None else beside,
+                                   "seen": []}
         lists = self.convert_lists.get(path)
         if lists is not None:
             if lists["profile"] == profile:
                 payload["seen"] = lists["waiting"]
                 payload["done"], payload["kept"] = lists["current"], lists["kept"]
-                payload["skip"] = lists["unconvertible"]
+                # Unconvertible under these settings only: a shot refused for its TXY's path length, or
+                # failed under a backend, is tried again once the user changes where TXY go or the backend
+                # (convert-2: the refusal's advice can be acted on this session).
+                if lists.get("where") == self._convert_where(payload):
+                    payload["skip"] = lists["unconvertible"]
             else:
                 # Another profile's current and unconvertible shots, and why a file looked unfinished (its
                 # trigger channel), aren't this one's: checked again. When each waiting file was seen, with its
@@ -1248,11 +1633,20 @@ class FolderCache(QObject):
                 payload["seen"] = [[*entry[:3], "", "", *entry[5:6]] for entry in lists["waiting"]]
         return self.submit(owner, 0, path, "convert", payload)
 
+    @staticmethod
+    def _convert_where(payload: Mapping[str, Any]) -> dict[str, Any]:
+        """What besides the profile decides whether a shot converts: the backend and where its TXY go."""
+        cache = payload.get("cache")
+        return {"backend": payload.get("backend"), "destination": payload.get("destination"),
+                "beside": bool(payload.get("beside")), "temps": payload.get("temps"),
+                "cache": cache.get("directory") if isinstance(cache, Mapping) else None}
+
     def _remember_convert(self, job: SharedJob, event: dict[str, Any]) -> None:
         """A conversion's lists, for the folder's next one (``convert``)."""
         lists: dict[str, Any] = {key: [list(entry) for entry in event.get(key) or ()]
                                  for key in ("current", "waiting", "unconvertible", "kept")}
         lists["profile"] = job.payload.get("profile")
+        lists["where"] = self._convert_where(job.payload)
         self.convert_lists[job.path] = lists
         self.convert_lists.move_to_end(job.path)
         while len(self.convert_lists) > self.MAX_SNAPSHOTS:
@@ -1466,6 +1860,32 @@ class FolderCache(QObject):
             del self.folder_constant_records[folder]
             if before:
                 self.constantsChanged.emit(folder)
+
+    def _root_prefs_gone(self, path: str) -> None:
+        """Beside :meth:`_root_constants_gone` (cache-1): the old root's folder flags (Don't cache, Don't
+        auto-load), converter flags (``write_beside``) and store-v4 folder choices (cache policy, TXY source:
+        A47-1) no longer apply to the folders it held (not those inside a nested root below), so the next
+        listing's answer under the new identity stands; a flag or choice write still running (this session's
+        choice) keeps its folder's."""
+        writing = {write[0] for write in self._pref_writes.values()}
+        changed: set[str] = set()
+        for folder in [folder for folder in self.prefs if self._root_holds(path, folder) and folder not in writing]:
+            before = self.folder_prefs(folder)
+            del self.prefs[folder]
+            self._confirmed_prefs.pop(folder, None)
+            if self.folder_prefs(folder) != before:
+                changed.add(folder)
+        for folder in [folder for folder in self.convert_prefs if self._root_holds(path, folder)]:
+            if self.write_beside(folder):
+                changed.add(folder)
+            del self.convert_prefs[folder]
+        choosing = set(self._choice_writes.values())
+        for folder in [folder for folder in self.folder_choices
+                       if self._root_holds(path, folder) and folder not in choosing]:
+            del self.folder_choices[folder]
+            changed.add(folder)
+        for folder in sorted(changed):
+            self.folderPrefsChanged.emit(folder)
 
     def _root_results_gone(self, path: str) -> None:
         """Beside :meth:`_root_constants_gone`: the old root's saved-result counts no longer apply to
@@ -2110,6 +2530,9 @@ class FolderCache(QObject):
                 holders.update(dataset_buffers(entry).keys())
             total += sum(size for key, size in plots.items() if not holders[key])
         pinned = {id(entry) for entry in self.pins.values()}
+        # A folder's cached read a check beside it waits for (``_awaiting_producers``, nothing pins it in the
+        # background) stays until that check takes it as its base (``_resume_awaiting``), next (io-7).
+        pinned |= {id(entry) for key, entry in self.datasets.items() if key[0] in self._awaiting_producers}
         for key, entry in list(self.datasets.items()):
             if total <= limit:
                 break
@@ -2142,7 +2565,8 @@ class FolderCache(QObject):
         payload = payload or {}
         if self.quitting and not (operation == "load" and payload.get("save")):
             return False
-        if operation == "load":
+        if operation in ("load", "cached"):
+            # (A cached read too: in store-v4 it reads the view of the tab's TXY source, stage 2.)
             payload = self.with_txy(path, payload)
             if payload.get("live") and "helab_since" not in payload:
                 # HeLab's folders as the last Live check found them: unchanged, nothing was converted since.
@@ -2217,8 +2641,8 @@ class FolderCache(QObject):
                 self._deliver(request, {"kind": "resolved", "path": self._defaults[candidates]})
                 return True
         live = operation == "load" and bool(payload.get("live"))
-        job_key = ("live" if live else operation if choice is None else f"{operation}:{choice}", path)
-        job = self.jobs.get(job_key)
+        filed = job_key(operation, path, live, choice)
+        job = self.jobs.get(filed)
         if job and operation == "load" and choice is None and self.payload_choice(job.payload) != \
                 self.payload_choice(payload):
             # The tab's load of the choice it had before Settings changed it: this one waits for it to end,
@@ -2229,7 +2653,7 @@ class FolderCache(QObject):
             def wait_for_job() -> None:
                 if request.cancelled.is_set() or self.service.closed:
                     return
-                if self.jobs.get(job_key) is job:
+                if self.jobs.get(filed) is job:
                     QTimer.singleShot(50, wait_for_job)
                     return
                 if request in self._deliveries:
@@ -2296,16 +2720,17 @@ class FolderCache(QObject):
                            "held_raw_times": list(base.metadata.get("raw_times") or ())}
             else:
                 payload = {key: value for key, value in payload.items() if key != "save_memory"}
-        job = SharedJob(uuid4().hex, path, operation, self._epochs.get(path, 0), payload, base=base, live=live)
+        job = SharedJob(uuid4().hex, path, operation, self._epochs.get(path, 0), payload, base=base, live=live,
+                        choice=choice)
         if operation in SCANS:
             job.payload = payload = {**payload, "scan_operation_id": job.owner,
                                      "scan_revision": time.time_ns(), "scan_manual": manual}
         job.subscribers[(owner, generation)] = request
-        self.jobs[job_key] = job
+        self.jobs[job.key] = job
         self._producers[job.owner] = job
         if not self.service.submit(job.owner, 0, path, operation, payload, priority=priority, timeout=timeout,
                                    arrays=arrays):
-            self.jobs.pop(job_key)
+            self.jobs.pop(job.key)
             self._producers.pop(job.owner)
             return False
         return True
@@ -2547,8 +2972,9 @@ class FolderCache(QObject):
         self.mismatchesChanged.emit()
 
     def cancel_held_io(self) -> None:
-        """Cancel every load and scan (queued, running or held), then stop holding them."""
-        self.service.cancel_operations(self.service.MISMATCH_HELD)
+        """Cancel every load and scan the hold holds (queued, running or held; not saves or Live
+        checks), then stop holding them."""
+        self.service.cancel_held()
         self.resume_after_mismatch()
 
     def skip_mismatches(self) -> None:
@@ -2653,15 +3079,17 @@ class FolderCache(QObject):
 
     def _invalidate_data(self, path: str) -> None:
         self._epochs[path] = self._epochs.get(path, 0) + 1
-        for operation in ("load", "live", "cached"):
-            job = self.jobs.get((operation, path))
-            if job:
-                self._cancel_job(job)
+        # Every load of the folder: the tab's, Live's, plots' own choices (``load:<choice>``), cached reads.
+        for job in [job for job in self.jobs.values() if job.path == path and job.operation in ("load", "cached")]:
+            self._cancel_job(job)
         for key in [key for key in self.datasets if key[0] == path]:
             del self.datasets[key]
-        for request in self._deliveries:
-            if request.operation in ("load", "cached") and request.path == path:
+        for request in list(self._deliveries):
+            # Waiting, or answered from RAM: told, as ``_mismatch`` tells them, so no tab waits on "queued".
+            if request.operation in ("load", "cached") and request.path == path and not request.cancelled.is_set():
+                self._deliveries.remove(request)
                 request.cancelled.set()
+                self.resultReady.emit(request, {"kind": "cancelled"})
         self.datasetChanged.emit(path)
 
     def cancel_automatic_scans(self, owner: str) -> list[IORequest]:
@@ -2857,6 +3285,9 @@ class FolderCache(QObject):
             if job.operation in ("load", "cached", "list", "details", "scan", "icons", "resolve") and not (
                     job.operation == "load" and job.saves()):
                 self._cancel_job(job)
+        # Nothing but saves starts now and the hold spares them (io-1): it has nothing left to hold. Lifted
+        # after the cancelling, so none of the loads and scans it held starts a helper only to be stopped.
+        self.resume_after_mismatch()
 
     def cancel(self, owner: str, operation: str | None = None, path: str | None = None) -> None:
         # A write held for an identity probe ends cancelled, as a queued helper would.
@@ -3485,6 +3916,9 @@ class FolderCache(QObject):
         if kind == "folder_prefs":
             self.remember_prefs(event["path"], event["prefs"])
             return
+        if kind == "folder_choices":
+            self.remember_choices(event["path"], event["choices"])
+            return
         if kind == "convert_prefs":
             self._remember_convert_prefs(event["path"], event["prefs"])
             return
@@ -3564,6 +3998,9 @@ class FolderCache(QObject):
             self.pending_results = merged_results
             self.pendingSavesChanged.emit()
             self._schedule_sweep(event["inventory"].get("next_deadline"))
+            self._note_legacy(event["inventory"].get("legacy"))
+        elif kind == "admin_result" and action in ("legacy_choice", "clear_legacy"):
+            self._note_legacy(event.get("legacy"))
         elif kind == "admin_result" and action in ("adopt", "discard"):
             # Matched by pending_id: a late answer about an older save never touches a newer one.
             pending_id = producer.payload["params"].get("pending_id")
@@ -3618,11 +4055,18 @@ class FolderCache(QObject):
             logging.info("Disk cache cleanup: %s", event)
         elif kind in ("error", "cancelled"):
             logging.warning("Disk cache %s: %s", action, event.get("message", "Cancelled"))
+        if action == "folder_choice" and kind == "admin_result" and isinstance(raw := event.get("folder_raw"), dict) \
+                and int(raw.get("shots") or 0) and (asker := self._choice_owners.get(producer.owner)):
+            # S4~1: the folder now keeps no raw pulses; the tab that chose it offers to remove those it has.
+            self.rawRemovalOffered.emit(asker, self._choice_writes.get(producer.owner, ""), int(raw.get("bytes") or 0),
+                                        int(raw.get("only_copy") or 0))
         if kind in ("inventory", "admin_result", "swept", "error", "cancelled") and not stale:
             self.cacheAdminResult.emit(action, event)
         if kind in ("done", "error", "cancelled"):
             self._admin.pop(producer.owner, None)
             self._started.pop(producer.owner, None)
+            self._choice_writes.pop(producer.owner, None)
+            self._choice_owners.pop(producer.owner, None)
             write = self._pref_writes.pop(producer.owner, None)
             if write is not None and kind != "done":
                 self._prefs_not_saved(write[0], write[1], str(event.get("message") or "the save was cancelled"),
@@ -3676,6 +4120,7 @@ class FolderCache(QObject):
                 # A root this session hadn't seen at that folder: what RAM holds there came from
                 # whichever root was nearest, gone too. (A known one: ``_root_seen``/``_root_gone``.)
                 self._root_constants_gone(str(event["path"]))
+                self._root_prefs_gone(str(event["path"]))
                 self._root_results_gone(str(event["path"]))
             if event.get("location"):
                 self._duplicate_settled(str(event["location"]))  # Forgotten, removed or replaced.
@@ -3771,6 +4216,7 @@ class FolderCache(QObject):
                            else "Cache update waiting for your answer")
             self.diskCacheChanged.emit(path)
         if valid and kind == "cache_saved":
+            self.schedule_raw_fill(path)  # (Caching v2: its raw files into store-v4, in the background.)
             state = self._cache_states.setdefault(path, CacheStatus())
             state.info, state.error = dict(event["cache_info"]), ""
             for entry in self.datasets.values():
@@ -3819,6 +4265,9 @@ class FolderCache(QObject):
                 self.quitSavesChanged.emit()
             return
         if self._on_root_event(producer, event) or self._on_verification_event(producer, event):
+            return
+        if producer.owner in self._raw_fills:
+            self._on_raw_fill_event(producer, event)
             return
         if event["kind"] == "clock_skew":
             location = str(event.get("location") or event["path"])
@@ -3934,6 +4383,9 @@ class FolderCache(QObject):
             if kind == "folder_prefs":
                 self.remember_prefs(event["path"], event["prefs"], known=False)
                 return
+            if kind == "folder_choices":
+                self.remember_choices(event["path"], event["choices"])
+                return
             if kind == "folder_constants":
                 self._remember_constant_folders(event.get("folders"), known=False)
                 return
@@ -3971,6 +4423,8 @@ class FolderCache(QObject):
                         self.remember_subtree(entry["path"], entry["subtree"], notify=False)
                     if "prefs" in entry:
                         self.remember_prefs(entry["path"], entry["prefs"], known=False)
+                    if "choices" in entry:
+                        self.remember_choices(entry["path"], entry["choices"])  # (A47.2: with its listing.)
                     if "constants" in entry:
                         self.remember_constants(entry["path"], entry["constants"], known=False)
                     if "disk_cached" in entry and not self._cleared_since(job, entry["path"]):
@@ -4099,7 +4553,7 @@ class FolderCache(QObject):
                 if job.load_status is not None and job.load_status["kind"] == "heartbeat":
                     job.load_status = None
             if kind == "scan_summary":
-                # A Live check's, or a Live save's that read shots again (``io_ops.save_held.save_held``).
+                # A Live check's, or a Live save's (``io_ops.save_held.save_held``).
                 listed = self.snapshots.get(job.path)
                 if (job.payload.get("save_memory") and listed is not None
                         and float(event["status"].get("scanned_at") or 0)
@@ -4219,6 +4673,8 @@ class FolderCache(QObject):
                         self.remember_folder_icon(path)
         elif job.operation == "convert" and kind == "convert_summary":
             self._remember_convert(job, event)
+        elif job.operation == "convert" and kind == "raw_overwritten":
+            self._raw_overwritten(job.path, event)  # (Its raw rows: a file changed in place, Q28.6.)
         elif job.operation == "convert" and kind == "shot_unconvertible":
             self.convert_reasons.setdefault(job.path, {})[str(event["raw_name"])] = str(
                 event.get("message") or event["reason"])

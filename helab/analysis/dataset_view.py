@@ -18,7 +18,12 @@ MATLAB lacks; ``txy_sources``). Each shot read from HeLab's TXY has its ``origin
 source is never taken for another's. ``revision`` starts at 1
 for a loaded dataset and goes up by one each time shots are added to it
 (``with_shots``, for Live); results are bound to identity *and* revision (``ViewKey``).
-``revise`` makes Live's next dataset of the folder the next revision of its view.
+``revise`` makes Live's next dataset of the folder the next revision of its view. The signature
+doesn't tell a folder's loads apart (every TXY choice's dataset of it has the MATLAB TXY's, and a
+folder without MATLAB TXY has ``sha256("[]")`` whatever it holds), so each view chain has its own
+``chain`` token: a fresh load, another TXY choice or another profile is another identity, never an
+earlier revision (plots-1). What a view holds is its ``held`` record (``Held``), compared with
+the ``Dataset`` a tab shows by its data, not its signature (``Held.shown_in``).
 
 A view may have no shots: Live started before the folder's first shot.
 
@@ -30,14 +35,18 @@ file has a new mtime either way.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import time
 import weakref
 from dataclasses import dataclass, field
+from functools import cached_property
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 from urllib.parse import quote
+from uuid import uuid4
 
 import numpy as np
 import numpy.typing as npt
@@ -49,8 +58,10 @@ if TYPE_CHECKING:
     from helab.utils.folder_cache import Dataset
 
 Events = npt.NDArray[np.float64]
+"""Events as an (n, 3) float64 array of T, X and Y: T in s since the trigger, X and Y in m."""
 # (shot, size in bytes, mtime in ns), as the helper fingerprints each TXY file.
 Fingerprint = tuple[int, int, int]
+"""(shot, size in bytes, mtime in ns) of a shot's TXY file, as HeLab found it when loading."""
 
 
 @dataclass(frozen=True)
@@ -64,14 +75,35 @@ class DataRootRef:
 
 @dataclass(frozen=True)
 class ViewIdentity:
+    """Which data a view is: its folder, the load and the TXY it is made of.
+
+    Two views with the same identity are revisions of one chain (``DatasetView.revision``); a
+    fresh load, another TXY choice or another profile is another identity.
+
+    Attributes:
+        source_path: The folder the data was loaded from.
+        root_key: The folder's data-root key, ``root://<uuid>/<relative>``; "" when no data
+            root (``.helab-root``) is known.
+        signature: The loaded dataset's signature (a hash of its TXY files' fingerprints); ""
+            when it has none (e.g. a resumed partial load).
+        source: Which TXY source the data is made of: "" for the two priority modes (the
+            shots' ``DatasetView.origins`` tell their data apart), else the mode's name or the TXY
+            priority list's text (``txy_sources.identity_source``).
+        chain: The token of this chain of revisions ("" for a placeholder view). Not part of a
+            result's reuse key, which compares the data itself.
+    """
     source_path: str
     root_key: str  # "" when no data root is known
     signature: str  # "" when the dataset has none (e.g. a resumed partial load)
     # Which TXY (``txy_sources.identity_source``): "" for the priority sources, else the source's name.
     source: str = ""
+    # Which chain of revisions: ``build_view``'s own token, kept by ``with_shots`` ("": a placeholder
+    # view's). Not in a result's reuse key, which compares the data itself (coverage and origins).
+    chain: str = ""
 
     @property
     def name(self) -> str:
+        """The folder's name (the last part of ``source_path``), for titles and records."""
         return os.path.basename(self.source_path.rstrip("/\\")) or self.source_path
 
 
@@ -82,11 +114,26 @@ class ViewKey:
     revision: int
 
     def short(self) -> str:
+        """``<folder name> · rev <revision>``, for a plot's source line."""
         return f"{self.identity.name} · rev {self.revision}"
 
 
 @dataclass(frozen=True)
 class Provenance:
+    """Where a view's data came from and how far it was checked, as the load reported it.
+
+    Attributes:
+        source: The load's source as the helper reported it (e.g. "disk", "memory", "merged").
+        loaded_at: When it was loaded (wall-clock time, s since the epoch); None if unknown.
+        checked_at: When it was last checked against the folder (wall-clock time); None: never.
+        verified: False while the data is shown from the disk cache, not yet checked against
+            the folder.
+        unsettled_files: TXY files left out because they were still being written.
+        failed_files: TXY files that couldn't be read.
+        problematic: Shots with unreadable rows (those rows dropped).
+        cache_reason: The load's note on the cache: why cached data was used (e.g. "Folder not
+            modified since cached") or why the data wasn't cached; "" for none.
+    """
     source: str  # the load's source as the helper reported it (e.g. "disk", "memory", "merged")
     loaded_at: float | None  # wall-clock time
     checked_at: float | None  # wall-clock time of the last check against the folder; None: never
@@ -99,6 +146,41 @@ class Provenance:
 
 @dataclass(frozen=True, eq=False)
 class DatasetView:
+    """A read-only, immutable snapshot of a loaded dataset: the one input an analysis gets.
+
+    ``compute`` reads it as ``context.view``. Its arrays are shared with HeLab and with other
+    runs, and read-only: copy one (``.copy()``) before changing it. A view may have no shots
+    (Live started before the folder's first shot); a plot then says it is empty.
+
+    Attributes:
+        identity: Which data this is (``ViewIdentity``).
+        revision: 1 for a loaded dataset, one more each time a newer load (Live's) adds or
+            replaces shots, or only finds their raw files' times.
+        shots: Shot number → that shot's events, a read-only (n, 3) T/X/Y array (``Events``),
+            in ascending shot order. ``events`` joins chosen shots into one array.
+        fingerprints: Shot number → its TXY file's ``Fingerprint``.
+        provenance: Where the data came from (``Provenance``).
+        data_root: The data root the folder is under, when known.
+        added_shots: The shots this revision added or replaced (a replaced shot's array is new:
+            its TXY file was rewritten, or it now comes from another TXY). A revision that only
+            found shot times has none. A running total over revisions must take a replaced
+            shot's old events out before adding its new ones.
+        created_at: When the view was made (wall-clock time).
+        dataset_signature: The signature of the loaded dataset this revision is ("": the
+            identity's, as at revision 1).
+        raw_times: Shot number → its raw ``d<N>.txt`` file's mtime in ns, where one was found
+            (``shot_time`` reads it).
+        origins: Shot number → its origin, ``helab:<profile hash>``, for shots read from
+            HeLab's own TXY; shots from MATLAB's TXY aren't listed.
+        txy_profiles: Profile hash → its name, version and whether it is calibrated, for the
+            HeLab TXY in the view.
+        on_read: The HeLab shots converted from their raw files when they were read.
+        fallback: The shots read from beyond the TXY choice's own list, because none of its
+            entries had them: from its fallback (the folder's or Settings' list, External, then
+            any HeLab TXY). ``origins`` says which TXY each is.
+        txy_choice: The TXY choice the data was loaded with ("": none named, MATLAB's TXY
+            alone). Views of two choices are never revisions of each other.
+    """
     identity: ViewIdentity
     revision: int
     shots: Mapping[int, Events]  # shot number → read-only (n, 3) T/X/Y array, ascending
@@ -115,6 +197,10 @@ class DatasetView:
     origins: Mapping[int, str] = field(default_factory=lambda: MappingProxyType({}))
     # profile hash → {name, version, calibrated} of the HeLab TXY in it.
     txy_profiles: Mapping[str, Mapping[str, Any]] = field(default_factory=lambda: MappingProxyType({}))
+    # The HeLab shots made from their raw files when read (caching v2 stage 3, S3~6).
+    on_read: frozenset[int] = frozenset()
+    # The shots taken from beyond its list's own entries (Q~2's fallback), whichever TXY each is (``origins``).
+    fallback: frozenset[int] = frozenset()
     # The TXY choice its data was loaded with (``txy_sources.metadata_choice``: source and profile tag; "":
     # data naming none, MATLAB's alone). Two choices' views are never revisions of each other (Q18.2).
     txy_choice: str = ""
@@ -122,11 +208,26 @@ class DatasetView:
     def txy_text(self) -> str:
         """Which TXY this revision is made of, for a plot's record (``txy_sources.describe``)."""
         source = txy_sources.source_of_choice(self.txy_choice)
-        return txy_sources.describe(source, self.origins, self.txy_profiles, len(self.shots))
+        return txy_sources.describe(source, self.origins, self.txy_profiles, len(self.shots),
+                                    len(self.on_read & set(self.origins)),
+                                    {shot: self.origins.get(shot, "") for shot in self.fallback})
 
     @property
     def key(self) -> ViewKey:
+        """What a result of this view is bound to: its identity and revision."""
         return ViewKey(self.identity, self.revision)
+
+    @property
+    def chain_key(self) -> list[str]:
+        """Which data this view's chain is, for what a plot keeps across Live's reruns (plots-3): its
+        TXY source and choice, its chain and the profile hashes of its HeLab shots."""
+        hashes = sorted({origin.removeprefix(txy_sources.HELAB_ORIGIN) for origin in self.origins.values()})
+        return [self.identity.source, self.txy_choice, self.identity.chain, *hashes]
+
+    @cached_property
+    def held(self) -> Held:
+        """What this revision holds (``Held``), as a ``Dataset`` of the same data has it (``held_of``)."""
+        return Held.of(self.shots, self.fingerprints, self.origins)
 
     @property
     def signature(self) -> str:
@@ -135,10 +236,12 @@ class DatasetView:
 
     @property
     def shot_numbers(self) -> tuple[int, ...]:
+        """The view's shot numbers, ascending."""
         return tuple(self.shots)
 
     @property
     def event_count(self) -> int:
+        """The number of events in all the view's shots."""
         return sum(len(array) for array in self.shots.values())
 
     def shot_time(self, shot: int) -> float | None:
@@ -169,14 +272,16 @@ class DatasetView:
                    provenance: Provenance | None = None, signature: str = "",
                    raw_times: Mapping[int, int] | None = None, origins: Mapping[int, str] | None = None,
                    txy_profiles: Mapping[str, Mapping[str, Any]] | None = None,
-                   txy_choice: str | None = None) -> DatasetView:
+                   txy_choice: str | None = None, on_read: Iterable[int] | None = None,
+                   fallback: Iterable[int] | None = None) -> DatasetView:
         """The next revision: this view plus ``added`` (new or replaced shots), same identity.
         The added arrays become shared, read-only data, as ``build_view``'s are. ``provenance``
         and ``signature``: the newer load's (default: this view's provenance, no signature).
         ``raw_times``: shot times known now; this view's are kept for shots not in ``added`` (a
         replaced shot has only the time given for it). ``origins``: the added shots' that came from
         HeLab's TXY (an added shot not in it is MATLAB's). ``txy_choice``: the newer load's, when this view's
-        names none (default: this view's)."""
+        names none (default: this view's). ``on_read``: the added shots made from their raw files when read.
+        ``fallback``: the newer load's fallback shots, all of them (Q~2; None: this view's, less those added)."""
         shots = {**self.shots, **{int(shot): read_only(array) for shot, array in added.items()}}
         kinds = {**{shot: origin for shot, origin in self.origins.items() if shot not in added},
                  **{int(shot): origin for shot, origin in (origins or {}).items() if int(shot) in added}}
@@ -189,6 +294,10 @@ class DatasetView:
                            raw_times=MappingProxyType({shot: times[shot] for shot in shots if shot in times}),
                            origins=MappingProxyType({shot: kinds[shot] for shot in shots if shot in kinds}),
                            txy_profiles=MappingProxyType({**self.txy_profiles, **(txy_profiles or {})}),
+                           on_read=frozenset({shot for shot in self.on_read if shot not in added}
+                                             | {int(shot) for shot in on_read or () if int(shot) in added}),
+                           fallback=frozenset(int(shot) for shot in fallback if int(shot) in shots)
+                           if fallback is not None else self.fallback - set(added),
                            txy_choice=self.txy_choice if txy_choice is None else txy_choice)
 
 
@@ -216,6 +325,34 @@ def txy(array: Events) -> Events:
 
 def _frozen(shots: dict[int, Events]) -> Mapping[int, Events]:
     return MappingProxyType(shots)
+
+
+@dataclass(frozen=True)
+class Held:
+    """What a view or a ``Dataset`` holds, to tell whether a plot shows the data a tab shows (memory
+    only): its shot numbers and its data (each shot's fingerprint and origin), as SHA-256 of their
+    JSON. ``own``: a plot's own TXY choice's data (its TXY row not "as the folder's tab")."""
+    shots: str
+    data: str
+    own: bool = False
+
+    @staticmethod
+    def of(shots: Iterable[int], fingerprints: Mapping[int, Fingerprint], origins: Mapping[int, str]) -> Held:
+        """The ``Held`` record of these shots, with their fingerprints and origins."""
+        numbers = sorted(int(shot) for shot in shots)
+        rows = [[shot, list(fingerprints[shot]) if shot in fingerprints else None, origins.get(shot, "")]
+                for shot in numbers]
+        return Held(_digest(numbers), _digest(rows))
+
+    def shown_in(self, dataset: Dataset) -> bool:
+        """Whether ``dataset`` holds this data: the same shots from the same files; for a plot's own
+        TXY choice (whose files the tab's choice needn't read), the same shots."""
+        other = held_of(dataset)
+        return self.shots == other.shots if self.own else self.data == other.data
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def root_key(folder: str, identifier: str, path: str) -> str:
@@ -272,7 +409,7 @@ def build_view(dataset: Dataset, root: tuple[str, str, str] | None = None) -> Da
         data_root = DataRootRef(identifier, label, folder, root_key(folder, identifier, dataset.path))
     shots = {int(shot): read_only(array) for shot, array in sorted(dataset.data.items())}
     identity = ViewIdentity(dataset.path, data_root.key if data_root else "", dataset.signature,
-                            txy_sources.identity_source(txy_sources.source_of(metadata)))
+                            txy_sources.identity_source(txy_sources.source_of(metadata)), uuid4().hex)
     times = parse_raw_times(metadata.get("raw_times"))
     origins = txy_sources.origins_of(metadata)
     return DatasetView(identity, 1, _frozen(shots), MappingProxyType(fingerprints_of(metadata)),
@@ -280,11 +417,24 @@ def build_view(dataset: Dataset, root: tuple[str, str, str] | None = None) -> Da
                        raw_times=MappingProxyType({shot: times[shot] for shot in shots if shot in times}),
                        origins=MappingProxyType({shot: origins[shot] for shot in shots if shot in origins}),
                        txy_profiles=MappingProxyType(txy_sources.profiles_of(metadata)),
+                       on_read=frozenset(shot for shot in txy_sources.on_read_of(metadata) if shot in shots),
+                       fallback=frozenset(shot for shot in txy_sources.fallback_of(metadata) if shot in shots),
                        txy_choice=txy_sources.metadata_choice(metadata))
 
 
 # One view per Dataset object, so repeated runs on the same shown data share one input.
 _views: weakref.WeakKeyDictionary[Dataset, DatasetView] = weakref.WeakKeyDictionary()
+# Each Dataset object's ``Held`` (its shots and their records aren't changed in place).
+_held: weakref.WeakKeyDictionary[Dataset, Held] = weakref.WeakKeyDictionary()
+
+
+def held_of(dataset: Dataset) -> Held:
+    """What ``dataset`` holds: the ``held`` of a view of the same data (memory only)."""
+    held = _held.get(dataset)
+    if held is None:
+        metadata = dataset.metadata
+        held = _held[dataset] = Held.of(dataset.data, fingerprints_of(metadata), txy_sources.origins_of(metadata))
+    return held
 
 
 def view_of(dataset: Dataset, root: tuple[str, str, str] | None = None) -> DatasetView:
@@ -322,6 +472,7 @@ def revise(view: DatasetView, dataset: Dataset, root: tuple[str, str, str] | Non
         added, {shot: prints[shot] for shot in added if shot in prints},
         provenance=_provenance(dict(dataset.metadata)), signature=dataset.signature, raw_times=times,
         origins=origins, txy_profiles=txy_sources.profiles_of(dataset.metadata),
-        txy_choice=view.txy_choice or txy_sources.metadata_choice(dataset.metadata))
+        txy_choice=view.txy_choice or txy_sources.metadata_choice(dataset.metadata),
+        on_read=txy_sources.on_read_of(dataset.metadata), fallback=txy_sources.fallback_of(dataset.metadata))
     _views[dataset] = revised
     return revised

@@ -7,7 +7,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Any
+import threading
+from typing import Any, Callable
 
 import pytest
 from pytestqt.qtbot import QtBot
@@ -43,9 +44,14 @@ def icon_producer(cache: FolderCache, path: str) -> IORequest:
     return next(request for request in cache.service.pending if request.owner == job.owner)
 
 
+@pytest.mark.parametrize("another", [False, True], ids=["alone", "another thread stats a file meanwhile"])
 def test_native_icon_delivery_is_shared_and_rendering_stays_memory_only(
-    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, another: bool,
 ) -> None:
+    """Painting an icon reads memory only: no stat, listing or submitted work on the GUI thread. The check is the
+    GUI thread's: ``os.stat`` and ``os.scandir`` are patched for the whole process, and another thread's call meanwhile
+    (an earlier test's helper reader, a log tidy) goes to the real one. Raising on it was Windows CI's flake
+    ("Painting an icon performed I/O or submitted work" on another thread, 41164525298)."""
     service = queued_service(monkeypatch)
     first, second = SnapshotFileSystemModel(service=service), SnapshotFileSystemModel(service=service)
     path = str(tmp_path)
@@ -61,12 +67,31 @@ def test_native_icon_delivery_is_shared_and_rendering_stays_memory_only(
     service.resultReady.emit(request, {"kind": "folder_icon", "path": path, "png": png_icon()})
     service.resultReady.emit(request, {"kind": "done"})
 
-    def forbidden(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("Painting an icon performed I/O or submitted work")
+    gui = threading.current_thread()
+    real: dict[str, Callable[..., Any]] = {"stat": os.stat, "scandir": os.scandir, "submit": service.submit}
 
-    monkeypatch.setattr(os, "stat", forbidden)
-    monkeypatch.setattr(os, "scandir", forbidden)
-    monkeypatch.setattr(service, "submit", forbidden)
+    def forbidden(name: str) -> Callable[..., Any]:
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if threading.current_thread() is not gui:
+                return real[name](*args, **kwargs)  # (Not painting's: another thread's.)
+            raise AssertionError("Painting an icon performed I/O or submitted work")
+        return call
+
+    monkeypatch.setattr(os, "stat", forbidden("stat"))
+    monkeypatch.setattr(os, "scandir", forbidden("scandir"))
+    monkeypatch.setattr(service, "submit", forbidden("submit"))
+    if another:
+        seen: list[Any] = []
+
+        def other() -> None:
+            try:
+                seen.append(os.stat(path).st_mode)
+            except AssertionError as exc:
+                seen.append(exc)
+        thread = threading.Thread(target=other)
+        thread.start()
+        thread.join()
+        assert len(seen) == 1 and isinstance(seen[0], int), seen
     icon = second.data(second.path_index(path), int(Qt.ItemDataRole.DecorationRole))
     assert isinstance(icon, QIcon)
     assert icon.pixmap(16, 16).toImage().pixelColor(8, 8) == QColor("red")

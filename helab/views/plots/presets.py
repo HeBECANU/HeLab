@@ -264,7 +264,7 @@ class PresetBar(QWidget):
         self.refresh()
         store = preset_store()
         store.presetsChanged.connect(self._changed)
-        store.read_presets()  # Another HeLab may have changed them since.
+        store.read_presets()  # (Cheap: the last read may have failed, or the cache folder moved since.)
         if plot.parameter_root is not None:
             plot.parameter_root.sigTreeStateChanged.connect(self._tree_changed)
 
@@ -414,7 +414,7 @@ class PresetBar(QWidget):
             if not self.confirm(self, "Replace preset?", f"A preset “{name}” of {plot.name} exists. Replace it?",
                                 "Replace"):
                 return
-        preset = ScriptPreset(name, self.ref, plot.values(), plot.backend(), time.time())
+        preset = ScriptPreset(name, self.ref, plot.values(), plot.backend(), time.time(), plot.txy_saved())
         try:
             why = write_script_preset(preset)
         except ValueError as error:  # A value JSON can't hold (not a finite number).
@@ -452,6 +452,13 @@ class PresetBar(QWidget):
 
 
 # Arrangement presets
+
+
+def warning_box(parent: Optional[QWidget], title: str, text: str) -> None:
+    """The arrangement presets' warning (modal, ``QMessageBox.warning``). Called by its module name, so a
+    test replaces it (``helab.views.plots.presets.warning_box``) to fail rather than wait on a modal no one
+    closes."""
+    QMessageBox.warning(parent, title, text)
 
 
 class PresetFolder(QObject):
@@ -599,7 +606,7 @@ class ArrangementPresets(QObject):
             self.fill_menu(menu, read=False)
 
     def _warn(self, title: str, text: str) -> None:
-        QMessageBox.warning(self.parent_widget, title, text)
+        warning_box(self.parent_widget, title, text)
 
     def cache(self) -> FolderCache:
         return self._given_cache if self._given_cache is not None else self.plots.folder_cache()
@@ -610,7 +617,9 @@ class ArrangementPresets(QObject):
         self._menu = menu
         store = preset_store()
         if read:
-            store.read_presets()  # Another HeLab may have changed them; listed again when it answers.
+            # Read again, cheaply: the last read may have failed, or the cache folder moved since. Listed again
+            # when it answers.
+            store.read_presets()
         menu.clear()
         save = QAction("Save Folder and Plots as Preset…", menu)
         save.setToolTip("Save the current tab's folder, whether Live watches it, and its open plots with their "

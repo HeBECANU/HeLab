@@ -13,7 +13,7 @@ are as JSON carries them; nested payloads (a dataset's ``cache_info``, a folder 
 """
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, Sequence, TypedDict, Union
+from typing import Any, Literal, NotRequired, Required, Sequence, TypedDict, Union
 
 # Fields several events carry, spread into them by the helper (``**``).
 
@@ -78,6 +78,8 @@ class LiveState(TypedDict):
     live_seen_names: list[str]
     live_listed_mtime: int | None
     live_identity_root: str | None
+    # Held HeLab shots whose new TXY couldn't be read, as stat'ed (A40.2): sent back with ``known``.
+    live_failed: NotRequired[list[list[int]]]
 
 
 class MoveCheckFields(TypedDict):
@@ -98,6 +100,7 @@ class AdminResultFields(TypedDict, total=False):
     message: str
     path: str
     room: dict[str, Any] | None
+    items: list[str]  # ``trim``'s plan as Make room's items (``plan_only``, S2-1)
     cache_info: dict[str, Any]
     discarded: bool
     forgotten: str
@@ -105,6 +108,11 @@ class AdminResultFields(TypedDict, total=False):
     budget: int
     recorded: bool
     results: int  # saved results removed (R2)
+    raw: int  # store-v4's raw layer rows removed (``clear_raw``, caching v2)
+    folder_raw: dict[str, int]  # a folder's raw pulses when its policy became TXY only (S4~1): shots, bytes, only_copy
+    txy: int  # store-v4's TXY layers removed (``clear_txy``, caching v2 stage 2)
+    choices: dict[str, Any]  # a folder's stage 2 choices after ``folder_choice`` (policy, source, tag)
+    legacy: dict[str, Any]  # store-v3 beside store-v4 after ``legacy_choice``/``clear_legacy`` (``measure_legacy``)
     result_id: str  # an adopted result's saved row (R2)
     folder_results: dict[str, ResultCountField]  # an adoption's folders' saved results after it (R2)
     store: str  # the store an adoption answered from (its ``store_id``)
@@ -285,6 +293,14 @@ class FolderPrefsEvent(TypedDict):
     kind: Literal["folder_prefs"]
     path: str
     prefs: dict[str, Any]
+
+
+class FolderChoicesEvent(TypedDict):
+    """A folder's stage 2 choices (store-v4, Q45.1, Q45.2): ``policy``, ``source`` and ``tag`` ("" each: the
+    global one), with when each was set; FolderCache applies the source to the tab's loads and Live."""
+    kind: Literal["folder_choices"]
+    path: str
+    choices: dict[str, Any]
 
 
 class FolderConstantsEvent(TypedDict):
@@ -549,6 +565,11 @@ class RemovedEvent(TypedDict):
     datasets: NotRequired[int]
     bytes: NotRequired[int]
     results: NotRequired[int]
+    # Kind ``raw`` (store-v4's raw layers, caching v2): the rows removed.
+    raw: NotRequired[int]
+    # Kind ``txy`` (store-v4's TXY layers, caching v2 stage 2): the layers removed, each [folder, layer].
+    txy: NotRequired[int]
+    layers: NotRequired[list[list[str]]]
     root: NotRequired[str | None]
     # Saved results Make room removed for a waiting one, [folder, lookup, result_id] each: not a clear
     # (no epoch moved; a newer copy of one of those keys has another result_id).
@@ -696,6 +717,36 @@ class SweptEvent(UsageFields):
     expired_pending: int
     expired_ids: list[str]
     still_open: int
+    next_deadline: float | None
+
+
+class RawOverwrittenEvent(TypedDict):
+    """A raw file overwritten in place since store-v4 cached it (``raw_fill``, a conversion; Q22.5): its
+    layer was replaced; ``old`` and ``new`` are [size, mtime_ns, sha256]. The app says so once per shot per
+    session (Q28.6)."""
+    kind: Literal["raw_overwritten"]
+    path: str
+    shot: int
+    raw_name: str
+    old: list[Any]
+    new: list[Any]
+
+
+class RawFillDoneEvent(UsageFields, total=False):
+    """A ``raw_fill`` run's end: the shots ``saved`` (new or replaced), ``kept`` (already cached), ``refused``
+    (a later job's version stood), ``waiting`` (not settled, or changed while read), ``gone`` (cached, but
+    gone from the folder: only copies now); ``more``: it yielded with shots left (queue another run).
+    ``reason`` when it saved nothing or stopped: ``store_v3`` (raw layers are store-v4's), ``no_data_root``,
+    ``no_cache``, ``read_only``, ``over_budget`` (a batch didn't fit: nothing asks, T~1)."""
+    kind: Required[Literal["raw_fill_done"]]
+    path: Required[str]
+    reason: Required[str]
+    saved: Required[int]
+    kept: Required[int]
+    refused: Required[int]
+    waiting: Required[int]
+    gone: Required[int]
+    more: Required[bool]
     next_deadline: float | None
 
 
@@ -938,10 +989,21 @@ class ConvertPlanEvent(TypedDict):
     todo: int  # of those, to convert now
 
 
+class ReadStopField(TypedDict):
+    """Where a raw file's read stopped before its end (``helab.convert.raw.ReadStop``, A37.1): the
+    first token MATLAB's textscan can't read ends it, and the TXY holds the hits of the rows before it.
+    ``line`` from 1, as the read counts lines; ``offset`` the token's byte; ``text`` its start, escaped;
+    ``unread`` the bytes from there to the end."""
+    line: int
+    offset: int
+    text: str
+    unread: int
+
+
 class ShotConvertedEvent(TypedDict):
     """A shot converted: its TXY (``txy``, 0 bytes when ``hits`` is 0: "converted, empty", Q10.3) and
     provenance row written first in the base's index (``provenance``: that index's path). A low-count shot is the app's to judge
-    from ``hits``."""
+    from ``hits``. ``read_stop``: the raw file's read stopped early (A37.1), None when it read to the end."""
     kind: Literal["shot_converted"]
     path: str
     shot: int
@@ -958,14 +1020,16 @@ class ShotConvertedEvent(TypedDict):
     profile: ConvertProfile
     backend: str
     seconds: ConvertSeconds
+    read_stop: ReadStopField | None
 
 
 class ShotWaitingEvent(TypedDict):
     """A raw file not converted yet: it may still be being written (``reason``: ``settling``,
     ``changed``, ``no_final_newline``, ``not_trigger_first``, ``no_rows``; damaged once unmodified for
     20 s), is dated ahead of this computer's
-    clock (``future``, with ``clock_skew`` for the folder) or couldn't be read now
-    (``read_failed``). Nothing was written; it is looked at again by a later conversion."""
+    clock (``future``, with ``clock_skew`` for the folder), couldn't be read now
+    (``read_failed``), or HeLab's converted TXY were cleared while this conversion ran (``cleared``,
+    A19.2: the Clear fence). Nothing was written; it is looked at again by a later conversion."""
     kind: Literal["shot_waiting"]
     path: str
     shot: int
@@ -1047,12 +1111,26 @@ class PartialRemovedEvent(TypedDict):
     age: float  # seconds since it was last modified
 
 
+class BesideRefusedEvent(TypedDict):
+    """A beside write refused because the source folder's file system can't add a file without risking
+    replacing one (no hard links and no rename that refuses an existing name: ``txy._rename_exclusive``,
+    Q38.1): sent before the conversion fails with that reason (its ``error``), so the app and
+    ``helab convert`` can offer Retry or HeLab's cache or temp folder instead, never falling back silently.
+    ``txy`` the file not written; ``message`` the refusal."""
+    kind: Literal["beside_refused"]
+    path: str
+    shot: int
+    txy: str
+    message: str
+
+
 HelperEvent = Union[
     DoneEvent, ErrorEvent, PausedEvent, ResumedEvent, HeartbeatEvent, DrivesEvent, ResolvedEvent,
     CacheWarningEvent, CacheSkippedEvent,
     EntriesEvent, ListedStatusEvent, OfflineListingEvent, ScanStatusEvent, MountsSeenEvent, SaveGuardEvent, ScanHistoryEvent,
     ScanHistorySavedEvent, ScanHistoryWarningEvent, ScanModeEvent, ScanCachedEvent, SubtreeCachedEvent,
-    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderConstantsEvent, PresetsEvent, CacheMismatchEvent,
+    SubtreeSavedEvent, SummarySaveFailedEvent, FolderPrefsEvent, FolderChoicesEvent, FolderConstantsEvent, PresetsEvent,
+    CacheMismatchEvent,
     FolderIconEvent,
     LoadSourceEvent, ProgressEvent, FileStartedEvent, FileFinishedEvent, ShotEvent, ScanSummaryEvent,
     ShotsMissingEvent, TooLargeEvent, CachedLoadedEvent, UnchangedCachedLoadedEvent, UnchangedHeldLoadedEvent,
@@ -1066,7 +1144,8 @@ HelperEvent = Union[
     TxyUnmarkedEvent, MarkerSaveRefusedEvent, VolumesVerifiedEvent, RootsVerifiedEvent,
     ResultFoundEvent, ResultMissingEvent, ResultSavedEvent, ResultNotSavedEvent, ResultPendingEvent,
     ConvertPrefsEvent, ConvertPlanEvent, ShotConvertedEvent, ShotWaitingEvent, ShotUnconvertibleEvent, ShotKeptEvent,
-    ConvertProgressEvent, ConvertSummaryEvent, PartialRemovedEvent,
+    ConvertProgressEvent, ConvertSummaryEvent, PartialRemovedEvent, RawOverwrittenEvent, RawFillDoneEvent,
+    BesideRefusedEvent,
 ]
 
 # Every kind a helper sends.
@@ -1074,7 +1153,7 @@ KINDS = frozenset({
     "done", "error", "paused", "resumed", "heartbeat", "drives", "resolved", "cache_warning", "cache_skipped",
     "entries", "status", "mounts_seen", "save_guard", "scan_history", "scan_history_saved",
     "scan_history_warning", "scan_mode", "scan_cached", "subtree_cached", "subtree_saved", "summary_save_failed",
-    "folder_prefs", "folder_constants", "presets", "cache_mismatch", "folder_icon",
+    "folder_prefs", "folder_choices", "folder_constants", "presets", "cache_mismatch", "folder_icon",
     "load_source", "progress", "file_started", "file_finished", "shot", "scan_summary", "shots_missing",
     "too_large", "loaded", "live_unchanged",
     "cache_saved", "disk_cached", "cache_save_failed", "cache_full", "cache_approval", "removed", "inventory",
@@ -1087,5 +1166,6 @@ KINDS = frozenset({
     "roots_verified", "result_found", "result_missing", "result_saved", "result_not_saved",
     "result_pending",
     "convert_prefs", "convert_plan", "shot_converted", "shot_waiting", "shot_unconvertible", "shot_kept",
-    "convert_progress", "convert_summary", "partial_removed",
+    "convert_progress", "convert_summary", "partial_removed", "beside_refused",
+    "raw_overwritten", "raw_fill_done",
 })

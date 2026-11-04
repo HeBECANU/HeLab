@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import threading
 import json
 import re
 import traceback
@@ -9,7 +10,7 @@ import uuid
 import zlib
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generator, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Generator, Iterator
 
 # Run Qt headless (offscreen) by default so tests don't pop up windows.
 # Set HELAB_SHOW_GUI=1 to force a real, visible display (e.g. when a test
@@ -47,6 +48,38 @@ os.environ["HELAB_DIR_CACHES_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_c
 os.environ["HELAB_APP_DIR_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_app_{_worker_id}_")
 os.environ["HELAB_TEST_VOLUME_ID"] = "test-volume"
 os.environ["HELAB_TEST_LOCAL_MOUNT"] = Path(tempfile.gettempdir()).anchor
+
+
+def mount_holding(path: str, mountpoints: list[str] | None = None) -> str:
+    """The mount holding ``path`` (its longest mountpoint; ``psutil``'s list unless given), as HeLab's
+    ``Mount.path`` names it; on Windows the drive, as ``HELAB_TEST_LOCAL_MOUNT`` above makes it."""
+    real = os.path.realpath(os.path.abspath(path))
+    if sys.platform == "win32":
+        return Path(real).anchor
+    if mountpoints is None:
+        import psutil
+        mountpoints = [part.mountpoint for part in psutil.disk_partitions(all=True)]
+    paths = [point for point in mountpoints if real == point or real.startswith(point.rstrip(os.sep) + os.sep)]
+    return max(paths, key=len) if paths else ""
+
+
+def name_fixed_mount(path: str, mountpoints: list[str] | None = None) -> None:
+    """Add the mount holding ``path`` to ``HELAB_TEST_FIXED_MOUNT`` (``os.pathsep``-separated): the tests'
+    folders there are trusted at once, as the system volume is (``data_roots.fixed_mount``), wherever it
+    is asked, whether the runner's /tmp is on / or a mount of its own (CI 41587336570 and 41570883747 on
+    ubuntu-26.04 20261018.50.1, where the result-cache, lifecycle and offline tests' folders waited for a
+    volume check that never ran). Named here at import for the temp folder, and in ``pytest_configure`` for
+    ``--basetemp`` (most tests' folders are ``tmp_path``, below it), before any helper starts; helpers
+    inherit it. On Windows ``fixed_mount`` trusts only %SystemDrive%, so a TEMP on another drive is named
+    too; a basetemp on a drive other than TEMP's is named but changes nothing, since
+    ``HELAB_TEST_LOCAL_MOUNT`` gives the tests' mount list only the temp folder's drive."""
+    mount = mount_holding(path, mountpoints)
+    named = [item for item in os.environ.get("HELAB_TEST_FIXED_MOUNT", "").split(os.pathsep) if item]
+    if mount and mount not in named:
+        os.environ["HELAB_TEST_FIXED_MOUNT"] = os.pathsep.join([*named, mount])
+
+
+name_fixed_mount(tempfile.gettempdir())
 # Tests never touch real data (a mounted share, a developer's data folder): helpers, and
 # helab.io_ops' functions called here, refuse such source paths before touching them and note
 # them in this folder, which fails the test (``no_real_data``). New tabs start in an empty folder
@@ -69,7 +102,12 @@ if TYPE_CHECKING:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    _CONFIG[:] = [config]
+    if config.option.basetemp:  # (On an xdist worker, its own folder below the run's.)
+        name_fixed_mount(str(config.option.basetemp))
     config.addinivalue_line("markers", "no_auto_data_root: test the RAM-only or explicit marker path")
+    config.addinivalue_line("markers", "store_v3: a test about store-v3 itself, run with the store_v4 switch off "
+                                       "(v0.0.8 ships store-v4, the suite's default)")
     group_option(config.getoption("test_group"))  # (a bad --test-group stops the run before collecting)
     # The folders HeLab resolved must be this process's private ones, never the real app's.
     from helab.utils import constants
@@ -132,14 +170,39 @@ def pytest_runtest_makereport(item: pytest.Item,
 
 
 _reruns: list[tuple[str, str]] = []  # (test, why it reran), in this process (the controller under xdist)
+_CONFIG: list[pytest.Config] = []  # (This run's, for its terminal: set in pytest_configure.)
+
+
+def failure_reason(report: pytest.TestReport) -> str:
+    """Why a test failed, in a few lines: its ``E`` lines and where it failed."""
+    text = report.longreprtext.splitlines()
+    lines = [line for line in text if line.startswith("E ")][:6]
+    lines += [line for line in text if re.match(r"\S+\.py:\d+: \w", line)][-1:]  # Where it failed.
+    return "\n".join(lines) or report.longreprtext[-600:]
+
+
+def live_reason(report: pytest.TestReport) -> str | None:
+    """The line written as a test fails or reruns (None for any other report): a CI job cancelled at its time
+    limit never reaches the summary, so its tracebacks and rerun reasons were lost (Ubuntu CI 41468043383,
+    attempt 1: 43 RERUN lines, not one reason)."""
+    outcome = str(report.outcome)  # ("rerun" is pytest-rerunfailures'.)
+    if outcome not in ("rerun", "failed"):
+        return None
+    # (xdist's report for a worker that died, killed at --timeout or crashed, has the phase "???".)
+    phase = report.when if report.when in ("setup", "call", "teardown") else "worker crashed or was killed"
+    return f"{outcome.upper()} REASON {report.nodeid} ({phase}):\n{failure_reason(report)}"
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if report.outcome == "rerun":  # type: ignore[comparison-overlap]  # (pytest-rerunfailures' outcome)
-        text = report.longreprtext.splitlines()
-        lines = [line for line in text if line.startswith("E ")][:6]
-        lines += [line for line in text if re.match(r"\S+\.py:\d+: \w", line)][-1:]  # Where it failed.
-        _reruns.append((report.nodeid, "\n".join(lines) or report.longreprtext[-600:]))
+        _reruns.append((report.nodeid, failure_reason(report)))
+    line = live_reason(report)
+    config = _CONFIG[0] if _CONFIG else None
+    if line is not None and config is not None and not hasattr(config, "workerinput"):  # (The controller's terminal.)
+        terminal = config.pluginmanager.get_plugin("terminalreporter")
+        if terminal is not None:
+            terminal.ensure_newline()  # (Not after -q's progress characters.)
+            terminal.write_line(line)
 
 
 def pytest_terminal_summary(terminalreporter: Any) -> None:
@@ -159,11 +222,11 @@ SLOW_FIRST_MODULES = frozenset({"test_typing.py"})
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--test-group", metavar="N/M", default=None,
-                     help="run only group N of M (each test is in exactly one; CI runs two per OS)")
+                     help="run only group N of M (each test is in exactly one; CI runs three per OS)")
 
 
-# CI runs the suite in two groups per OS, each a job of its own (Q16.2), so neither job nears its
-# time limit. A test's group is a hash of its node ID: the same on every OS, xdist worker and run,
+# CI runs the suite in three groups per OS (two for the compatibility jobs), each a job of its own
+# (Q16.2), so no job nears its time limit. A test's group is a hash of its node ID: the same on every OS, xdist worker and run,
 # with nothing to record or keep up to date, and each module's tests split about evenly, so the
 # groups' times stay close as the suite grows. The slow-first tests are dealt out in turn instead,
 # so each group gets its share of them (and still runs them first, below).
@@ -267,6 +330,39 @@ def delete_left_widgets(test: str, *, fail: bool = True) -> None:
                         pytrace=False)
 
 
+def this_tests(fake: Callable[..., Any], real: Callable[..., Any]) -> Callable[..., Any]:
+    """``fake`` for this test's own threads, ``real`` for the others (A46.1). A test that patches ``os.stat``,
+    ``os.scandir`` or ``subprocess.Popen`` patches them for the whole process: threads earlier tests left in the
+    worker (a helper's reader, a log tidy, a helper still starting) call them meanwhile, and a fake that
+    counted, refused or answered those was Windows CI's flakes (``3bafef1``, ``eccb23c``). Its own are the test's
+    thread and every thread started after this call (an IOService's helpers); threads alive before it get
+    ``real``. Call it when patching: ``monkeypatch.setattr(os, "stat", this_tests(stat, os.stat))``."""
+    ours = threading.current_thread()
+    earlier = {thread for thread in threading.enumerate() if thread is not ours}
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        return (real if threading.current_thread() in earlier else fake)(*args, **kwargs)
+    return call
+
+
+_QT_APP: list[Any] = []
+
+
+def qt_application() -> Any:
+    """The worker's QApplication, made as pytest-qt's ``qapp`` makes it (with a program name) if no test has
+    made it yet, and kept for the session. For unittest-style tests, which can't take ``qapp``; a pytest test
+    takes ``qapp``. Never ``QApplication([])``: QtWebEngine needs the program name, and with an empty argument
+    list it ends the process at the worker's first web view ("Argument list is empty, the program name is not
+    passed to QCoreApplication", a qFatal in ``WebContentsAdapter``): a Plotly test aborted its xdist worker
+    whenever such a test had been the worker's first Qt test (known-issues 139, 162)."""
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(["pytest-qt-qapp"])
+        _QT_APP.append(app)
+    return app
+
+
 def store_free(*services: "IOService") -> bool:
     """Whether no helper of these IOServices, nor of the app-wide one, has the disk cache open (every
     exit confirmed): only then may a test delete the store, which Windows refuses while a helper has
@@ -278,12 +374,47 @@ def store_free(*services: "IOService") -> bool:
     return not any(service.cache_busy() for service in (*services, app) if service is not None)
 
 
+_ICONS_READY: list[bool] = []
+
+
+@pytest.fixture(autouse=True)
+def toolbar_icons(request: pytest.FixtureRequest) -> None:
+    """A Qt test's windows have the app's icons, as ``main.py`` sets them up before its window (A43.1): without
+    them the toolbars' buttons show their text, so a window's widths depended on whether an earlier test in the
+    worker had set them up (``test_main_split`` on Windows CI). Once per worker (class attributes that stay),
+    and only for tests using pytest-qt: it takes ``qapp`` first, since an icon made before the QApplication
+    aborts the process (``1f86ca2``), and a test without Qt gets no QApplication from here."""
+    if _ICONS_READY or not {"qtbot", "qapp"} & set(request.fixturenames):
+        return
+    request.getfixturevalue("qapp")
+    from helab.resources.icons import IconsInitUtil
+    IconsInitUtil.initialise_icons()
+    _ICONS_READY.append(True)
+
+
 @pytest.fixture(autouse=True)
 def private_settings(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test's app settings are an ini file of its own (``settings_store.app_settings``), never
     the machine's native store. In a folder apart from ``tmp_path``, which tests list."""
     folder = tmp_path_factory.mktemp("settings")
     monkeypatch.setenv("HELAB_TEST_SETTINGS_FILE", str(folder / "helab-settings.ini"))
+
+
+@pytest.fixture(autouse=True)
+def store_layout(request: pytest.FixtureRequest, private_settings: None) -> Iterator[None]:
+    """A ``store_v3`` test runs with the ``store_v4`` row off in its own settings (read again by the next
+    ``store_root``); every other test runs on the shipped default, store-v4. The layout is read again after."""
+    if request.node.get_closest_marker("store_v3") is None:
+        yield
+        return
+    from helab.utils import cache_store
+    from helab.utils.settings_store import app_settings
+    settings = app_settings()
+    settings.setValue("store_v4", False)
+    settings.sync()
+    cache_store._reset_live_layout()
+    yield
+    cache_store._reset_live_layout()
 
 
 @pytest.fixture(autouse=True)
@@ -455,3 +586,17 @@ def no_selection_settle(monkeypatch: pytest.MonkeyPatch) -> None:
     selection to settle (Finish, Cancel) has its own tests, which set ``SETTLE_MAX`` again."""
     from helab.views.FolderExplorer import FolderExplorer
     monkeypatch.setattr(FolderExplorer, "SETTLE_MAX", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An arrangement preset's warning (``helab.views.plots.presets.warning_box``) is a modal no test closes:
+    a worker hung on one until killed (CI 41484277419). Here it fails the test with its text instead. A test
+    that expects a warning sets the presets' ``warn`` (as ``test_presets_plots.py`` does), or patches
+    ``warning_box`` itself."""
+    from helab.views.plots import presets
+
+    def fail(parent: Any, title: str, text: str) -> None:
+        raise AssertionError(f"a modal warning would wait here: {title}: {text}")
+
+    monkeypatch.setattr(presets, "warning_box", fail)

@@ -14,6 +14,10 @@ from helab._version import __version__
 
 BUILD_INFO_FILENAME = "_build_info.json"
 PACKAGE_DIR = Path(__file__).resolve().parent
+# A GitHub repository, "owner/name", and the remote URLs that name one (https or ssh, with or without .git).
+REPOSITORY = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+")
+GITHUB_REMOTE = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                           r"(?P<owner>[A-Za-z0-9-]+)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?")
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,10 @@ class BuildInfo:
     built_at: str | None = None
     dirty: bool | None = None
     build_ref: str = "unknown"
+    # The GitHub repository the build came from ("owner/name"), stamped at build time only
+    # (``write_build_info``), never read from Git at runtime: Help › User manual opens that
+    # repository's site (``helab.utils.user_manual``). "unknown" for a source run or an older stamp.
+    repository: str = "unknown"
 
     @property
     def short_commit(self) -> str:
@@ -33,6 +41,7 @@ class BuildInfo:
         state = "unknown" if self.dirty is None else "modified" if self.dirty else "clean"
         return (f"HeLab {self.version}\nCommit: {self.commit}\nBranch: {self.branch}\n"
                 f"Build ref: {self.build_ref}\n"
+                f"Repository: {self.repository}\n"
                 f"Built (UTC): {self.built_at or 'source checkout / unavailable'}\n"
                 f"Source state: {state}")
 
@@ -83,7 +92,12 @@ def read_build_info(path: Path) -> BuildInfo | None:
             return None
         if dirty is not None and not isinstance(dirty, bool):
             return None
-        return BuildInfo(commit=commit, branch=branch, built_at=built_at, dirty=dirty, build_ref=build_ref)
+        # Stamps from before the field have none; one that isn't "owner/name" is unknown.
+        repository = data.get("repository", "unknown")
+        if not isinstance(repository, str) or not REPOSITORY.fullmatch(repository):
+            repository = "unknown"
+        return BuildInfo(commit=commit, branch=branch, built_at=built_at, dirty=dirty, build_ref=build_ref,
+                         repository=repository)
     except (OSError, ValueError, TypeError):
         return None
 
@@ -97,6 +111,25 @@ def get_build_info() -> BuildInfo:
     return checkout_build_info(PACKAGE_DIR.parent)
 
 
+def build_repository(root: Path) -> str:
+    """The GitHub repository a build comes from, "owner/name" (build time only): CI's own
+    (``HELAB_BUILD_REPOSITORY``, else GitHub's ``GITHUB_REPOSITORY``), else the checkout's
+    ``origin`` remote when it is on GitHub; "unknown" otherwise."""
+    named = os.environ.get("HELAB_BUILD_REPOSITORY")
+    if not named and os.environ.get("GITHUB_ACTIONS") == "true":
+        named = os.environ.get("GITHUB_REPOSITORY")
+    if named:
+        return named if REPOSITORY.fullmatch(named) else "unknown"
+    try:
+        if not (root / ".git").exists():
+            return "unknown"
+        remote = _git(root, "remote", "get-url", "origin")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    match = GITHUB_REMOTE.fullmatch(remote)
+    return f"{match['owner']}/{match['name']}" if match else "unknown"
+
+
 def write_build_info(root: Path, destination: Path) -> BuildInfo:
     """Write into build output, leaving the source package untouched."""
     info = replace(checkout_build_info(root), built_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
@@ -106,7 +139,8 @@ def write_build_info(root: Path, destination: Path) -> BuildInfo:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         branch = branch or os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF_NAME")
         ref = ref or os.environ.get("GITHUB_REF")
-    info = replace(info, branch=branch or info.branch, build_ref=ref or info.build_ref)
+    info = replace(info, branch=branch or info.branch, build_ref=ref or info.build_ref,
+                   repository=build_repository(root.resolve()))
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(asdict(info), indent=2) + "\n", encoding="utf-8")
     return info

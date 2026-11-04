@@ -151,7 +151,8 @@ class LaunchFolder(QObject):
         if not self.load_asked:
             listed = node is not None and node.report is not None
             if self._shown() or explorer.model.cache.disk_cached(self.folder) or (
-                    node is not None and listed and node.txy_count > 0):
+                    node is not None and listed and (node.txy_count > 0
+                                                     or explorer.on_read_count(self.folder, node.report) > 0)):
                 self.load_asked = self.data_expected = True
                 explorer.load_to_ram_cache(self.folder, dwell=False, explicit=True)
                 if self.done:

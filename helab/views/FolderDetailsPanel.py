@@ -5,6 +5,7 @@ import math
 import os
 import time
 from datetime import datetime
+import weakref
 from typing import Any, Mapping
 
 from PyQt6.QtCore import QEvent, QObject, QRectF, Qt, QTimer, pyqtSignal
@@ -23,10 +24,12 @@ from helab.views.FolderExplorer import (
     AMBER, AUTO_LOAD_OFF, AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, LARGE_TOOLTIP, REFUSED_TOOLTIP,
     LOAD_SPINNER, FolderExplorer, load_origin,
 )
-from helab.views.explorer_live import no_hits_text
+from helab.views.explorer_live import READ_STOPPED, no_hits_text
 from helab.views.explorer_text import large_text
 
 
+# The Problems row's part for raw files overwritten since they were cached (Q28.6), which is then amber.
+RAW_OVERWRITTEN_TEXT = "raw file(s) overwritten since cached"
 # Marks the large-folder part of a state row, which is then amber.
 LARGE_MARK = "Update not loaded: "
 
@@ -101,9 +104,9 @@ class FolderDetailsPanel(QScrollArea):
     reviewRootRequested = pyqtSignal(str)
     """Single-line rows that hide when empty; longer details are in each row's tooltip."""
 
-    ROWS = (("folder", "Folder"), ("state", "State"), ("files", "Files"), ("time", "Time"), ("rate", "Rate"),
-            ("data", "Data"), ("loaded", "Loaded"), ("source", "Source"), ("cache", "Disk cache"),
-            ("convert", "Auto-convert"), ("errors", "Problems"),
+    ROWS = (("folder", "Folder"), ("state", "State"), ("files", "Files"), ("txy", "TXY"), ("time", "Time"),
+            ("rate", "Rate"), ("data", "Data"), ("loaded", "Loaded"), ("source", "Source"), ("cache", "Disk cache"),
+            ("convert", "Auto-convert"), ("offer", "Convert"), ("errors", "Problems"),
             ("tab", "This tab"), ("io", "All I/O"))
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -150,6 +153,9 @@ class FolderDetailsPanel(QScrollArea):
         self.values["io"].installEventFilter(self)
         self._review_root: str | None = None
         self.values["cache"].installEventFilter(self)
+        # Clicking the Convert row (A39.5) asks how to convert the folder: (the tab, as a weak reference; its path).
+        self._convert: tuple[weakref.ref[FolderExplorer], str] | None = None
+        self.values["offer"].installEventFilter(self)
         layout.addLayout(grid)
         layout.addStretch(1)
         self.setWidget(body)
@@ -178,6 +184,13 @@ class FolderDetailsPanel(QScrollArea):
                 and self._review_root is not None):
             self.reviewRootRequested.emit(self._review_root)
             return True
+        if (a0 is self.values["offer"] and isinstance(a1, QMouseEvent)
+                and a1.type() == QEvent.Type.MouseButtonRelease and a1.button() == Qt.MouseButton.LeftButton
+                and self._convert is not None):
+            explorer = self._convert[0]()
+            if explorer is not None and not explorer.closed:
+                explorer.converter.clicked(self._convert[1])
+            return True
         return super().eventFilter(a0, a1)
 
     def text(self, key: str) -> str:
@@ -194,10 +207,19 @@ class FolderDetailsPanel(QScrollArea):
         cursor = Qt.CursorShape.PointingHandCursor if pending is not None else Qt.CursorShape.ArrowCursor
         if self.values["cache"].cursor().shape() != cursor:
             self.values["cache"].setCursor(cursor)
+        self._convert = None
         if explorer is None:
             rows["state"] = ("Select a data folder", "")
         else:
             rows.update(self._folder_rows(explorer))
+            path = explorer.selected_path_globally
+            offer = explorer.converter.row(path) if path else None
+            if offer is not None:
+                rows["offer"] = offer
+                self._convert = (weakref.ref(explorer), path)
+            overwritten = self._raw_overwritten_row(explorer, rows["errors"])
+            if overwritten is not None:
+                rows["errors"] = overwritten
             if explorer.activity_text:
                 rows["tab"] = (explorer.activity_text, "\n\n".join(filter(None, (
                     "Other work in this tab; the selected folder's load is above.", explorer.activity_tooltip))))
@@ -212,6 +234,10 @@ class FolderDetailsPanel(QScrollArea):
         cursor = Qt.CursorShape.PointingHandCursor if self._reveal else Qt.CursorShape.ArrowCursor
         if io.cursor().shape() != cursor:
             io.setCursor(cursor)
+        convert_label = self.values["offer"]
+        cursor = Qt.CursorShape.PointingHandCursor if self._convert else Qt.CursorShape.ArrowCursor
+        if convert_label.cursor().shape() != cursor:
+            convert_label.setCursor(cursor)
         for key, (text, tooltip) in rows.items():
             self.set_row(key, text, tooltip)
         # A large folder's state is amber, as on the summary line.
@@ -221,10 +247,29 @@ class FolderDetailsPanel(QScrollArea):
             style = f"color: {AMBER};"
         if self.values["state"].styleSheet() != style:
             self.values["state"].setStyleSheet(style)
-        # Shots converted with no hits are amber (A17.1).
-        style = f"color: {AMBER};" if "with no hits" in rows.get("convert", ("", ""))[0] else ""
+        # A raw file overwritten in place since it was cached is amber (Q28.6).
+        style = f"color: {AMBER};" if RAW_OVERWRITTEN_TEXT in rows["errors"][0] else ""
+        if self.values["errors"].styleSheet() != style:
+            self.values["errors"].setStyleSheet(style)
+        # Shots converted with no hits are amber (A17.1), as are raw files whose read stopped early (A37.1).
+        convert_text = rows.get("convert", ("", ""))[0]
+        style = (f"color: {AMBER};" if "with no hits" in convert_text
+                 or any(mark in convert_text for mark in READ_STOPPED) else "")
         if self.values["convert"].styleSheet() != style:
             self.values["convert"].setStyleSheet(style)
+
+    @staticmethod
+    def _raw_overwritten_row(explorer: FolderExplorer, problems: tuple[str, str]) -> tuple[str, str] | None:
+        """The Problems row with the folder's raw files overwritten in place since store-v4 cached them
+        this session (Q28.6, ``FolderCache.raw_overwrites``), or None when there are none."""
+        found = explorer.model.cache.raw_overwrites.get(explorer.selected_path_globally)
+        if not found:
+            return None
+        names = [str(found[shot]["raw_name"]) for shot in sorted(found)]
+        text = f"{len(names):,} {RAW_OVERWRITTEN_TEXT}"
+        tooltip = ("Raw files overwritten in place since HeLab cached them (read again; the TDC may be "
+                   "misconfigured): " + ", ".join(names[:20]) + (" …" if len(names) > 20 else ""))
+        return (f"{problems[0]} · {text}" if problems[0] else text, "\n\n".join(filter(None, (problems[1], tooltip))))
 
     def _folder_rows(self, explorer: FolderExplorer) -> dict[str, tuple[str, str]]:
         path = explorer.selected_path_globally
@@ -273,13 +318,21 @@ class FolderDetailsPanel(QScrollArea):
             rows["state"] = (explorer.scan_message, "")
         elif node is None or node.report is None:
             rows["state"] = ("TXY count not checked", "")
-        elif node.txy_count or node.report.d_txy_shots or node.report.status in StatusReport.STATUS_CONTAINS_DATA_HERE:
+        elif (node.txy_count or node.report.d_txy_shots or node.report.status in StatusReport.STATUS_CONTAINS_DATA_HERE
+              or explorer.on_read_count(node.path, node.report)):
             rows["state"] = ("Not loaded", "Right-click it › Load data, or turn on View › Toggle Auto Load to RAM.")
         else:
             rows["state"] = ("No TXY files here", "")
-        if not loading and not shown and node is not None and (node.txy_count or node.report and node.report.d_txy_shots):
+        on_read = explorer.on_read_count(node.path, node.report) if node is not None else 0
+        if not loading and not shown and node is not None and (node.txy_count or node.report and node.report.d_txy_shots
+                                                              or on_read):
             found = node.txy_count or (len(node.report.d_txy_shots or []) if node.report else 0)
-            rows["files"] = (f"{found:,} TXY found", "")
+            # (store-v4, stage 3: raw files without TXY, converted when the folder is loaded, S3~5.)
+            rows["files"] = ((f"{found:,} TXY found" + (f" · {on_read:,} converted when loaded" if on_read else ""))
+                             if found else f"{on_read:,} raw found · converted when loaded",
+                             "HeLab converts these shots' raw files when it loads the folder, with the TXY "
+                             "converter's profile, and keeps them in the disk cache; no TXY file is written."
+                             if on_read else "")
         large = explorer.large_state(path)
         if large is not None and (shown or opened) and not loading and not explorer.load_error:
             # The update didn't load for being large: say so beside the data still shown.
@@ -362,6 +415,64 @@ class FolderDetailsPanel(QScrollArea):
                                   "of running time (files reused from memory or the disk cache are not counted)")
 
     @staticmethod
+    def _txy_row(meta: Mapping[str, Any]) -> tuple[str, str]:
+        """The folder's TXY by kind as the shown data's load found them (``load_counts``: Q38.3, A39.4), e.g.
+        "120 External · 118 m19v1"; ("", "") for data whose load didn't count them (from memory or the disk cache
+        unchanged, or saved before)."""
+        counts = meta.get("load_counts")
+        if not isinstance(counts, Mapping) or not isinstance(counts.get("txy_matlab"), int):
+            return "", ""
+        record = meta.get(txy_sources.TXY_FIELD)
+        tag = str(record.get("profile_tag") or "") if isinstance(record, Mapping) else ""
+        parts = [f"{counts['txy_matlab']:,} {txy_sources.EXTERNAL_SHORT}"]
+        lines = [f"{txy_sources.EXTERNAL_LABEL} TXY (d_txy_forc<N>.txt) in the folder"]
+        helab = counts.get("txy_helab")
+        if isinstance(helab, int) and tag:
+            parts.append(f"{helab:,} {tag}")
+            lines.append(f"HeLab's current TXY of the profile conversions use, tag {tag} (d_txy_helab_{tag}_<N>.txt), "
+                         "in HeLab's TXY folder or beside the raw files. Other profiles' aren't counted.")
+            on_read = counts.get("helab_on_read")
+            if isinstance(on_read, int) and on_read:
+                # (store-v4, stage 3: shots without a HeLab TXY, made from their raw files, S3~6.)
+                parts.append(f"{on_read:,} {tag} converted from raw")
+                lines.append(f"HeLab {tag}, converted from raw: shots with no HeLab TXY file, converted from their "
+                             "raw files when loaded and kept in the disk cache (no TXY file written).")
+        else:
+            lines.append("HeLab's TXY not looked for: this folder's TXY source reads External only.")
+        fallback = sorted(txy_sources.fallback_of(meta))
+        if fallback:
+            # (Q~2: shots none of the list's own entries has a TXY of, from the levels above or any TXY there.)
+            origins, profiles = txy_sources.origins_of(meta), txy_sources.profiles_of(meta)
+            names = sorted({txy_sources.origin_name(origins.get(shot, ""), profiles) for shot in fallback})
+            parts.append(f"{len(fallback):,} fallback")
+            lines.append(f"Fallback: {len(fallback):,} shot{'' if len(fallback) == 1 else 's'} none of the TXY "
+                         f"list's own entries has a TXY of, taken from the lists above it or any TXY there "
+                         f"({', '.join(names)})")
+        return " · ".join(parts), "\n".join([*lines, "Counted when this data was loaded"])
+
+    @staticmethod
+    def _with_choices(row: tuple[str, str], choices: Mapping[str, Any], conversion_tag: str = "") -> tuple[str, str]:
+        """The TXY line with the folder's own choices (store-v4, Q45.1, Q45.2), when it has any: its TXY source
+        and tag, and its cache policy unless it follows Settings › Cache's."""
+        from helab.views.CacheTab import POLICY_LABELS
+        text, tip = row
+        parts, lines = [], []
+        entries = txy_sources.parse_list(choices.get("source"), str(choices.get("tag") or ""))
+        if entries is not None:
+            # (Q53.2: its list in short, "m23v1 › Conversion › External".)
+            from helab.views.txy_list import list_summary  # (Says "(reads as m19v1 only)" too: TP-8.)
+            parts.append(f"this folder: {list_summary(entries, conversion_tag)}")
+            lines.append("This folder's own TXY priority (right-click › TXY for this folder…), instead of "
+                         "Settings': each shot from the first entry with a usable TXY.")
+        policy = dict(POLICY_LABELS).get(str(choices.get("policy") or ""))
+        if policy:
+            parts.append(f"cache: {policy}")
+            lines.append("What this folder's saves keep (right-click › Cache policy for this folder…).")
+        if not parts:
+            return row
+        return " · ".join(filter(None, (text, *parts))), "\n".join(filter(None, (tip, *lines)))
+
+    @staticmethod
     def _data_rows(explorer: FolderExplorer, meta: Mapping[str, Any], rows: dict[str, tuple[str, str]],
                    loading: bool, opened: bool, *, unchecked: bool = False) -> None:
         """The shown dataset: counts, size, when it was loaded, where from and its problem shots. Shown
@@ -380,6 +491,10 @@ class FolderDetailsPanel(QScrollArea):
                 f"{found:,} TXY found · {loaded:,} loaded", f"{failed:,} unreadable" if failed else "",
                 f"{unsettled:,} still being written" if unsettled else "")))
             rows["files"] = (files, "Counts from when this data was loaded")
+            rows["txy"] = FolderDetailsPanel._with_choices(
+                FolderDetailsPanel._txy_row(meta),
+                explorer.model.cache.folder_choices.get(explorer.selected_path_globally) or {},
+                explorer.model.cache.convert_profile_tag())
         rows["data"] = (f"{plural(number('rows'), 'data row')} · {fnum(number('bytes')).strip()}B in RAM",
                         "Rows (t, x, y) across the loaded TXY files, and the memory their arrays use")
         loaded_at = meta.get("loaded_at")

@@ -13,7 +13,7 @@ from helab.utils.io_service import IORequest, delete_io_traces, get_io_service, 
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, get_folder_cache, set_disk_budget, store_options
 from helab.utils.gui_watchdog import GUIWatchdog
 from helab.utils.lab_parameters import read_lab_constants
-from helab.utils import app_log, events
+from helab.utils import app_log, events, user_manual
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -35,7 +35,7 @@ from helab.utils.constants import (
     APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, DEFAULT_LOAD_MODE, DIR_TEMPS, LOAD_MODE_LABELS,
     QSPLITTER_STYLESHEET, TOOLBAR_STYLESHEET_LR, cache_dir_refused, read_check_level,
     read_disk_budget, read_io_concurrency, read_live_autosave, read_live_interval, read_load_mode,
-    app_folder, read_plot_auto_reload, read_ram_budget,
+    app_folder, read_convert_profile, read_plot_auto_reload, read_ram_budget, read_txy_source,
 )
 from helab.utils.number_format import byte_size, byte_unit
 from helab.utils.settings_defaults import (
@@ -43,6 +43,7 @@ from helab.utils.settings_defaults import (
     setting_default)
 from helab.utils.settings_store import app_settings
 from helab.views.CacheDialogs import CacheDialogs
+from helab.views.CacheTab import read_result_reuse
 from helab.views.ClockSkewWarning import ClockSkewWarning
 from helab.views.OldLogs import OldLogs
 from helab.views.ElidedLabel import ElidedLabel
@@ -52,6 +53,7 @@ from helab.views.FolderExplorer import (
     AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, LARGE_TOOLTIP, REFUSED_TOOLTIP,
     IO_SPINNER, FolderExplorer, paint_spinner,
 )
+from helab.views.explorer_live import ARM_AUTO_CONVERT
 from helab.views.explorer_text import large_text
 from helab.views.FolderTabWidget import FolderTabWidget
 from helab.views import live_launch, state_dump
@@ -66,6 +68,7 @@ from helab.views.DebugIconsWindow import DebugIconsWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
 
 PLACE_ROOT_MENU = " Place .helab-root…"
+CONVERT_FOLDER_MENU = " Convert This Folder…"
 
 # Work Offline (cache-only browsing; Tony named it, 2026-10-26: D2).
 WORK_OFFLINE_TOOLTIP = ("Browse and analyse cached data only: HeLab reads no source folder and no server until you "
@@ -291,6 +294,31 @@ class HelabMainWindow(QMainWindow):
         self.action_place_root.setEnabled(enabled)
         self.action_place_root.setToolTip(f"{path}\n{tooltip}")
 
+    def update_convert_folder_action(self) -> None:
+        """File › Convert This Folder… (Q~4): named for the tab's selected folder, enabled as its right-click item."""
+        target = self._place_root_target()
+        if target is None:
+            self.action_convert_folder.setText(CONVERT_FOLDER_MENU)
+            self.action_convert_folder.setEnabled(False)
+            self.action_convert_folder.setToolTip("Open a folder tab first")
+            return
+        explorer, path = target
+        name = os.path.basename(path.rstrip("/\\")) or path
+        if len(name) > 40:
+            name = f"{name[:24]}…{name[-15:]}"
+        why = explorer.converter.convert_unavailable(path)
+        self.action_convert_folder.setText(f" Convert “{name}”…")
+        self.action_convert_folder.setEnabled(not why)
+        self.action_convert_folder.setToolTip(f"{path}\n" + (f"Not now: {why}" if why else
+                                              "Its raw files to HeLab's TXY, with a profile you pick (this folder only)"))
+
+    def convert_folder_in_current_tab(self) -> bool:
+        """As the tree's Convert this folder… does, for the current tab's selected folder."""
+        target = self._place_root_target()
+        if target is None or target[0].converter.convert_unavailable(target[1]):
+            return False
+        return target[0].converter.ask_convert(target[1]) is not None
+
     def place_root_in_current_tab(self) -> bool:
         """As the tree's Place .helab-root here… does, for the current tab's selected folder."""
         target = self._place_root_target()
@@ -390,8 +418,14 @@ class HelabMainWindow(QMainWindow):
             self.action_place_root.setEnabled(False)  # Until the menu shows (aboutToShow).
             self.action_place_root.triggered.connect(self.place_root_in_current_tab)
             menu_file.addAction(self.action_place_root)
+            # Q~4: right-click › Convert this folder…, for the tab's selected folder.
+            self.action_convert_folder = QAction(CONVERT_FOLDER_MENU, self)
+            self.action_convert_folder.setEnabled(False)  # Until the menu shows (aboutToShow).
+            self.action_convert_folder.triggered.connect(self.convert_folder_in_current_tab)
+            menu_file.addAction(self.action_convert_folder)
             menu_file.setToolTipsVisible(True)
             menu_file.aboutToShow.connect(self.update_place_root_action)
+            menu_file.aboutToShow.connect(self.update_convert_folder_action)
 
             # Cache-only browsing (D2): no source folder or server is read while it is on.
             self.action_work_offline = QAction(" Work Offline", self)
@@ -531,6 +565,11 @@ class HelabMainWindow(QMainWindow):
 
         menu_help = self.menu_bar.addMenu("Help")
         if menu_help is not None:
+            action_manual = QAction("User manual", self)
+            action_manual.setObjectName("help_user_manual")
+            action_manual.setToolTip("Open HeLab's user manual in your web browser")
+            action_manual.triggered.connect(self.open_user_manual)
+            menu_help.addAction(action_manual)
             action_about = QAction("About HeLab", self)
             action_about.triggered.connect(self.show_about_dialog)
             menu_help.addAction(action_about)
@@ -809,6 +848,48 @@ class HelabMainWindow(QMainWindow):
     def show_about_dialog(self) -> None:
         QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description())
 
+    # Help › User manual's site check under way: its reply and the targets it chooses between.
+    _manual_check: tuple[Any, user_manual.ManualTargets] | None = None
+    _manual_network: Any = None
+
+    def open_user_manual(self) -> None:
+        """Help › User manual, in the system browser (``user_manual``): the build's site for this
+        version once a HEAD request finds it, else the bundled copy (or GitHub's page). The check is
+        asynchronous (Qt's network access, no thread) with a short timeout, so the click never waits;
+        a click while a check is under way adds none (that check opens the manual)."""
+        if self._manual_check is not None:
+            return
+        found = user_manual.targets(APP_BUILD_INFO)
+        if found.site is None:
+            self._open_manual(found.fallback)
+            return
+        from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+        if self._manual_network is None:
+            self._manual_network = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(found.site))
+        request.setTransferTimeout(user_manual.SITE_CHECK_TIMEOUT_MS)
+        reply = self._manual_network.head(request)
+        self._manual_check = (reply, found)
+        reply.finished.connect(self._manual_checked)
+
+    def _manual_checked(self) -> None:
+        """The site check ended: the site if it answered, else the fallback."""
+        from PyQt6.QtNetwork import QNetworkReply, QNetworkRequest
+        check, self._manual_check = self._manual_check, None
+        if check is None:
+            return
+        reply, found = check
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        reached = (reply.error() == QNetworkReply.NetworkError.NoError and isinstance(status, int)
+                   and 200 <= status < 400)
+        reply.deleteLater()
+        self._open_manual(found.site if reached and found.site is not None else found.fallback)
+
+    def _open_manual(self, url: str) -> None:
+        from PyQt6.QtGui import QDesktopServices
+        if not QDesktopServices.openUrl(QUrl(url)):
+            logging.warning("Help › User manual: couldn't open %s", url)
+
     def _toggle_io_trace(self, on: bool) -> None:
         """Help › Record I/O trace (this session): a new recording folder in the temp folder's io-traces
         folder; earlier recordings are kept unless the user deletes them when asked. A local-lane helper
@@ -924,6 +1005,13 @@ class HelabMainWindow(QMainWindow):
         cache.check_level = read_check_level(settings)
         self._apply_live_settings(settings)
         cache.set_lab_constants(read_lab_constants(settings))
+        # What only Save applies, again from the settings: Reset, then Cancel, has already cleared them.
+        cache.set_convert_profile(read_convert_profile(settings))
+        cache.set_tab_source(read_txy_source(settings))
+        cache.set_result_reuse(read_result_reuse(settings))
+        # Reset while working offline, "go online now" (Q43.1): the setting was cleared, the session follows.
+        if bool(read_setting(settings, WORK_OFFLINE_SETTING, typed=True)) != cache.offline:
+            self.set_work_offline(not cache.offline)
         if read_disk_budget(settings) != store_options().get("budget"):
             # Saved without Save (e.g. Reset, then Cancel): the store is told until it has it.
             # (After Save it already has it: Settings saves a new disk budget only then.)
@@ -1075,6 +1163,14 @@ class HelabMainWindow(QMainWindow):
         self.action_tab_live.setCheckable(True)
         # Enabled for the current tab's selected folder once its data is shown (_update_live_action).
         self.action_tab_live.setEnabled(False)
+        # Below Live, so it stays at hand while Live collapses the left panel: the Live line's Auto-convert
+        # (on or off while Live watches; armed before it starts), its menu on the arrow below it.
+        self.action_tab_auto_convert = QAction(ToolIcons.ICON_AUTO_CONVERT, "Auto-convert", self)
+        self.action_tab_auto_convert.setCheckable(True)
+        self.action_tab_auto_convert.setEnabled(False)
+        self.action_tab_auto_convert.triggered.connect(self.on_auto_convert_clicked)
+        self.auto_convert_menu = QMenu(self)
+        self.auto_convert_menu.aboutToShow.connect(self._fill_auto_convert_menu)
 
         self.action_tab_new.setToolTip("New Tab")
         self.action_tab_new.setWhatsThis(
@@ -1136,6 +1232,32 @@ class HelabMainWindow(QMainWindow):
         self.sidebar_toolbar_left.addWidget(status_control)
         self.sidebar_toolbar_left.addAction(self.action_tab_cancel)
         self.sidebar_toolbar_left.addAction(self.action_tab_live)
+        convert_control = QWidget(self.sidebar_toolbar_left)
+        convert_layout = QVBoxLayout(convert_control)
+        convert_layout.setContentsMargins(0, 0, 0, 0)
+        convert_layout.setSpacing(0)
+        self.auto_convert_tool_button = identify(QToolButton(convert_control), "toolbar_auto_convert",
+                                                 description="Auto-convert new raw shots while Live watches, or "
+                                                             "arm it before Live starts")
+        self.auto_convert_tool_button.setAutoRaise(True)
+        self.auto_convert_tool_button.setDefaultAction(self.action_tab_auto_convert)
+        self.auto_convert_tool_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.auto_convert_tool_button.setIconSize(self.sidebar_toolbar_left.iconSize())
+        self.auto_convert_tool_button.setFixedSize(button_size)
+        self.auto_convert_scope_button = HoverMenuToolButton(convert_control)
+        self.auto_convert_scope_button.setIcon(QIcon(arrow_path))
+        self.auto_convert_scope_button.setIconSize(QSize(6, 8))
+        self.auto_convert_scope_button.setFixedSize(button_size.width(), 12)
+        self.auto_convert_scope_button.setMenu(self.auto_convert_menu)
+        self.auto_convert_scope_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.auto_convert_scope_button.setToolTip("Auto-convert's choices\nHover or click to open them.")
+        identify(self.auto_convert_scope_button, "toolbar_auto_convert_menu", "Auto-convert's choices",
+                 "Open auto-convert's choices: where TXY files go, Live at launch, low-count notifications")
+        self.action_tab_auto_convert.changed.connect(self._sync_auto_convert_menu_button)
+        self._sync_auto_convert_menu_button()
+        convert_layout.addWidget(self.auto_convert_tool_button)
+        convert_layout.addWidget(self.auto_convert_scope_button)
+        self.sidebar_toolbar_left.addWidget(convert_control)
         for action, ident, description in (
                 (self.action_tab_new, "new_tab", "Open a new folder tab"),
                 (self.action_tab_folder_up, "folder_up", "Show the folder above in this tab"),
@@ -1270,7 +1392,13 @@ class HelabMainWindow(QMainWindow):
     # macOS's default font (Load Scripts… and Delete… start to be at 240), below the 320 px default so the
     # default split holds where the system's font is wider (Windows), set rather than taken from the contents.
     MIN_SETTINGS_WIDTH = 250
+    # The plots' least width when the panels' widths don't fit the window (app-2: a split saved on a wider
+    # screen narrows both panels in proportion, rather than leaving the plots 0 px). Below what the default
+    # split leaves in Windows CI's 976 px splitter (268 px), so the default 380/320 holds there (Q33.2).
+    MIN_PLOTS_WIDTH = 240
     _split_shown = True  # (False from ``_setup_central_widgets`` until the first show applies the widths.)
+    # Panels the window narrowed (splitter index: (width shown, width chosen)), not saved as the user's.
+    _narrowed: dict[int, tuple[int, int]] = {}
 
     @classmethod
     def read_split(cls, settings: QSettings) -> tuple[int, int]:
@@ -1298,9 +1426,32 @@ class HelabMainWindow(QMainWindow):
         super().showEvent(a0)
         if not self._split_shown:
             self._split_shown = True
-            self.splitter.setSizes([self.left_panel_width,
-                                    max(0, self.splitter.width() - self.left_panel_width - self.right_panel_width),
-                                    self.right_panel_width])
+            self._set_split(self.left_panel_width, self.right_panel_width, self.splitter.width())
+
+    @classmethod
+    def fitted(cls, left: int, right: int, total: int) -> tuple[int, int]:
+        """The panels' widths ``left`` and ``right`` (0: collapsed) in a splitter ``total`` wide: as they are
+        when the plots keep MIN_PLOTS_WIDTH; else each shown panel keeps its least width and the room above
+        those is shared in proportion to what each had above its own (one held at its least width narrows
+        the other)."""
+        room = total - cls.MIN_PLOTS_WIDTH
+        if left + right <= room:
+            return left, right
+        least_left, least_right = min(left, cls.MIN_PANEL_WIDTH), min(right, cls.MIN_SETTINGS_WIDTH)
+        above_left, above_right = left - least_left, right - least_right
+        spare = max(0, room - least_left - least_right)
+        share = round(spare * above_left / (above_left + above_right)) if above_left + above_right else 0
+        return least_left + share, least_right + min(spare - share, above_right)
+
+    def _set_split(self, left: int, right: int, total: int) -> None:
+        """The panels ``left`` and ``right`` wide (0: collapsed), the plots the rest of ``total``. Where the
+        plots would get less than MIN_PLOTS_WIDTH, the shown panels are narrowed in proportion (to no less
+        than their least widths) for this window only: the widths chosen stay the ones saved."""
+        chosen = {0: left, 2: right}
+        left, right = self.fitted(left, right, total)
+        self.splitter.setSizes([left, max(0, total - left - right), right])
+        sizes = self.splitter.sizes()
+        self._narrowed = {index: (sizes[index], width) for index, width in chosen.items() if sizes[index] < width}
 
     def save_split(self) -> None:
         """Keep the panels' widths for the next start (as HeLab quits). A shown panel's width is its own; a
@@ -1308,9 +1459,19 @@ class HelabMainWindow(QMainWindow):
         self._remember_panel_widths()
         app_settings().setValue(MAIN_SPLIT_SETTING, f"{self.left_panel_width},{self.right_panel_width}")
 
+    def _chosen_sizes(self) -> list[int]:
+        """The splitter's sizes, a panel the window narrowed (``_set_split``) and still that wide at the
+        width chosen for it."""
+        sizes = self.splitter.sizes()
+        for index, (shown, chosen) in self._narrowed.items():
+            if sizes[index] == shown:
+                sizes[index] = chosen
+        return sizes
+
     def _remember_panel_widths(self) -> None:
-        """The panels' widths to restore (toggle back, next start): each shown panel's current width."""
-        left, _, right = self.splitter.sizes()
+        """The panels' widths to restore (toggle back, next start): each shown panel's current width, or the
+        one chosen for it while the window narrows it."""
+        left, _, right = self._chosen_sizes()
         if left >= self.MIN_PANEL_WIDTH:
             self.left_panel_width = min(left, self.MAX_PANEL_WIDTH)
         if right >= self.MIN_SETTINGS_WIDTH:
@@ -1373,13 +1534,7 @@ class HelabMainWindow(QMainWindow):
 
     def toggle_left_panel(self, checked: bool) -> None:
         if checked: # Expand the left panel
-            # self.splitter.setSizes([self.left_panel_width, self.splitter.sizes()[1], self.splitter.sizes()[2]])
-            self.splitter.setSizes([
-                self.left_panel_width,
-                # self.splitter.sizes()[1],
-                self.width()-self.left_panel_width-self.right_panel_width,
-                self.right_panel_width
-            ])
+            self._set_split(self.left_panel_width, self._chosen_sizes()[2], self.splitter.width())
             self.toggle_left_panel_action.setIcon(ToolIcons.ICON_LEFT_COLLAPSE)
             self.toggle_left_panel_action.setChecked(True)
             self.view_toggle_left_panel.setChecked(True)
@@ -1449,21 +1604,15 @@ class HelabMainWindow(QMainWindow):
 
     def toggle_right_panel(self, checked: bool) -> None:
         if checked:
-            self.splitter.setSizes([
-                self.splitter.sizes()[0],
-                self.width()-self.left_panel_width-self.right_panel_width,
-                self.right_panel_width
-            ])
+            self._set_split(self._chosen_sizes()[0], self.right_panel_width, self.splitter.width())
             self.sidebar_toolbar_right.actions()[0].setIcon(ToolIcons.ICON_RIGHT_COLLAPSE)
             self.toggle_right_panel_action.setChecked(True)
             self.view_toggle_right_panel.setChecked(True)
         else:
             self._remember_panel_widths()
-            self.splitter.setSizes([
-                self.splitter.sizes()[0],
-                self.width()-self.left_panel_width,
-                0
-            ])
+            # Its width goes to the plots; the folders keep the width shown (which the window may narrow).
+            left, middle, right = self.splitter.sizes()
+            self.splitter.setSizes([left, middle + right, 0])
             self.sidebar_toolbar_right.actions()[0].setIcon(ToolIcons.ICON_RIGHT_EXPAND)
             self.toggle_right_panel_action.setChecked(False)
             self.view_toggle_right_panel.setChecked(False)
@@ -1675,7 +1824,7 @@ class HelabMainWindow(QMainWindow):
             return f"Showing previous data for {name} — see Folder details", ""
         node = explorer.model.nodes.get(path)
         if node is not None and node.report is not None and not node.error and not explorer.scan_message:
-            if node.txy_count or node.report.d_txy_shots:
+            if node.txy_count or node.report.d_txy_shots or explorer.on_read_count(path, node.report):
                 return f"{name} is not loaded — right-click it › Load data", ""
             return f"No TXY files in {name} — select a data folder", ""
         return "Select a data folder to begin", ""
@@ -1811,6 +1960,48 @@ class HelabMainWindow(QMainWindow):
                                         or "Live couldn't start")
         self._update_live_action()
 
+    def on_auto_convert_clicked(self, on: bool) -> None:
+        """The toolbar's Auto-convert: as the Live line's (arms the selected folder before Live starts)."""
+        explorer = self.tab_widget.currentWidget()
+        if isinstance(explorer, FolderExplorer) and not explorer.closed:
+            explorer.live_control.set_auto_convert(on)
+        self._update_live_action()
+
+    def _fill_auto_convert_menu(self) -> None:
+        self.auto_convert_menu.clear()
+        explorer = self.tab_widget.currentWidget()
+        if isinstance(explorer, FolderExplorer) and not explorer.closed:
+            explorer.live_control.fill_convert_menu(self.auto_convert_menu)
+
+    def _sync_auto_convert_menu_button(self) -> None:
+        self.auto_convert_scope_button.setEnabled(self.action_tab_auto_convert.isEnabled())
+
+    def _update_auto_convert_action(self, explorer: FolderExplorer | None) -> None:
+        """The toolbar's Auto-convert follows the current tab's Live line: on or off while Live watches,
+        armed or not before it starts; off with no folder selected."""
+        action = self.action_tab_auto_convert
+        control = explorer.live_control if explorer is not None else None
+        path = control.convert_folder() if control is not None else ""
+        watching = explorer is not None and explorer.live is not None
+        on = control is not None and bool(path) and (control.auto_converting(path) if watching
+                                                     else control.auto_convert_armed(path))
+        name = os.path.basename(path.rstrip(os.sep)) or path
+        if not path:
+            tooltip = "Auto-convert\nSelect a folder to arm auto-convert for Live there."
+        elif watching:
+            tooltip = (f"Auto-convert is on in {name}\nClick to stop converting its new raw files." if on else
+                       f"Auto-convert {name}'s new raw files (d<N>.txt) to HeLab's TXY while Live watches it")
+        else:
+            tooltip = (f"Auto-convert armed for {name}\nTurn Live on to start watching it and converting its new raw "
+                       "files. Click to disarm." if on else
+                       f"{ARM_AUTO_CONVERT} for {name}\nWhen you turn Live on there, it also converts the folder's "
+                       "new raw files (d<N>.txt) to HeLab's TXY.")
+        action.setEnabled(bool(path))
+        action.setChecked(on)
+        action.setText("Auto-convert" if watching else ARM_AUTO_CONVERT)
+        if action.toolTip() != tooltip:
+            action.setToolTip(tooltip)
+
     def _update_live_action(self) -> None:
         """The toolbar's Live follows the current tab. While it is on, the tab's folder tree is
         locked, and so are Up, Refresh and Check folder status; switching tabs turns it off."""
@@ -1830,6 +2021,7 @@ class HelabMainWindow(QMainWindow):
         else:
             self.set_tools_and_tabs_enable()
         session = explorer.live if explorer is not None else None
+        self._update_auto_convert_action(explorer)
         self._live_panel(session is not None and not session.error)
 
     def _open_first_tab(self) -> None:

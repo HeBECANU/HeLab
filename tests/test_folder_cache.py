@@ -31,6 +31,7 @@ from helab.io_ops.loading import load
 from helab.io_ops.scanning import scan
 from helab.utils.cache_store import CacheStore, DatasetRow, unpack_dataset
 from helab.resources.icons import IconsInitUtil, StatusIcons
+from conftest import this_tests
 
 
 def saved_dataset(options: dict[str, Any], path: str) -> tuple[DatasetRow, dict[int, Any]] | None:
@@ -932,14 +933,15 @@ def test_real_helpers_reuse_warm_tab_without_scan_or_decompression(
     first_saved_at = first.model.cache.cache_status(str(tmp_path)).info["saved_at"]
     assert first.folder_cache_label.text().startswith("Cache created ")
     # The load lists and fingerprints the folder, so the details scan is skipped.
-    assert operations == ["list", "load"]
+    # (store-v4, the shipped default: the load's save queues the folder's raw pulses, raw_fill.)
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load"]
     second = explorer_for_test(qtbot, str(tmp_path))
     qtbot.waitUntil(lambda: second.folder_opened_data is not None)
     assert second.load_source == "memory"
     assert second.folder_cache_label.text().startswith("Cached data loaded · Cached ")
     assert second.model.cache.cache_status(str(tmp_path)).info["saved_at"] == first_saved_at
     assert second.load_counts["reused_memory"] == 1 and second.load_counts["read"] == 0
-    assert operations == ["list", "load"]  # No helper for warm memory reuse.
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load"]  # No helper for warm memory reuse.
     assert first.folder_opened_data is not None and second.folder_opened_data is not None
     assert first.folder_opened_data[1] is second.folder_opened_data[1]
     source.write_text("10,20,30\n")
@@ -947,7 +949,7 @@ def test_real_helpers_reuse_warm_tab_without_scan_or_decompression(
     qtbot.waitUntil(lambda: second.folder_opened_data is not None and second.folder_opened_data[1][0, 0] == 10,
                    timeout=15000)
     # The listing finds the same names; the details scan finds the modified file.
-    assert operations == ["list", "load", "list", "details", "load"]
+    assert [op for op in operations if op != "raw_fill"] == ["list", "load", "list", "details", "load"]
     assert first.folder_opened_data[1] is second.folder_opened_data[1]
     qtbot.waitUntil(lambda: first.model.cache.cache_status(str(tmp_path)).info.get("saved_at", 0)
                    > first_saved_at, timeout=15000)
@@ -1071,6 +1073,8 @@ def test_changed_folder_reads_only_new_or_modified_txy_files(
     assert loaded_event(events)["load_counts"] == {
         "reused_memory": 0, "reused_disk": 2, "new": 1, "modified": 1, "removed": 1,
         "read": 2, "new_loaded": 1, "modified_loaded": 1,
+        # (Shot 3 is really gone: removed, not left out. The folder's TXY by kind: A39.4.)
+        "left_out": 0, "txy_matlab": 4, "txy_helab": 0,
     }
     assert events[-1] == {"kind": "disk_cached", "disk_cached": True}
     for shot, expected in ((1, [[1, 1, 1]]), (2, [[20, 20, 20]]), (4, [[5, 5, 5]]), (5, [[50, 50, 50]])):
@@ -1118,7 +1122,7 @@ def test_load_skips_shots_already_in_memory_and_completes_disk_cache(
     assert loaded["source"] == "updated" and loaded["memory_shots"] == [1, 2]
     assert loaded["load_counts"] == {
         "reused_memory": 2, "reused_disk": 0, "new": 0, "modified": 1, "removed": 0,
-        "read": 1, "new_loaded": 0, "modified_loaded": 1,
+        "read": 1, "new_loaded": 0, "modified_loaded": 1, "left_out": 0, "txy_matlab": 3, "txy_helab": 0,
     }
     assert loaded["cache_reason"] == "Reused 2 shots from memory; 1 new or changed TXY file to read"
     assert events[-1] == {"kind": "disk_cached", "disk_cached": True}
@@ -1148,7 +1152,7 @@ def test_scan_reports_cached_children_without_loading_or_probing_them(
     def forbid_decompression(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("Checking cache badges decompressed a dataset")
 
-    monkeypatch.setattr("os.scandir", record_scandir)
+    monkeypatch.setattr("os.scandir", this_tests(record_scandir, original_scandir))
     monkeypatch.setattr(blosc, "decompress", forbid_decompression)
     events: list[Any] = []
     scan(str(root), events.append, options)

@@ -6,16 +6,17 @@ come from ``FolderCache``. See roadmaps/cache-storage-and-settings.md.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from fractions import Fraction
 import re
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QValidator
 from PyQt6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
+    QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -30,12 +31,119 @@ from helab.utils.constants import (
 from helab.utils import folder_cache
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size, byte_unit
-from helab.utils.settings_defaults import RESULT_REUSE_SETTING, read_setting
+from helab.utils.settings_defaults import CACHE_POLICY_SETTING, RESULT_REUSE_SETTING, read_setting
 from helab.utils.time_format import relative_age
 
 DAY = 86400.0
 DEFAULT_PURGE_DAYS = 90
 # The rows of the disk cache, by record kind: label and button.
+# The cache policy's choices (caching v2, Q45.1), in the words S~6 proposed (Tony to confirm).
+POLICY_LABELS = (("raw+used", "Raw + what you load (default)"), ("raw", "Raw only, convert on load"),
+                 ("txy", "TXY only (no raw)"))
+
+
+def remove_raw_following_text(following: Mapping[str, Any]) -> str:
+    """S4~1's question for Settings' policy (Tony's wording, 2026-11-02): every folder that follows it now keeps
+    no raw pulses; remove HeLab's cached copy of theirs? ``following``: the inventory's ``raw.following``, what
+    ``remove_raw_following`` removes (S4-1)."""
+    only = int(following.get("only_copy") or 0)
+    folders = int(following.get("folders") or 0)
+    return ("Folders that follow this setting keep no raw pulses from now on. Also remove HeLab's cached copy of "
+            f"their raw pulses ({plural(folders, 'folder')}, {byte_size(int(following.get('bytes') or 0), 'disk')})? "
+            "Your d files aren't touched. Folders with their own cache policy keep theirs."
+            + (f"\n\nRaw pulses of {plural(only, 'shot')} are the only copy: their raw files are gone from their "
+               "folders, so they can't be read again." if only else ""))
+
+
+# What Settings says when it couldn't offer that (S4-3: busy, or the cache not checked yet).
+RAW_KEPT_MESSAGE = "Cached raw pulses kept: Clear raw pulses removes them"
+
+
+def _only_copies(txy: Mapping[str, Any] | None, raw: Mapping[str, Any] | None) -> str:
+    """The sentence a question that removes store-v4's TXY data or raw pulses (Clear, Clear all) gives their only
+    copies (Q22.6, C2-9: never removed unnamed), or "" when there are none."""
+    parts: list[str] = []
+    folders = int((txy or {}).get("only_copy_folders") or 0)
+    if folders:
+        parts.append(f"TXY data of {folders} folder{'' if folders == 1 else 's'}")
+    shots = int((raw or {}).get("only_copy") or 0)
+    if shots:
+        parts.append(f"HeLab's cached raw pulses of {shots} shot{'' if shots == 1 else 's'}")
+    if not parts:
+        return ""
+    return (f"Some of it is the only copy ({' and '.join(parts)}): their files are gone from their folders, so "
+            "it can't be read again.")
+
+
+# The purges by age (A47.4), as their controls' accessible names say them.
+PURGE_NAMES = {"datasets": "cached data", "txy": "TXY data", "raw": "HeLab's cached raw pulses",
+               "records": "folder records", "results": "cached analysis", "all": "everything"}
+# What a purge of TXY data or raw pulses leaves, for its question (Tony, 2026-11-02: name the raw pulses as
+# HeLab's cached copy, and say the d files aren't touched).
+PURGE_TEXT = {
+    "txy": "Loaded data stays open; the next load of each folder caches its TXY again. TXY files are never touched.",
+    "raw": "Your d files aren't touched: their pulses are cached again from them after the next load of each folder.",
+}
+ONLY_COPIES_STAY = "Only copies stay (Make room names them)."
+
+
+@dataclass(frozen=True)
+class Everything:
+    """What Remove everything old takes by one cutoff, by part (A47.4)."""
+    datasets: dict[str, int]
+    txy: dict[str, int] | None
+    raw: dict[str, int] | None
+    records: int
+    record_kinds: dict[str, int]
+    results: dict[str, int]
+
+    @property
+    def bytes(self) -> int:
+        return (self.datasets["bytes"] + (self.txy or {}).get("bytes", 0) + (self.raw or {}).get("bytes", 0)
+                + self.results["bytes"])
+
+    @property
+    def any(self) -> bool:
+        return bool(self.datasets["datasets"] or (self.txy or {}).get("txy_folders") or
+                    (self.raw or {}).get("raw_folders") or self.records or self.results["results"])
+
+
+def everything(inventory: Mapping[str, Any], cutoff: float, include_failures: bool) -> Everything:
+    """Each part of Remove everything old, from the same estimates as each part's own purge."""
+    v4 = "txy" in inventory["ages"]
+    records = purge_estimate(inventory, cutoff, datasets=False, include_failures=include_failures)
+    return Everything(
+        datasets=purge_estimate(inventory, cutoff, datasets=True, kinds=("datasets",)),
+        txy=purge_estimate(inventory, cutoff, datasets=True, kinds=("txy",)) if v4 else None,
+        raw=purge_estimate(inventory, cutoff, datasets=True, kinds=("raw",)) if v4 else None,
+        records=sum(records.values()), record_kinds=records,
+        results=results_purge_estimate(inventory, cutoff))
+
+
+def everything_text(inventory: Mapping[str, Any], cutoff: float, days: int, include_failures: bool) -> str:
+    """Remove everything old's question: every part with its size (CoCo: cached analysis named as the user's
+    results; scan failures only with the box), and what stays."""
+    parts = everything(inventory, cutoff, include_failures)
+    lines = [f"• cached data for {plural(parts.datasets['datasets'], 'folder')} "
+             f"({byte_size(parts.datasets['bytes'], 'disk')})"]
+    if parts.txy is not None:
+        lines.append(f"• TXY data for {plural(parts.txy.get('txy_folders', 0), 'folder')} "
+                     f"({byte_size(parts.txy['bytes'], 'disk')})")
+    if parts.raw is not None:
+        lines.append(f"• HeLab's cached raw pulses for {plural(parts.raw.get('raw_folders', 0), 'folder')} "
+                     f"({byte_size(parts.raw['bytes'], 'disk')}); your d files aren't touched")
+    lines.append(f"• {plural(parts.records, 'folder record')} not checked since: summaries, subfolder status, "
+                 "listings and scan histories" + ("" if include_failures else " (scan failures are kept)"))
+    lines.append(f"• cached analysis: {plural(parts.results['results'], 'saved result')} of your plots "
+                 f"({byte_size(parts.results['bytes'], 'disk')}) not shown since")
+    stays = ("Automatic checks will try folders whose scan failed again." if include_failures else
+             "Automatic checks still skip folders whose scan failed.")
+    return (f"Removes everything not used, checked or shown in the last {plural(days, 'day')} "
+            f"({byte_size(parts.bytes, 'disk')}):\n" + "\n".join(lines) + "\n\n"
+            f"Loaded data and plots shown now stay open. {stays} Raw files and TXY files are never touched."
+            + (f" {ONLY_COPIES_STAY}" if parts.txy is not None else "") + " Presets are kept.")
+
+
 KIND_ROWS = {"datasets": ("Cached data", "Clear…"), "summaries": ("Folder summaries", "Clear…"),
              "histories": ("Scan failures", "Forget…"), "subtrees": ("Subfolder status", "Clear…"),
              "listings": ("Folder listings", "Clear…")}
@@ -126,6 +234,10 @@ class CacheTab(QWidget):
         self._applying_budget = 0
         # The budget job found more cached than the lowered budget allows (its usage).
         self._too_full: int | None = None
+        # store-v4: lowering the budget asks from the helper's plan (``trim`` ``plan_only``, S2-1): the budget
+        # being planned for, and the plan when it came.
+        self._planning: int | None = None
+        self._trim_plan: dict[str, Any] | None = None
         self.message = ""
         self.confirm: Callable[[str, str, str], bool] = self._confirm
 
@@ -200,7 +312,56 @@ class CacheTab(QWidget):
         self.results_button = QPushButton("Clear…")
         self.results_button.clicked.connect(self.clear_results)
         grid.addWidget(self.results_button, row, 2)
+        # Caching v2 (store-v4, the switch on): raw pulses, and an older HeLab's store-v3 beside it.
+        self.raw_name = QLabel("Raw pulses")
+        self.raw_label = QLabel("")
+        self.raw_label.setToolTip("Each raw file's pulses, kept so any converter profile can make its TXY without "
+                                  "reading the folder again. Filled in the background after a folder's data is "
+                                  "cached. Only copies: raw files gone from their folders since.")
+        self.raw_button = QPushButton("Clear…")
+        self.raw_button.clicked.connect(self.clear_raw)
+        grid.addWidget(self.raw_name, row + 1, 0)
+        grid.addWidget(self.raw_label, row + 1, 1)
+        grid.addWidget(self.raw_button, row + 1, 2)
+        # Caching v2 stage 2: TXY data in layers (MATLAB's, and one per HeLab profile), and what new saves keep.
+        self.txy_name = QLabel("TXY data")
+        self.txy_label = QLabel("")
+        self.txy_label.setToolTip("Each folder's cached TXY: External (MATLAB converter), and HeLab's of each "
+                                  "converter profile used, each shot kept once whichever TXY source a tab or plot shows. Only copies: their TXY "
+                                  "files are gone from their folders since.")
+        self.txy_button = QPushButton("Clear…")
+        self.txy_button.clicked.connect(self.clear_txy)
+        grid.addWidget(self.txy_name, row + 2, 0)
+        grid.addWidget(self.txy_label, row + 2, 1)
+        grid.addWidget(self.txy_button, row + 2, 2)
+        self.policy_name = QLabel("Cache policy")
+        self.policy_combo = QComboBox()
+        for data, text in POLICY_LABELS:
+            self.policy_combo.addItem(text, data)
+        self.policy_combo.setCurrentIndex(max(0, self.policy_combo.findData(
+            str(read_setting(settings, CACHE_POLICY_SETTING, typed=True)))))
+        self.policy_combo.setToolTip("What new saves keep, for every folder that hasn't its own choice. Raw + what you "
+                                     "load: raw pulses and each TXY a tab or plot uses. Raw only: TXY are made from "
+                                     "the raw pulses on each load. TXY only: no raw pulses (archives without raw "
+                                     "files). Changing it removes nothing.")
+        grid.addWidget(self.policy_name, row + 3, 0)
+        grid.addWidget(self.policy_combo, row + 3, 1, 1, 2)
         layout.addLayout(grid)
+        legacy = QHBoxLayout()
+        self.legacy_name = QLabel("Older cache (store-v3)")
+        legacy.addWidget(self.legacy_name)
+        self.legacy_label = QLabel("")
+        self.legacy_label.setToolTip("An older HeLab's disk cache in this cache folder. Kept: HeLab reads its records "
+                                     "and saved analysis where the new cache has none, and it counts toward the "
+                                     "budget. Ignored: left on disk, unused.")
+        legacy.addWidget(self.legacy_label, 1)
+        self.legacy_choice_button = QPushButton("Ignore it")
+        self.legacy_choice_button.clicked.connect(self.toggle_legacy)
+        legacy.addWidget(self.legacy_choice_button)
+        self.legacy_clear_button = QPushButton("Clear…")
+        self.legacy_clear_button.clicked.connect(self.clear_legacy)
+        legacy.addWidget(self.legacy_clear_button)
+        layout.addLayout(legacy)
         self.result_reuse = QCheckBox("Reuse saved analysis results")
         self.result_reuse.setChecked(read_result_reuse(settings))
         self.result_reuse.setToolTip(
@@ -279,29 +440,29 @@ class CacheTab(QWidget):
         purges = QGridLayout()
         purges.setVerticalSpacing(0)
         purges.setColumnStretch(2, 1)
-        self.dataset_days = self._days()
-        self.dataset_estimate = QLabel("")
-        self.purge_datasets_button = QPushButton("Remove…")
-        self.purge_datasets_button.clicked.connect(self.purge_datasets)
-        self.record_days = self._days()
-        self.record_estimate = QLabel("")
-        self.purge_records_button = QPushButton("Remove…")
-        self.purge_records_button.clicked.connect(self.purge_records)
-        self.result_days = self._days()
-        self.result_estimate = QLabel("")
-        self.purge_results_button = QPushButton("Remove…")
-        self.purge_results_button.clicked.connect(self.purge_results)
-        for row, (text, days, estimate, button) in enumerate((
-                ("Cached data not used in the last", self.dataset_days, self.dataset_estimate,
-                 self.purge_datasets_button),
-                ("Folder records not checked in the last", self.record_days, self.record_estimate,
-                 self.purge_records_button),
-                ("Cached analysis not shown in the last", self.result_days, self.result_estimate,
-                 self.purge_results_button))):
-            purges.addWidget(QLabel(text), row, 0)
-            purges.addWidget(days, row, 1)
-            purges.addWidget(estimate, row, 2)
-            purges.addWidget(button, row, 3)
+        # One row per purge by age (A47.4): store-v4 adds TXY data and raw pulses; Everything takes them all.
+        self.purge_rows: dict[str, tuple[QLabel, QSpinBox, QLabel, QPushButton]] = {}
+        for row, (kind, text, slot) in enumerate((
+                ("datasets", "Cached data not used in the last", self.purge_datasets),
+                ("txy", "TXY data not used in the last", self.purge_txy),
+                ("raw", "HeLab's cached raw pulses not used in the last", self.purge_raw),
+                ("records", "Folder records not checked in the last", self.purge_records),
+                ("results", "Cached analysis not shown in the last", self.purge_results),
+                ("all", "Everything not used, checked or shown in the last", self.purge_all))):
+            name, days, estimate, button = QLabel(text), self._days(), QLabel(""), QPushButton("Remove…")
+            button.clicked.connect(slot)
+            self.purge_rows[kind] = (name, days, estimate, button)
+            for column, widget in enumerate((name, days, estimate, button)):
+                purges.addWidget(widget, row, column)
+        _, self.dataset_days, self.dataset_estimate, self.purge_datasets_button = self.purge_rows["datasets"]
+        _, self.txy_days, self.txy_estimate, self.purge_txy_button = self.purge_rows["txy"]
+        _, self.raw_days, self.raw_estimate, self.purge_raw_button = self.purge_rows["raw"]
+        _, self.record_days, self.record_estimate, self.purge_records_button = self.purge_rows["records"]
+        _, self.result_days, self.result_estimate, self.purge_results_button = self.purge_rows["results"]
+        _, self.all_days, self.all_estimate, self.purge_all_button = self.purge_rows["all"]
+        for kind in ("txy", "raw"):
+            for widget in self.purge_rows[kind]:
+                widget.setVisible(False)  # (store-v4 only: shown with its inventory.)
         layout.addLayout(purges)
         self.include_failures = QCheckBox("Include scan failures (automatic checks will try those folders again)")
         self.include_failures.toggled.connect(self._show_estimates)
@@ -354,6 +515,11 @@ class CacheTab(QWidget):
         for kind, button in self.kind_buttons.items():
             identify(button, f"cache_clear_{kind}", f"{button.text().rstrip('…')} {KIND_ROWS[kind][0].lower()}…")
         identify(self.results_button, "cache_clear_results", f"Clear {RESULTS_LABEL.lower()}…")
+        identify(self.raw_button, "cache_clear_raw", "Clear raw pulses…")
+        identify(self.txy_button, "cache_clear_txy", "Clear TXY data…")
+        identify(self.policy_combo, "cache_policy", "Cache policy")
+        identify(self.legacy_choice_button, "cache_legacy_choice", "Keep using or ignore the older cache")
+        identify(self.legacy_clear_button, "cache_clear_legacy", "Clear the older cache…")
         identify(self.result_reuse, "result_reuse")
         identify(self.refresh_button, "cache_refresh", "Refresh cache sizes")
         identify(self.clear_all_button, "cache_clear_all")
@@ -361,10 +527,8 @@ class CacheTab(QWidget):
         identify(self.converted_button, "cache_clear_converted", "Clear HeLab's converted TXY…")
         identify(self.presets_button, "cache_presets")
         identify(self.live_autosave, "live_autosave", "Live: save to the disk cache every")
-        for kind, what, days, button in (
-                ("datasets", "cached data", self.dataset_days, self.purge_datasets_button),
-                ("records", "folder records", self.record_days, self.purge_records_button),
-                ("results", "cached analysis", self.result_days, self.purge_results_button)):
+        for kind, what in PURGE_NAMES.items():
+            _, days, _, button = self.purge_rows[kind]
             identify(days, f"purge_{kind}_days", f"Remove {what} older than")
             identify(button, f"purge_{kind}", f"Remove old {what}…")
         identify(self.include_failures, "purge_include_failures")
@@ -431,6 +595,8 @@ class CacheTab(QWidget):
         self._update()
 
     def _on_result(self, action: str, event: dict[str, Any]) -> None:
+        if action == "trim" and self._planning is not None and event.get("kind") == "admin_result" and "items" in event:
+            self._trim_plan = event  # (What lowering the budget would remove, only copies named.)
         if (action == "budget" and self._budget_job and event.get("kind") == "admin_result"
                 and event.get("recorded") is False):
             self._too_full = int(event.get("usage") or 0)  # The data cached by now doesn't fit.
@@ -443,6 +609,20 @@ class CacheTab(QWidget):
             self._inventory_owner = ""
             if message:
                 self.message = f"Could not read the disk cache: {message}"
+        elif owner == self._budget_job and self._planning is not None:
+            # store-v4: the plan came; ask from it, and lower the budget removing exactly what it named (S2-1).
+            self._budget_job = ""
+            budget, plan, self._planning, self._trim_plan = self._planning, self._trim_plan, None, None
+            if not message and plan is not None and self._ask_trim(budget, None, None, plan.get("room")):
+                self._send_budget("trim", budget, plan=list(plan["items"]))
+                if self._budget_job:
+                    return
+            elif message:
+                self.message = f"Changing the disk budget failed: {message} — nothing saved"
+            else:
+                self.message = "Budget not lowered — nothing saved"
+            self.budgetApplied.emit(False)
+            self.refresh()
         elif owner == self._budget_job:
             self._budget_job = ""
             too_full, self._too_full = self._too_full, None
@@ -506,8 +686,8 @@ class CacheTab(QWidget):
                 else f"what is left of HeLab's converted TXY: old records and damaged indexes ({size})")
         if not self.confirm("Clear HeLab's converted TXY?",
                             f"Removes {what}, from the cache and temp folders; HeLab's index of what made them "
-                            "stays. Raw files, MATLAB's TXY and HeLab's TXY written beside raw files are kept. Data "
-                            "loaded stays open; plots on HeLab's TXY keep what they show, and shots are converted "
+                            "stays. Raw files, External TXY (MATLAB converter) and HeLab's TXY written beside raw files "
+                            "are kept. Data loaded stays open; plots on HeLab's TXY keep what they show, and shots are converted "
                             "again when converting is on.", "Clear"):
             return
         self._run("Clear HeLab's converted TXY", "clear_converted_txy")
@@ -516,14 +696,25 @@ class CacheTab(QWidget):
         inventory = self.inventory
         if inventory is None or self.busy:
             return
-        if set(kinds) == set(KINDS):
+        if set(kinds) >= set(KINDS):
+            raw = inventory.get("raw")
+            txy = inventory.get("txy")
             title = "Clear the disk cache?"
             text = (f"Removes everything in the disk cache: cached data for "
                     f"{plural(inventory['datasets']['count'], 'folder')} ({byte_size(inventory['datasets']['bytes'], 'disk')}),"
-                    " folder summaries, scan failures, subfolder status and folder listings.\n\n"
+                    + (f" TXY data for {plural(int(txy['folders']), 'folder')} ({byte_size(int(txy['bytes']), 'disk')}),"
+                       if txy else "")
+                    + (f" HeLab's cached raw pulses for {plural(int(raw['folders']), 'folder')} "
+                       f"({byte_size(int(raw['bytes']), 'disk')}; your d files aren't touched)," if raw else "")
+                    + " folder summaries, scan failures, subfolder status and folder listings.\n\n"
                     "Loaded data stays open. Automatic checks will try failed folders again. Cached analysis "
                     "stays (its own Clear).")
+            only = _only_copies(txy, raw)
+            if only:
+                text += f"\n\n{only}"
             verb, label = "Clear all", "Clear all"
+            # (store-v4: its raw pulses and TXY data too.)
+            kinds = [*KINDS, *(["raw"] if raw is not None else []), *(["txy"] if txy is not None else [])]
         else:
             kind = kinds[0]
             name = KIND_ROWS[kind][0]
@@ -536,6 +727,58 @@ class CacheTab(QWidget):
             label = f"{verb} {name.lower()}"
         if self.confirm(title, text, verb):
             self._run(label, "clear", kinds=list(kinds))
+
+    def clear_raw(self) -> None:
+        """Clear raw pulses (store-v4): every folder's, only copies included, after asking."""
+        inventory = self.inventory
+        raw = (inventory or {}).get("raw")
+        if inventory is None or self.busy or not raw:
+            return
+        only = int(raw.get("only_copy") or 0)
+        text = (f"Removes HeLab's cached raw pulses of {plural(int(raw['folders']), 'folder')} "
+                f"({byte_size(int(raw['bytes']), 'disk')}). Your d files aren't touched: their pulses are cached "
+                "again from them after the next load of each folder."
+                + (f"\n\n{plural(only, 'shot')} are the only copy: their raw files are gone from their folders, so "
+                   "these can't be read again." if only else ""))
+        if self.confirm("Clear HeLab's cached raw pulses?", text, "Clear"):
+            self._run("Clear raw pulses", "clear_raw")
+
+    def clear_txy(self) -> None:
+        """Clear TXY data (store-v4): every folder's layers, only copies included, after asking."""
+        inventory = self.inventory
+        txy = (inventory or {}).get("txy")
+        if inventory is None or self.busy or not txy:
+            return
+        only = _only_copies(txy, None)
+        text = (f"Removes the cached TXY data of {plural(int(txy['folders']), 'folder')} "
+                f"({byte_size(int(txy['bytes']), 'disk')}). It is cached again at the next load of each folder."
+                + (f"\n\n{only}" if only else ""))
+        if self.confirm("Clear TXY data?", text, "Clear"):
+            self._run("Clear TXY data", "clear_txy")
+
+    def toggle_legacy(self) -> None:
+        """Keep using the older store-v3, or ignore it (store-v4)."""
+        legacy = (self.inventory or {}).get("legacy") or {}
+        if self.busy or not legacy.get("present"):
+            return
+        choice = "keep" if legacy.get("choice") == "ignore" else "ignore"
+        self._run("Keep using the older cache" if choice == "keep" else "Ignore the older cache", "legacy_choice",
+                  choice=choice)
+
+    def clear_legacy(self) -> None:
+        """The Older cache row's Clear… (as Make room's Clear old stores…, Q28.5): store-v3 goes, after asking with its size, while no other HeLab runs."""
+        from helab.utils.cache_locks import other_instances
+        from helab.utils.constants import app_folder
+        from helab.views.CacheDialogs import legacy_clear_text, legacy_clearable
+        legacy = (self.inventory or {}).get("legacy") or {}
+        if self.busy or not legacy_clearable(legacy):
+            return
+        if other_instances(app_folder()):
+            self.message = "A HeLab converter (helab convert) is running. Stop it before clearing the older cache."
+            self._update()
+            return
+        if self.confirm("Clear the older cache?", legacy_clear_text(legacy), "Remove"):
+            self._run("Clear the older cache", "clear_legacy")
 
     def clear_results(self) -> None:
         """Clear cached analysis: every saved result, nothing else (asks first)."""
@@ -559,17 +802,56 @@ class CacheTab(QWidget):
                         f"not shown in the last {plural(days, 'day')}.\n\n{RESULTS_TEXT}", "Remove"):
             self._run("Remove old cached analysis", "purge", what="results", cutoff=cutoff)
 
-    def purge_datasets(self) -> None:
+    def _purge_cutoff(self, days: QSpinBox) -> tuple[int, float] | None:
+        """A purge's days and cutoff, or None while there is nothing to ask from (no inventory, or busy)."""
         if self.inventory is None or self.busy:
+            return None
+        return days.value(), time.time() - days.value() * DAY
+
+    def purge_datasets(self) -> None:
+        if (asked := self._purge_cutoff(self.dataset_days)) is None or self.inventory is None:
             return
-        days = self.dataset_days.value()
-        cutoff = time.time() - days * DAY
-        estimate = purge_estimate(self.inventory, cutoff, datasets=True)
+        days, cutoff = asked
+        estimate = purge_estimate(self.inventory, cutoff, datasets=True, kinds=("datasets",))
         if self.confirm("Remove old cached data?",
                         f"Removes cached data for {plural(estimate['datasets'], 'folder')} "
                         f"({byte_size(estimate['bytes'], 'disk')}) not used in the last {plural(days, 'day')}.\n\n"
                         f"{CLEAR_TEXT['datasets']} TXY files are never touched.", "Remove"):
             self._run("Remove old cached data", "purge", what="datasets", cutoff=cutoff)
+
+    def purge_txy(self) -> None:
+        """Remove TXY data (store-v4's layers and their views) not used since the cutoff; only copies stay."""
+        if (asked := self._purge_cutoff(self.txy_days)) is None or self.inventory is None:
+            return
+        days, cutoff = asked
+        estimate = purge_estimate(self.inventory, cutoff, datasets=True, kinds=("txy",))
+        if self.confirm("Remove old TXY data?",
+                        f"Removes the cached TXY data of {plural(estimate.get('txy_folders', 0), 'folder')} "
+                        f"({byte_size(estimate['bytes'], 'disk')}) not used in the last {plural(days, 'day')}.\n\n"
+                        f"{PURGE_TEXT['txy']} {ONLY_COPIES_STAY}", "Remove"):
+            self._run("Remove old TXY data", "purge", what="txy", cutoff=cutoff)
+
+    def purge_raw(self) -> None:
+        """Remove HeLab's cached raw pulses (store-v4's raw layers) not used since the cutoff; only copies stay."""
+        if (asked := self._purge_cutoff(self.raw_days)) is None or self.inventory is None:
+            return
+        days, cutoff = asked
+        estimate = purge_estimate(self.inventory, cutoff, datasets=True, kinds=("raw",))
+        if self.confirm("Remove old cached raw pulses?",
+                        f"Removes HeLab's cached raw pulses of {plural(estimate.get('raw_folders', 0), 'folder')} "
+                        f"({byte_size(estimate['bytes'], 'disk')}) not used in the last {plural(days, 'day')}.\n\n"
+                        f"{PURGE_TEXT['raw']} {ONLY_COPIES_STAY}", "Remove"):
+            self._run("Remove old cached raw pulses", "purge", what="raw", cutoff=cutoff)
+
+    def purge_all(self) -> None:
+        """Everything by age (A47.4): every kind of cached data, folder records (scan failures only with the box)
+        and cached analysis, each part named with its size; only copies stay."""
+        if (asked := self._purge_cutoff(self.all_days)) is None or self.inventory is None:
+            return
+        days, cutoff = asked
+        failures = self.include_failures.isChecked()
+        if self.confirm("Remove everything old?", everything_text(self.inventory, cutoff, days, failures), "Remove"):
+            self._run("Remove everything old", "purge", what="all", cutoff=cutoff, include_failures=failures)
 
     def purge_records(self) -> None:
         if self.inventory is None or self.busy:
@@ -600,16 +882,22 @@ class CacheTab(QWidget):
     def _show_estimates(self) -> None:
         inventory = self.inventory
         if inventory is None:
-            for label in (self.dataset_estimate, self.record_estimate, self.result_estimate):
+            for _, _, label, button in self.purge_rows.values():
                 label.setText("")
-            self.purge_datasets_button.setEnabled(False)
-            self.purge_records_button.setEnabled(False)
-            self.purge_results_button.setEnabled(False)
+                label.setToolTip("")
+                button.setEnabled(False)
             return
         now = time.time()
-        datasets = purge_estimate(inventory, now - self.dataset_days.value() * DAY, datasets=True)
-        self.dataset_estimate.setText(f"— frees ~{byte_size(datasets['bytes'], 'disk')} "
-                                      f"({plural(datasets['datasets'], 'folder')})")
+        v4 = "txy" in inventory["ages"]
+        for kind in ("txy", "raw"):
+            for widget in self.purge_rows[kind]:
+                widget.setVisible(v4)
+        writable = not inventory.get("read_only") and not self.busy
+        for kind, folders in (("datasets", "datasets"), ("txy", "txy_folders"), ("raw", "raw_folders")):
+            _, days, label, button = self.purge_rows[kind]
+            found = purge_estimate(inventory, now - days.value() * DAY, datasets=True, kinds=(kind,))
+            label.setText(f"— frees ~{byte_size(found['bytes'], 'disk')} ({plural(found.get(folders, 0), 'folder')})")
+            button.setEnabled(writable and found.get(folders, 0) > 0)
         records = purge_estimate(inventory, now - self.record_days.value() * DAY, datasets=False,
                                  include_failures=self.include_failures.isChecked())
         self.record_estimate.setText(f"— {plural(sum(records.values()), 'record')}")
@@ -620,8 +908,12 @@ class CacheTab(QWidget):
         results = results_purge_estimate(inventory, now - self.result_days.value() * DAY)
         self.result_estimate.setText(f"— frees ~{byte_size(results['bytes'], 'disk')} "
                                      f"({plural(results['results'], 'result')})")
-        writable = not inventory.get("read_only") and not self.busy
-        self.purge_datasets_button.setEnabled(writable and datasets["datasets"] > 0)
+        parts = everything(inventory, now - self.all_days.value() * DAY, self.include_failures.isChecked())
+        self.all_estimate.setText(f"— frees ~{byte_size(parts.bytes, 'disk')}"
+                                  + (f" (+{plural(parts.records, 'record')})" if parts.records else ""))
+        self.all_estimate.setToolTip(everything_text(inventory, now - self.all_days.value() * DAY,
+                                                     self.all_days.value(), self.include_failures.isChecked()))
+        self.purge_all_button.setEnabled(writable and parts.any)
         self.purge_records_button.setEnabled(writable and sum(records.values()) > 0)
         self.purge_results_button.setEnabled(writable and results["results"] > 0)
 
@@ -639,6 +931,10 @@ class CacheTab(QWidget):
                   "Changing the disk budget…" if self._budget_job else f"{self._job_label}…" if self.busy else "Checking…" if self._inventory_owner and inventory is None
                   else "")
         if inventory is None:
+            for widget in (self.raw_name, self.raw_label, self.raw_button, self.txy_name, self.txy_label,
+                           self.txy_button, self.policy_name, self.policy_combo, self.legacy_name, self.legacy_label,
+                           self.legacy_choice_button, self.legacy_clear_button):
+                widget.setVisible(False)
             for label in (*self.kind_labels.values(), self.prefs_label, self.results_label, self.converted_label):
                 label.setText(status or "Not checked")
             self.usage_label.setText(status or "Not checked")
@@ -697,9 +993,47 @@ class CacheTab(QWidget):
             for name, base in (converted.get("bases") or {}).items()))))
         # (Only when Clear would remove something: never the index itself, which the bytes include.)
         self.converted_button.setEnabled(writable and bool(converted.get("clearable")))
+        self._show_v4_rows(inventory, writable)
         checked = f"Checked {datetime.fromtimestamp(inventory['checked_at']):%H:%M}"
         self.checked_label.setText(" · ".join(filter(None, (status or checked, self.message))))
         self._show_estimates()
+
+    def _show_v4_rows(self, inventory: dict[str, Any], writable: bool) -> None:
+        """Caching v2's rows, shown only with store-v4: raw pulses, TXY data and the policy, and the older store-v3
+        when there is one."""
+        txy = inventory.get("txy")
+        for widget in (self.txy_name, self.txy_label, self.txy_button, self.policy_name, self.policy_combo):
+            widget.setVisible(txy is not None)
+        if txy is not None:
+            tags = ", ".join(sorted(txy.get("tags") or ()))
+            text = f"{plural(int(txy['shots']), 'shot')} in {plural(int(txy['folders']), 'folder')} · " \
+                   f"{byte_size(int(txy['bytes']), 'disk')}" + (f" · {tags}" if tags else "")
+            if txy.get("only_copy"):
+                text += f" · {int(txy['only_copy']):,} only copies"
+            self.txy_label.setText(text)
+            self.txy_button.setEnabled(writable and bool(txy["layers"]))
+        raw = inventory.get("raw")
+        for widget in (self.raw_name, self.raw_label, self.raw_button):
+            widget.setVisible(raw is not None)
+        if raw is not None:
+            text = f"{plural(int(raw['count']), 'shot')} in {plural(int(raw['folders']), 'folder')} · " \
+                   f"{byte_size(int(raw['bytes']), 'disk')}"
+            if raw.get("only_copy"):
+                text += f" · {int(raw['only_copy']):,} only copies"
+            self.raw_label.setText(text)
+            self.raw_button.setEnabled(writable and bool(raw["count"]))
+        from helab.views.CacheDialogs import legacy_clearable, legacy_text
+        legacy = inventory.get("legacy") or {}
+        present = bool(legacy.get("present"))
+        for widget in (self.legacy_name, self.legacy_label, self.legacy_clear_button):
+            widget.setVisible(legacy_clearable(legacy))  # (Or only what a Clear cut short left, C3-4.)
+        self.legacy_choice_button.setVisible(present)
+        if legacy_clearable(legacy):
+            self.legacy_label.setText(legacy_text(legacy))
+            self.legacy_clear_button.setEnabled(writable)
+        if present:
+            self.legacy_choice_button.setText("Keep using it" if legacy.get("choice") == "ignore" else "Ignore it")
+            self.legacy_choice_button.setEnabled(writable)
 
     def focus_purge(self) -> None:
         """Opened from the 80% warning: start at Remove old entries."""
@@ -744,14 +1078,26 @@ class CacheTab(QWidget):
             return True
         inventory = self.inventory
         trim = budget < saved and (inventory is None or int(inventory["usage"]) > budget)
+        if trim and inventory is not None and "txy" in inventory:
+            # store-v4: what lowering it removes comes from the helper's plan (layers, raw pulses and only copies,
+            # named); the question is asked when it comes (``_on_done``).
+            self._planning = budget
+            self._send_budget("trim", budget, plan_only=True)
+            if not self._budget_job:
+                self._planning = None
+            return None if self._budget_job else False
         if trim and not self._ask_trim(budget, inventory, None):
             return False
         # Lowering it without a trim: the helper checks it still fits (more may be cached by now).
         self._send_budget("trim" if trim else "budget", budget, fit=budget < saved and not trim)
         return None if self._budget_job else False
 
-    def _ask_trim(self, budget: int, inventory: dict[str, Any] | None, usage: int | None) -> bool:
-        if inventory is not None:
+    def _ask_trim(self, budget: int, inventory: dict[str, Any] | None, usage: int | None,
+                  room: dict[str, Any] | None = None) -> bool:
+        if room is not None:
+            from helab.views.CacheDialogs import room_text
+            removes = room_text(room, "Lowering the budget")
+        elif inventory is not None:
             estimate = trim_estimate(inventory, budget)
             removes = (f"Removes cached data for up to {plural(estimate['datasets'], 'folder')} "
                        f"({byte_size(estimate['bytes'], 'disk')}), least recently used first.")
@@ -762,18 +1108,43 @@ class CacheTab(QWidget):
                             f"The disk cache {uses} {byte_size(budget, 'disk')}. {removes}\n\n{CLEAR_TEXT['datasets']}",
                             "Lower budget")
 
-    def _send_budget(self, action: str, budget: int, *, fit: bool = False) -> None:
+    def _send_budget(self, action: str, budget: int, *, fit: bool = False, plan_only: bool = False,
+                     plan: list[str] | None = None) -> None:
         assert self.cache is not None
         self._applying_budget = budget
         params: dict[str, Any] = {"budget": budget, "budget_set_at": time.time()}
         if fit:
             params["fit"] = True
+        if plan_only:
+            params["plan_only"] = True
+        if plan is not None:
+            params["plan"] = plan
         self._budget_job = self.cache.cache_admin(action, **params)
         self.message = "" if self._budget_job else "Disk cache queue full — nothing saved. Save again to retry."
         self._update()
 
     def save(self, settings: QSettings) -> None:
-        """Save both budgets (after :meth:`apply_budget`), and how often Live saves."""
+        """Save both budgets (after :meth:`apply_budget`), how often Live saves, and the cache policy."""
+        policy = str(self.policy_combo.currentData() or "")
+        if policy:
+            before = folder_cache.cache_policy()
+            settings.setValue(CACHE_POLICY_SETTING, policy)
+            folder_cache.set_cache_policy(policy)  # (Sent with the next store-v4 request.)
+            raw = (self.inventory or {}).get("raw")
+            following = (raw or {}).get("following") or {}
+            if policy == "txy" and before != "txy":
+                # S4~1 (Tony, 2026-11-02): nothing is removed unasked; offer the raw pulses of the folders that
+                # follow this setting (those with their own policy keep theirs), sized as the removal (S4-1).
+                if self.inventory is None or self.busy:
+                    # S4-3, S4R-1: not offered now; said, not skipped silently. Settings closes as it saves, so
+                    # the main window's status bar says it (in the app, not the desktop), and this tab too.
+                    self.message = RAW_KEPT_MESSAGE
+                    self._update()
+                    from helab.utils import events
+                    events.notify(events.RAW_KEPT, RAW_KEPT_MESSAGE, status=True)
+                elif int(following.get("count") or 0) and self.confirm(
+                        "TXY only", remove_raw_following_text(following), "Remove"):
+                    self._run("Remove cached raw pulses", "clear_raw", following=True)
         # Never a value the store hasn't recorded (e.g. edited while it was recording another).
         settings.setValue(DISK_BUDGET_SETTING,
                           self._acknowledged if self._acknowledged is not None else read_disk_budget(settings))

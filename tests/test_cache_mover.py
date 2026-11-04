@@ -155,7 +155,8 @@ def test_a_move_is_refused_while_another_helab_or_a_move_helper_runs(tmp_path: P
     try:
         assert other_instances(app) == [4242]
         lock, reason = lock_for_move(app, "move")
-        assert lock is None and reason.startswith("Another HeLab is running (1 window)")
+        # (Only helab convert can be the other now: one HeLab app per computer, Q39.1; Tony's wording, Q43.4.)
+        assert lock is None and reason == "A HeLab converter (helab convert) is running (1). Stop it before moving the cache."
     finally:
         other.kill()
         other.wait()
@@ -193,6 +194,9 @@ def test_startup_waits_out_a_move_then_recovers_and_registers(tmp_path: Path, mo
         waits.append(True)
         helper.kill()  # ...until it ends.
         helper.wait()
+        # And until its lock is free: Windows frees a killed process's locks a little later, so startup
+        # found it still held and waited again (CI 41162160704: "[True, True, True] == [True]").
+        assert free_soon(lambda: not cache_locks.locked_elsewhere(cache_locks.move_lock(app).path))
     message, instance = startup(app, lambda token: cache_move.recover(app, lambda: setting[0], write), wait)
     try:
         assert waits == [True] and "finished" in message and setting == [str(target)]
@@ -321,8 +325,8 @@ def test_a_failed_or_cancelled_move_keeps_the_source(
         assert run.finished[-1] is False and not run.service.cache_hold and cache_dir() == run.source
         # Refused while another HeLab runs.
         monkeypatch.setattr("helab.views.CacheMover.lock_for_move",
-                            lambda app, token: (None, "Another HeLab is running (1 window). Close it before moving "
-                                                "the cache."))
+                            lambda app, token: (None, "A HeLab converter (helab convert) is running (1). Stop it "
+                                                "before moving the cache."))
         run.mover.change(run.target, run.parent)
         run.send(run.request("check"), {"kind": "move_check", "problem": "", "method": "copy", "bytes": 1, "free": 9})
         assert run.reports[-1][0] == "Can't move the disk cache now" and not run.service.cache_hold
@@ -673,3 +677,18 @@ def test_a_real_move_with_real_helpers(qtbot: QtBot, tmp_path: Path) -> None:
         mover.detach()
         service.shutdown()
         time.sleep(0.1)
+
+
+@pytest.mark.parametrize("layout", [3, 4])
+def test_the_move_names_the_live_stores_layout(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                               layout: int) -> None:
+    """C2-6 (Assay): the move's helper is told which store is live (``cache_store.live_layout()``), so that
+    store is the move's primary even when another layout's store is in the folder too."""
+    from helab.utils import cache_store
+    cache_store._reset_live_layout(layout)
+    run = Run(qtbot, monkeypatch, tmp_path)
+    try:
+        assert run.checked().payload["move"]["layout"] == layout
+    finally:
+        run.close()
+        cache_store._reset_live_layout()

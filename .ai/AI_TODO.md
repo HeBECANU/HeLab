@@ -124,59 +124,10 @@ Finding numbers refer to the [planning-docs audit](sessions/2026-10-28-claude-do
   `tests/test_helabMainWindow.py` patches only `helab.utils.folder_cache.store_options`; once it
   is called as `folder_cache.store_options()`, drop the exception from `io-and-browsing.md`.
 
-## Building the TXY converter (block 9)
-
-- [x] **A9.1 Remove unused converter backends from the build** (done in `134e2ec`: numpy, cython and the reference ship) (Q9.2): every backend ships while the
-  converter is tested; once the default and the optional fast ones are settled, drop the rest
-  from `requirements.txt`, the lock and `HeLab.spec`, and note the size saved. Input: the stage 2
-  results (`sessions/2026-10-29-claude-txy-bench/results.md`) and Q11.2. Packaging's sizes (macOS app):
-  mlx +234 MB (78 zipped), numba+llvmlite +127 (40), rust +0.48, cython +0.27. Dropping numba means
-  removing it from the lock (or adding it to `excludes`): once it is in the lock, pandas' and scipy's
-  optional imports pack it even without the spec.
-
-## Converter stage 1 (block 10)
-
-From the `agent/txy-reference` handoffs ([builder](sessions/2026-10-29-claude-txy-reference/handoff.md),
-[cross-checker](sessions/2026-10-29-claude-txy-reference/crosscheck/handoff.md)); detail in
-[converter.md](architecture/converter.md).
-
-- [x] **A10.1 Settle checks, with the evidence** (done in stage 4 core, `5cf4652`, landed `775fb1d`;
-  converter.md's settle rules) (stage 4, `agent/txy-helab-core`): 2019-halos d3667
-  shows MATLAB converting a raw file 0.25 s after its last write and losing the end of the shot.
-  Test the settle check with a synthetic half-written file.
-- [x] **A10.2 Backend constraints** (done in the stage 2 landings `d522691`, `32158c2`, `7031bea`,
-  `aecbe68`, `ed35099`) (stage 2, every backend floor): all 39 cases and every sample shot,
-  including the phantom row, `NoRowsError` and stable NaN-last sorts (`kind="stable"`). A split of
-  one shot keeps the global `t_zero`, the first-row skip (first piece only), the whole-file
-  `floor(N/4)` preallocation, the 2023 cuts (only at gaps over 20,000 bins, or before splitting)
-  and one final stable sort by T; test that a split equals the whole on the `phantom_*` and
-  `dead_time_x1` cases.
-- [x] **A10.3 Built-in profiles as JSON files** in the package (stage 4, Q6.11), each tested to load
-  equal to the Python definitions. Done in `475c6a6` (`agent/txy-ui`).
-- [x] **A10.4 Durable HeLab TXY writes** (done in `5cf4652`, landed `775fb1d`; `io_ops/convert.py`)
-  (stage 4): use `txy.write_atomic` (new file with mode
-  `0o666` under the umask, fsync, rename, folder fsync) for `d_txy_helab_<N>.txy`, which matters
-  once they go beside raw files on a share (Q9.7).
-- [x] **A10.5 A conversion with no hits writes an empty HeLab TXY** (stage 4; Q10.3, confirmed by
-  Tony 2026-10-29). Done in `5cf4652` (converter.md, `pipeline`).
-
 ## Converter stage 2 (block 11)
 
 From the backend floors' and the bench's handoffs (`sessions/2026-10-29-claude-txy-*/handoff.md`).
 
-- [x] **A11.1 Packaging the backends** (done in `7cb168e`; since `134e2ec` only numpy, cython and the
-  reference ship, Q11.2) (stage 4, `agent/txy-packaging`): build cython and rust in CI on
-  all three OSes (MSVC from VS 2022 17.0+, never `/arch:AVX2` with an older toolset; GCC/clang with
-  `-ffp-contract=off`; maturin abi3-py311, no `target-cpu=native` for the Sandy Bridge lab PC), make
-  their tests required there (a missing extension fails, not skips) and check each built kernel
-  equals the reference on `tests/data/convert/`; numba (with llvmlite) in the lock if it ships;
-  mlx's GPU tests only where Metal exists (print `mx.metal.is_available()` first); `hiddenimports`
-  for every `_MODULES` backend and mlx's `collect_*`.
-- [x] **A11.2 In the helper** (done in `5cf4652`, landed `775fb1d`; numba's folder is now under the
-  temp folder, Q18.1, `874fd2b`) (stage 4, `agent/txy-helab-core`): `numba_backend.set_cache_folder(<cache_dir()>/numba)`
-  before first use, and after a cache-folder move restart helpers that loaded the kernels (or accept
-  a stray old folder); a lock in `reconstruct._load`; convert across shots in long-lived processes,
-  no within-shot splitting for the fast backends.
 - **A11.3 A conftest-wide numba cache fixture**: a session-scoped autouse fixture calling
   `numba_backend.set_cache_folder(<session temp>/numba-cache)`, replacing the numba tests' own (which
   would raise if another file's in-process numba test loaded the kernels first on a worker).
@@ -194,14 +145,6 @@ From the backend floors' and the bench's handoffs (`sessions/2026-10-29-claude-t
 - **A12.2 `HeLab.exe convert` on Windows** (`agent/txy-packaging`): the windowed exe has no console;
   check where its output goes, and consider a console launcher (`HeLab-convert.exe`) if the
   acquisition PC needs one.
-- [x] **A12.3 Live sends the summary back** (done in `573c86b`, landed `6454b4a`; `folder_cache.py`'s
-  `convert` payload) (`agent/txy-live`): every `convert_summary`'s lists as
-  `seen`/`done`/`kept`/`skip`, so done shots aren't checked again and unfinished ones aren't read again
-  (`seen` is required).
-- [x] **A12.4 JSON leftovers in `converted-txy/`** (done in Quick Fixes 5, `2b9435a`): conversions remove their own leftover temporary TXY
-  there (over 1 h), but a kill can also leave `.d_txy_helab_<N>.json.<16 hex>.partial` (the record)
-  and `.folder.json.<16 hex>.partial`, which stay for good. Harmless and small; widen the own-folder
-  pattern to HeLab's own JSON names (Gannet, fix round).
 
 ## Quick Fixes 4 (block 13)
 
@@ -226,40 +169,13 @@ From the backend floors' and the bench's handoffs (`sessions/2026-10-29-claude-t
   `helab_since`, `listed_mtime`, `seen_names`, `identity_root`), so Live tests elsewhere exercise
   what the helper runs (`test_live_convert.py` already does).
 
-## Converter stage 4, packaging (block 16)
-
-- [x] **A16.1 Rust build cache in CI** (moot: rust left CI, A9.1, `134e2ec`): every build job compiles the rust crate from cold (LTO fat,
-  `codegen-units = 1`); if CI time matters, `Swatinem/rust-cache@v2` with `workspaces: native/rust`.
-- [x] **A16.2 The compatibility jobs** (moot: numba left CI, `134e2ec`) (3.11, 3.12, 3.14, unpinned; PR-only, experimental) also build and
-  require cython, rust and numba: watch the first PR run, and make numba conditional there if a
-  Python has no wheel.
-- [x] **A16.3 `native/build.py`'s `--out`/`--prebuilt`** (dropped in `134e2ec`) are no longer used by any workflow (Puffin): drop
-  them, or fix the module docstring that says the test job takes a build job's `--out`.
-
-## Tony's answers on the converter (block 17)
-
-- [x] **A17.1 Warn about raw files with no hits** (Q10.3; done in `62d156e`): the HeLab GUI shows a
-  warning for shots whose conversion found no hits (Folder details and the Live line), with the
-  shot numbers.
-- [x] **A17.2 Two pytest groups per OS in CI** (Q16.2 b; done in `874fd2b`, `ci-test.yml`'s
-  `--test-group`): split the test job into two shards on every OS, keeping the typing-tests-first
-  ordering (Quick Fixes 6); no limit raised.
-
-## Converter follow-ups (block 18)
-
-- [x] **A18.1 Folder status and HeLab's TXY** (Q14.4): merged into A23.1; the question is Q14.4.
-
 ## Caching after the converter (block 19)
 
-**On hold: Tony's go (block 19).** Tony, 2026-10-29: no cache coding until his explicit go, "A19.1
-and A19.2 included"; don't start these without it.
+Tony's go came on 2026-10-31 (Q28.1), on the Caching v2 floor.
 
-- [x] **A19.1 Settings › Cache shows and clears HeLab's TXY in the temp folder too** (audit I4, I6;
-  in Q26.2's floor, Q27.5, Tony 2026-10-29): `converted_usage` and `clear_converted` over both places.
-  Done on `agent/txy-index` (landed `460360b`).
-- **A19.2 Clear converted TXY vs a running conversion** (audit K4; on hold): `clear_converted` takes
-  a fence a conversion checks before each write, or the docs say a running conversion may write
-  after it.
+- [x] **A19.2 Clear converted TXY vs a running conversion** (audit K4; done in `ce8eae7` and S0-1's fix,
+  Caching v2 stage 0, landed `ad86bd3`): `clear_converted` takes a fence a conversion checks before each
+  write, or the docs say a running conversion may write after it.
 
 ## Quick Fixes 6 (block 20)
 
@@ -297,15 +213,6 @@ and A19.2 included"; don't start these without it.
   `backends.numba_kernels` as optional only, so a converter module that imports Qt or
   `helab.utils.constants` fails CI; then `converter.md` and AGENTS.md can say it is enforced.
 
-## Byte units by OS (block 26)
-
-- [x] **A26.1 OS-aware byte units** (Q26.1, decided; done on `agent/byte-units`, landed `8bf810f`): `number_format.byte_size(n, kind="disk" |
-  "ram")` and `time_format.byte_rate` SI on macOS/Linux, powers of 1024 labelled KiB/MiB/GiB on
-  Windows; RAM in GiB everywhere; budget defaults and minimums follow (8 GB / 8 GiB disk, 1 GB /
-  1 GiB, RAM 1 GiB); the ~67 calls sorted into disk and RAM; tests for both platforms; AGENTS.md's
-  units rule, `cache-store.md` and `settings.md` updated. Not cache code; a floor now, in v0.0.7
-  (Tony, 2026-10-29: "do now").
-
 ## Converted-TXY index (block 30)
 
 From the TXY Index floor's [handoff](sessions/2026-10-29-claude-txy-index/handoff.md) (landed `460360b`).
@@ -321,10 +228,6 @@ From the TXY Index floor's [handoff](sessions/2026-10-29-claude-txy-index/handof
   stops the `-wal` being rebuilt between them; it doesn't make SQLite's lock fair. Cost (Tern): on
   Windows a long-held connection blocks the app helper's set-aside of a damaged index, so the app's
   conversions fail until `helab convert` reopens.
-- [x] **A30.4 Write skipped `last_used` marks in the background every ~10 min** (Q30.3 (c)): the marks
-  `FolderCache` keeps (`txy_unmarked`) go out in one `cache_admin` `mark_used` request about every
-  10 minutes while any are owed, respecting Work Offline, lane pausing, quit (the quit flush stays)
-  and the cache being off. Done on `agent/txy-index` (landed with merge `e06d891`).
 - **A30.5 Settings refuses a temp folder on a network drive or in a synced folder** (Q30.5): the
   cache folder's check (`cache_location.cache_location_problem`) and wording for Settings › General's
   temp folder; an existing such setting kept but warned about once.
@@ -334,20 +237,6 @@ From the TXY Index floor's [handoff](sessions/2026-10-29-claude-txy-index/handof
 - **A32.1 `result_cache.LARGE_RESULT_BYTES` by OS** (optional): the 50 MB threshold could follow the
   disk unit like the log thresholds, if Tony wants every threshold by OS
   ([handoff](sessions/2026-10-29-claude-byte-units/handoff.md)).
-
-## Provisional UI pass (block 33)
-
-From the [findings](sessions/2026-10-30-claude-ui-provisional-0.0.7/findings.md); in the UI polish
-floor (Q33.6). All four done on `agent/ui-polish` (landed `c104502`).
-
-- [x] **A33.1** Tab out of a plot setting opens the next row's editor (an empty wide box until the
-  next click); Tab should commit and stop, like Return after Smoke ready.
-- [x] **A33.2** Offline, Folder details says "Loaded from cache · not checked yet" beside "checked,
-  unchanged"; make the two agree with the summary's "not checked (offline)".
-- [x] **A33.3** Settings › General labels the temp folder "DIR_TEMPS:" (the constant's name); word it
-  like the cache folder's row.
-- [x] **A33.4** After a plot floats, the settings panel's Float button floats whichever plot the panel
-  names, not the one just floated; make it act on (or show) the right plot.
 
 ## Smoke ready (block 34)
 
@@ -389,12 +278,368 @@ was done on the floor.
 
 From the Assistant's Live tests on HeLab's test data (`tests/test_live_testdata.py`, 2026-10-31).
 
-- **A37.1** (Q37.1; v0.0.8, Tony 2026-10-31) Say when a raw file's reading stops early: the parser (`helab/convert/raw.py`, both
+- [x] **A37.1** (done in `a37deb1`, `2c88b65`, `fd43431`, Converter UX, landed `ed7bcf9`: `raw.ReadStop`, `shot_converted.read_stop`, the Live line, Folder details and `helab convert` name it; the raw layer's `Facts.stop_line`) (Q37.1; v0.0.8, Tony 2026-10-31) Say when a raw file's reading stops early: the parser (`helab/convert/raw.py`, both
   `fastio.parse_strict` and `_parse_textscan`) reports the line where an unreadable token ended it, the
   conversion keeps MATLAB's TXY byte for byte and adds the stop to its event (a `shot_converted` field, or
   a warning kind in `helab/io_ops/events.py`), and the Live line, Folder details and `helab convert` name
   it ("read stopped at line N"). `test_damaged_files_during_live_are_said_once_and_the_run_goes_on` then
   checks the flag.
+
+## Quick Fixes 7 (block 38)
+
+From Quick Fixes 7's [handoff](sessions/2026-10-31-claude-quick-fixes-7/handoff.md) (Rivet on Ground, Codex's
+review of PR #10, six rounds).
+
+- **A38.1** Audit `helab/io_ops/live.py`'s matching paths for the two gaps Codex found in `save_held`: no
+  test for a held HeLab shot whose TXY has gone, nor for a shadowed MATLAB TXY that has settled. Its
+  `file_names`/signature shapes are the same, so the same two holes may be there.
+- **A38.2** (display only) `AutoConvert.damaged` in `helab/views/explorer_live.py` keeps a file counted
+  "damaged" while it stays unconvertible, even when a later profile fails it for another reason; on a new
+  summary it could keep only names whose current message starts with `DAMAGED_TEXT`.
+
+## The release check and Tony's answers (block 39)
+
+- [x] **A39.1 Check release archives on PR builds** (done in `c201c01`, Quick Fixes 8; `release_draft
+  --check` on every 3.13 build, passed on all three in its CI runs) (CI; Ground or a floor): `main`'s
+  release job is the only place `release_draft --validate-only` runs, so 0.0.7a1's linked macOS build
+  stamp showed only after the
+  merge (run 41110274554; [known issues](../roadmaps/known-issues.md#fixed)). Run the archive check (the
+  stamps, without the tag and the draft) on each PR's three builds against its build commit, so a
+  packaging change that breaks it fails the PR.
+
+- [x] **A39.2 Live takes HeLab's TXY for a shot held from MATLAB's** (done in `10a9c3c`, `f945f69`, IO
+  Fixes, landed `471966b`) (Q38.2, Tony 2026-10-31; the I/O area):
+  under HeLab priority, a HeLab TXY converted during Live replaces the shot held from MATLAB's TXY,
+  read again as a changed shot (as a HeLab-held shot converted again is), instead of waiting for the
+  folder's next load (`fefe6ab`).
+
+- [x] **A39.3 One running HeLab per computer** (done in `0335768`, `f128623`, Quick Fixes 8; what only
+  served several at once is listed in its [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.md),
+  not removed: A43.2, Q43.4) (Q39.1, Tony 2026-10-31): a second HeLab (source or build)
+  started while one runs says so and stops before opening anything; the lock in the app folder, so an
+  override (agents, tests) has its own. Then drop what only served several at once where the area
+  review names it (`.ai/sessions/2026-10-31-claude-area-review/cache.md`).
+
+- [x] **A39.4 Folder details: TXY left out and TXY per converter** (done in `915aff5`, Quick Fixes 8) (Q38.3, Tony 2026-10-31): the load line says
+  "N left out (TXY source)" for shots the folder's TXY source leaves out (a `load_counts` key and
+  `FolderExplorer.load_count_details`, `924109a`), keeping "removed" for files really gone; and a line with
+  the folder's TXY counts by kind, from the listing's names only (memory, no I/O): MATLAB's
+  `d_txy_forc` and each HeLab tag's `d_txy_helab_<tag>_` (e.g. "TXY: 120 MATLAB · 118 p19v1"; detail in
+  the tooltip).
+
+- [x] **A39.5 TXY and shares** (done in `186b7b0`, `7648e27`, `a36bc95`, `7a60998`, review fixes `bc73f0c`, Converter UX, landed `ed7bcf9`, with Q38.1's build; `cache_location.share_of`, `helab/views/explorer_convert.py`) (Q39.2, Tony 2026-10-31; the converter and I/O areas): writing TXY beside the
+  raw files on a share (`helab/utils/cache_location.py` and the data roots' share detection) warns once
+  per folder that conversion belongs on the machine that owns the data, the user confirming: the folder's
+  beside setting, `helab convert --output beside`, and Live's auto-convert. A share folder with no TXY of
+  any kind offers in Folder details to convert into HeLab's cache (recommended) or temp folder, says the
+  converter should run on the acquisition PC, and keeps "Convert beside on the share…" behind the warning.
+
+## I/O fixes (block 40)
+
+From the IO Fixes floor's [handoff](sessions/2026-10-31-claude-io-fixes/handoff.md) (Conduit; landed `471966b`).
+
+- [x] **A40.1 A helper still starting when HeLab quits** (done in `b34683e`, Quick Fixes 9, as a guard test: quitting cancels every request first, and `_run` already kills a cancelled one after `Popen`; no code change) (no `process` yet in `IOService._run`) is stopped
+  only by `_run`'s daemon thread, so it may run until its first stdout write fails. Low risk. Fix: `_run`
+  checks `self.closed` right after `Popen` and kills.
+- [x] **A40.2 An unreadable new HeLab TXY in `live_check`** (done in `4e86094`, caching v2 stage 3, landed `d4f28f3`: the held data is kept and the file goes back as `live_failed`): a switched or HeLab-held shot whose new HeLab TXY
+  turns out unreadable drops the held data and keeps the shot known-unreadable (as for a HeLab-held shot
+  converted again). Unlikely (temporary name and rename); keeping the held data until a readable TXY is
+  read would be safer (Probe agrees: a fresh load would take the same file). It joined caching v2's stage 2
+  (design addendum §7) but wasn't built there; built in stage 3.
+- [x] **A40.3 A signature-only change rewrites the whole dataset** (done in store-v4, caching v2 stage 2: `confirm_view`, `b691d26`, used by loads from `7d185eb`; it writes only the view's signature and TXY record, `txy.folders` included; store-v3 unchanged) (io-5; the cache area, best with caching
+  v2's store work): every cached shot is unpacked and packed again, though no TXY is read.
+  `CacheStore.confirm_dataset(..., signature=None)` merging a given signature into `info` (JSON, no schema
+  change), and a confirm branch in `loading.load` for a cache whole but for the signature, would need
+  neither the dataset nor a rewrite.
+- [x] **A40.4 Cancel all loads and scans' tip** (done in `0f54c5e`, Quick Fixes 9) (Q40.1): set `MissingShotsWindow.CANCEL_TIP` to "Cancel every
+  load and scan, running, paused or queued. Browsing, cached data, saves and Live go on; loads already
+  saving their cached data finish."
+
+## Plot identity (block 41)
+
+From the Plot Identity floor's [handoff](sessions/2026-10-31-claude-plot-identity/handoff.md) (Prism; landed
+`e3f94d9`).
+
+- **A41.1 An outdated saved result has no view**: `AnalysisInstance._cached_found` shows it without one.
+  If Release or the TXY row ever needs that result's own data, build a hollow view from the saved record
+  (coverage and origins). Not needed now: open until Release or the TXY row needs it (Quick Fixes 9
+  found no defect, 2026-11-02).
+
+## Caching v2 (block 42)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) (Vault; stage 0 and
+checkpoint 2 landed `ad86bd3`). The floor's own remaining steps (5–7, and what step 5 owes) are in its
+handoff and the [plan](../roadmaps/caching-v2.md#stages-each-needs-tonys-go).
+
+- [x] **A42.1 store-v3's saved results under Keep** (done in `08895bc`, stage 2: copied into store-v4 as `result_find` returns them, within the budget, never over a newer one): copy a v3 result into v4 when it is used (the addendum
+  said "by the next save of that folder's results"), or decide read-through is enough while v3 is kept
+  (built: read-through only).
+- [x] **A42.2 `trim` in Make room's order** (done in `b691d26`, with S2-1's fix `6b0f998` and the question from its plan `102c027`, stage 2: one planner, only copies only when named): a lowered budget in store-v4 removes datasets only; give it Make
+  room's order (datasets, raw layers seen, only copies named).
+
+## Quick Fixes 8 (block 43)
+
+From Quick Fixes 8's [handoff](sessions/2026-10-31-claude-quick-fixes-8/handoff.md) (Rivet on Ground).
+
+- [x] **A43.1 Toolbar icons in every test window** (done in `e784834`, Quick Fixes 9): without `IconsInitUtil.initialise_icons()` the side
+  toolbars show their text, so a `HelabMainWindow`'s widths depend on which tests ran earlier on the xdist
+  worker (the cause of `test_main_split`'s Windows failures). A conftest autouse fixture would remove it
+  everywhere; it must take pytest-qt's `qapp` (icons before a `QApplication` abort the worker, `1f86ca2`).
+- [x] **A43.2 "Another HeLab may have changed them"** (done in `e3faeb3`, Quick Fixes 9) before `read_presets()` (`PresetsInspector.py:207`,
+  `views/plots/presets.py:267`, `:613`): with one app per computer (Q39.1) and `helab convert` writing no
+  presets, keep the cheap re-reads and drop that reason from the comments.
+- [x] **A43.3 Reset all settings while Work Offline is on** (done in `c9e64e6`) (Q43.1, Tony 2026-10-31; app-1; numbered at block
+  44's docs pass): only while Work Offline is on, the Reset confirmation asks whether to keep Work Offline
+  (the default button, as the cache folder's location is kept) or go online now. Rivet's, on Ground
+  (Quick Fixes 8; in progress at numbering).
+- [x] **A43.4 The cache move's refusal while a converter runs** (done in `4940a81`) (Q43.4, Tony 2026-10-31): `cache_locks.lock_for_move`'s
+  "Another HeLab is running (N windows)." becomes "A HeLab converter (helab convert) is running (N). Stop it
+  before moving the cache." (only `helab convert` can hold it now, Q39.1). Rivet's, on Ground (Quick Fixes 8).
+- [x] **A43.5 The two other "Another HeLab is running" texts** (done in `42855ab`, Quick Fixes 9) (Q43.5, Tony 2026-11-01): `CacheTab.py:605`
+  becomes "A HeLab converter (helab convert) is running. Stop it before clearing the older cache." and
+  `CacheDialogs.py:106` "A HeLab converter (helab convert) is running. Stop it before clearing old stores."
+  (Quick Fixes 9.)
+
+## Quick Fixes 9 (block 46)
+
+- [x] **A46.1 Process-wide fakes in tests** (done in `6fa8cd9`, Quick Fixes 9: `conftest.this_tests(fake, real)`; fakes acting only on the test's own paths left as they were) (Quick Fixes 9's A~1): sweep the tests that patch `os.stat`,
+  `os.scandir` or `subprocess.Popen` for the whole process and make each fake act only on the test's own
+  thread, the pattern behind both Windows flakes fixed in `3bafef1` and `eccb23c`.
+- **A46.2 A runtime check for a nameless `QApplication`** (Quick Fixes 9's A~6, optional; after the Plotly worker
+  deaths, `b0eb914`): a conftest check that fails a test whose worker's `QApplication` was made with an empty
+  argument list (`QCoreApplication.arguments()` empty at the first `qapp`), for code `tests/test_qt_application.py`'s
+  AST guard can't see. The guard covers the code today.
+
+Done without IDs (2026-11-03): Quick Fixes 9's A~4, `--session-timeout` in CI (`457debc`), and A~5, every test job's
+junit.xml kept (`5324a7f`).
+
+## Caching v2 checkpoint 3 (block 44)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) (Vault; checkpoint 3
+landed `c2d0ece`, stage 1 complete, the switch off). A42.1 and A42.2 were done in stage 2 (`1cd586c`).
+
+- [x] **A44.1 `helab cache export` of stage 2's TXY layers** (done in `a70d261`: `--kind txy [--layer]`) (`kind` `txy`): the same CLI, the layer's columns.
+  With stage 2.
+- [x] **A44.2 A Qt-free `helab cache`** (done in `a70d261`: `cache-folder.json` in the app folder, written by the GUI only, CoCo's option (b)): `helab cache export --folder` without `--cache` imports
+  `helab.utils.constants` (QtCore) for `cache_dir()`; a Qt-free reader of the cache-folder setting would
+  make all of `helab cache` Qt-free. Minor: no widgets and no GUI start either way.
+
+## Caching v2 stage 2 (block 47)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Step 7", Vault;
+stage 2 landed `1cd586c`, the switch off). The typing and accessible-names timeouts it proposed (A~10) were
+done by Quick Fixes 9 (`e8a28a1`, `5f52068`).
+
+- [x] **A47.1 Conversion from the raw layer for user profiles** (done in `912f928`, stage 3a, landed `d4f28f3`: `with_txy` sends the conversion profile whole, `profile_def`; a plot's own pick of another user profile still reads its text) (A~7): a load converts a HeLab shot from the raw
+  layer (the loading order's second step, `6f57918`) only for built-in profiles, since the helper has no user
+  profile library; other profiles read their text. Send the profile (or the library) with the request.
+- [x] **A47.2 `FolderCache` learns a folder's choices with its listing** (done in `28d2112`, landed `1d91897`; A47-1's fix `65f98d0`: a root's change of identity drops its folders' choices) (A~8; Q47.2): `folder_choices` beside
+  `folder_prefs` in `io_ops/metadata.py`, so Live and the first load follow a folder's own TXY source at once,
+  not the global one until a load tells it. Before the switch goes on (Q47.2, Tony 2026-11-02): stage 3, the
+  Caching v2 floor.
+- [x] **A47.3 The GUI watchdog left running by quit tests** (done in `36b2224`, Quick Fixes 9: `_watch` ends once its QObject is deleted; `tests/test_gui_watchdog.py`) (A~9; known-issues): `HelabMainWindow.closeEvent`
+  returns early, without stopping its `GUIWatchdog`, when a close waits for saves (`QuitSaveDialog`) or a quit
+  dialog is open. Finish or cancel the dialog in `tests/test_quit_confirms.py` and
+  `tests/test_txy_last_used_quit.py`, or stop the watchdog when the window is destroyed.
+- [x] **A47.4 Purge by age per kind, plus everything** (done in `5cbf1d4`, landed `1d91897`: `purge_cached(cutoff, kinds)`, the helper's `purge` `what`, Settings › Cache's rows and "Everything not used…") (Q47.1, Tony 2026-11-02; the Caching v2 floor, Vault):
+  Settings › Cache's store-v4 purge by age split per kind (datasets, TXY layers and their views, raw layers),
+  each with its estimate and question, plus one "purge everything by age" button; only copies never go unless
+  the question names them. Until then the purge takes all three and keeps only copies (S3-1).
+- [x] **A47.5 Save a plot's TXY source and profile** (done in `63817b5`, review fixes `a18e4c9`, Live Scripts, landed `971f4af`: `TxyChoice` in records and script presets, the TXY row's Keep box) (Q14.2 = Q23.4, Tony 2026-11-02; the Live Scripts floor):
+  with presets, arrangements and reopened plots (a format change in `analysis/presets.py`; today a reopened
+  plot starts "As the folder's tab"), plus a plot-settings toggle that turns the saving off, for tweaking and
+  exploring.
+- [x] **A47.6 Convert from the raw layer with the app's backend** (done in `9e8c576`, landed `1d91897`: `with_txy` adds Settings' `backend`; `txy_cache.backend_for`, numpy when it can't run here or for numba) (block 47's docs pass; the Caching v2 floor,
+  Vault): `txy_cache.py:215` calls `reconstruct(raw_layer.decode(layer), profile)` without a backend, so it
+  runs `reconstruct.DEFAULT_BACKEND`, `reference` (readable, not fast), not `pipeline.APP_BACKEND` (numpy) or
+  Settings' `convert_backend`. Pass the app's choice; the output is byte-identical by contract.
+
+## Converter UX (block 48)
+
+From the Converter UX floor's [handoff](sessions/2026-11-02-claude-converter-ux/handoff.md) (Ember; Strata's
+[review](sessions/2026-11-02-claude-converter-ux/review.md); landed `ed7bcf9`). A37.1, A39.5 and Q38.1's build
+are done.
+
+- **A48.1 Live's test loads without `txy`**: `tests/test_live.py`'s `run_helper` passes a load no `txy` (nor
+  `memory_origins`), so its loads never find HeLab's TXY. Give it the fields `io_helper` passes (as
+  `test_live_convert.check` does for Live checks) and drop `test_explorer_convert.load_as_the_helper_does`.
+- **A48.2 The converter's questions in the accessible-names walk**: add `convert_offer`, `live_share`,
+  `beside_refused` and `share_beside_confirm` to `test_accessible_names.ASKS` or `INLINE_SKIPPED` (their IDs
+  are checked in `test_explorer_convert.py` only).
+- **A48.3 Keep a read stopped early**: the stop is kept only in Live's session and the logs. Record it in the
+  provenance row (a column within schema 1), so Folder details can name it for a folder loaded later; the
+  same row could tell `ExplorerConverter.offered` that HeLab's TXY already exist in the cache or temp folder
+  for a folder not loaded (Strata's info note).
+- **A48.4 The output setting's tooltip**: Settings › TXY converter's output tooltip (`ConverterTab.py`) could
+  say that a folder on a share asks before writing beside.
+
+## Live Scripts (block 49)
+
+From the Live Scripts floor's [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md) (Lumen; design
+[note](sessions/2026-11-02-claude-live-scripts/design.md); Prismo's [review](sessions/2026-11-02-claude-live-scripts/review.md);
+landed `971f4af`). A47.5 is done.
+
+- **A49.1 A TXY choice in the Presets row's changes**: the row's dots and "Save N changes" don't count a TXY
+  choice changed from the applied preset.
+- **A49.2 Same-named helpers in two script folders** share the first one imported (Python's one module
+  namespace): detect it and name it in the Scripts panel's error list.
+- **A49.3 The presets inspector and TXY profiles**: `PresetsInspector` calls `check_plot` without `profiles`,
+  so it doesn't name a preset's unknown TXY profile; pass `{name: file_tag(p)}` from
+  `txy_source.known_profiles()`.
+- **A49.4 The reopen setting's description**: `reopen_plots_at_start`'s row could name the TXY rule ("a plot
+  with its own TXY choice loads it only once HeLab read its folder this session").
+- **A49.5 The loading marker's two loose ends** (Prismo's optional notes, re-check 2): test `deliberate=False`
+  end to end through `_check_changes` (today only by calling `reload_scripts(…, deliberate=False)`), and reset
+  `_pending_deliberate` in `_stop_waiting` when nothing is pending, so a removed folder's waiting deliberate
+  reload doesn't make the next auto-reload clear a marker. Both harmless today.
+
+## Caching v2 A47 checkpoint and stage 3 (block 50)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stages 3 and 4",
+Vault; Assay's [A47 review](sessions/2026-10-31-claude-caching-v2/review-a47.md) and
+[stage 3 review](sessions/2026-10-31-claude-caching-v2/review-s3.md); landed `1d91897` and `d4f28f3`, the switch
+off). Done: A40.2, A47.1, A47.2, A47.4, A47.6 (above); A47-1 fixed on the floor. No new item; Tony's answers are
+Q50.3–Q50.18, the open ones Q50.1 and Q50.2.
+
+## Caching v2 stage 4 and the switch-on (block 51)
+
+From the Caching v2 floor's [handoff](sessions/2026-10-31-claude-caching-v2/handoff.md) ("Stage 4" on, Vault;
+Assay's [review](sessions/2026-10-31-claude-caching-v2/review-s4.md); landed `8071c04` and `9f92daf`, the switch
+off). No new item: stage 4, the switch-on run's fixes and Q50.1's option (a) are done; Q51.1 (a) decided by Tony (2026-11-03); the
+switch-on (V-2, V-3, V-5) waits on `agent/v4-switch-on` for the v0.0.8 PR.
+
+## Live Scripts' follow-ups (block 52)
+
+From the follow-up sessions on the Live Scripts floor (Lumen; Prismo's reviews): the reload-wait race (the Live
+Scripts [handoff](sessions/2026-11-02-claude-live-scripts/handoff.md), landed `f534ede`), the
+[plot crash](sessions/2026-11-03-claude-plot-library-crash/handoff.md) (landed `823589a`) and the
+[preset hang](sessions/2026-11-03-claude-preset-modal-hang/handoff.md) (landed `566eed6`). All test-side.
+
+- **A52.1 Test-made Scripts panels get a Qt parent** (the plot crash's A~2, Prismo's
+  [assessment](sessions/2026-11-03-claude-plot-library-crash/review-crash.md)): about 45 test sites make
+  `TreePanelWidget(...)` without one (17 in `test_analysis_gui`, 16 in `test_live_scripts`, 4 in
+  `test_constant_layers`, the rest in 6 files); give them `TreePanelWidget(window.plots, window)`, the `plot()`
+  helpers that drop the panel first. None crashes under forced collections today ([testing](architecture/testing.md)'s
+  rule).
+- **A52.2 The plot crash's two optional notes** (Prismo's N1, N2): say in the guard test's docstring and at
+  `workspace.py`'s two `setParent(None)` sites that the replaced widget is Python's until the `deleteLater()`
+  right after hands it back to Qt, and optionally guard `replace_plot_content` too (the RAM budget's release
+  picture); make `test_a_dropped_scripts_panel_survives_a_collection_in_its_first_polish` assert its inner run's
+  "3 passed", not only exit 0.
+- **A52.3 A shared "wait for owed writes, then restart" test helper** (the preset hang's A~1, Prismo's N3):
+  other tests that simulate a restart (shut the helpers down) should wait for owed preset writes as
+  `test_presets_plots.stored()` now does. Its private reads (`_presets_again`, `_probe_owner`) could later become a
+  public `FolderCache.presets_idle()` (an app change).
+- **A52.4 Guard the presets' other modals** (the preset hang's A~2): `presets.ask_name` (`QInputDialog`),
+  `presets.replace_or_add` and `presets.confirm` (`QMessageBox`, `exec`) open real dialogs unless a test stubs them
+  (per instance today, `presets_for`). Make them fail in conftest as `warning_box` does, after checking every test
+  that reaches them stubs them; or, broader, a conftest guard on `QMessageBox.exec` / `QDialog.exec` that fails
+  unless a test allows it.
+
+## Documentation (block 54; Q54.1, Tony 2026-11-03, before the v0.0.8 PR)
+
+- [x] **A54.1 Docstrings for the script-facing API.** (done in `4c47227`, review fixes `9631294`, `results.py` in `aafcb9d`, Docs floor, landed `b0e3aac`) Every public name in `helab/scripts/base.py`,
+  `helab/analysis/dataset_view.py` (the `DatasetView` class itself, `name`, `short`, `key`, `shot_numbers`,
+  `event_count`, `ViewIdentity`, `Provenance`), `parameters.py`, `selection.py` and the fit helpers scripts use
+  gets a docstring, with Google-style `Args:`/`Returns:` where they add something the types don't. A check keeps
+  it: ruff's pydocstyle rules (`D1`) on those modules only, in CI. Counts on 2026-11-03: `base.py` 35/37,
+  `DatasetView`'s module 21/30; all of `helab/` 60 % of public functions. These docstrings feed PyCharm's Quick
+  Documentation and the manual's API reference (A54.2).
+- [x] **A54.2 The user manual's frame.** (done in `9507d02`, `3462828`, `662a287`, review fixes `d0128ae`, `17239e0`, `ee6df99`, `ec9defd`, Docs floor, landed `b0e3aac`; the deploy on a published release only, DM-1 (a)) MkDocs with the Material theme in `docs/` (beside `hlb-format.md`),
+  Diátaxis sections (getting started, how-to, reference, explanations), an API reference for script writers built
+  by mkdocstrings from A54.1's docstrings, a CI job that builds it with warnings as errors, and Help › User
+  manual. First pages: install and first folder, `.helab-root`, Live, converting TXY, writing a script, the cache,
+  `helab convert` / `helab cache`, the settings. Written for users from `.ai/architecture/` and the memory
+  notes; names no person or lab machine. Published on GitHub Pages per release (Q54.2), bundled in the app as an offline copy (Q54.3); the deploy workflow publishes from whichever repo it runs in, so `HeBECANU/HeLab` gets its own site; Help opens the site of the repo the build came from, else the bundled copy (Q54.4).
+
+## TXY priority lists (block 55)
+
+From the TXY Priority floor's [handoff](sessions/2026-11-03-claude-txy-priority/handoff.md) (design
+[note](sessions/2026-11-03-claude-txy-priority/design.md); [review](sessions/2026-11-03-claude-txy-priority/review.md),
+TP-1–TP-11 fixed on the floor; landed `9bf99ff`).
+
+- **A55.1 A widget test of Live's offer**: the Live line's "not read here: convert with m23v1?" and the menu's
+  "Convert with m23v1 (this folder reads m23v1 only)" have only FolderCache-level tests
+  (`test_a_one_entry_folder_offers_its_profile_to_auto_convert`); add one in `test_live_convert.py`'s style.
+- **A55.2 Retire the old composition**: `txy_sources.choose`, `helab_txy.compose` and `could_take` are kept for
+  their tests and for MATLAB only (`compose(source, matlab, {})`); they can go once their tests move to
+  `compose_list`.
+- **A55.3 Time the any-HeLab stage**: the fallback's last stage reads provenance records of every tag in HeLab's
+  folders for the shots no earlier stage has, so a large folder converted with several profiles reads more rows
+  than before. Time it on a lab folder with M55.4.
+- **A55.4 A manual convert beside Live's**: Convert this folder… is disabled while Live's Auto-convert converts
+  that folder (TP-5). A manual convert with another profile could queue after Live's conversion instead; that
+  needs FolderCache's convert jobs keyed by profile.
+
+## Documentation follow-ups (block 56)
+
+From the Docs floor's [handoff](sessions/2026-11-03-claude-docs-manual/handoff.md) (reviews D-1–D-3 and DM-1–DM-4
+fixed on the floor; landed `b0e3aac`). Each runs on a floor or Ground; the manual's pages are public text, naming no
+person, lab machine or internal ID.
+
+- [x] **A56.1 `results.py`'s docstrings and its API page** (done in `aafcb9d`, Docs floor, landed `b0e3aac`).
+- **A56.2 `dataset_view.py`'s module docstring, public-safe**: it names Q6.6, plots-1 and plots-3, and
+  `root_key`'s docstring names a person and a review finding. Then `docs/reference/api/dataset-view.md` may render
+  the module instead of naming its classes one by one.
+- **A56.3 `docs/.ai-generated/`**: three old planning files in the public `docs/` folder (MkDocs skips dot-folders,
+  so the site doesn't show them). Move them to `.ai/sessions/` or delete them.
+- **A56.4 The built-in profiles' notes** shown in Settings › TXY converter carry internal IDs ("stage 3", "Q6.11"):
+  make them user-facing text.
+- **A56.5 Stale docs found while writing the manual**: `data-roots.md`, `cache-store.md` and `live.md` were
+  corrected in the landing's docs pass; left: the comment above `STORE_V4_SETTING` in
+  `helab/utils/settings_defaults.py` still says "off until stage 2", while its row is on from v0.0.8.
+- **A56.6 Grow `ruff.toml`'s scope** to the rest of what scripts import (`follow.py`, `backends.py`'s panes,
+  `stats.py`), each with an API page.
+- **A56.7 `helab --help` starts the GUI**: `helab/main.py` handles `--version`, `convert` and `cache` before the
+  GUI, but not `--help`/`-h`. Print a short usage (the app, `--version`, `--geometry`, `convert`, `cache`, each
+  with `--help`) and exit 0, before anything starts.
+- **A56.8 The manual's "Which TXY HeLab reads" section** (now a short note): the ordered TXY list (Settings › TXY
+  converter › Edit…, a folder's and a plot's own lists, the fallback shots and how a plot's record names them),
+  and the External label.
+
+## Test isolation follow-ups (block 57; [handoff](sessions/2026-11-03-claude-fixed-mount-seam/handoff.md))
+
+- [ ] **A57.1 CachedRuns' verification timer outlives a closed plot.** In 41587336570's leaked plots,
+  `CachedRuns._verification_due` reached `AnalysisInstance._cached_status` on a deleted QLabel (a plot closed
+  while its save waited for the volume check), and `AnalysisInstance.close` raised `'AnalysisRunner' object has
+  no attribute 'results'` after its test's runner was released. Both are logged and HeLab goes on. Fix: stop
+  `_verify_timer` and drop the plot's callbacks when it closes (or check `sip.isdeleted`), and let `close` skip a
+  runner that is gone; a test for each.
+- [ ] **A57.2 Windows tests with `--basetemp` on another drive than TEMP's.** conftest's
+  `HELAB_TEST_LOCAL_MOUNT` lists only TEMP's drive, so a `--basetemp=.ai/temp/pytest-<name>` on `D:` has no mount
+  in the tests' list. Check whether those tests then run as on CI; if not, let it list several drives.
+- [ ] **A57.3 An inherited `HELAB_TEST_FIXED_MOUNT`** (Sieve's FM-4, Info): conftest appends to a value set in
+  the shell or by a parent process, so that mount stays trusted for the run. Clear it at import before naming
+  the temp folder's mount.
+
+## v0.0.8 follow-ups (block 58)
+
+From the Follow-ups floor's [handoff](sessions/2026-11-03-claude-followups/handoff.md) (Mend; Assay's review FU-1,
+FU-2 and FU-4 fixed on the floor, FU-3 decided as Q58.3; landed `72ab47a`). Q48.2, Q48.3, Q49.3 (b), Q56.3 and
+Q56.1 (b)'s shim are done.
+
+- **A58.1 Zensical, later** (Q56.1 (b), Tony 2026-11-03). Move the manual from Material for MkDocs to Zensical
+  once Zensical's versioning is native or mike's Zensical fork is on PyPI, before Material's end of life
+  (2027-05-05). The switch needs:
+  1. the version menu: native versioning, or the fork (`git+https://github.com/squidfunk/mike.git`, pinned by
+     commit in `requirements-docs.lock`), first proven in a CI dry run; `docs/publish/site_versions.py` only calls
+     `mike deploy`, `set-default` and `list`;
+  2. `docs/hooks/repo_links.py` doesn't run under Zensical: use its built-in `macros` with `{{ config.repo_url }}`
+     in the two pages that use `{repo_url}` (checked: a fork's URL comes out right);
+  3. `zensical build` has no `-d`: set `site_dir: !ENV [HELAB_DOCS_SITE_DIR, site]` and the variable in CI; keep
+     `mkdocs.yml` (Zensical reads it, and `!ENV` needs YAML);
+  4. `ci-build.yml`'s manual step (`mkdocs build --strict -d build/manual`), the Docs job and `docs-site.yml` move
+     to `zensical build --strict`;
+  5. the vendored search shim: Zensical takes the same `extra.polyfills` entry (checked offline).
+
+  Also: Zensical doesn't warn about pages missing from `nav`. The check is the floor's
+  [zensical.md](sessions/2026-11-03-claude-followups/zensical.md).
+- **A58.2 Folder details' conversion and a read stopped early**: `explorer_convert.ExplorerConverter` neither names
+  a read stopped early nor notifies; Live's auto-convert does both (Q48.1, Q48.2). Route its `shot_converted`
+  through the same stop handling.
+- **A58.3 The try-import's cost**: the probe adds about 0.2–1 s per script folder at start and on each reload (two
+  at once, `PROBES_AT_ONCE`). If a lab PC's cold frozen start makes it slow, reuse one probe process per round for
+  several folders (a protocol change).
 
 ## Not AI work (stays in MANUAL_TODO)
 

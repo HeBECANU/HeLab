@@ -64,8 +64,15 @@ TXY_SOURCE_SETTING = "txy_source"
 # The plots that reopen at start (helab/views/plots/arrangement.py; presets are in the disk cache store).
 REOPEN_PLOTS_SETTING = "reopen_plots_at_start"
 OPEN_PLOTS_SETTING = "open_plots"
+# Live scripts: the user's script folders (Load Scripts…), restored at start, and reloading them when
+# a script is saved (helab/views/plots/script_tree.py).
+SCRIPT_FOLDERS_SETTING = "script_folders"
+SCRIPT_AUTO_RELOAD_SETTING = "script_auto_reload"
 # The main window's folder and settings panels' widths, the plots taking the rest (Q33.2).
 MAIN_SPLIT_SETTING = "main_window_split"
+# Caching v2's store (Q28.3): developers only, off until stage 2 and Tony's go; no Settings control.
+STORE_V4_SETTING = "store_v4"
+CACHE_POLICY_SETTING = "cache_policy"
 
 def default_disk_budget(platform: str | None = None) -> int:
     """8 GB on macOS and Linux, 8 GiB on Windows (Q22.7, Q26.1): disk units follow the OS
@@ -141,8 +148,11 @@ SETTINGS: tuple[Setting, ...] = (
             "its first becomes that folder, and this key is removed."),
     Setting(TXY_SOURCE_SETTING, str, "helab-priority",
             "Which TXY tabs and Live load (Settings → TXY converter, Q18.2): helab-priority (HeLab's of the "
-            "conversion profile where they exist, MATLAB's for the rest), matlab-priority, helab-only or "
-            "matlab-only; anything else reads as helab-priority. A plot may choose another in its settings."),
+            "conversion profile where they exist, External's, the MATLAB converter's, for the rest), "
+            "matlab-priority, helab-only or matlab-only; or a priority list (Q53.2): entries joined by '>', each "
+            "External, Conversion (the conversion profile) or a profile's tag, e.g. m23v1>m19v1>External (a list "
+            "that is one of the four is saved as it); anything else reads as helab-priority. A plot may choose "
+            "another in its settings."),
     Setting(CONVERT_LOW_HITS_SETTING, int, 100,
             "Live auto-convert: a converted shot with fewer hits than this raises a system notification, once "
             "per shot (the Auto-convert menu); 0: never."),
@@ -153,10 +163,26 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(OPEN_PLOTS_SETTING, str, "",
             "The plots open when HeLab last quit (or last opened or closed a plot), with their settings and "
             "places: an arrangement record (helab.analysis.presets, JSON). Unset: none."),
+    Setting(SCRIPT_FOLDERS_SETTING, str, "",
+            "The script folders added with Load Scripts… (the Scripts panel), as a JSON list of paths, loaded again "
+            "at start; removed only with Remove from the list in Load Scripts…'s menu. A folder that isn't there "
+            "stays listed with \"folder not found\". Unset: none."),
+    Setting(SCRIPT_AUTO_RELOAD_SETTING, bool, False,
+            "Reload a script folder when one of its scripts or helper modules is saved (Load Scripts…'s menu, "
+            "\"Reload when a script is saved\"); off: only the Reload button does. Watches the script folders only, "
+            "and only while on."),
     Setting(MAIN_SPLIT_SETTING, str, "380,320",
             "The main window's folder panel and plot settings panel widths in logical pixels, \"<folders>,<settings>\", "
             "saved as HeLab quits; the plots take the rest of the window. Folders 80 to 4000, settings 250 to 4000; "
             "otherwise the default (Q33.2)."),
+    Setting(STORE_V4_SETTING, bool, True,
+            "The disk cache's store: store-v4 (caching v2), on from v0.0.8 (Q47.4). Off is a hidden fallback to "
+            "store-v3 kept for one release (V~2): set by hand only, never shown in Settings. Read once when "
+            "HeLab starts."),
+    Setting(CACHE_POLICY_SETTING, str, "raw+used",
+            "Caching v2 (store-v4 only): what new saves write unless a folder chooses otherwise (Q45.1): "
+            "raw+used (raw pulses and every TXY a load uses, the default), raw (raw pulses; TXY converted on "
+            "load), txy (TXY only, no raw pulses)."),
 )
 
 # Keys under a prefix: Settings → Lab parameters saves only the lab constants the user set,

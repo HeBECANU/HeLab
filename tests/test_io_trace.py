@@ -36,6 +36,17 @@ from helab.utils.io_service import IOService
 from helab.views.FolderExplorer import FolderExplorer
 
 
+def cached(store: Any, folder: Path) -> tuple[Any, Any]:
+    """A folder's cached row and data as a load reads them, in store-v3 (its dataset) or store-v4 (its view and
+    layers): through ``txy_cache.Access`` of the source a save without a TXY choice uses."""
+    from helab.io_ops import txy_cache
+    from helab.utils import txy_sources
+    full = txy_cache.Access(store, txy_sources.requested_source(None), {}).full(str(folder)).value
+    assert full is not None
+    row, loader = full
+    return row, loader()
+
+
 def write_shots(folder: Path, shots: range, *, age: float = 60.0) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     when = time.time() - age
@@ -306,6 +317,11 @@ class SourceCalls:
         return call
 
 
+# How long this test waits for its helpers (listing, expanding, the load, then idle): 9-18.5 s for the whole test on
+# Windows CI (3.4 s here), and a wait for idle hit 20 s there (caching-v2 CI 41456480233, job 125314458602).
+HELPERS_MS = 60_000
+
+
 def test_the_gui_process_never_touches_source_folders(
     qtbot: QtBot, tmp_path: Path, trace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,17 +338,17 @@ def test_the_gui_process_never_touches_source_folders(
     explorer.resize(600, 400)
     explorer.show()
     model = explorer.model
-    qtbot.waitUntil(lambda: str(share / "more") in model.nodes, timeout=20000)
+    qtbot.waitUntil(lambda: str(share / "more") in model.nodes, timeout=HELPERS_MS)
     explorer.tree.expand(model.path_index(str(share / "more")))
-    qtbot.waitUntil(lambda: str(share / "more" / "run b") in model.nodes, timeout=20000)
+    qtbot.waitUntil(lambda: str(share / "more" / "run b") in model.nodes, timeout=HELPERS_MS)
     run = str(share / "run a")
     explorer.tree.setCurrentIndex(model.path_index(run))
     explorer.load_to_ram_cache(run, dwell=False, explicit=True)
     qtbot.waitUntil(lambda: explorer.folder_opened_path == run and explorer.folder_opened_data is not None,
-                    timeout=20000)
-    wait_idle(qtbot, service)
+                    timeout=HELPERS_MS)
+    wait_idle(qtbot, service, HELPERS_MS)
     explorer.refresh()
-    wait_idle(qtbot, service)
+    wait_idle(qtbot, service, HELPERS_MS)
     assert gui.calls == []
     helpers = [record for record in lines(trace) if record["pid"] != os.getpid()]
     assert {(record["request"], record["op"]) for record in helpers} >= {
@@ -501,7 +517,9 @@ def test_a_changed_cached_folder_is_listed_once_by_its_load(
     qtbot.wait(300)
     wait_idle(qtbot, service)
     listings = [record for record in lines(trace)[before:] if record["op"] == "scandir" and record["path"] == str(run)]
-    assert [record["request"] for record in listings] == ["load"]
+    # (store-v4, the shipped default: the load's save queues raw_fill, which lists the folder for its raw files,
+    # in the background; the load itself still lists it once.)
+    assert [record["request"] for record in listings if record["request"] != "raw_fill"] == ["load"]
     node = model.nodes[str(run)]
     assert not node.cached_report and node.txy_count == 4 and node.signature and node.loaded
     explorer.close_cleanup()
@@ -724,19 +742,18 @@ def test_a_live_save_checks_every_held_file_once_and_reads_none(tmp_path: Path, 
               identity=identity, identity_root=root)
     kinds = [event["kind"] for event in events]
     assert "cache_saved" in kinds and "disk_cached" in kinds and "shots_missing" not in kinds
-    assert "scan_summary" not in kinds  # (The fingerprint is the data's: nothing new to say.)
+    # The folder's status as this data stands (io-3: a newer listing elsewhere then keeps its own).
+    assert kinds.index("scan_summary") < kinds.index("loaded")
     loaded = next(event for event in events if event["kind"] == "loaded")
     assert loaded["memory_shots"] == list(range(1, 10)) and loaded["disk_cache_pending"]
     assert loaded["unsettled_files"] == 1 and loaded["problematic"] == [3]
     found = counts(lines(trace)[before:])
     assert found[("scandir", "save: listing")] == 1 and found[("entry_stat", "save: checking")] == 10
-    assert not any(op in ("read", "stat") for op, _ in found)
-    assert found[("marker_read", "save: identity")] == 1
+    assert not any(op == "read" for op, _ in found)
+    assert [key for key in found if key[0] == "stat"] == [("stat", "folder mtime")]  # (The summary's, once.)
+    assert found[("stat", "folder mtime")] == 1 and found[("marker_read", "save: identity")] == 1
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        value = store.read_dataset(str(run)).value
-        assert value is not None
-        row, packed = value
-        data = unpack_dataset(packed)
+        row, data = cached(store, run)
         assert data is not None and sorted(data) == list(range(1, 10))
         np.testing.assert_array_equal(data[4], [[4, 2, 3], [4, 4, 5]])
         assert row["info"]["unsettled"] == 1 and row["problematic"] == [3]
@@ -769,7 +786,7 @@ def test_a_live_save_saves_nothing_for_a_missing_changed_or_other_folder(tmp_pat
     (run / "d_txy_forc2.txt").unlink()
     assert stopped(save(), "missing")
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        assert store.read_dataset_row(str(run)).value is None
+        assert store.read_dataset_infos([str(run)])[str(run)].missing  # (store-v4: no view either.)
 
 
 def test_a_live_save_reads_a_shot_live_read_recently_that_changed_again(tmp_path: Path, trace: Path) -> None:
@@ -806,10 +823,7 @@ def test_a_live_save_reads_a_shot_live_read_recently_that_changed_again(tmp_path
     assert summary["signature"] == loaded["signature"] and summary["txy"] == [1, 2, 3] and summary["unsettled"] == 0
     assert counts(lines(trace))[("read", "save: read again")] == 1
     with stores._cache_store(cache["directory"], [str(run)]) as store:
-        value = store.read_dataset(str(run)).value
-        assert value is not None
-        row, packed = value
-        data = unpack_dataset(packed)
+        row, data = cached(store, run)
         assert data is not None and sorted(data) == [1, 2, 3]
         np.testing.assert_array_equal(data[3], [[3, 2, 3], [3, 4, 5], [3, 6, 7]])
     # Not read by Live recently: a mismatch, nothing saved over it.

@@ -48,6 +48,14 @@ and path (its ``folders`` row, updated when the folder moved) and holds the shot
 conversion there removes its leftover temporary TXY the same way, and old builds' JSON
 temporaries (``own_partial()``).
 
+**Clear fence** (A19.2). A conversion into the cache or temp folder reads the index's fence token
+when it starts (``provenance.fence_of``); each TXY's row is written only while it is unchanged, and the
+rename is made under the index's write lock with the token checked again (``TxyIndex.hold``), so
+Settings › Cache's Clear (which sets a new token before it removes anything) never leaves a TXY this
+conversion wrote: one refused waits (``shot_waiting``, reason ``cleared``), and so does every shot after it,
+unread; a later conversion converts them. Beside the raw files nothing is fenced (Clear never removes
+those TXY).
+
 **Processes.** Reads, writes and every source-folder call stay in this process (traced, guarded
 and paused like the other helpers'). With ``workers`` > 1, conversions run across shots in a pool
 of spawned processes (4–8 give 3–5×, the NumPy floor measured), or, for one large shot, its pieces
@@ -72,7 +80,7 @@ import re
 import sys
 import threading
 import time
-from typing import Any, Callable, Iterable, NotRequired, TypedDict, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Mapping, NotRequired, TypedDict, TYPE_CHECKING
 
 from helab.io_ops import fingerprints, stores
 from helab.io_ops.events import ConvertProfile, ConvertSeconds, HelperEvent, ShotUnconvertibleEvent
@@ -110,6 +118,9 @@ COMPUTE_RATE = 10**6
 # timeout 20s"; raw files arrive about one per 30 s).
 DAMAGED_SECONDS = 20.0
 DAMAGED = "damaged"
+# A shot's ``shot_waiting`` reason when HeLab's TXY were cleared while this conversion ran (A19.2).
+CLEARED = "cleared"
+CLEARED_TEXT = "HeLab's converted TXY were cleared while this conversion ran: converted again at the next check"
 # Leftover temporary TXY of a killed beside write: removed once this old, by a beside conversion.
 PARTIAL_MAX_AGE = 3600.0
 # Workers when the request doesn't say: across shots in processes. A frozen app's spawned workers
@@ -123,6 +134,13 @@ DEFAULT_WORKERS = 1 if getattr(sys, "frozen", False) else max(1, min(4, (os.cpu_
 WINDOWS_MAX_PATH = 260
 # The OS whose path rules ``path_too_long`` applies (tests patch it to try Windows' on any OS).
 PLATFORM = sys.platform
+
+
+def unsafe_rename(exc: BaseException) -> bool:
+    """Whether a write was refused because the folder's file system can't add a file without risking
+    replacing one (``txy._cannot_refuse``: ENOTSUP, "Not written: …"; Q38.1)."""
+    return (isinstance(exc, OSError) and exc.errno == errno.ENOTSUP
+            and str(exc.strerror or "").startswith("Not written: "))
 
 
 def path_too_long(exc: BaseException, path: str, platform: str | None = None,
@@ -440,6 +458,7 @@ class _Pool:
 
 def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> None:
     from helab._version import __version__
+    import sqlite3
     from helab.convert import provenance, raw, txy
     from helab.convert.pipeline import APP_BACKEND, convert_shot
     from helab.convert.profile import DetectorProfile
@@ -449,6 +468,12 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
     profile = DetectorProfile.from_dict(request["profile"])
     backend = str(request.get("backend") or APP_BACKEND)
     places = _places(path, request)
+    # The Clear fence's token now (A19.2), before anything is listed: a Clear from here on refuses
+    # this conversion's writes. (Beside: none; Clear never removes those TXY.)
+    fence = None if places["output"] == "beside" else provenance.fence_of(os.path.dirname(places["folder"]))
+    cleared = False
+    # Caching v2 (store-v4): the raw layers of the shots this conversion reads, saved as it goes.
+    raw_rows = _RawRows.start(path, places, request, send)
     numba_folder = ""
     if backend == "numba":
         # Its compiled code goes in HeLab's temp folder (Q18.1): numba no longer ships (Q11.2), so
@@ -646,10 +671,22 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
             send({"kind": "convert_progress", "path": path, "done": handled, "todo": len(todo),
                   "converted": converted, "raw_bytes": raw_bytes})
 
+    def fenced() -> bool:
+        """A Clear has set another fence token since this conversion started (False when unread now:
+        each write checks it again)."""
+        if fence is None or index is None:
+            return False
+        try:
+            return index.fence() != fence
+        except sqlite3.Error:
+            return False
+
     def finish(shot: _Shot, data: bytes, read_seconds: float, result: Converted | BaseException) -> None:
-        nonlocal converted, handled
+        nonlocal converted, handled, cleared
         handled += 1
-        if isinstance(result, NoRowsError):
+        if cleared:
+            wait(shot, CLEARED, CLEARED_TEXT)
+        elif isinstance(result, NoRowsError):
             refuse(shot, raw.NO_ROWS, f"The raw file has no rows: {result}")
         elif isinstance(result, BaseException):
             refuse(shot, "failed", f"Conversion failed: {type(result).__name__}: {result}")
@@ -678,22 +715,41 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                 row matches no TXY there, so the shot is converted again."""
                 assert index is not None
                 pinned = dataclasses.replace(record, txy_size=info.st_size, txy_mtime_ns=info.st_mtime_ns)
-                index.record(folder_name, places["key"], path, pinned, time.time())
+                index.record(folder_name, places["key"], path, pinned, time.time(), fence=fence)
                 written.append(pinned)
+                if fence is not None:
+                    # The rename alone under the index's lock, the token checked again: a Clear's comes
+                    # before (refused here) or after it (and finds the TXY).
+                    index.hold(fence)
 
+            assert index is not None
             if beside:
                 _guard(target)
             try:
-                txy.write_atomic(target, result.txy, replace=not beside, before_rename=pin)
+                try:
+                    txy.write_atomic(target, result.txy, replace=not beside, before_rename=pin,
+                                     after_rename=index.release)
+                finally:
+                    index.release()  # (Refused or failed before the rename: let go all the same.)
             except BaseException as exc:
                 if written:
                     # Its row goes, unless another conversion has written its own since: then that one stands.
                     with contextlib.suppress(OSError):
                         index.forget(folder_name, written[0])
+                if isinstance(exc, provenance.Cleared) or (isinstance(exc, FileNotFoundError) and fenced()):
+                    # (Refused by the fence; or a Clear meanwhile took this write's temporary file.)
+                    cleared = True
+                    wait(shot, CLEARED, CLEARED_TEXT)
+                    progress()
+                    return
                 if (too_long := path_too_long(exc, target)) is not None:
                     refuse(shot, "failed", too_long)  # (Not converted again while unchanged: Q23.6.)
                     progress()
                     return
+                if beside and unsafe_rename(exc):
+                    # (Q38.1: the user chooses Retry or HeLab's cache or temp folder; the run fails as before.)
+                    send({"kind": "beside_refused", "path": path, "shot": shot.shot, "txy": target,
+                          "message": str(exc.strerror if isinstance(exc, OSError) else exc)})
                 if not (beside and isinstance(exc, FileExistsError)):
                     raise
                 # (Another conversion wrote it since the listing; it stays.)
@@ -707,19 +763,31 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
                 _trace("write", target, "convert: TXY beside", bytes=len(result.txy))
             seconds["write"] = time.perf_counter() - write_started
             converted += 1
+            stop = result.read_stop  # (Where textscan's read stopped early: A37.1.)
             current.append(shot.entry)
+            if raw_rows is not None:
+                raw_rows.add(shot.shot, shot.name, shot.size, shot.mtime_ns, data, read_at.get(shot.shot, time.time()))
             send({"kind": "shot_converted", "path": path, "shot": shot.shot, "raw_name": shot.name,
                   "raw_size": shot.size, "raw_mtime_ns": shot.mtime_ns, "raw_sha256": record.raw_sha256,
                   "output": places["output"], "txy": target, "txy_size": len(result.txy), "provenance": index_path,
                   "hits": result.hits, "replaced": shot.replaced, "profile": profile_info, "backend": backend,
-                  "seconds": seconds})
+                  "seconds": seconds, "read_stop": None if stop is None else {
+                      "line": stop.line, "offset": stop.offset, "text": stop.text, "unread": stop.unread}})
         progress()
+
+    read_at: dict[int, float] = {}
 
     def read(shot: _Shot) -> tuple[bytes, float] | None:
         """The shot's bytes and read time, or None when it waits (sent here)."""
-        nonlocal handled, raw_bytes
+        nonlocal handled, raw_bytes, cleared
+        cleared = cleared or fenced()
+        if cleared:
+            handled += 1
+            wait(shot, CLEARED, CLEARED_TEXT)
+            return None
         read_started = time.perf_counter()
         reader = Heartbeat(send, "reading")
+        read_at[shot.shot] = time.time()
         try:
             data = _read_raw(shot, reader)
         except OSError as exc:
@@ -764,10 +832,68 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
             pool.close()
         if index is not None:
             index.close()
+    if raw_rows is not None:
+        raw_rows.flush()
     progress(force=True)
     send({"kind": "convert_summary", "path": path, "output": places["output"], "folder": places["folder"],
           "txy_folder": places["txy_folder"], "converted": converted, "current": current, "waiting": waiting,
           "unconvertible": unconvertible, "kept": kept, "seconds": time.monotonic() - started})
+
+
+class _RawRows:
+    """A conversion's raw layers (caching v2, store-v4): the shots it read and converted, saved in
+    batches under one raw guard taken as it starts (``io_ops.raw_fill.save_batch``), as a ``raw_fill`` would
+    have saved them: at most ``BATCH_SHOTS`` shots or ``BATCH_BYTES`` of raw text each (C3-1). Only for a folder with a data root whose output is the cache folder or beside the raw
+    files, online. It never fails the conversion: a store that can't take them (busy, a Clear since, the
+    budget, Don't cache) sends one ``cache_warning`` or nothing, and the rest of this run's go unsaved."""
+
+    def __init__(self, path: str, cache: Mapping[str, Any], guard: Any, send: Emit) -> None:
+        self.path, self.cache, self.guard, self.send = path, cache, guard, send
+        self.batch: list[Any] = []
+        self.batch_bytes = 0
+
+    @classmethod
+    def start(cls, path: str, places: _Places, request: ConvertRequest, send: Emit) -> _RawRows | None:
+        from helab.utils.cache_store import StoreError, layout_of
+        from helab.utils.store_v4 import LAYOUT
+        cache = request.get("cache") or {}
+        if (not cache or cache.get("offline") or not places["key"] or places["output"] not in ("cache", "beside")
+                or layout_of(str(cache["directory"])) < LAYOUT):
+            return None
+        try:
+            with stores._cache_store(cache["directory"], [path]) as store:
+                if store.read_only or store.policy_of(path, str(cache.get("policy") or "")) == "txy":
+                    return None  # (Policy txy: no raw pulses, Q45.1.)
+                return cls(path, cache, store.start_raw_job(path), send)
+        except (StoreError, OSError, ValueError) as exc:
+            send({"kind": "cache_warning", "message": f"Raw pulses of {path} aren't cached this time: {exc}"})
+            return None
+
+    def add(self, shot: int, name: str, size: int, mtime_ns: int, data: bytes, read_at: float) -> None:
+        from helab.io_ops import raw_fill
+        if self.guard is None:
+            return
+        self.batch.append(raw_fill.RawRead(shot, name, size, mtime_ns, data, read_at))
+        self.batch_bytes += len(data)
+        if len(self.batch) >= raw_fill.BATCH_SHOTS or self.batch_bytes >= raw_fill.BATCH_BYTES:
+            self.flush()
+
+    def flush(self) -> None:
+        from helab.io_ops.raw_fill import save_batch
+        from helab.utils.cache_store import SaveRejected, StoreError
+        batch, self.batch, self.batch_bytes = self.batch, [], 0
+        if not batch or self.guard is None:
+            return
+        try:
+            with stores._cache_store(self.cache["directory"], [self.path]) as store:
+                result = save_batch(store, self.path, batch, self.guard, self.cache, self.send)
+            if result.reason:
+                self.guard = None  # (Over the budget: the rest isn't tried either, T~1.)
+        except SaveRejected:
+            self.guard = None  # (Cleared since, or Don't cache: nothing more this run.)
+        except (StoreError, OSError, ValueError) as exc:
+            self.guard = None
+            self.send({"kind": "cache_warning", "message": f"Raw pulses of {self.path} weren't cached: {exc}"})
 
 
 def _remove_partial(path: str, entry: os.DirEntry[str], send: Emit) -> None:

@@ -7,8 +7,11 @@
 - `middle`: the needle (or a trace's level) is within its `tolerance` of the middle;
 - `ok`: the instrument's own status is `ok`.
 
-A laser is `locked` when every sign holds (sure as its least sure sign), `lost` when any fails (sure as its
-surest failing sign), and `unknown` when none fails but some can't be told.
+A laser is `lost` when any sign fails (sure as its surest failing sign). Otherwise it is `locked` when the signs
+that can be told all hold (sure as the least sure of them, times the share of signs told), and `unknown` when none
+can be told. A sign that can't be told (unreadable, covered) is left out when the laser has others (Tony,
+2026-11-03: He4 has so many signs that one unknown shouldn't make it unknown); a laser with one sign is
+`unknown` while it can't be told.
 """
 
 from __future__ import annotations
@@ -46,6 +49,8 @@ class Lock:
             return "; ".join(failing) or "can't tell now: " + "; ".join(unsure)
         if self.state == "unknown":
             return "can't tell: " + "; ".join(unsure)
+        if unsure:
+            return "signs told hold; can't tell (left out): " + "; ".join(unsure)
         return "all signs as locked"
 
 
@@ -91,6 +96,7 @@ def evaluate(specs: list[str], instruments: dict[str, Instrument], readings: dic
     failing = [s for s in signs if s.holds is False]
     if failing:
         return Lock("lost", round(max(s.confidence for s in failing), 2), signs)
-    if any(s.holds is None for s in signs) or not signs:
+    told = [s for s in signs if s.holds is not None]
+    if not told or (len(told) < len(signs) and len(signs) < 2):
         return Lock("unknown", 0.0, signs)
-    return Lock("locked", round(min(s.confidence for s in signs), 2), signs)
+    return Lock("locked", round(min(s.confidence for s in told) * len(told) / len(signs), 2), signs)

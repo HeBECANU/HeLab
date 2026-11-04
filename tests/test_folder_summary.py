@@ -27,6 +27,7 @@ from helab.views.HelabMainWindow import HelabMainWindow
 from helab.views.plots.workspace import PlotWorkspace
 from helab.resources.icons import IconsInitUtil, StatusIcons
 from helab.utils.cache_freshness import CacheFreshness
+from conftest import this_tests
 
 
 @pytest.fixture
@@ -80,14 +81,19 @@ def complete_scan(explorer: FolderExplorer, qtbot: QtBot, path: str,
     explorer._update_activity()
 
 
-@pytest.mark.parametrize("contents, expected", [
-    ("empty", "Folder is empty"),
-    ("unrelated", "No TXY files in this folder"),
-    ("subfolder", "No TXY files here · Select a subfolder to load data"),
-    ("raw", "1 raw shot found · No converted TXY files"),
+@pytest.mark.parametrize("contents, expected, cache_line", [
+    ("empty", "Folder is empty", "No data to cache"),
+    ("unrelated", "No TXY files in this folder", "No data to cache"),
+    ("subfolder", "No TXY files here · Select a subfolder to load data", "No data to cache"),
+    # (store-v4, the shipped default: a raw file without a TXY is converted when the folder is loaded, so it is
+    # data to cache, S3~5.)
+    ("raw", "1 raw found · converted when loaded · Not loaded", "No cached data"),
+    # (The hidden fallback, store-v3, V~2 and SO-3: a raw file alone is no data to cache, as before the switch-on.)
+    pytest.param("raw", "1 raw shot found · No converted TXY files", "No data to cache", marks=pytest.mark.store_v3,
+                 id="raw-store-v3"),
 ])
 def test_non_data_folder_summary(
-    browser: FolderExplorer, qtbot: QtBot, tmp_path: Path, contents: str, expected: str,
+    browser: FolderExplorer, qtbot: QtBot, tmp_path: Path, contents: str, expected: str, cache_line: str,
 ) -> None:
     if contents == "unrelated":
         (tmp_path / "notes.txt").write_text("experiment notes")
@@ -105,7 +111,7 @@ def test_non_data_folder_summary(
     assert "Live updates off" in browser.folder_freshness_label.text()
     assert browser.selected_folder_label.isHidden()
     assert browser.deselect_button.isHidden()
-    assert browser.folder_cache_label.text() == "No data to cache"
+    assert browser.folder_cache_label.text() == cache_line
 
 
 def test_folder_details_and_hint_describe_each_folder_state(
@@ -211,6 +217,28 @@ def test_offline_folder_details_agree_with_the_summary(browser: FolderExplorer, 
     FolderDetailsPanel._data_rows(browser, {"loaded_at": time.time(), "unchanged": True}, rows, False, True,
                                   unchecked=True)  # Online, unchecked: being checked, not yet "unchanged".
     assert rows["loaded"][0].endswith("just now")
+
+
+def test_folder_details_count_the_txy_by_kind_and_what_the_source_leaves_out(browser: FolderExplorer) -> None:
+    """A39.4 (Q38.3): the TXY row counts the folder's TXY by kind as the load found them, MATLAB's and HeLab's of the
+    conversion profile's tag (not looked for when the source reads MATLAB's only); the load's counts say "left out
+    (TXY source)" apart from "removed". Data whose load counted none shows no row."""
+    counts = {"reused_memory": 0, "reused_disk": 0, "read": 118, "removed": 1, "left_out": 2,
+              "txy_matlab": 120, "txy_helab": 118}
+    meta: dict[str, Any] = {"loaded_at": time.time(), "files": 118, "total_files": 118, "load_counts": counts,
+                            "txy": {"source": "helab-only", "origins": {}, "profiles": {}, "profile_hash": "h",
+                                    "profile_tag": "m19v1", "folders": []}}
+    rows: dict[str, tuple[str, str]] = {}
+    FolderDetailsPanel._data_rows(browser, meta, rows, False, True)
+    text, tooltip = rows["txy"]
+    assert text == "120 External · 118 m19v1" and "d_txy_helab_m19v1_<N>.txt" in tooltip and "Other profiles" in tooltip
+    matlab_only = {**meta, "load_counts": {key: value for key, value in counts.items() if key != "txy_helab"}}
+    FolderDetailsPanel._data_rows(browser, matlab_only, rows, False, True)
+    assert rows["txy"][0] == "120 External" and "not looked for" in rows["txy"][1]
+    FolderDetailsPanel._data_rows(browser, {**meta, "load_counts": {"reused_memory": 118}}, rows, False, True)
+    assert rows["txy"] == ("", "")
+    browser.load_counts = counts
+    assert browser.load_count_details == ["1 file removed", "2 left out (TXY source)", "118 TXY files read"]
 
 
 @pytest.mark.parametrize("known_counts", [False, True])
@@ -377,8 +405,8 @@ def test_subfolder_scope_and_retained_plot_source(
     def forbidden(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("Rendering must not query source folders")
     with monkeypatch.context() as blocked:
-        blocked.setattr("os.scandir", forbidden)
-        blocked.setattr("os.stat", forbidden)
+        blocked.setattr("os.scandir", this_tests(forbidden, os.scandir))
+        blocked.setattr("os.stat", this_tests(forbidden, os.stat))
         browser._update_activity()
         PlotWorkspace._update_plot_source_label(dock, browser)
 
@@ -549,8 +577,8 @@ def test_cache_age_advances_without_filesystem_reads_or_new_save(
 
     with monkeypatch.context() as blocked:
         blocked.setattr("time.time", lambda: saved_at + 61)
-        blocked.setattr("os.scandir", forbidden)
-        blocked.setattr("os.stat", forbidden)
+        blocked.setattr("os.scandir", this_tests(forbidden, os.scandir))
+        blocked.setattr("os.stat", this_tests(forbidden, os.stat))
         browser._animate()  # The existing GUI timer performs this update.
     assert browser.folder_cache_label.text() == "Cache created 1m ago · May be outdated"
     assert browser.folder_cache_label.toolTip() == original_tooltip
@@ -1116,8 +1144,8 @@ def test_data_and_status_cache_freshness_indicators_are_independent(
 
     # Reading labels, badges and tooltips must consume memory only.
     with monkeypatch.context() as blocked:
-        blocked.setattr("os.stat", no_io)
-        blocked.setattr("os.scandir", no_io)
+        blocked.setattr("os.stat", this_tests(no_io, os.stat))
+        blocked.setattr("os.scandir", this_tests(no_io, os.scandir))
         blocked.setattr(browser.model.service, "submit", no_io)
         browser._update_activity()
         index = browser.model.path_index(path, browser.model.COLUMN_STATUS_ICON)

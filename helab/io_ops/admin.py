@@ -10,7 +10,8 @@ from helab.io_ops import helab_txy, stores
 from helab.io_ops.events import AdminResultFields
 from helab.io_ops.infra import Emit, Heartbeat, emit
 from helab.io_ops.markers import _location_path, _root_rows
-from helab.io_ops.stores import (_cache_info, _deadline, _removed_event, _results_removed_event, _store_fields,
+from helab.io_ops.stores import (_cache_info, _deadline, _raw_removed_event, _removal_events, _removed_event,
+                                 _results_removed_event, _store_fields, _txy_removed_event,
                                  _usage)
 
 
@@ -23,7 +24,10 @@ UNVERIFIED_CONSTANTS = "its drive isn't verified yet this session"
 ADMIN_ACTIONS = ("inventory", "clear", "purge", "trim", "adopt", "discard", "sweep", "budget", "prefs",
                  "convert_prefs", "clear_prefs", "clear_converted_txy", "mark_used",
                  "constants", "presets", "forget_root", "root_same", "clear_root", "clear_results",
-                 "clear_root_results", "adopt_result", "discard_result", "identity")
+                 "clear_root_results", "adopt_result", "discard_result", "identity", "clear_raw", "legacy_choice",
+                 "clear_legacy", "clear_txy", "folder_choice")
+# What ``purge`` takes by age (A47.4): one kind of cached data, folder records, cached analysis, or all of them.
+PURGES = ("datasets", "txy", "raw", "records", "results", "all")
 
 
 def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, **params: Any) -> None:
@@ -35,7 +39,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
     """
     from dataclasses import asdict
     from helab.utils.cache_store import (
-        KINDS, CacheStore, SaveRejected, StoreError, StoreReadOnly, remove_old_caches,
+        KINDS, PURGE_KINDS, CacheStore, Kind, SaveRejected, StoreError, StoreReadOnly, remove_old_caches,
     )
     if action not in ADMIN_ACTIONS:
         raise ValueError(f"Unknown cache action: {action}")
@@ -53,8 +57,9 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
     if action == "sweep":
         old = remove_old_caches(os.path.dirname(os.path.abspath(root)), Heartbeat(send, "cleaning up"))
     # A constants or converter-flag write trusts only the volume hints this session verified, like the other local
-    # writes keyed by a source folder (scan history, subfolder status); the other actions name
-    # no source folder.
+    # writes keyed by a source folder (scan history, subfolder status). ``prefs`` (the folder flags)
+    # names a source folder too but trusts every hint, by design (cache-store.md: "flags still trust
+    # every hint"); the other actions name no source folder.
     verified_volumes = params.get("verified_volumes") if action in ("constants", "convert_prefs") else None
     with stores._cache_store(root, local_lane=True, verified_volumes=verified_volumes,
                              offline=bool(cache_options.get("offline"))) as store:
@@ -92,35 +97,70 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                   "still_open": len(swept.still_open), "next_deadline": swept.next_deadline, **_usage(store)})
             return
         elif action == "clear":
-            kinds = tuple(params.get("kinds") or KINDS)
-            unknown = set(kinds) - set(KINDS)
+            # (Kinds ``raw`` and ``txy``: store-v4's raw and TXY layers, cleared with everything when no kinds
+            # are named.)
+            asked = tuple(params.get("kinds") or (*KINDS, "raw", "txy"))
+            unknown = set(asked) - set(KINDS) - {"raw", "txy"}
             if unknown:
                 raise ValueError(f"Unknown cache kinds: {sorted(unknown)}")
-            send(_removed_event(store.remove(kinds)))
+            kinds: tuple[Kind, ...] = tuple(kind for kind in KINDS if kind in asked)
+            if kinds:
+                send(_removed_event(store.remove(kinds)))
+            if "raw" in asked and store.layout >= 4:
+                raw = store.remove_raw()
+                send(_raw_removed_event(None, raw.rows, raw.bytes))
+            if "txy" in asked and store.layout >= 4:
+                txy = store.remove_txy()
+                send(_txy_removed_event(None, [], txy.bytes))
         elif action == "purge":
+            # By age (A47.4): one kind of cached data (datasets, TXY layers, raw layers), folder records, cached
+            # analysis, or ``all`` of them with one cutoff; only copies stay.
             cutoff = float(params["cutoff"])
-            if params["what"] == "results":
+            what = params["what"]
+            if what not in PURGES:
+                raise ValueError(f"Unknown purge: {what}")
+            removals: list[Any] = []
+            if what in ("results", "all"):
                 # Saved analysis results not shown since ``cutoff`` (R2).
                 purged = store.remove_results(cutoff=cutoff)
                 send(_results_removed_event(purged))
                 result["removed"] = {"results": purged.results}
                 result["bytes"] = purged.bytes
-                removals = []
-            elif params["what"] == "datasets":
-                removals = [store.purge_datasets(cutoff)]
-            elif params["what"] == "records":
-                removals = store.purge_records(cutoff, bool(params.get("include_failures")))
-            else:
-                raise ValueError(f"Unknown purge: {params['what']}")
+            cached = [kind for kind in PURGE_KINDS if what in (kind, "all")]
+            if cached:
+                removals.append(store.purge_cached(cutoff, cached))
+            if what in ("records", "all"):
+                removals.extend(store.purge_records(cutoff, bool(params.get("include_failures"))))
             for removal in removals:
-                send(_removed_event(removal))
+                for event in _removal_events(removal):  # (store-v4: the layers a purge of cached data took, S3-1.)
+                    if event["kinds"] or event["paths"]:
+                        send(event)
             if removals:
-                result["removed"] = {kind: len(removal.paths or ()) for removal in removals for kind in removal.kinds}
-                result["bytes"] = sum(removal.dataset_bytes for removal in removals)
+                removed = result.setdefault("removed", {})
+                for removal in removals:
+                    for kind in removal.kinds:
+                        removed[kind] = removed.get(kind, 0) + len(removal.paths or ())
+                    if removal.txy_bytes or removal.txy_seen:
+                        removed["txy"] = removed.get("txy", 0) + len({path for path, _ in removal.txy_seen})
+                    if removal.raw_rows:
+                        removed["raw"] = removed.get("raw", 0) + len(removal.raw_paths)
+                result["bytes"] = int(result.get("bytes") or 0) + sum(
+                    removal.dataset_bytes + removal.txy_bytes + removal.raw_bytes for removal in removals)
         elif action == "trim":
-            removal = store.trim(int(budget or params["budget"]), budget_set_at)
-            send(_removed_event(removal))
-            result.update({"datasets": removal.datasets, "bytes": removal.dataset_bytes})
+            # In Make room's order (A42.2): datasets, then in store-v4 TXY layers and raw layers. With ``plan_only``
+            # it says what that would remove, only copies named (S2-1); with ``plan`` (those items) only copies
+            # go too, exactly as named.
+            if params.get("plan_only"):
+                plan = store.trim_plan(int(budget or params["budget"]))
+                result.update({"room": asdict(plan), "items": list(plan.items)})
+            else:
+                planned = params.get("plan")
+                removal = (store.trim(int(budget or params["budget"]), budget_set_at) if planned is None else
+                           store.trim(int(budget or params["budget"]), budget_set_at, [str(item) for item in planned]))
+                for event in _removal_events(removal):
+                    send(event)
+                result.update({"datasets": removal.datasets,
+                               "bytes": removal.dataset_bytes + removal.raw_bytes + removal.txy_bytes})
         elif action == "adopt":
             try:
                 adopted = store.adopt_pending(params["pending_id"], budget=budget, budget_set_at=budget_set_at,
@@ -130,12 +170,14 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 result.update({"adopted": False, "rejected": rejection.reason, "message": str(rejection)})
             else:
                 if adopted.removal is not None:
-                    send(_removed_event(adopted.removal))
+                    for event in _removal_events(adopted.removal):
+                        send(event)
                 result.update({"adopted": adopted.adopted, "path": adopted.path, "bytes": adopted.bytes,
                                "room": None if adopted.room is None else asdict(adopted.room)})
                 if adopted.adopted:
-                    row = store.read_dataset_row(adopted.path)
-                    result["cache_info"] = _cache_info(row.value["info"]) if row.value is not None else {}
+                    # (store-v4: the folder's view, read_dataset_infos's answer for it.)
+                    info = store.read_dataset_infos([adopted.path])[adopted.path].value
+                    result["cache_info"] = _cache_info(info["info"]) if info is not None else {}
         elif action == "discard":
             result["discarded"] = store.discard_pending(params["pending_id"])
         elif action == "prefs":
@@ -147,7 +189,8 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 float(params.get("set_at") or time.time()), remove_cached=bool(params.get("remove_cached")))
             send({"kind": "folder_prefs", "path": path, "prefs": saved})
             if flag_removal is not None:
-                send(_removed_event(flag_removal))
+                for event in _removal_events(flag_removal):  # (store-v4: its raw layers too, C2-9.)
+                    send(event)
         elif action == "convert_prefs":
             # The converter's flags for one folder (``write_beside``, Q9.7): set when given, newest
             # choice wins; without it, read. A folder without a data root has none (an error).
@@ -211,10 +254,54 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             result["forgotten"] = location
             if path:
                 send({"kind": "root_changed", "path": path, "location": location, "reason": "forgotten"})
+        elif action == "clear_raw":
+            # The user asked (Settings › Cache's Clear raw pulses, confirmed): every folder's raw layers, or
+            # these folders' (``paths``); store-v4 only. Fenced: a batch being saved can't bring them back.
+            paths = params.get("paths")
+            if params.get("following"):
+                # (S4~1, the global TXY only: the folders that follow Settings' policy; the others keep theirs.)
+                raw = store.remove_raw_following()
+            else:
+                raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
+            send(_raw_removed_event(raw.paths, raw.rows, raw.bytes))
+            result.update({"raw": raw.rows, "bytes": raw.bytes})
+        elif action == "clear_txy":
+            # The user asked (Settings › Cache's Clear TXY data, confirmed): every folder's TXY layers, or these
+            # folders' (``paths``); store-v4 only. Fenced: a unit being saved can't bring them back.
+            paths = params.get("paths")
+            txy = store.remove_txy(None if paths is None else [str(path) for path in paths])
+            send(_txy_removed_event(txy.paths, [], txy.bytes))
+            result.update({"txy": txy.layers, "bytes": txy.bytes})
+        elif action == "folder_choice":
+            # A folder's stage 2 choices (Q45.1, Q45.2): its cache policy and its TXY source, each set when
+            # given (the newest choice wins, as ``convert_prefs``); read otherwise. "" follows the global one.
+            path = str(params["path"])
+            set_at = float(params.get("set_at") or time.time())
+            if params.get("policy") is not None:
+                store.set_cache_policy(path, str(params["policy"]), set_at)
+            if params.get("source") is not None:
+                store.set_txy_source_pref(path, str(params["source"]), str(params.get("tag") or ""), set_at)
+            read = store.read_folder_choices([path])[path]
+            if read.status == "error":
+                raise StoreError(read.error)
+            result["choices"] = read.value or {"policy": "", "source": "", "tag": ""}
+            send({"kind": "folder_choices", "path": path, "choices": result["choices"]})
+            if params.get("policy") == "txy":
+                # S4~1: nothing is removed; the app offers to remove the folder's raw pulses, with their size.
+                result["folder_raw"] = store.folder_raw(path)
+        elif action == "legacy_choice":
+            # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
+            result["legacy"] = store.set_legacy_choice(str(params["choice"]))
+        elif action == "clear_legacy":
+            # The user asked (after seeing its size; the app checked no other HeLab runs): store-v3 goes.
+            gone = store.clear_legacy()
+            send({"kind": "removed", "kinds": ["legacy"], "paths": None, "bytes": gone})
+            result.update({"bytes": gone, "legacy": store.measure_legacy()})
         elif action == "clear_root":
             # Everything cached below one data root on this computer but its saved results (Clear
             # cached analysis, Tony 2026-10-22); roots, flags and marker stay.
-            send(_removed_event(store.clear_root(str(params["uuid"]))))
+            for event in _removal_events(store.clear_root(str(params["uuid"]))):
+                send(event)
         elif action == "clear_root_results":
             # A data root's Clear cached analysis: its saved results only (R2).
             cleared = store.remove_results(root=str(params["uuid"]))
@@ -296,7 +383,9 @@ def _cache_move_step(mover: Any, action: str, app_dir: str, move: dict[str, Any]
         # Only this move's record: a later move's is never touched.
         return record is not None and record.get("id") == move.get("id")
     if action == "move":
-        record = mover.start(move["from"], move["to"], app_dir, move["method"], move.get("id", ""))
+        # (``layout``: the live store's, so it is the move's primary: C2-6. The app sends it.)
+        record = mover.start(move["from"], move["to"], app_dir, move["method"], move.get("id", ""),
+                             move.get("layout"))
         last = [0.0]
 
         def progress(done: int, total: int) -> None:

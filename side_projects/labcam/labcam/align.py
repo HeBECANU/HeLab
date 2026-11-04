@@ -1,8 +1,20 @@
 """Keeps the boxes on their instruments if the camera is nudged: each frame is matched to a reference frame.
 
-ORB features on a half-size grey copy, a similarity transform (shift, turn, scale) by RANSAC. The boxes are
+ORB features on a 3/4-size grey copy, a similarity transform (shift, turn, scale) by RANSAC. The boxes are
 drawn in the reference frame's coordinates and moved by that transform. Too few matches means the camera
 moved too far (or something blocks it): the last good transform is kept and the page says so.
+
+Each box then gets its own transform from the matches near it (`refine`, Tony 2026-11-03: a bump turned the camera
+3° and shifted it 50 px; the far rack followed the frame's transform but the scopes nearer the camera were 50 px
+off, from parallax and the wide lens). Without enough matches near it a box follows its last own transform plus
+the frame's change since. A new own transform is taken only once two checks agree on it (within SETTLE px), and
+small changes are ignored, so a box doesn't jitter or jump on one odd match. A box is stored through its own
+transform (`for_box(...).back`), so moving it back out gives the same place.
+
+While the camera stays still nothing is estimated again: the frame is compared with the one at the last estimate
+(phase correlation at 1/4 size), and only a shift of STILL_FRAME px or more, or a view too different to compare,
+starts a new estimate. (On 2026-11-03, after a 115 px bump, fresh estimates on a still camera wandered by about 3 px
+each check, moving the boxes, the movement detector's area and the surroundings checks with them.)
 """
 
 from __future__ import annotations
@@ -20,8 +32,14 @@ from .detectors import Image
 
 log = logging.getLogger("labcam.align")
 
-SCALE = 0.5
+SCALE = 0.75  # 0.5 left too few matches near the smaller boxes for their own transforms
 MIN_INLIERS = 25
+LOCAL_MIN = 10  # matches near a box that must agree on its own transform
+LOCAL_RADIUS = 120.0  # px (frame): matches this near a box's centre, or twice its size if larger
+STILL = 1.5  # px: a box's own transform changing its corners by less is kept as it was
+SETTLE = 4.0  # px: two checks agreeing within this make a new own transform
+STILL_FRAME = 1.0  # px: the frame shifted less than this since the last estimate: the camera hasn't moved
+SAME_VIEW = 0.5  # phase correlation response above which the frames are compared at all
 
 
 @dataclass
@@ -56,16 +74,25 @@ IDENTITY = Alignment(np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]), 0, True, "no 
 
 class Aligner:
     def __init__(self) -> None:
-        self.orb = cv2.ORB.create(nfeatures=1500)
+        self.orb = cv2.ORB.create(nfeatures=4000)
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         self.reference: Image | None = None
         self._ref_features: tuple[list[cv2.KeyPoint], Image] | None = None
         self.current = IDENTITY
+        self._matches: tuple[NDArray[np.float32], NDArray[np.float32]] | None = None  # reference, current points
+        self.local: dict[str, tuple[Alignment, NDArray[np.float64]]] = {}  # box → (its transform, the frame's then)
+        self._candidate: dict[str, NDArray[np.float64]] = {}
+        self._seen: NDArray[np.float32] | None = None  # grey, 1/4 size: the frame at the last estimate
+        self.moved = False  # the last update moved the frame's transform
 
     def set_reference(self, frame: Image) -> None:
         self.reference = frame.copy()
         self._ref_features = self._features(frame)
         self.current = Alignment(IDENTITY.matrix.copy(), len(self._ref_features[0]), True, "reference set")
+        self.local.clear()  # boxes stored through their own transforms keep their places: same frame, identity
+        self._candidate.clear()
+        self._matches = None
+        self._seen = None
         log.info("reference frame set (%d features)", len(self._ref_features[0]))
 
     def _features(self, frame: Image) -> tuple[list[cv2.KeyPoint], Image]:
@@ -74,8 +101,15 @@ class Aligner:
         return list(keypoints), (descriptors if descriptors is not None else np.zeros((0, 32), np.uint8))
 
     def update(self, frame: Image) -> Alignment:
+        self.moved = False
+        self._matches = None
         if self._ref_features is None:
             return self.current
+        grey = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.25, fy=0.25).astype(np.float32)
+        if self._seen is not None and self._seen.shape == grey.shape and self.current.ok and not self._candidate:
+            (sx, sy), response = cv2.phaseCorrelate(self._seen, grey)
+            if response > SAME_VIEW and math.hypot(sx, sy) * 4 < STILL_FRAME:
+                return self.current  # the camera hasn't moved: everything stays as it is
         ref_points, ref_desc = self._ref_features
         points, desc = self._features(frame)
         if len(points) < MIN_INLIERS or len(ref_points) < MIN_INLIERS:
@@ -89,7 +123,17 @@ class Aligner:
         inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
         if matrix is None or inliers < MIN_INLIERS:
             return self._lost(f"only {inliers} consistent matches")
+        self._matches = (src, dst)
+        self._seen = grey
         was_ok = self.current.ok
+        h, w = frame.shape[:2]
+        probe = np.array([[w * 0.25, h * 0.25, 1], [w * 0.75, h * 0.25, 1], [w * 0.25, h * 0.75, 1],
+                          [w * 0.75, h * 0.75, 1]])
+        change = float(np.abs(probe @ matrix.T - probe @ self.current.matrix.T).max())
+        if was_ok and change < STILL:  # the same as before, within the estimate's noise: kept as it was
+            self.current = Alignment(self.current.matrix, inliers, True, self.current.note)
+            return self.current
+        self.moved = True
         self.current = Alignment(matrix.astype(np.float64), inliers, True)
         dx, dy = self.current.shift
         if not was_ok:
@@ -97,6 +141,54 @@ class Aligner:
         if math.hypot(dx, dy) > 5:
             self.current.note = f"camera moved {dx:+.0f}, {dy:+.0f} px since the reference"
         return self.current
+
+    def for_box(self, name: str) -> Alignment:
+        """The transform a box is moved by: its own, else the frame's."""
+        own = self.local.get(name)
+        return own[0] if own is not None else self.current
+
+    def refine(self, name: str, corners: Corners) -> bool:
+        """Updates a box's own transform (`corners` in the reference frame) from the last update's matches; True
+        when the box moved."""
+        if self._matches is None or not self.current.ok:
+            return False
+        src, dst = self._matches
+        c = np.array(corners, np.float64)
+        centre = c.mean(axis=0)
+        radius = max(LOCAL_RADIUS, 2.0 * float(max(np.ptp(c[:, 0]), np.ptp(c[:, 1]))))
+        near = np.linalg.norm(src - centre, axis=1) < radius
+        estimate: NDArray[np.float64] | None = None
+        if int(near.sum()) >= LOCAL_MIN:
+            matrix, mask = cv2.estimateAffinePartial2D(src[near], dst[near], method=cv2.RANSAC,
+                                                       ransacReprojThreshold=3.0)
+            if matrix is not None and mask is not None and int(mask.sum()) >= LOCAL_MIN:
+                scale = math.hypot(matrix[0, 0], matrix[1, 0])
+                if 0.8 < scale < 1.25:
+                    estimate = matrix.astype(np.float64)
+        own = self.local.get(name)
+        if estimate is None:
+            if own is None:
+                return False  # the frame's transform, as it is
+            # Its own transform as last taken, plus however the frame moved since.
+            then = np.vstack([own[1], [0, 0, 1]])
+            now = np.vstack([self.current.matrix, [0, 0, 1]])
+            estimate = (now @ np.linalg.inv(then) @ np.vstack([own[0].matrix, [0, 0, 1]]))[:2]
+        def place(m: NDArray[np.float64]) -> NDArray[np.float64]:
+            return np.column_stack([c, np.ones(4)]) @ m.T
+        used = own[0].matrix if own is not None else self.current.matrix
+        if own is not None and float(np.abs(place(estimate) - place(used)).max()) < STILL:
+            self._candidate.pop(name, None)
+            return False
+        candidate = self._candidate.get(name)
+        if own is not None and (candidate is None or float(np.abs(place(estimate) - place(candidate)).max()) > SETTLE):
+            self._candidate[name] = estimate
+            return False
+        self._candidate.pop(name, None)
+        if own is not None:
+            moved = place(estimate).mean(axis=0) - place(used).mean(axis=0)
+            log.info("%s: box moved %+.0f, %+.0f px with what's around it", name, moved[0], moved[1])
+        self.local[name] = (Alignment(estimate, int(near.sum()), True), self.current.matrix.copy())
+        return own is not None
 
     def _lost(self, why: str) -> Alignment:
         if self.current.ok:

@@ -39,7 +39,7 @@ HANDLERS = ("list_folder", "folder_icons", "scan", "save_scan_history", "save_su
             "save_held", "load", "read_cached", "cache_move_job", "cache_admin", "result_find", "result_save",
             "verify_known_roots",
             "verify_volumes", "trace_check", "create_root", "reassign_root", "remove_root", "save_marker_copy",
-            "saved_list_folder", "newest_root_folder", "convert_folder")
+            "saved_list_folder", "newest_root_folder", "convert_folder", "raw_fill")
 
 
 @pytest.fixture(autouse=True)
@@ -156,9 +156,16 @@ ROUTES: list[tuple[dict[str, Any], str, tuple[Any, ...], dict[str, Any]]] = [
       "txy": None, "memory_origins": None}),
     ({"operation": "cached", "path": PATH, "output": OUTPUT, "cache": CACHE, "limits": {"ram": 9},
       "allow_large": 1, "verified_volumes": [["/v", "dev"]]}, "read_cached", (PATH, OUTPUT),
-     {"cache_options": CACHE, "limits": {"ram": 9}, "allow_large": True, "verified_volumes": [["/v", "dev"]]}),
+     {"cache_options": CACHE, "limits": {"ram": 9}, "allow_large": True, "verified_volumes": [["/v", "dev"]],
+      "txy": None}),
+    # (Stage 2: the tab's TXY source, so store-v4 reads its view; an older request without one, the last used.)
+    ({"operation": "cached", "path": PATH, "output": OUTPUT, "cache": CACHE, "txy": {"source": "matlab-only"}},
+     "read_cached", (PATH, OUTPUT),
+     {"cache_options": CACHE, "limits": None, "allow_large": False, "verified_volumes": None,
+      "txy": {"source": "matlab-only"}}),
     ({"operation": "cache_move", "move": {"to": OTHER}}, "cache_move_job", ({"to": OTHER},), {}),
     (CONVERT, "convert_folder", (PATH, CONVERT), {}),
+    ({"operation": "raw_fill", "path": PATH, "cache": CACHE}, "raw_fill", (PATH, CACHE), {}),
     # Work Offline's listing and start folder (cache-only browsing): the disk cache only.
     ({"operation": "saved_list", "path": PATH, "cache": CACHE, "verified_volumes": [["/v", "dev"]]},
      "saved_list_folder", (PATH,), {"cache_options": CACHE, "verified_volumes": [["/v", "dev"]]}),
@@ -222,9 +229,9 @@ def test_invalidate_removes_the_folders_datasets_on_the_local_lane(
         def __exit__(self, *_: object) -> None:
             pass
 
-        def remove(self, kinds: tuple[str, ...], paths: list[str]) -> SimpleNamespace:
-            opened.append(("remove", (kinds, paths), {}))
-            return SimpleNamespace(kinds=kinds, paths=paths, datasets=1, dataset_bytes=2048)
+        def clear_folder_data(self, path: str) -> SimpleNamespace:  # (In store-v4 its layers too, S3-1.)
+            opened.append(("clear_folder_data", (path,), {}))
+            return SimpleNamespace(kinds=("datasets",), paths=[path], datasets=1, dataset_bytes=2048)
 
         def next_deadline(self) -> float:
             return 1234.5
@@ -239,7 +246,7 @@ def test_invalidate_removes_the_folders_datasets_on_the_local_lane(
     monkeypatch.setattr(stores, "_cache_store", open_store)
     events = send(monkeypatch, capsys, {"operation": "invalidate", "path": PATH, "cache": CACHE})
     assert opened == [("open", (CACHE["directory"], [PATH]), {"local_lane": True, "offline": False}),
-                      ("remove", (("datasets",), [PATH]), {})]
+                      ("clear_folder_data", (PATH,), {})]
     assert events == [
         {"kind": "removed", "kinds": ["datasets"], "paths": [PATH], "datasets": 1, "bytes": 2048},
         {"kind": "admin_result", "action": "invalidate", "next_deadline": 1234.5, "usage": 4096,

@@ -11,7 +11,8 @@ key), whether Live watches it, the plots open on it and where they sit (``dock_s
 plot area's ``saveState``, plus each plot's tab group and floating flag). Each plot
 (``SavedPlot``) holds the script it was opened from (``ScriptRef``: id, action, version, file
 hash), every parameter's value as stored (SI units, ``ParameterSpec``'s own storage), its drawing
-library and its Live group. A named preset is one arrangement (Tony, 2026-10-22: one folder,
+library, its Live group and its TXY choice (``TxyChoice``, unless "Keep this plot's TXY choice" is
+off; Q14.2 = Q23.4; a script preset holds it too). A named preset is one arrangement (Tony, 2026-10-22: one folder,
 no several folders, pinned results or run history); the plots to reopen at start are another,
 whose plots may each have their own folder. All are JSON with a format version (``FORMAT``).
 An arrangement stores each plot's values itself and names the script preset last applied to the
@@ -41,9 +42,75 @@ from typing import Any, Mapping, Sequence
 from helab.analysis.dataset_view import DatasetView, Provenance, ViewIdentity
 from helab.analysis.identity import AnalysisIdentity
 from helab.analysis.parameters import ParameterSpec, Value
+from helab.utils import txy_sources
 
 FORMAT = 1  # The record's format; a newer one is read as unreadable (named), never guessed at.
 LIBRARY = "Library"  # How the drawing library is named in problems.
+TXY = "TXY"  # … and the plot's TXY choice.
+
+
+@dataclass(frozen=True)
+class TxyChoice:
+    """A plot's TXY choice as saved (Q14.2 = Q23.4): its source ("" as the folder's tab, else one of
+    ``txy_sources.SOURCES``) and, for HeLab's TXY, the profile whose files it reads: its name ("" the
+    conversion profile's) and its file tag, to find it again if renamed. A record without one
+    (saved before, or with "Keep this plot's TXY choice" off) holds None.
+
+    A priority list (Q53.2) that is a mode is saved as that mode (``of_list``), as before; any other has its
+    text as ``source`` (which older HeLab reports as no longer a source, and doesn't apply) and ``entries``:
+    each (``External``, ``Conversion`` or a tag, the profile's name then: "" for the first two)."""
+    source: str = ""
+    profile: str = ""
+    tag: str = ""
+    entries: tuple[tuple[str, str], ...] = ()
+
+    @classmethod
+    def of_list(cls, entries: Sequence[str] | None, names: Mapping[str, str] | None = None) -> TxyChoice:
+        """A plot's list as saved (None: as the tab); ``names``: tag → profile name."""
+        if not entries:
+            return cls()
+        mode = txy_sources.mode_of(entries)
+        names = names or {}
+        if mode is not None:
+            tag = "" if mode[1] in ("", txy_sources.CONVERSION) else mode[1]
+            return cls(mode[0], names.get(tag, "") if tag else "", tag)
+        return cls(txy_sources.list_text(entries), "", "",
+                   tuple((token, names.get(token, "") if txy_sources.is_entry(token)
+                          and token not in (txy_sources.EXTERNAL, txy_sources.CONVERSION) else "")
+                         for token in entries))
+
+    def tokens(self) -> txy_sources.Entries | None:
+        """The list this choice is (None: as the tab, or one that names nothing valid)."""
+        if not self.source:
+            return None
+        if self.entries:
+            return txy_sources.valid_list([token for token, _ in self.entries])
+        return txy_sources.parse_list(self.source, self.tag)
+
+    def to_json(self) -> dict[str, Any]:
+        return {"source": self.source, "profile": self.profile, "tag": self.tag,
+                **({"entries": [{"entry": token, "profile": name} for token, name in self.entries]}
+                   if self.entries else {})}
+
+    @classmethod
+    def from_json(cls, data: Any) -> TxyChoice | None:
+        """The choice ``data`` holds; None if it isn't one (the record then holds none)."""
+        if not isinstance(data, dict):
+            return None
+        given = data.get("entries")
+        entries = tuple((_text(item.get("entry")), _text(item.get("profile"))) for item in given
+                        if isinstance(item, dict)) if isinstance(given, list) else ()
+        return cls(_text(data.get("source")), _text(data.get("profile")), _text(data.get("tag")), entries)
+
+    def label(self) -> str:
+        """"HeLab's only (p22v1)", "As the folder's tab", "m23v1 › m19v1 › External"."""
+        if not self.source:
+            return "As the folder's tab"
+        if self.entries:
+            return txy_sources.summary([token for token, _ in self.entries])
+        text = txy_sources.LABELS.get(self.source, self.source)
+        return text + (f" ({self.tag or self.profile})" if (self.tag or self.profile)
+                       and self.source != txy_sources.MATLAB_ONLY else "")
 
 
 class RecordError(ValueError):
@@ -102,6 +169,8 @@ class SavedPlot:
     dock_name: str = ""  # Its dock's object name in ``Arrangement.dock_state``
     preset: str = ""  # The script preset last applied to it ("": none), and when that preset was saved
     preset_saved_at: float = 0.0
+    txy: TxyChoice | None = None  # Its TXY choice (None: none saved, it starts as the folder's tab)
+    txy_keep: bool = True  # "Keep this plot's TXY choice": off, its choice isn't saved
 
     def to_json(self) -> dict[str, Any]:
         return {"script": self.script.to_json(), "path": self.path, "root_key": self.root_key,
@@ -109,7 +178,8 @@ class SavedPlot:
                 "instance_id": self.instance_id, "title": self.title, "settings_open": self.settings_open,
                 "settings_width": self.settings_width, "floating": self.floating, "group": self.group,
                 "front": self.front, "dock_name": self.dock_name, "preset": self.preset,
-                "preset_saved_at": self.preset_saved_at}
+                "preset_saved_at": self.preset_saved_at, "txy_keep": self.txy_keep,
+                **({"txy": self.txy.to_json()} if self.txy is not None else {})}
 
     @classmethod
     def from_json(cls, data: Any) -> SavedPlot:
@@ -126,7 +196,8 @@ class SavedPlot:
                    _text(data.get("instance_id")), _text(data.get("title")), data.get("settings_open") is True,
                    _whole(data.get("settings_width")), data.get("floating") is True, _whole(data.get("group")),
                    data.get("front") is True, _text(data.get("dock_name")), _text(data.get("preset")),
-                   _time(data.get("preset_saved_at")))
+                   _time(data.get("preset_saved_at")), TxyChoice.from_json(data.get("txy")),
+                   data.get("txy_keep") is not False)
 
 
 @dataclass(frozen=True)
@@ -298,6 +369,7 @@ class PlotCheck:
     live: dict[str, Value]  # The Live group's values that fit
     problems: tuple[Problem, ...] = ()
     notes: tuple[str, ...] = ()  # E.g. "saved with v1, now v2" (applied all the same)
+    txy: TxyChoice | None = None  # The TXY choice to apply (None: none saved, or it doesn't fit)
 
     def summary(self, kept: str = "at the script's defaults") -> str:
         """One line for the plot: the settings not applied, ``kept`` as they are ("at the script's
@@ -317,10 +389,64 @@ class PlotCheck:
         return "\n".join([*(problem.text() for problem in self.problems), *self.notes])
 
 
+def check_txy(saved: TxyChoice | None, profiles: Mapping[str, str] | None) -> tuple[TxyChoice | None,
+                                                                                   Problem | None, str]:
+    """A saved TXY choice against the sources and the known ``profiles`` (name -> file tag; None: not
+    checked): (the choice to apply, a problem, a note). A profile no longer known by its name is found
+    by its tag (its TXY files' name: the same data), and the note says so; known by neither, or an
+    unknown source, the choice isn't applied (the plot is as the folder's tab), never replaced."""
+    if saved is None:
+        return None, None, ""
+    if saved.entries:
+        return _check_list(saved, profiles)
+    if saved.source and saved.source not in txy_sources.SOURCES:
+        return None, Problem(TXY, TXY, f"saved “{saved.source}” is no longer a source "
+                                       f"({', '.join(txy_sources.LABELS[s] for s in txy_sources.SOURCES)})"), ""
+    if not saved.profile or profiles is None or saved.source == txy_sources.MATLAB_ONLY:
+        return (TxyChoice(saved.source, "" if saved.source == txy_sources.MATLAB_ONLY else saved.profile,
+                          "" if saved.source == txy_sources.MATLAB_ONLY else saved.tag), None, "")
+    if saved.profile in profiles and (not saved.tag or profiles[saved.profile] == saved.tag):
+        return TxyChoice(saved.source, saved.profile, profiles[saved.profile]), None, ""
+    by_tag = sorted(name for name, tag in profiles.items() if saved.tag and tag == saved.tag)
+    if by_tag:
+        return (TxyChoice(saved.source, by_tag[0], saved.tag), None,
+                f"TXY profile “{saved.profile}” is now “{by_tag[0]}” (the same tag, {saved.tag})")
+    tag = f" (tag {saved.tag})" if saved.tag else ""
+    return None, Problem(TXY, f"{TXY} profile", f"saved “{saved.profile}”{tag} isn't a known profile now"), ""
+
+
+def _check_list(saved: TxyChoice, profiles: Mapping[str, str] | None) -> tuple[TxyChoice | None, Problem | None,
+                                                                             str]:
+    """A saved priority list (Q53.2): each profile entry found by its name, else its tag (renamed: a note), as
+    one choice's profile is; a list that names nothing valid, or an entry known by neither, isn't applied."""
+    tokens = saved.tokens()
+    if tokens is None:
+        return None, Problem(TXY, TXY, f"saved “{saved.source}” is no longer a TXY list"), ""
+    if profiles is None:
+        return saved, None, ""
+    entries: list[tuple[str, str]] = []
+    notes: list[str] = []
+    for token, name in saved.entries:
+        if token in (txy_sources.EXTERNAL, txy_sources.CONVERSION):
+            entries.append((token, ""))
+        elif name in profiles and profiles[name] == token or not name and token in profiles.values():
+            entries.append((token, name))
+        elif found := sorted(known for known, tag in profiles.items() if tag == token):
+            entries.append((token, found[0]))
+            if name:
+                notes.append(f"TXY profile “{name}” is now “{found[0]}” (the same tag, {token})")
+        else:
+            label = f"“{name}” (tag {token})" if name else f"tag {token}"
+            return None, Problem(TXY, f"{TXY} profile", f"saved list entry {label} isn't a known profile now"), ""
+    return TxyChoice(saved.source, "", "", tuple(entries)), None, "; ".join(notes)
+
+
 def check_plot(saved: SavedPlot | ScriptPreset, identity: AnalysisIdentity, specs: Sequence[ParameterSpec],
-               backends: Sequence[str], live_specs: Sequence[ParameterSpec] = ()) -> PlotCheck:
+               backends: Sequence[str], live_specs: Sequence[ParameterSpec] = (),
+               profiles: Mapping[str, str] | None = None) -> PlotCheck:
     """``saved`` (a plot of an arrangement, or a script preset, which has no Live group) against
-    the installed script: its ``identity``, parameters, libraries and Live group specs."""
+    the installed script: its ``identity``, parameters, libraries and Live group specs, and its TXY
+    choice against the known ``profiles`` (name -> file tag; None: the profile isn't checked)."""
     parameters = check_values(specs, saved.values)
     live = check_values(live_specs, saved.live) if isinstance(saved, SavedPlot) else Checked({})
     problems = [*parameters.problems, *live.problems]
@@ -336,11 +462,16 @@ def check_plot(saved: SavedPlot | ScriptPreset, identity: AnalysisIdentity, spec
     elif saved.backend:
         problems.append(Problem(LIBRARY, LIBRARY, "this plot no longer chooses a library"))
     notes = []
+    txy, txy_problem, txy_note = check_txy(saved.txy, profiles)
+    if txy_problem is not None:
+        problems.append(txy_problem)
+    if txy_note:
+        notes.append(txy_note)
     if saved.script.version != identity.version:
         notes.append(f"saved with v{saved.script.version or '?'}, now v{identity.version or '?'}")
     elif saved.script.file_hash and identity.file_hash and saved.script.file_hash != identity.file_hash:
         notes.append(f"saved from another copy of v{identity.version or '?'} (its file differs)")
-    return PlotCheck(parameters.values, backend, live.values, tuple(problems), tuple(notes))
+    return PlotCheck(parameters.values, backend, live.values, tuple(problems), tuple(notes), txy)
 
 
 def preset_note(saved: SavedPlot, presets: ScriptPresets | None) -> str:
@@ -367,10 +498,12 @@ class ScriptPreset:
     values: Mapping[str, Any] = field(default_factory=dict)
     backend: str = ""
     saved_at: float = 0.0
+    txy: TxyChoice | None = None  # The plot's TXY choice (None: none saved; applying leaves a plot's as it is, D2)
 
     def to_json(self) -> dict[str, Any]:
         return {"format": FORMAT, "script": self.script.to_json(), "values": dict(self.values),
-                "backend": self.backend, "saved_at": self.saved_at}
+                "backend": self.backend, "saved_at": self.saved_at,
+                **({"txy": self.txy.to_json()} if self.txy is not None else {})}
 
     @classmethod
     def from_json(cls, name: str, data: Any) -> ScriptPreset:
@@ -385,7 +518,7 @@ class ScriptPreset:
         if not isinstance(values, dict):
             raise RecordError("its settings aren't a record")
         return cls(name, ScriptRef.from_json(data.get("script")), dict(values), _text(data.get("backend")),
-                   _time(data.get("saved_at")))
+                   _time(data.get("saved_at")), TxyChoice.from_json(data.get("txy")))
 
 
 @dataclass(frozen=True)

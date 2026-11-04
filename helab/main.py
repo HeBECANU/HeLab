@@ -13,12 +13,22 @@ if "--helab-io-helper" in sys.argv:
     from helab.io_helper import main as io_helper_main
     io_helper_main()
     raise SystemExit(0)
+# The try-import of a user script folder (Q49.3 (b), ``helab.scripts.probe``), in its own process: before
+# any GUI, cache or Dash import (it makes its own offscreen QApplication).
+if "--helab-script-probe" in sys.argv:
+    probe_arg = sys.argv.index("--helab-script-probe")
+    from helab.scripts.probe import main as probe_main
+    raise SystemExit(probe_main(sys.argv[probe_arg + 1:probe_arg + 3]))
 
 # The headless converter (``helab convert --watch <folder>``, also ``HeLab convert …`` in the
 # packaged app): before any Qt widgets, caches or Dash.
 if len(sys.argv) > 1 and sys.argv[1] == "convert":
     from helab.convert_cli import main as convert_main
     raise SystemExit(convert_main(sys.argv[2:]))
+# ``helab cache dump|export …`` (caching v2's .hlb files, read only): before any Qt widgets, caches or Dash too.
+if len(sys.argv) > 1 and sys.argv[1] == "cache":
+    from helab.cache_cli import main as cache_main
+    raise SystemExit(cache_main(sys.argv[2:]))
 
 # Query provenance before importing Qt, opening settings/caches or starting Dash.
 if "--version" in sys.argv:
@@ -51,7 +61,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from helab.resources.icons import IconsInitUtil
 from helab.utils import app_log
 from helab.utils.constants import (
-    APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, start_cache_dir)
+    APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, record_cache_folder, start_cache_dir)
 from helab.utils.settings_store import app_settings
 from helab.views import quit_watch
 from helab.views.HelabMainWindow import HelabMainWindow
@@ -97,6 +107,7 @@ def _start_cache() -> str:
         reason = ("The disk cache is off for this session: an interrupted cache move couldn't be finished. "
                   "HeLab tries again at the next start.")
         start_cache_dir(settings, usable=usable, reason=reason)
+        record_cache_folder()  # (A44.2: for ``helab cache``; logged and ignored if it can't be written.)
         return message
     message, instance = startup(app_folder(), recover, wait)
     for box in waiting:
@@ -147,6 +158,28 @@ def _recover_in_helper(settings: QSettings, token: str) -> tuple[str, bool]:
 
 # This instance's lock, held for the app's life.
 _INSTANCE_LOCK: list[object] = []
+# The one-running-HeLab lock, held until the process ends (not at quit: it may still be saving).
+_RUNNING_LOCK: list[object] = []
+
+
+def _another_running() -> bool:
+    """Whether another HeLab app runs on this computer (its app folder's ``running.lock``; an override's
+    folder has its own), which a message box then says; else this one holds the lock from now on. A lock
+    that can't be checked (the app folder unwritable) doesn't stop HeLab: it is logged."""
+    from helab.utils.cache_locks import take_running
+    try:
+        lock, pid = take_running(app_folder())
+    except OSError as exc:
+        logging.warning(f"Couldn't check for another running HeLab: {exc}")
+        return False
+    if lock is not None:
+        _RUNNING_LOCK.append(lock)
+        return False
+    text = (f"HeLab is already running on this computer{f' (process {pid})' if pid.isdigit() else ''}. Use its "
+            "window, or quit it before starting HeLab again.")
+    logging.warning(text)
+    QMessageBox.information(None, "HeLab is running", text)
+    return True
 
 
 def main() -> None:
@@ -166,6 +199,10 @@ def main() -> None:
     # --geometry WxH+X+Y: this run's window size and place (a test runner's fixed coordinates).
     geometry, argv = HelabMainWindow.take_geometry(sys.argv)
     app = QApplication(argv)
+    # One HeLab per computer (Q39.1): a second start stops here, having opened no store, started no
+    # helper and written no setting.
+    if _another_running():
+        sys.exit(1)
     app.setStyle("Fusion")
     # app.setStyleSheet("QWidget { background-color: #fafafa; }")
     if "SF Mono" in QFontDatabase.families():
