@@ -3358,8 +3358,8 @@ class FolderCache(QObject):
 
     def cancel_raw_fill(self, path: str) -> None:
         """Stop a folder's ``raw_fill`` (the Activity window's Cancel): it ends as ``cancelled``
-        (``_on_raw_fill_event``); the folder's next save asks for it again."""
-        path = self.key(path)
+        (``_on_raw_fill_event``); the folder's next save asks for it again. ``path`` as its request names it
+        (``schedule_raw_fill``'s owner is made from that string)."""
         self._raw_fill_again.discard(path)
         self.service.cancel(RAW_FILL_OWNER + path)
 
