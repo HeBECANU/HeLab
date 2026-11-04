@@ -242,3 +242,17 @@ All runs used `pytest -n 12 --reruns 5 --reruns-delay 1` on macOS, with the work
   (A58.2), isn't. It is a two-line change beside the `convert` row's style, in a file outside this brief.
 - **A~2 Pin `packaging` in the release jobs.** get-version and now the release job run `pip install packaging`
   unpinned; requirements.lock has `packaging==26.3`.
+
+## CI
+
+Run **41756514071** (`298b601`, push) succeeded. I read the logs of all 17 jobs: Detect, Docs, and on macOS,
+Windows and Ubuntu, Build, Converter backends and Tests 1–3. No log has a RERUN. Each Tests and Converter job's
+summary line is "N passed, M skipped", with nothing failed. The macOS build's ERROR lines are its expected check
+of the optional backends (mlx, numba, rust not installed).
+
+From the junit artifacts, every new or changed test passed on all three OSes:
+- A59.1: 18 cases;
+- A59.2: 3;
+- A56.7: 5;
+- A58.2: 1;
+- A56.4: 2, plus test_profile_library's plate test.
