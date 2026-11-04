@@ -16,7 +16,20 @@ with answers (1)–(4) and (a)–(d)).
 | `f76f7e2` | 5 · the manual's page |
 | `a141e60` | Windows CI fix: owners' paths compared as folders; wider default size |
 | `d0e203a` | Windows CI fix: a raw fill cancelled under the owner it was queued with |
-| (this file) | 5 · handoff |
+| `b2e996a` | 5 · handoff |
+| `3afddf4` | Gauge's review |
+| `c906528` | AW-1, AW-13 · the Now tree survives rows changing group or parent; headings count shown rows |
+| `41de473` | AW-2 · successful conversion passes, details scans and cached reads stay out of the history |
+| `3798dea` | AW-3 · Cancel all queued never stops a running task; Cancel says it stops a tab's other loads |
+| `7682d6c` | AW-4 · `@pyqtSlot()` back on `_reload_clicked` |
+| `384f93f` | AW-5 · conversion failures that start no helper go in the history |
+| `33b1489` | AW-6 · a history listener's error is logged, never raised into the reporter |
+| `a429d15`, `df13e56` | AW-7, AW-8 · the manual's lines; no internal ID in a details line |
+| `a3eb1c7` | AW-9 · the saved size fitted to the screen |
+| `a69c9d4` | AW-10 · unique history keys; the History tab updated in place |
+| `0c653c1` | AW-12 · log lines name the folder itself |
+| `d4593c8` | AW-11 · the memory-only test covers a tab's rows and the history |
+| (this commit) | the handoff, after the review |
 
 ## What is built
 
@@ -72,9 +85,9 @@ with answers (1)–(4) and (a)–(d)).
   `cancel_raw_fill`; `cancel_for_quit` lifts the user hold.
 - `helab/analysis/runner_core.py`, `runner.py`: `RunInfo`, `jobs()`; the runner's history report from a
   GUI-thread slot (`_record`).
-- `helab/views/explorer_live.py`: `sessions()`; Live off's report. `explorer_convert.py`: the
+- `helab/views/explorer_live.py`: `sessions()`; Live off's report; `_convert_stopped` (AW-5). `explorer_convert.py`: the
   conversion's end report (`_report`). `plots/script_tree.py`: `FolderProbes.activity()`,
-  `TreePanelWidget.probe_activity()` / `reload_waiting()`; the probe's end report. `CacheMover.py`: the
+  `TreePanelWidget.probe_activity()` / `reload_waiting()` / `probe_limits()`; the probe's end report. `CacheMover.py`: the
   move's end report (in `_end`).
 - `helab/views/HelabMainWindow.py`: the Window menu, the window, the click, the tooltip line, the log
   handler.
@@ -87,6 +100,22 @@ with answers (1)–(4) and (a)–(d)).
 - `docs/how-to/activity.md` and `mkdocs.yml` (the manual's page, after "Follow a folder live").
 
 ## Checks
+
+**After the review fixes** (`d4593c8` and this commit):
+- Full suite, `pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`: **9391 passed, 673
+  skipped, 2 RERUN** (output kept whole in `.ai/temp/activity-suite-review.txt`), both of one existing test,
+  `tests/test_gui_responsiveness.py::test_rendering_never_reads_filesystem_or_disk_cache`: reasons
+  `(teardown) AssertionError: GUI rendering performed I/O / RuntimeError: Failed to process unraisable
+  exception` and, on its rerun, `(setup) … Failed to process thread exception`; it passed on the next. The test
+  starts no thread of its own and guards `os.scandir` / `os.stat` for every thread started after its patch
+  (`conftest.this_tests`), so a thread another test left (a helper's reader finishing and starting its
+  `HeLab-artifact-cleanup` `shutil.rmtree`, which scandirs) running then raises there. Not reproduced in three
+  runs of the activity files followed by `test_gui_responsiveness.py` in one process. Proposed for
+  known-issues below.
+- The five type checks: clean (`.ai/temp/activity-types-review.txt`). `ruff check`; `mkdocs build --strict`.
+- CI: CI_REVIEW
+
+**Before the review** (`b2e996a`):
 
 - Full suite, `pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`, at `d0e203a`:
   **9382 passed, 673 skipped, no RERUN** (output kept whole in `.ai/temp/activity-suite-step4c.txt`; the
@@ -118,6 +147,17 @@ owners, the user hold never pausing the foreground or local lane, saves or Live 
 it, the window's buttons, and each owner's history report). Each test file resets `HISTORY` and
 `LogLines` and takes the handler off the root logger (an autouse `fresh_activity`, answer (b)).
 
+## Review fixes (Gauge's AW-1 to AW-13, `3afddf4`)
+
+All fixed as Gauge suggested, with CoCo's decisions on AW-3 (one row's Cancel stays the toolbar's Cancel,
+said in its tooltip and the manual; Cancel all queued never stops a running task) and AW-10 (unique ids):
+AW-1 (the Now tree's re-parenting, three regroup/reparent tests that fail on the old render), AW-2
+(`NOT_KEPT_WHEN_OK` gains `convert`, `details`, `cached`), AW-3, AW-4, AW-5 (`ExplorerConverter.start`/
+`_pass` and `LiveController._convert_stopped` report), AW-6, AW-7 (the manual), AW-8 (the probe limits
+from `TreePanelWidget.probe_limits()`), AW-9 (`ActivityWindow.fit_screen`), AW-10 (also: the History tab
+updated in place, log lines read for the details pane only), AW-11, AW-12, AW-13. The handoff's text
+below follows them.
+
 ## Proposed doc changes (for the Coordinator)
 
 ### `.ai/architecture/app-runtime-and-ui.md`, a new paragraph under "UI"
@@ -139,19 +179,29 @@ it, the window's buttons, and each owner's history report). Each test file reset
 > `activity_counts`'. **Hidden, it does nothing** (no timer, no connection); shown, a 200 ms coalesced
 > refresh on `activityChanged`, terminal `resultReady` kinds, `quitSavesChanged`, runners' `finished` and
 > history appends, plus a 1 s tick; rows update in place. **Actions go through each owner's own path**
-> (`ActivityActions`): Cancel (`cancel_loading`, `FolderCache.cancel`, auto-convert's toggle,
-> `cancel_raw_fill`, `CacheMover.cancel`, `AnalysisRunner.cancel`; saves, cache upkeep and test imports
-> have none), Retry (`resume_live`, the Convert row's `clicked`, `refresh_folder`, `FolderExplorer.retry`,
+> (`ActivityActions`): Cancel (a tab's selected load through `cancel_loading`, the toolbar's Cancel, which
+> also stops that tab's background loads, as its tooltip and the manual say (CoCo, AW-3); else
+> `FolderCache.cancel`, auto-convert's toggle, `cancel_raw_fill`, `CacheMover.cancel`,
+> `AnalysisRunner.cancel`; saves, cache upkeep and test imports have none), Retry (`resume_live`, the Convert row's `clicked`, `refresh_folder`, `FolderExplorer.retry`,
 > a plot's `run`, `reload_scripts`; refused while `IOService.unexited(operation, path)`), Show in tab, Stop
 > Live, Open log (this session's log file), Pause / Resume background I/O (`IOService.set_user_hold`) and
-> Cancel all queued (saves stay). **The history** (`activity.HISTORY`, the last 200, newest first; added to
-> on the GUI thread only): each owner reports its task's end once (`activity.record`): IOService at a
+> Cancel all queued (never a running task: a tab's selected load is left to its tab's Cancel,
+> `cancel(…, queued_only=True)`; saves stay). **The Now tree** fills rows in place; when any row's group or
+> parent changes it detaches every item before placing it again, holding the taken items until the render
+> ends, under `try/finally` (AW-1); a group's heading counts the rows shown under it. **The history**
+> (`activity.HISTORY`, the last 200, newest first; added to on the GUI thread only; each entry's `key` is
+> unique, `Finished.seq`): each owner reports its task's end once (`activity.record`): IOService at a
 > request's first terminal event, before its owner hears (`_report_end`; a retried timeout or a requeue is
-> no end), the runner from a GUI-thread slot, Live off, a GUI conversion's end, a test import's end, the
-> cache move's end; successful Live checks and reruns, listings, icons and other frequent small work aren't
-> kept (`kept_in_history`). `activity.LogLines` keeps the session's last 500 warnings in memory for a
-> failure's details (the main window adds it to the root logger at start and removes it on close). The
-> window's size is `activity_window_size`.
+> no end), the runner from a GUI-thread slot, Live off, Live's auto-convert stopping without a helper's
+> failure (`_convert_stopped`), a GUI conversion's end (including one whose pass couldn't be queued), a
+> test import's end, the cache move's end. Every failure and cancellation is kept; successes are kept but
+> Live's checks, Live's plot reruns, every conversion pass (the Live session or the GUI conversion is the
+> entry), listings, details scans, cached reads, icons and other frequent small work (`kept_in_history`,
+> `NOT_KEPT_WHEN_OK`; AW-2). A listener's error is logged, never raised into the reporter. The History tab
+> adds new entries on top and drops the oldest at the bottom, leaving the rest. `activity.LogLines` keeps
+> the session's last 500 warnings in memory for a failure's details (lines naming the folder itself, not a
+> longer name; the main window adds it to the root logger at start and removes it on close). The window's
+> size is `activity_window_size`, fitted to its screen when it first shows.
 
 ### `.ai/architecture/io-and-browsing.md`, in "The shared I/O queue"
 
@@ -167,6 +217,9 @@ it, the window's buttons, and each owner's history report). Each test file reset
 
 > Tests of the Activity window (`tests/test_activity*.py`) reset the module-global `activity.HISTORY` and
 > `LOG_LINES_HANDLER` around each test and take the handler off the root logger (`fresh_activity`).
+> `IOService` records into the global `HISTORY` in **every** test that ends a request (bounded at 200, and
+> harmless with no listeners); a test that shows an `ActivityWindow` hides or closes it (pytest-qt's
+> `addWidget` does), so its listener leaves `HISTORY.listeners`.
 
 ### `AGENTS.md` (one line, in the code map's `helab/views/` row)
 
@@ -182,8 +235,10 @@ Status to done (v0.0.9) at landing; "Reordering the queue" and `helab convert` b
 
 - **Q~1** Cancel for saves, cache upkeep and test imports: v1 lists them without Cancel. Proposed: keep it
   so; the quit window's Quit now stays the only stop for saves.
-- **Q~2** The history leaves out successful Live checks, Live's plot reruns, folder listings, icons and
-  other frequent small work. Proposed: yes; every failure and cancellation is kept.
+- **Q~2** The history leaves out successful Live checks, Live's plot reruns, every successful conversion
+  pass (Live's auto-convert runs one with each check; the Live session or the GUI conversion is the entry),
+  folder listings, details scans, cached reads, icons and other frequent small work. Proposed: yes; every
+  failure and cancellation is kept.
 - **Q~3** "paused by you" on the status bar while Pause background I/O is on (CoCo: yes). Proposed: keep.
 - **Q~4** Retry of a failed load whose folder is no longer selected: disabled with "Select the folder in
   its tab to load it again (Show in tab)". Proposed: yes for v1.
@@ -192,6 +247,12 @@ Status to done (v0.0.9) at landing; "Reordering the queue" and `helab convert` b
   tab works from History for cancellations too.
 - **A~2** Refresh on each tab's `liveChanged` / `loadStateChanged` too, if a second's delay on Live's own
   state shows (deviation 6).
+- **Known issue (proposed)**: `tests/test_gui_responsiveness.py::test_rendering_never_reads_filesystem_or_disk_cache`
+  RERAN twice in one local run after the review fixes (teardown, then its rerun's setup): `AssertionError: GUI
+  rendering performed I/O` raised in a thread, pytest-qt's "Failed to process unraisable/thread exception".
+  Probably a thread another test left behind (a helper's artifact cleanup, `shutil.rmtree`) started during the
+  test, which `this_tests` counts as the test's own; a fix would be to count only threads the test's own
+  service starts. Not touched here.
 - **Known issue (proposed)**: `tests/test_load_queue.py::test_an_automatic_load_waits_for_the_selection_to_settle_only_while_loads_are_busy`
   RERAN once on Ubuntu CI (run `41794579242`, Tests 1/3): `assert (False) where False =
   FolderExplorer.settling` at `:674`, right after selecting a third folder while the second's load was
