@@ -372,6 +372,8 @@ class ActivitySources:
         scripts = self.scripts()
         if scripts is None:
             return []
+        from helab.views.plots.script_tree import PROBE_SECONDS, PROBE_START_SECONDS
+        limits = f"Its own time limits end it ({PROBE_START_SECONDS:g} s to start, {PROBE_SECONDS:g} s to import)"
         tasks = []
         for folder, state, started in scripts.probe_activity():
             text = {"importing": "test-importing", "starting": "starting its test import",
@@ -380,7 +382,7 @@ class ActivitySources:
                               "queued" if state == "queued" else "stopping" if state == "stopping" else "running",
                               text, None, None if started is None else max(0.0, now - started), None,
                               (f"Test import of the script folder {folder} in a separate process",
-                               "Its own time limits end it (Q49.3 (b))"), frozenset({"log"}),
+                               limits), frozenset({"log"}),
                               Route("probe", path=folder)))
         folders, runs = scripts.reload_waiting()
         if folders:

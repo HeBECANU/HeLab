@@ -400,6 +400,7 @@ def test_script_probes_and_a_waiting_reload(qtbot: QtBot, monkeypatch: pytest.Mo
     assert [(row.folder, row.state, row.state_text) for row in rows] == [
         ("/scripts/a", "running", "test-importing"), ("/scripts/b", "queued", "queued"),
         ("/scripts/a", "waiting", "waits for 2 runs to end")]
+    assert rows[0].details[1] == "Its own time limits end it (60 s to start, 10 s to import)"  # (AW-8.)
     service.shutdown()
 
 

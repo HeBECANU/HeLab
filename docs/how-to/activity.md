@@ -38,12 +38,13 @@ The **State** column says one of:
 - **queued**, with its place in the queue, or why it is held;
 - **paused**, and why: while the current tab browses or loads, because cached data doesn't match
   several folders, or **by you** (below);
-- **stopping**: it was cancelled or timed out, and its process hasn't exited yet. It keeps its place
-  in the queue until it has, so nothing new starts beside it;
+- **stopping**: it was cancelled or timed out, and its process hasn't exited yet. It keeps its slot
+  in HeLab's work queue until it has: nothing new starts in that slot, and a retry of it waits;
 - **waiting for N files to settle**: files still being written are read once they have been
   unmodified for the settle time (Settings › General);
 - **no progress for M:SS**: nothing has been heard from it for a while (a slow or unresponsive
-  drive); HeLab stops it after a minute without progress;
+  drive); HeLab stops it after a while without progress (a minute for most work; a load's file
+  reads are given 15, 20 and 30 s, and tried again);
 - **failed**, in amber: Live or a conversion stopped on an error, waiting for **Retry**.
 
 The status bar's counts and the Activity window's always agree: both count the same tasks.
@@ -75,8 +76,9 @@ Select a row, then:
 For everything at once:
 
 - **Pause background I/O** pauses background loads, scans and conversions, and starts no new ones,
-  until you click **Resume background I/O**. The current tab, saves, Live and reading the local disk
-  cache carry on. The status bar says `paused by you` meanwhile, and quitting HeLab resumes it.
+  until you click **Resume background I/O**. The current tab, saves, Live's checks and autosaves, and
+  reading the local disk cache carry on; Live's auto-convert pauses with the other conversions. The
+  status bar says `paused by you` meanwhile, and quitting HeLab resumes it.
 - **Cancel all queued** cancels every queued task that can be cancelled, and never one that is
   running. A tab's selected load is left for that tab's own Cancel, which would stop the tab's other
   loads too. Saves stay queued.
