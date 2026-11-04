@@ -364,3 +364,9 @@ the files. As for the review fix, I didn't run the full suite for this one.
 
 **Proposal (`converter.md`, Profiles in the app):** the profile manager's list has one aligned column per field:
 Profile, Version, TXY tag (`file_tag`), Kind, Notes, Hash.
+
+**CI 41767805544** (`133ccd8`, with `6722408`) succeeded. I read all 17 job logs; none has a RERUN. From the junit
+artifacts, `test_the_profiles_list_shows_each_tag_in_aligned_columns`, and the two tests whose helpers changed
+(`test_the_builtins_are_listed_read_only`, `test_unreadable_files_are_named`), passed on macOS, Windows and Ubuntu.
+While the run went on, this Mac's DNS for api.github.com dropped in and out, so I fetched the logs with retries;
+every log came down whole.
