@@ -31,6 +31,15 @@ How to use this list:
 
 ## Recently decided
 
+Cleared at the v0.0.8a1 tidy-up (2026-11-04) where each was recorded in memory, an architecture file,
+the roadmap or a plan, or was superseded or one-off; these three aren't recorded there yet (the first two kept
+since the v0.0.7a1 tidy-up):
+
+- **Q5.1** the smoke pass runs on Sonnet 5.5 (it drove both runs so far); Haiku stays untried.
+- **Q30.4** with the disk cache off this session, Settings › Cache doesn't list the temp folder's
+  converted TXY: "ok", left for caching v2.
+- **At most three floors at once** (Tony in Chat, 2026-11-02, with the go for caching v2's stage 2; via Side).
+
 ## Activity window (block 62; [plan](../roadmaps/activity-window.md))
 
 - **Q62.1** "Activity", from Window › Activity and a click on the status bar's counts (Tony, 2026-11-04: "ok").
@@ -41,16 +50,6 @@ How to use this list:
   reordering later ("ok").
 - **Q62.4** this session's history, the last 200 ("ok").
 - **Q62.5** in v0.0.9, a floor on this Mac ("ok").
-
-
-Cleared at the v0.0.8a1 tidy-up (2026-11-04) where each was recorded in memory, an architecture file,
-the roadmap or a plan, or was superseded or one-off; these three aren't recorded there yet (the first two kept
-since the v0.0.7a1 tidy-up):
-
-- **Q5.1** the smoke pass runs on Sonnet 5.5 (it drove both runs so far); Haiku stays untried.
-- **Q30.4** with the disk cache off this session, Settings › Cache doesn't list the temp folder's
-  converted TXY: "ok", left for caching v2.
-- **At most three floors at once** (Tony in Chat, 2026-11-02, with the go for caching v2's stage 2; via Side).
 
 ## v0.0.8 follow-ups (block 58)
 
