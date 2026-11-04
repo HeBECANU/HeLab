@@ -14,8 +14,12 @@ The `.spec` file produces `HeLab.app` on macOS (bundle ID `au.edu.anu.he-bec-lab
 or Dash: `multiprocessing.freeze_support()` (frozen only, so the converter's worker pool can spawn,
 A12.1), the I/O helper (`--helab-io-helper`), the script folder probe (`--helab-script-probe FOLDER RESPONSE`,
 `helab.scripts.probe`, Q49.3 (b); [plots-and-scripts](plots-and-scripts.md#script-system)), the headless
-converter (`convert`, [converter](converter.md)), `--version`, then the GUI. Neither helper entry takes
-`running.lock`, since `main()` isn't reached.
+converter (`convert`, [converter](converter.md)), `helab cache` (read only), `--help`/`-h`, `--version`, then
+the GUI. Neither helper entry takes `running.lock`, since `main()` isn't reached. `--help` (A56.7, Quick Fixes 10,
+`5a4d863`) prints a short usage (the app with `--geometry`, `--version`, `--help`, `convert` and `cache`, each
+pointing at its own `--help`) and exits 0, before Qt, settings, caches, Dash and `running.lock`; after the
+`convert`/`cache` dispatch, so `helab convert --help` is still convert's own (`tests/test_versioning.py` runs it
+in a subprocess: no PyQt6, `helab.utils.constants`, `dash_server` or `cache_locks` loaded, no `running.lock`).
 
 **The bundled manual** (Q54.3; Docs floor, landed `b0e3aac`): the Python 3.13 Build jobs build the user
 manual offline (`HELAB_DOCS_OFFLINE=true`, Material's offline plugin) into `build/manual`, in their own
@@ -116,6 +120,27 @@ the release job still validates). Build jobs may target an older tagged SHA duri
 the normal test jobs still check the current workflow commit, and recovery builds
 add Python 3.13 tests of the tagged commit on each OS.
 
+**The release notes** (A59.1, Quick Fixes 10; `ca0bd61`, `be2f0e5`, `9e06bcb`, landed `20dd672`):
+`release_draft.main` writes a new draft's notes (`release_body`): `## Release [<tag>](…/tree/<tag>)`, the date,
+the commit link and the Workflow Run link (`--run-url`, built from `github.server_url`, `github.repository` and
+`github.run_id`, never `github.event.repository.url`, which is the API's URL); GitHub's generated notes
+(`GitHubReleases.generated_notes`, `POST /releases/generate-notes` with `previous_tag_name`, which changes
+nothing); the build list and note; one `**Full Changelog**: …/compare/<previous>...<tag>` line (GitHub's own is
+replaced; `/commits/<tag>` with no previous tag); then the asset manifest (`manifest_body`). **The previous tag**
+(Tony, 2026-11-04: "I think we include alpha full releases too"): the previous **published full** GitHub
+release. Of the repository's releases that are published and not marked pre-release (`full_release_tags`, every
+page), keep those whose tag is in the commit's history (`tags_in_history`, `git tag --merged`; the release job
+checks out with `fetch-depth: 0`) and take the highest PEP 440 version lower than the new one
+(`previous_release`). An alpha published as a full release counts, so v0.0.9 compares with v0.0.8a1; drafts and
+GitHub pre-releases never do. **Fallbacks:** if the releases can't be listed, the newest earlier `v` + PEP 440 tag
+in the history (`previous_tag`; `v.0.0.1i`, `CI-CD-everything-passed` and other non-PEP 440 tags are never
+chosen), with a `::warning::`; if the commit's history can't be read (`SubprocessError`, `OSError`; `be2f0e5`),
+nothing is in it, so no previous tag, with a warning. If GitHub's notes fail, the draft is made without them, with a warning: the draft matters more than its
+notes. `publish_draft` takes the body as a string or a callable, called only when it creates the draft, so a
+resumed draft or a published release keeps its notes and never asks GitHub for new ones; bodies are still written
+only while drafts (`_guard`). The release job installs `packaging` first (unpinned, as get-version's; A60.2), since
+`release_draft` imports it. The job's first real run is v0.0.9's release.
+
 **The Docs job** (A54.1, A54.2; landed `b0e3aac`): one Ubuntu job in `dev-cicd.yml` (10 min), beside the
 tests; it needs only `get-version`, nothing needs it, and it is not in the release gate (it does block a
 floor's landing, which needs every job green). It installs `requirements-docs.lock` (developer tools only:
@@ -140,8 +165,15 @@ deploy, exit 1; no `gh-pages` yet lists `[]`) and runs `mike deploy --push --upd
 every release, stable ones included; an older release published late gets its version and moves no alias. A
 stable release newer than `pre-release`'s target then runs `mike delete --push pre-release` (the alias only;
 the next pre-release brings it back). The front page: `mike set-default --push latest` once a stable release
-exists, else `mike set-default --push --template docs/publish/no-stable.html pre-release` (the "No stable release
-yet" page, light and dark, linking to the newest pre-release). No dev channel: a dev manual is built locally
+exists, else `mike set-default --push --template <page> pre-release` (the "No stable release yet" page, light
+and dark, linking to the newest pre-release). **The rule** (A59.2 (b), Quick Fixes 10, `bfa2b78`): a pre-release
+version may be published as a full GitHub release (v0.0.8a1 is GitHub's "Latest"), but the site goes by the
+version number: its `latest` stays the newest stable version, and until there is one the front page names the
+newest pre-release, "Latest: 0.0.8a1 (alpha)", linked to `pre-release/`. mike's `--template` renders only
+`{{href}}`, so `site_versions` fills in `docs/publish/no-stable.html`'s `{{latest}}` first: `no_stable_page`
+with `latest_label` ("(alpha)", "(beta)", "(release candidate)", "(development version)" for a `.dev`) of
+`newest_pre_release` (the newest of every deployed version and the new one), written to a temporary folder and
+passed to `plan(…, page)` exactly when the plan sets it as the front page. No dev channel: a dev manual is built locally
 (`mkdocs serve`, the README's User manual section). `mkdocs.yml` excludes `publish/`. Help › User manual opens
 `<owner>.github.io/<repo>/<version>/`, a pre-release's own page included ([app-runtime-and-ui](app-runtime-and-ui.md)).
 `--dry-run` prints the commands. A commit without `mkdocs.yml`, `requirements-docs.lock` or

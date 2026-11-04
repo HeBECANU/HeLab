@@ -391,15 +391,17 @@ person, lab machine or internal ID.
   `root_key`'s docstring names a person and a review finding. Then `docs/reference/api/dataset-view.md` may render
   the module instead of naming its classes one by one.
 - **A56.3 `docs/.ai-generated/`**: three old planning files in the public `docs/` folder (MkDocs skips dot-folders,
-  so the site doesn't show them). Move them to `.ai/sessions/` or delete them.
-- **A56.4 The built-in profiles' notes** shown in Settings › TXY converter carry internal IDs ("stage 3", "Q6.11"):
-  make them user-facing text.
-- **A56.5 Stale docs found while writing the manual**: `data-roots.md`, `cache-store.md` and `live.md` were
+  so the site doesn't show them). Move them to `.ai/sessions/` or delete them. **Stays** (Tony, 2026-11-04, Quick
+  Fixes 10's brief: leave `docs/.ai-generated/` where it is).
+- [x] **A56.4 The built-in profiles' notes** (done in `0dc4f90`, the five texts approved by Tony 2026-11-04; the
+  profiles list's TXY tags in aligned columns, which he asked for then, in `6722408`; Quick Fixes 10, landed
+  `20dd672`) shown in Settings › TXY converter carry internal IDs ("stage 3", "Q6.11"): make them user-facing text.
+- **A56.5 Stale docs found while writing the manual** (on hold until Tony has tried v0.0.8; Tony, 2026-11-04): `data-roots.md`, `cache-store.md` and `live.md` were
   corrected in the landing's docs pass; left: the comment above `STORE_V4_SETTING` in
   `helab/utils/settings_defaults.py` still says "off until stage 2", while its row is on from v0.0.8.
 - **A56.6 Grow `ruff.toml`'s scope** to the rest of what scripts import (`follow.py`, `backends.py`'s panes,
   `stats.py`), each with an API page.
-- **A56.7 `helab --help` starts the GUI**: `helab/main.py` handles `--version`, `convert` and `cache` before the
+- [x] **A56.7 `helab --help` starts the GUI** (done in `5a4d863`, Quick Fixes 10, landed `20dd672`): `helab/main.py` handles `--version`, `convert` and `cache` before the
   GUI, but not `--help`/`-h`. Print a short usage (the app, `--version`, `--geometry`, `convert`, `cache`, each
   with `--help`) and exit 0, before anything starts.
 - **A56.8 The manual's "Which TXY HeLab reads" section** (now a short note): the ordered TXY list (Settings › TXY
@@ -443,7 +445,8 @@ Q56.1 (b)'s shim are done.
 
   Also: Zensical doesn't warn about pages missing from `nav`. The check is the floor's
   [zensical.md](sessions/2026-11-03-claude-followups/zensical.md).
-- **A58.2 Folder details' conversion and a read stopped early**: `explorer_convert.ExplorerConverter` neither names
+- [x] **A58.2 Folder details' conversion and a read stopped early** (done in `6b22d8d`, Quick Fixes 10, landed
+  `20dd672`; the Convert row's amber is A60.1): `explorer_convert.ExplorerConverter` neither names
   a read stopped early nor notifies; Live's auto-convert does both (Q48.1, Q48.2). Route its `shot_converted`
   through the same stop handling.
 - **A58.3 The try-import's cost**: the probe adds about 0.2–1 s per script folder at start and on each reload (two
@@ -455,7 +458,9 @@ Q56.1 (b)'s shim are done.
 From CoCo's check of the v0.0.8a1 release (2026-11-04, Tony in Chat: "ok ya add to todo since i had to manually tag
 v0.0.8a1 and v0.0.6a1 just now"). For v0.0.9, before its PR.
 
-- **A59.1 Release notes that link their tags** (`dev-cicd.yml`'s release job, `helab/release_draft.py`). CI's
+- [x] **A59.1 Release notes that link their tags** (done in `ca0bd61`, review fix `be2f0e5`, the previous published
+  full release as the compare base, Tony's rule of 2026-11-04, in `9e06bcb`; Quick Fixes 10, landed `20dd672`)
+  (`dev-cicd.yml`'s release job, `helab/release_draft.py`). CI's
   draft (`v0.0.8a1`, run 41746737106) had a fixed template. Tony had to link the tags by hand. Make the draft's notes:
   1. name and link their tag;
   2. compare against the previous release tag, a "Full Changelog: <previous>...<tag>" link. The previous tag is the
@@ -468,7 +473,8 @@ v0.0.8a1 and v0.0.6a1 just now"). For v0.0.9, before its PR.
 
   Keep the recovery path (`release_draft` resuming an existing draft) and its tests working. Draft bodies are
   rewritten only while they are drafts, never after publishing.
-- **A59.2 GitHub's pre-release flag vs the manual's "stable".** CI made the v0.0.8a1 draft a pre-release
+- [x] **A59.2 GitHub's pre-release flag vs the manual's "stable".** (done (b) in `bfa2b78`, the rule in
+  `release-and-ci.md`; Quick Fixes 10, landed `20dd672`) CI made the v0.0.8a1 draft a pre-release
   (`RELEASE_PRERELEASE: true`). Tony published it as a full release on purpose, so GitHub's "Latest" is v0.0.8a1;
   as a pre-release, "Latest" would fall back to v0.0.3b. The manual's site goes by the version number
   (`site_versions.py`, PEP 440), so its front page still says "No stable release yet". Asked in Chat (2026-11-04):
@@ -481,6 +487,20 @@ v0.0.8a1 and v0.0.6a1 just now"). For v0.0.9, before its PR.
   3. record the rule in `release-and-ci.md`'s publishing step (a pre-release version may be published as a full
      GitHub release; the site's `latest` stays the newest stable version, and until there is one the front page
      names the newest pre-release).
+
+## Quick Fixes 10 (block 60)
+
+From Quick Fixes 10's [handoff](sessions/2026-11-04-claude-quick-fixes-10/handoff.md) (Rivet; A59.1, A59.2 (b),
+A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
+
+- [ ] **A60.1 Folder details' Convert row amber for a read stopped early** (Quick Fixes 10's A~1;
+  `helab/views/FolderDetailsPanel.py`). Live's Auto-convert row turns amber when it names a read stopped early
+  (`READ_STOPPED`); the Convert ("offer") row, which names them since A58.2 (`6b22d8d`), doesn't. A two-line change
+  beside the `convert` row's style, with a test.
+- [ ] **A60.2 Pin `packaging` in the release jobs** (Quick Fixes 10's A~2; `.github/workflows/dev-cicd.yml`).
+  get-version and, since A59.1, the release job run `pip install packaging` unpinned; `requirements.lock` has
+  `packaging==26.3`. Pin it to the lock's version (or install it from the lock), keeping `--check`'s builds as they
+  are.
 
 ## Not AI work (stays in MANUAL_TODO)
 

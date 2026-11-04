@@ -510,7 +510,16 @@ definitions; in `setup.py`'s package data and `HeLab.spec`'s datas). User profil
 (`helab/views/ConverterTab.py`): the conversion profile, backend and output (the converter rows in
 [settings](settings.md)), and the profile manager (built-ins read-only; duplicate, validated edit with
 the hash shown, import, export; delete asks, and deleting the profile in use resets the setting;
-edits save at once). Names sharing a hash are all shown. Each plot's settings suggest the plate profile
+edits save at once). Names sharing a hash are all shown. The list (`profiles_list`, a `QTreeWidget`; Quick Fixes
+10, `6722408`) has one header and one aligned column per field, each sized to its widest text
+(`ResizeToContents`), uniform one-line rows (`ConverterTab.profile_columns`): Profile, Version, TXY tag
+(`file_tag`: a built-in's own, a user profile's `u` + 32 hex digits; its tooltip gives the file pattern), Kind,
+Notes, Hash; an unreadable profile file's row spans the columns. **The built-ins' descriptions** (A56.4, Quick
+Fixes 10, `0dc4f90`; wording approved by Tony, 2026-11-04): each built-in's `notes` is user-facing text, shown in
+Settings › TXY converter: what it is and where it comes from, when to choose it, how it differs from the others,
+whether it is calibrated ("Marked uncalibrated" exactly for `UNCALIBRATED`); no internal ID, "content hash" or
+person's name. `notes` is DESCRIPTIVE, outside the content hash, so rewording it changes no tag or hash
+(`tests/test_convert_profile.py` pins the five hashes). Each plot's settings suggest the plate profile
 for the folder's date (`PLATE_SWAPS`, `suggested_plates`, Q6.10), never applied.
 
 #### Convert this folder…
@@ -593,7 +602,14 @@ pending; a beside start saves the folder's flag first, waits for `folderPrefsCha
 helper still checks the store): the first pass only records, then passes a check interval apart while files
 settle (at most `MAX_PASSES` = 6; files still being written then are left to Live's auto-convert, said in the
 tooltip). The row shows `Converting to HeLab's cache folder… 3 of 40`, then `40 converted to HeLab's cache folder
-· 2 still being written`; the folder is then listed and loaded again (Q48.6).
+· 2 still being written`; the folder is then listed and loaded again (Q48.6). **A read stopped early** (A58.2, Quick
+Fixes 10, `6b22d8d`, landed `20dd672`): `FolderConversion.stopped` keeps the raw files whose `shot_converted.read_stop`
+is set, by name (dropped when a file converts again to its end), and the Convert row names them while converting
+and when done (`3 converted to HeLab's cache folder · d3.txt read stopped at line 10`; several: `N reads stopped
+early`), the detail in its tooltip; each file is logged and notified once per session through
+`explorer_convert.note_read_stop` and `read_stops_text`, which Live's auto-convert uses too
+([live](live.md)), so a file notifies once whichever conversion read it. The Convert row isn't amber for it yet,
+as Live's Auto-convert row is (A60.1, `FolderDetailsPanel.py`).
 
 **After a refused beside write** (Q38.1; `beside_refused`): the app asks, non-modal (`beside_refused_retry` /
 `_cache` / `_temp` / `_later`), Retry, Write to HeLab's cache folder instead (the default), Write to HeLab's temp

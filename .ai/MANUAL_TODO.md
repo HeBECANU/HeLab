@@ -311,7 +311,20 @@ and M42.1 on a lab PC with the switch on (one Live session).
   bundled copy opens and its search finds results.
 - [ ] **M58.3 The site after the first published pre-release**: the site's root shows "No stable release yet",
   linking to `pre-release/`, and the version menu lists the pre-release. On 0.0.8a1 (2026-11-04) the root said
-  "No stable release yet"; Tony chose to reword it (A59.2 (b)), so check the root again once that lands.
+  "No stable release yet"; Tony chose to reword it (A59.2 (b)), so check the root again once that lands. Landed
+  `20dd672` (Quick Fixes 10): the root shows "Latest: <version> (alpha)" only after the next published
+  pre-release's Docs site run; a stable v0.0.9 makes the root `latest` instead, and the page isn't seen.
+
+## Quick Fixes 10 (added 2026-11-04, block 60)
+
+- [ ] **M60.1 Settings › TXY converter's profiles list on a real screen** (macOS and Windows; A56.4, `0dc4f90`,
+  `6722408`): the list's columns (Profile, Version, TXY tag, Kind, Notes, Hash) aligned and nothing cut; a user
+  profile's 33-character tag widens its column, and a narrow window scrolls sideways; a built-in's description
+  wraps above "Plates in since…", "Content hash…" and "TXY files…". Checked only offscreen at 720×640.
+- [ ] **M60.2 v0.0.9's draft release notes** (A59.1, the job's first real run), before publishing: the tag linked,
+  GitHub's generated notes, one "Full Changelog" line comparing `v0.0.8a1...v0.0.9`, the Workflow Run link on
+  `github.com` (not `api.github.com`), the build list and the asset manifest; no `::warning::` in the release job's
+  log about the releases, the history or GitHub's notes.
 
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 

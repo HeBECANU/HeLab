@@ -138,7 +138,9 @@ How to use it:
   (Tests 2/3, job 125788785096, `413b2a0`, 2026-11-03): reran twice, `assert (674.56 - 671.49) < 1.0`, quitting
   took 3.07 s; passed on the second rerun. Again on Windows, Ground CI 41750756742 (Tests 2/3, job 126315040588,
   `25f3ae6`, dev/v0.0.9's first run, 2026-11-04): `assert (911.83 - 910.77) < 1.0`, quitting took 1.06 s;
-  passed on rerun. All three on Windows Tests 2/3 since store-v4 went on.
+  passed on rerun. Again on Windows, `agent/quick-fixes-10` CI 41762330085 (Tests 2/3, job 126352703916, `feb9985`,
+  2026-11-04): `assert (692.18 - 691.02) < 1.0`, quitting took 1.15 s; passed on rerun. All four on Windows Tests
+  2/3 since store-v4 went on.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -259,6 +261,11 @@ How to use it:
   tick until `service.messages` is empty.
 - [ ] `test_gui_responsiveness.py::test_stalled_process_keeps_heartbeat_and_shutdown_responsive`:
   `assert 0.2199… < 0.2` (line 228) on macOS CI (run 40764414177), passed on retry.
+- [ ] `test_gui_responsiveness.py::test_real_helper_loads_data_and_refresh_replaces_changed_data`: Windows CI
+  41758844145 (`agent/quick-fixes-10` `be2f0e5`, Tests 3/3, job 126341477058, 2026-11-04), one RERUN, passed on
+  rerun. The `waitUntil` (15 s) at line 788 timed out once, with real helper processes. That job took 12 min 43 s;
+  the other Windows groups took about 7–10 min, so a slow runner is likely. The branch didn't touch the test's
+  path. Cause not yet found.
 - [ ] Tests that `chdir` while helpers can start: a helper inherits the working folder, which its
   `helab.utils.constants` lists as a developer's data folder (`DEV_POTENTIAL_DATA_PATHS`), so the source
   guard refuses it outside the temp folder and the checkout. `test_window_icon_is_found_from_any_launch_folder`
@@ -354,6 +361,17 @@ How to use it:
   before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into. Again on Windows CI, same line:
   `agent/docs-a54-1` 41587185042 (Tests 2/3, job 125755380835, `9631294`) and Ground 41595342227 (`dc86412`),
   both passed on rerun (2026-11-03).
+- [ ] `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so` (both cases): macOS CI
+  on `agent/quick-fixes-10`, 41758844145 (`be2f0e5`, Tests 1/3, job 126341476955, `[as it comes]`) and 41770471113 (`1ab4864`, Tests 2/3,
+  job 126378820117, `[a Live check comes due while offline]`), one RERUN each, passed on rerun. The `waitUntil` (5 s)
+  at line 626, for the conversion's "not while working offline" error after `_convert_tick` while offline, timed
+  out. It predates the branch: it reproduced once on the base `bd349ec` under overload (1 of 15 passes, `-n 4`
+  against 32 CPU burners on 16 cores, `--reruns 0`), and the code path (`_convert_tick` → `FolderCache.convert` →
+  `submit` → IOService's offline refusal → `_convert_event`) is unchanged by the branch; none of 147 macOS Tests
+  jobs in 43 other recent runs (2026-11-03 to 04) reran it. In the base failure's teardown a pending "Volume
+  verification" job and a "Disk cache convert_prefs" read were cancelled: check whether the conversion waits
+  behind them while offline instead of being refused at once (Rivet's hypothesis, unconfirmed). Cause not yet
+  found (Quick Fixes 10's handoff).
 - [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
   `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
   retry and 5 of 5 alone. Cause not looked into.
@@ -384,5 +402,14 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 
 ## Fixed
 
-Landed in `dev/v0.0.9`: none yet (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their
-release-notes lines are in TonyXTYan/HeLab#11).
+Landed in `dev/v0.0.9` (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their release-notes lines are in
+TonyXTYan/HeLab#11):
+
+- [x] **Folder details' conversion said nothing of a raw file whose read stopped early** (A58.2): only Live's
+  auto-convert named it and notified. Folder details' Convert row now names it (one by name, several counted, the
+  detail in its tooltip) and each file notifies once per session whichever conversion read it, through the shared
+  `explorer_convert.note_read_stop` and `read_stops_text` (`6b22d8d`, Quick Fixes 10, landed `20dd672`). The row
+  isn't amber for it yet (A60.1).
+- [x] **The release job's notes linked the API's URL for the Workflow Run** (`github.event.repository.url`; v0.0.8a1's
+  draft, run 41746737106), with no tag link and no comparison: `release_draft.release_body` now writes them, the
+  run link from `github.server_url` (A59.1; `ca0bd61`, `be2f0e5`, `9e06bcb`, Quick Fixes 10, landed `20dd672`).

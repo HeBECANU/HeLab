@@ -33,15 +33,18 @@ that branch.
   Clear… (SO-1), beside Make room's Clear old stores….
 - [ ] Zensical for the manual (A58.1, Q56.1 (b)): once its versioning is native or mike's Zensical fork is on PyPI,
   before Material for MkDocs' end of life (2027-05-05).
-- [ ] Release notes that link their tags, with a Full Changelog link and GitHub's generated notes (A59.1), and the
+- [x] Release notes that link their tags, with a Full Changelog link and GitHub's generated notes (A59.1), and the
   no-stable front page reworded to name the newest pre-release as the latest download (A59.2 (b), Tony
-  2026-11-04), before v0.0.9's PR.
+  2026-11-04), before v0.0.9's PR. Done by Quick Fixes 10, landed `20dd672` (CI 41770471113); the Full Changelog
+  compares with the previous published full GitHub release (Tony, 2026-11-04), so v0.0.9 with v0.0.8a1. The job's
+  first real run is v0.0.9's release (M60.2). The same batch: `helab --help` (A56.7), Folder details' read stopped
+  early (A58.2), the built-in profiles' descriptions and the profiles list's columns (A56.4); A60.1, A60.2 left.
 - [ ] CodeQL alert #4 (`py/bind-socket-all-network-interfaces`, `helab/utils/dash_server.py`'s
   `_listened_on_all`), left open by Tony as a reminder.
 - [ ] Tony's open checks ([MANUAL_TODO](../.ai/MANUAL_TODO.md)):
   - store-v4's (Q50.18): M44.1 and M47.1 on screen, M47.2 (with Q51.1's extra listing) and M42.1 on a lab PC;
   - v0.0.8's: M48.1–M48.3 (converter UX), M49.1, M49.2 (Live Scripts), M55.1–M55.4 (TXY lists), M56.1–M56.3
-    (the manual; M56.2's HeBECANU half), M58.1–M58.3 (the follow-ups);
+    (the manual; M56.2's HeBECANU half), M58.1–M58.3 (the follow-ups), M60.1, M60.2 (Quick Fixes 10);
   - v0.0.7's: on a Mac, M1.4-2 to M1.4-4, M1.5, M1.6-3, M1.8, M1.9 and M36.1–M36.4, and by hand the splitter
     drags and floated plots opening a step apart; the review of M1.4-1 and M1.7's physics; the lab PC pass
     (M1.1–M1.10 on Windows, with Live during an acquisition, M1.3).
