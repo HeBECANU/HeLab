@@ -48,3 +48,24 @@ A56.4 (being explained to Tony).
 - **Not allowed:** no version bump, release, tag, PR, or edit of a published release.
 
 When done: `maestri ask "CoCo" "QF10: done at <hash>, items <…>, suite <N>, RERUNs <…>, CI <run>"`.
+
+## Addendum: A56.4 added (Tony, Chat, 2026-11-04)
+
+Tony: "each built-in profiles should have details notes/description explaining themselves".
+
+5. **A56.4 The built-in profiles' descriptions** (`helab/convert/profile.py` and `helab/convert/builtin_profiles/*.json`,
+   kept in step; the Settings › TXY converter view in `helab/views/ConverterTab.py` only if the longer text needs
+   room). Give each of the five built-in profiles a user-facing description that explains itself:
+   - what it is and where it comes from;
+   - when to choose it (which plates or dates);
+   - how it differs from the others;
+   - whether it is calibrated.
+
+   Rules:
+   - no internal IDs ("Q6.11", "stage 3"), no "content hash", no person's name;
+   - only facts the code, the profiles' fields or `.ai/architecture/converter.md` and `roadmaps/txy-converter.md`
+     support;
+   - `notes` stays a DESCRIPTIVE field, outside the content hash, so the tags and hashes don't change;
+   - add a test that each built-in profile's hash is unchanged.
+
+   Put the five texts in the handoff for Tony to read: the wording is his to approve before landing.
