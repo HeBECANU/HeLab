@@ -283,3 +283,37 @@ changes. I haven't looked for their causes. Proposed known-issues lines:
   41758844145 (Tests 3/3, job 126341477058), one RERUN. The `waitUntil` (15 s) at line 788 timed out once, with
   real helper processes. That job took 12 min 43 s; the other Windows groups took about 7–10 min. Cause not yet
   found.
+
+## RERUN (1) checked: not related to this branch
+
+CoCo asked whether `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so[as it
+comes]` (macOS CI 41758844145) is related to `6b22d8d`, which changed `explorer_live.py`.
+
+**(a) The code path.** The test goes `_convert_tick` → `FolderCache.convert` → `submit` → IOService's offline
+refusal (`service.offline = True`). The `offline` event then reaches `_convert_event`, which sets
+`convert.error`. Line 626 waits for that.
+- None of that is in `6b22d8d`'s diff.
+- The changed `_converted` branch runs only for a `shot_converted` with a `read_stop`. This test's raw files read
+  to the end, so it takes the unchanged `else`.
+- The only changed code it reaches is `read_stops_text({})` in each Live-line render, which returns `("", "")` at
+  once. `READ_STOPPED` is the same tuple, now defined in `explorer_convert`.
+
+**(b) Runs under load** on macOS (16 cores), with `--reruns 0`. Branch `04419ed` and base `bd349ec` (a clean
+worktree) alternated pass by pass, so both met the same load. CPU burners (`yes`) ran beside each round.
+
+| Round | What ran | Branch | Base |
+|---|---|---|---|
+| 1 | the whole of test_live_convert.py plus the target, `-n 12`, 8 burners, 30 passes (the target 4 times a pass) | 120 runs, 0 failed | 120 runs, 0 failed |
+| 2 | the target only, `-n 12`, 16 burners, 30 passes (2 a pass) | 60 runs, 0 failed | 60 runs, 0 failed |
+| 3 | 12 concurrent single-process runs, 8 burners, 10 rounds (2 each) | 240 runs, 0 failed | 240 runs, 0 failed |
+
+In total, **420 runs on each side, no failure on either.** pytest dropped the repeated node IDs I passed for more
+copies, so each pass ran the counts in brackets; the table counts what actually ran. In every other pass of the
+whole file (round 1) the file's other 23 tests passed too.
+
+**(c) Not related.** Neither the code path nor the numbers tie it to this branch, and it didn't reproduce on
+either side. On CI the test ran 11 s on `gw3`, about 6 s of setup and then the 5 s wait. The known-issues line
+proposed above stands, with its cause not found. One idea for the hunt: the refusal's `offline` answer may arrive
+on a timer that a loaded runner's event loop is late to.
+
+RERUN (2) (Windows, real-helper refresh): the known-issues line above, as CoCo asked.
