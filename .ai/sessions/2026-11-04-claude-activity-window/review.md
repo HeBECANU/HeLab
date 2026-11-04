@@ -193,3 +193,83 @@ visible row. Count `tops[group]` plus their descendants instead, or count by whe
 - `testing.md`: the proposed note on `fresh_activity` is right. It could add that `IOService` now records into
   the global `HISTORY` in **every** test (bounded, and harmless with no listeners), and that a test shown window
   must be hidden or closed so its listener goes.
+
+## Re-check (Gauge, fixes `3afddf4..16ff65c`)
+
+I read only the fix diffs: `c906528`, `41de473`, `3798dea`, `7682d6c`, `384f93f`, `33b1489`, `a429d15`,
+`df13e56`, `a3eb1c7`, `de386d2`, `a69c9d4`, `0c653c1` and `d4593c8`, plus the handoff commits `99c74c4` and `16ff65c`.
+
+**Checks rerun at `16ff65c`:**
+- Full suite, `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-gauge`: **9390 passed, 673
+  skipped, no RERUN**. Output is kept whole in `.ai/temp/gauge-recheck-suite.log`.
+- The five type checks are clean (`.ai/temp/gauge-recheck-types.log`).
+- AW-1's reproduction, with the real IOService and FolderCache (a folder's only load starts writing its cache),
+  is now clean. The tree goes from `Loads and scans (1)` to `Saves (1)`, with no exception, and its signals are
+  not blocked.
+- **The new tests fail on the old code.** I ran HEAD's tests against `3afddf4`'s `helab/`, in a scratch copy
+  with `PYTHONPATH` pointing at it. All 13 new or changed tests failed there, covering AW-1, 2, 3, 5, 6, 8, 9, 10,
+  12 and 13. The 40 others passed.
+- **AW-11's memory-only test catches a regression.** `test_rendering_reads_memory_only` passes on both, as it
+  only adds coverage. In a scratch copy I made `_live_task` call `os.path.isdir(session.path)`, and the test then
+  failed with `touched == ['stat …/source/live']`.
+
+| AW | Re-check |
+|---|---|
+| AW-1 | **Resolved.** When the shape changes or an item is replaced, every item is detached before any is placed again. The items taken out stay in `held` until the render ends, so sip never deletes a row that is still wanted. A stale wrapper is replaced (`_item` catches `RuntimeError`), and `try/finally` always unblocks the signals. If a render fails part-way, `_shape` isn't updated, so the next render detaches everything again. Three regroup/reparent tests cover it. It brings one regression in scroll position: AW-14. |
+| AW-2 | **Resolved.** `NOT_KEPT_WHEN_OK` now includes `convert`, `details` and `cached`. Failures and cancellations are still kept. The 20-pass test fails on the old code. |
+| AW-3 | **Resolved as CoCo decided.** `queued_only` skips only the `select` subscriber of a `load`/`cached` request; any other subscriber of the same request is still cancelled. Both tooltips and the manual say so. The test checks that the running background load survives and that `cancel_loading` isn't called. |
+| AW-4 | **Resolved.** |
+| AW-5 | **Resolved.** Each failure is reported once. `_next_passes` skips a conversion with `error` set. `_convert_tick` returns while `convert.error` is set, so a pass that couldn't be queued adds one entry, not one per check. A Live `offline` answer is FolderCache's, with no IOService request (`folder_cache.py:2816`), so it isn't counted twice. |
+| AW-6 | **Resolved.** |
+| AW-7 | **Resolved.** The manual's three lines are now accurate. The page has no person's name, internal ID or `.ai/` path. |
+| AW-8 | **Resolved.** `probe_limits()` keeps `script_tree` (and QtWebEngine) out of the builder's imports. |
+| AW-9 | **Resolved.** The window is fitted once, in `showEvent`, before it is mapped. `de386d2`'s bound (the window's own `minimumSizeHint`) is right for the 800 px offscreen screen. |
+| AW-10 | **Resolved.** `key` is `id#seq`, and `seq` is never reset (`clear` keeps `_serial`), so keys stay unique across a clear. New entries are inserted on top and dropped ones removed from the bottom. The history rebuilds only when its newest shown key has gone (the first render, a clear, or more than 200 new entries while the window was hidden). When the selected oldest row drops, the selection moves to the next row and the details pane follows it (checked by script). Retry and the details use the same entry. One small change: the Tab column is now set when a row is added and isn't updated if the tab is renamed later. This is harmless. |
+| AW-11 | **Resolved** (see the mutation check above). |
+| AW-12 | **Resolved.** |
+| AW-13 | **Resolved.** |
+
+### AW-14 · Minor · `helab/views/ActivityWindow.py:1046` (`_place_rows`, AW-1's full detach)
+
+**With no row selected, the Now tree jumps to the top whenever a task starts or leaves.** AW-1's fix runs
+`root.takeChildren()` on every shape change. That takes every top-level row out, the vertical scroll bar's
+maximum falls to 0, and its value is clamped there before the rows come back.
+
+Measured with the real IOService: 80 queued scans, scrolled to the bottom (value 75), then one more scan
+queued. The value is **0** after the refresh at `16ff65c`, and **75** with `b2e996a`'s render.
+
+With a row selected, `setCurrentItem` scrolls to that row. The old render did this too, so it isn't a regression.
+While loads queue and finish, the shape changes several times a second, so you can't read further down a long
+list.
+
+**Fix:** save `now.verticalScrollBar().value()` (and the horizontal one) before the detach and set them again
+after the rows are placed, inside the `try`. Add a test that scrolls a long list, queues a task and checks the
+value is kept.
+
+### AW-15 · Minor · `helab/views/explorer_convert.py:612`, `helab/utils/io_service.py:1028-1037` (pre-existing; I missed it in the first review)
+
+**A GUI conversion pass that fails or is cancelled goes into the history twice.** IOService's `_report_end` keeps
+a `convert` that fails or is cancelled (AW-2 leaves out only successes). `ExplorerConverter.event` then reports
+the same end again through `_report`, with its `conversion` route.
+
+Checked by script: `cache.convert("tab:convert", "/raw", …)` and a helper `error` leave
+`('Convert raw files to TXY', 'failed', 'io', ('tab:convert',))` in `HISTORY`. The tab's `_io_event` then calls
+`converter.event`, which adds a second `('Convert raw files to TXY', 'failed', …, 'conversion')` row.
+
+Closing a tab (or Cancel) during a conversion gives two `cancelled` rows the same way. Live's auto-convert isn't
+affected, because `_convert_stopped` reports only ends where no helper ran. The rule that each owner's end is
+reported once still holds, since these are two owners. But the user sees one failure as two rows, and the two
+rows' Retry buttons use different routes.
+
+**Fix:** follow AW-2's own reasoning: the GUI conversion is the entry. Either
+- IOService doesn't report `convert` requests whose owner is an `ExplorerConverter`'s, the way Live's are
+  handled; or
+- `kept_in_history` leaves out every outcome of a `convert` request whose route is a GUI conversion.
+
+Then add a test that runs a pass's `error` through FolderCache and the tab, and checks there is one entry.
+
+**Summary of the re-check:**
+- AW-1 to AW-13 are resolved, and I found no new Blocker or Major.
+- There are 2 new findings, both Minor:
+  - AW-14 is a regression from AW-1's fix.
+  - AW-15 predates the fixes; I missed it in the first review.
