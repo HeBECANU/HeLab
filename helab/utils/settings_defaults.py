@@ -70,6 +70,8 @@ SCRIPT_FOLDERS_SETTING = "script_folders"
 SCRIPT_AUTO_RELOAD_SETTING = "script_auto_reload"
 # The main window's folder and settings panels' widths, the plots taking the rest (Q33.2).
 MAIN_SPLIT_SETTING = "main_window_split"
+# The Activity window's size (Q62.1; helab/views/ActivityWindow.py).
+ACTIVITY_SIZE_SETTING = "activity_window_size"
 # Caching v2's store (Q28.3): developers only, off until stage 2 and Tony's go; no Settings control.
 STORE_V4_SETTING = "store_v4"
 CACHE_POLICY_SETTING = "cache_policy"
@@ -175,6 +177,9 @@ SETTINGS: tuple[Setting, ...] = (
             "The main window's folder panel and plot settings panel widths in logical pixels, \"<folders>,<settings>\", "
             "saved as HeLab quits; the plots take the rest of the window. Folders 80 to 4000, settings 250 to 4000; "
             "otherwise the default (Q33.2)."),
+    Setting(ACTIVITY_SIZE_SETTING, str, "760,420",
+            "The Activity window's size in logical pixels, \"<width>,<height>\", saved when it closes; at most the "
+            "screen's, at least 400 by 200; otherwise the default (Q62.1)."),
     Setting(STORE_V4_SETTING, bool, True,
             "The disk cache's store: store-v4 (caching v2), on from v0.0.8 (Q47.4). Off is a hidden fallback to "
             "store-v3 kept for one release (V~2): set by hand only, never shown in Settings. Read once when "

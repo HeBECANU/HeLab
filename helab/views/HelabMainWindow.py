@@ -13,7 +13,7 @@ from helab.utils.io_service import IORequest, delete_io_traces, get_io_service, 
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, get_folder_cache, set_disk_budget, store_options
 from helab.utils.gui_watchdog import GUIWatchdog
 from helab.utils.lab_parameters import read_lab_constants
-from helab.utils import app_log, events, user_manual
+from helab.utils import activity, app_log, events, user_manual
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -57,6 +57,7 @@ from helab.views.explorer_live import ARM_AUTO_CONVERT
 from helab.views.explorer_text import large_text
 from helab.views.FolderTabWidget import FolderTabWidget
 from helab.views import live_launch, state_dump
+from helab.views.ActivityWindow import ActivityActions, ActivitySources, ActivityWindow, ClickOpens
 from helab.views.MemoryUsageWindow import MemoryUsageWindow
 from helab.views.MissingShotsWindow import MissingShotsWindow
 from helab.views.QuitSaveDialog import QuitSaveDialog
@@ -78,6 +79,10 @@ OFFLINE_STATUS_TOOLTIP = ("Working offline (File › Work Offline): folders show
                           "listed, checked or loaded. Click to work online.")
 REFRESH_TOOLTIP = ("Refresh folder list\nUpdate folder names and expanded folders in view.\n"
                    "Use Check folder status to update counts and status.")
+
+
+# The status bar message's tooltip ends with this: a click opens Activity (Q62.1).
+ACTIVITY_HINT = "Click for Activity"
 
 
 class HelabMainWindow(QMainWindow):
@@ -162,6 +167,16 @@ class HelabMainWindow(QMainWindow):
         self.roots_button.clicked.connect(lambda: self.review_root(None))
         cache.rootDuplicatesChanged.connect(self._update_roots_button)
         self.plots.setup_ram_budget(cache, app_settings())
+        # Activity (Q62.1–Q62.5): one window, hidden until asked for; it does nothing while hidden. The
+        # session's warnings are kept in memory for its details pane from the start.
+        activity.install_log_lines()
+        sources = ActivitySources(get_io_service(), cache, self._activity_tabs, self._activity_runners,
+                                  self._activity_plots, lambda: self.panel_right_bottom_script_selector)
+        self.activity_window = ActivityWindow(sources, ActivityActions(
+            sources, self._activity_show_tab, self._activity_show_plot, self._activity_open_log,
+            self._activity_run_plot, self.panel_right_bottom_script_selector.reload_scripts), self)
+        self._activity_click = ClickOpens(self.show_activity_window, self)
+        self.status_bar_message_left.installEventFilter(self._activity_click)
         # The plots open last time reopen at start (Settings → General), after the first tab
         # opens; recorded as plots open and close, and at quit. Presets of a folder and its plots.
         self.plot_reopen = PlotReopen(self.plots, self.panel_right_bottom_script_selector)
@@ -347,7 +362,8 @@ class HelabMainWindow(QMainWindow):
             explorer.activity_text if explorer else "",
             explorer.activity_tooltip if explorer and not loading else "",
             "" if summary == "Ready" else summary,
-            "" if loading else service.queue_tooltip()))))
+            "" if loading else service.queue_tooltip(),
+            ACTIVITY_HINT))))
         busy = bool(explorer and explorer.activity_busy or service.active or service.pending or service.retired)
         self.status_bar_spinner_angle = (self.status_bar_spinner_angle + 30) % 360 if busy else 0
         self.status_bar_spinner.setPixmap(self._spinner_pixmap() if busy else QPixmap())
@@ -562,6 +578,15 @@ class HelabMainWindow(QMainWindow):
 
         else:
             logging.error("menu_debug is None")
+
+        # Window › Activity (Q62.1): every task HeLab runs; a click on the status bar's message opens it too.
+        menu_window = self.menu_bar.addMenu("Window")
+        if menu_window is not None:
+            self.action_activity = QAction("Activity", self)
+            self.action_activity.setObjectName("window_activity")
+            self.action_activity.setToolTip("Every task HeLab runs, its state and this session's history")
+            self.action_activity.triggered.connect(self.show_activity_window)
+            menu_window.addAction(self.action_activity)
 
         menu_help = self.menu_bar.addMenu("Help")
         if menu_help is not None:
@@ -1047,6 +1072,63 @@ class HelabMainWindow(QMainWindow):
         if not paused and not cache.disk_nearly_full():
             self.show_status_notice("Disk cache below 80% — automatic loading resumed")
         self._update_folder_details()
+
+    def show_activity_window(self) -> None:
+        """Window › Activity, and a click on the status bar's message (Q62.1)."""
+        self.activity_window.show_window()
+
+    def _activity_tabs(self) -> list[tuple[str, FolderExplorer]]:
+        return [(self.tab_widget.tabText(index), explorer) for index, explorer in self._explorers()
+                if not explorer.closed]
+
+    def _activity_runners(self) -> list[Any]:
+        from helab.analysis.runner import get_analysis_runner
+        return list(dict.fromkeys([get_analysis_runner(), *(instance.runner for instance in
+                                                            self.panel_right_bottom_script_selector.instances())]))
+
+    def _activity_plots(self) -> dict[str, str]:
+        return {instance.instance_id: (instance.dock_widget.windowTitle() if instance.dock_widget is not None
+                                       else instance.name)
+                for instance in self.panel_right_bottom_script_selector.instances()}
+
+    def _activity_show_tab(self, explorer: FolderExplorer, path: str) -> None:
+        """Activity's Show in tab: the tab, and the folder in it (as Folder details' All I/O row)."""
+        index = self.tab_widget.indexOf(explorer)
+        if index < 0:
+            return
+        self.tab_widget.setCurrentIndex(index)
+        if path:
+            explorer.reveal(path)
+        self.raise_()
+        self.activateWindow()
+
+    def _activity_plot(self, plot: str) -> Any:
+        return next((instance for instance in self.panel_right_bottom_script_selector.instances()
+                     if instance.instance_id == plot), None)
+
+    def _activity_show_plot(self, plot: str) -> bool:
+        """Activity's Show in tab for a plot: as Debug › Show Plot Tab."""
+        instance = self._activity_plot(plot)
+        if instance is None or instance.dock_widget is None:
+            return False
+        self.plots.panel_right_top_plot_settings.show_plot(instance.dock_widget, raise_dock=True)
+        self.raise_()
+        self.activateWindow()
+        return True
+
+    def _activity_run_plot(self, plot: str) -> bool:
+        """Activity's Retry for a failed plot run: the plot's Run."""
+        instance = self._activity_plot(plot)
+        if instance is None:
+            return False
+        instance.run()
+        return True
+
+    def _activity_open_log(self) -> None:
+        """Activity's Open log: this session's log file, in the system's viewer (HeLab doesn't read it)."""
+        from PyQt6.QtGui import QDesktopServices
+        path = os.path.join(app_log.log_folder(app_folder()), app_log.LOG_NAME.format(pid=os.getpid()))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path if os.path.exists(path) else os.path.dirname(path)))
 
     def show_memory_usage_window(self) -> None:
         self.memory_usage_window = MemoryUsageWindow()
@@ -2099,6 +2181,8 @@ class HelabMainWindow(QMainWindow):
         for timer in self.findChildren(QTimer):
             timer.stop()
         self.tab_widget.closeEvent(None)
+        self.activity_window.close()
+        activity.remove_log_lines()
         get_io_service().shutdown()
         if a0 is not None:
             a0.accept()

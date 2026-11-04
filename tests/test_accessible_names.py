@@ -523,7 +523,21 @@ def convert_folder(cache: FolderCache, path: Path) -> QWidget:
                                "", lambda profile, where: None)
 
 
+def activity_window(cache: FolderCache, path: Path) -> QWidget:
+    """Activity with queued tasks in two groups, the first selected (its buttons enabled)."""
+    from helab.views.ActivityWindow import ActivitySources, ActivityWindow
+    cache.service.submit("a", 0, str(path / "run1"), "scan")
+    cache.service.submit("b", 0, str(path / "run2"), "raw_fill")
+    window = ActivityWindow(ActivitySources(cache.service, cache))
+    window.refresh()
+    groups = window.now.topLevelItem(0)
+    if groups is not None and groups.child(0) is not None:
+        window.now.setCurrentItem(groups.child(0))
+    return window
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
+    "activity": (activity_window, ("ActivityWindow",)),
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
     "missing shots": (missing_shots, ("MissingShotsWindow",)),

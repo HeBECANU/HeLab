@@ -168,10 +168,12 @@ class History:
     def __init__(self, size: int = HISTORY_SIZE) -> None:
         self._entries: deque[Finished] = deque(maxlen=size)
         self.listeners: list[Callable[[], None]] = []
+        self.version = 0  # Counts changes, so a view redraws only after one.
 
     def add(self, entry: Finished) -> None:
         assert threading.current_thread() is threading.main_thread(), "History.add off the GUI thread"
         self._entries.append(entry)
+        self.version += 1
         for listener in list(self.listeners):
             listener()
 
@@ -182,6 +184,7 @@ class History:
     def clear(self) -> None:
         self._entries.clear()
         self.listeners.clear()
+        self.version += 1
 
     def __len__(self) -> int:
         return len(self._entries)

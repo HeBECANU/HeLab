@@ -12,11 +12,22 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence
 
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, pyqtSlot
+from PyQt6.QtGui import QBrush, QColor, QHideEvent, QMouseEvent, QShowEvent
+from PyQt6.QtWidgets import (QAbstractItemView, QHBoxLayout, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
+                             QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+
 from helab.utils import activity
+from helab.utils.accessible import identify
 from helab.utils.activity import About, Action, Progress, Route, Snapshot, Task
+from helab.utils.colours import AMBER
 from helab.utils.folder_cache import FolderCache, SharedJob
 from helab.utils.io_service import IORequest, IOService
+from helab.utils.settings_defaults import ACTIVITY_SIZE_SETTING, read_setting
+from helab.utils.settings_store import app_settings
 from helab.utils.time_format import clock
+from helab.views.ElidedLabel import ElidedLabel
+from helab.views.gaps import CELL_PADDING_STYLE, COLUMN_GAP, LABEL_GAP, ROW_SPACING
 
 if TYPE_CHECKING:
     from helab.analysis.runner import AnalysisRunner
@@ -418,3 +429,577 @@ def _question_task(tab: str, explorer: FolderExplorer, box: Any, kind: str) -> T
                 "waiting for your answer", details=(title, *[line for line in text.splitlines() if line],
                                                     "Nothing converts there until it is answered"),
                 actions=frozenset({"answer", "show"}), route=Route("question", explorer.model.owner, kind))
+
+
+# The window
+
+def parse_size(text: object, default: tuple[int, int] = (760, 420)) -> tuple[int, int]:
+    """``"W,H"`` as (width, height), at least ``MIN_SIZE``; the default when it can't be read."""
+    try:
+        width, height = (int(part) for part in str(text).split(","))
+    except (TypeError, ValueError):
+        return default
+    if width <= 0 or height <= 0:
+        return default
+    return max(MIN_SIZE[0], width), max(MIN_SIZE[1], height)
+
+
+MIN_SIZE = (400, 200)
+NOW_COLUMNS = ("Task", "Tab", "Folder", "State", "Progress", "Elapsed", "Left")
+HISTORY_COLUMNS = ("Ended", "Task", "Tab", "Folder", "Outcome", "Took")
+# IOService events that change what the list shows at once (progress waits for the 1 s tick).
+REFRESH_KINDS = frozenset({"queued", "started", "paused", "resumed", "done", "error", "cancelled", "loaded"})
+# Why each action can't be used on the selected row (its tooltip).
+ACTION_TIPS: dict[str, tuple[str, str]] = {
+    "cancel": ("Cancel", "Stop the selected task, as its own Cancel does (it shows stopping until its process exits)"),
+    "retry": ("Retry", "Run the failed task again, as its own Retry does"),
+    "show": ("Show in tab", "Show the selected task's folder in its tab, or its plot"),
+    "stop_live": ("Stop Live", "Turn Live off for the selected folder; its new shots are saved as always"),
+    "log": ("Open log", "Open this session's log file"),
+    "answer": ("Answer", "Show the converter's question waiting for your answer"),
+}
+NOT_FOR = {
+    "cancel": "Not for this task: saves, cache upkeep and test imports end by themselves (Live: Stop Live)",
+    "retry": "Only a failed task, whose owner can run it again now",
+    "show": "This task isn't for a tab or a plot",
+    "stop_live": "Only Live",
+}
+
+
+class ActivityActions:
+    """What the window's buttons do, each through its owner's own path."""
+
+    def __init__(self, sources: ActivitySources, show_tab: Callable[[FolderExplorer, str], None] = lambda e, p: None,
+                 show_plot: Callable[[str], bool] = lambda plot: False, open_log: Callable[[], None] = lambda: None,
+                 run_plot: Callable[[str], bool] = lambda plot: False,
+                 reload_scripts: Callable[[list[str]], None] = lambda folders: None) -> None:
+        self.sources = sources
+        self.show_tab = show_tab
+        self.show_plot = show_plot
+        self.open_log = open_log
+        self.run_plot = run_plot
+        self.reload_scripts = reload_scripts
+
+    def _explorer(self, route: Route) -> Optional[FolderExplorer]:
+        """The tab a route's owner (or, for a helper's request, one of its subscribers) belongs to."""
+        owners = [route.owner]
+        if route.kind == "io":
+            request = self._request(route)
+            if request is not None:
+                owners = self.sources.subscribers(request)
+        for name in owners:
+            owner = self.sources.owner(name)
+            if owner is not None and owner.explorer is not None:
+                return owner.explorer
+        return None
+
+    def _request(self, route: Route) -> Optional[IORequest]:
+        service = self.sources.service
+        return next((r for r in (*service.active, *service.pending, *service.retired)
+                     if (r.owner, r.operation, r.path) == (route.owner, route.operation, route.path)), None)
+
+    def _plot(self, route: Route) -> str:
+        if route.kind == "analysis":
+            return route.owner
+        if route.kind == "io":
+            request = self._request(route)
+            for name in self.sources.subscribers(request) if request is not None else [route.owner]:
+                owner = self.sources.owner(name)
+                if owner is not None and owner.plot:
+                    return owner.plot
+        return ""
+
+    def show(self, route: Route, folder: str) -> bool:
+        """Show the task's folder in its tab (``FolderExplorer.reveal``), or its plot."""
+        plot = self._plot(route)
+        if plot:
+            return self.show_plot(plot)
+        explorer = self._explorer(route)
+        if explorer is None:
+            return False
+        self.show_tab(explorer, route.path or folder)
+        return True
+
+    def show_target(self, route: Route) -> bool:
+        """Whether Show in tab has somewhere to go for ``route``: a tab or a plot that is open now."""
+        return bool(self._plot(route) and self._plot(route) in self.sources._plots) or self._explorer(route) is not None
+
+    # (Step 4: through each owner's path.)
+    def cancel(self, task: Task) -> bool:
+        return False
+
+    def retry(self, route: Route, folder: str) -> bool:
+        return False
+
+    def retry_refusal(self, entry: activity.Finished) -> str:
+        return "Not yet"
+
+    def stop_live(self, route: Route) -> bool:
+        return False
+
+    def cancel_queued(self, snapshot: Snapshot) -> int:
+        return 0
+
+    def answer(self, route: Route) -> bool:
+        explorer = self._explorer(route) if route.kind != "question" else next(
+            (owner.explorer for owner in [self.sources.owner(route.owner)] if owner is not None), None)
+        if explorer is None:
+            return False
+        box = explorer.live_control.box if route.operation == "live" else explorer.converter.box
+        if box is None:
+            return False
+        box.show()
+        box.raise_()
+        box.activateWindow()
+        return True
+
+
+class ClickOpens(QObject):
+    """Calls ``opened`` when its watched widget is clicked (the status bar's message opens Activity)."""
+
+    def __init__(self, opened: Callable[[], None], parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.opened = opened
+
+    def eventFilter(self, a0: Optional[QObject], a1: Optional[QEvent]) -> bool:
+        if (a1 is not None and a1.type() == QEvent.Type.MouseButtonRelease and isinstance(a1, QMouseEvent)
+                and a1.button() == Qt.MouseButton.LeftButton):
+            self.opened()
+        return False
+
+
+class ActivityWindow(QWidget):
+    """Activity (Q62.1): every task HeLab runs, grouped by kind, with its state, progress and time, this
+    session's history, and a details pane. Not modal; one per main window. Closed, it does nothing: no
+    timer and no signal connection; shown, it refreshes on its owners' signals (at most every
+    ``REFRESH_MS``) and every ``TICK_MS`` for times and progress."""
+    REFRESH_MS = 200
+    TICK_MS = 1000
+
+    def __init__(self, sources: ActivitySources, actions: Optional[ActivityActions] = None,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, Qt.WindowType.Window)
+        self.sources = sources
+        self.handler = actions or ActivityActions(sources)
+        self.snapshot = Snapshot()
+        self.refreshes = 0
+        self.setWindowTitle("Activity")
+        identify(self, "activity_window", "Activity", "Every task HeLab runs, and this session's history")
+        self._items: dict[str, QTreeWidgetItem] = {}
+        self._groups: dict[str, QTreeWidgetItem] = {}
+        self._collapsed: set[str] = set()
+        self._history: list[activity.Finished] = []
+        self._history_version = -1
+        self._connected: list[tuple[Any, Callable[..., None]]] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(LABEL_GAP, ROW_SPACING, LABEL_GAP, LABEL_GAP)
+        layout.setSpacing(ROW_SPACING)
+        row = QHBoxLayout()
+        row.setSpacing(LABEL_GAP)
+        self.buttons: dict[str, QPushButton] = {}
+        for action, (text, tip) in ACTION_TIPS.items():
+            if action == "answer":
+                continue
+            button = identify(QPushButton(text), f"activity_{action}", text, tip)
+            button.setToolTip(tip)
+            button.setAutoDefault(False)
+            button.clicked.connect(getattr(self, f"_on_{action}"))
+            self.buttons[action] = button
+            row.addWidget(button)
+        row.addSpacing(COLUMN_GAP)
+        self.pause_button = identify(QPushButton("Pause background I/O"), "activity_pause", "Pause background I/O",
+                                     "Pause background loads, scans and conversions, and start none, until Resume")
+        self.pause_button.setCheckable(True)
+        self.pause_button.setAutoDefault(False)
+        self.pause_button.setToolTip("Pause background loads, scans and conversions, and start none, until "
+                                     "Resume. The current tab, saves, Live and the local disk cache go on.")
+        self.pause_button.clicked.connect(self._on_pause)
+        row.addWidget(self.pause_button)
+        self.cancel_queued_button = identify(QPushButton("Cancel all queued"), "activity_cancel_queued",
+                                             "Cancel all queued", "Cancel every queued task that can be cancelled")
+        self.cancel_queued_button.setToolTip("Cancel every queued task that can be cancelled, each as its own "
+                                             "Cancel does. Saves stay queued.")
+        self.cancel_queued_button.setAutoDefault(False)
+        self.cancel_queued_button.clicked.connect(self._on_cancel_queued)
+        row.addWidget(self.cancel_queued_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        self.summary = identify(ElidedLabel("Ready"), "activity_summary", "Activity summary")
+        layout.addWidget(self.summary)
+        self.now = self._tree("activity_now", "Running and queued tasks", NOW_COLUMNS)
+        self.now.itemCollapsed.connect(self._item_collapsed)
+        self.now.itemExpanded.connect(self._item_expanded)
+        self.history = self._tree("activity_history", "This session's finished tasks", HISTORY_COLUMNS)
+        self.tabs = identify(QTabWidget(), "activity_tabs", "Activity lists")
+        self.tabs.addTab(self.now, "Now")
+        self.tabs.addTab(self.history, "History")
+        if (bar := self.tabs.tabBar()) is not None:
+            identify(bar, "activity_tab_bar", "Now or History")
+        self.tabs.currentChanged.connect(self._selection_changed)
+        self.details = identify(QPlainTextEdit(), "activity_details", "Task details",
+                                "What the selected task is, where it is, and for a failure its error and log lines")
+        self.details.setReadOnly(True)
+        self.details.setPlaceholderText("Select a task to see its details")
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.addWidget(self.tabs)
+        self.splitter.addWidget(self.details)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 1)
+        layout.addWidget(self.splitter, 1)
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(self.REFRESH_MS)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._tick = QTimer(self)
+        self._tick.setInterval(self.TICK_MS)
+        self._tick.timeout.connect(self.refresh)
+        self.resize(*parse_size(read_setting(app_settings(), ACTIVITY_SIZE_SETTING)))
+        self._update_buttons()
+
+    def _tree(self, ident: str, name: str, columns: Sequence[str]) -> QTreeWidget:
+        tree = identify(QTreeWidget(), ident, name)
+        tree.setColumnCount(len(columns))
+        tree.setHeaderLabels(list(columns))
+        tree.setUniformRowHeights(True)
+        tree.setStyleSheet(CELL_PADDING_STYLE)
+        tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        tree.setAlternatingRowColors(True)
+        tree.currentItemChanged.connect(self._selection_changed)
+        return tree
+
+    # Showing and hiding: nothing runs while hidden
+
+    def show_window(self) -> None:
+        """Window › Activity and the status bar's click: show it, raised."""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def showEvent(self, a0: Optional[QShowEvent]) -> None:
+        super().showEvent(a0)
+        self._connect()
+        self.refresh()
+        self._tick.start()
+
+    def hideEvent(self, a0: Optional[QHideEvent]) -> None:
+        super().hideEvent(a0)
+        self._tick.stop()
+        self._refresh_timer.stop()
+        self._disconnect()
+        size = self.size()
+        app_settings().setValue(ACTIVITY_SIZE_SETTING, f"{size.width()},{size.height()}")
+
+    @property
+    def watching(self) -> bool:
+        """Whether it is connected to its owners' signals (only while shown)."""
+        return bool(self._connected)
+
+    def _connect(self) -> None:
+        if self._connected:
+            return
+        sources = self.sources
+        pairs: list[tuple[Any, Callable[..., None]]] = [
+            (sources.service.activityChanged, self.request_refresh), (sources.service.resultReady, self._io_event),
+            (sources.cache.quitSavesChanged, self.request_refresh)]
+        for runner in dict.fromkeys(sources.runners()):
+            pairs.append((runner.finished, self._run_ended))
+        for signal, slot in pairs:
+            signal.connect(slot)
+        self._connected = pairs
+        activity.HISTORY.listeners.append(self.request_refresh)
+
+    def _disconnect(self) -> None:
+        for signal, slot in self._connected:
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass  # (Its sender has gone.)
+        self._connected = []
+        if self.request_refresh in activity.HISTORY.listeners:
+            activity.HISTORY.listeners.remove(self.request_refresh)
+
+    # Refreshing
+
+    @pyqtSlot()
+    def request_refresh(self) -> None:
+        """A refresh soon: requests within ``REFRESH_MS`` share one."""
+        if self.isVisible() and not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+
+    @pyqtSlot(object, object)
+    def _io_event(self, _request: object, event: object) -> None:
+        if isinstance(event, dict) and event.get("kind") in REFRESH_KINDS:
+            self.request_refresh()
+
+    @pyqtSlot(object)
+    def _run_ended(self, _result: object) -> None:
+        self.request_refresh()
+
+    @pyqtSlot()
+    def refresh(self) -> None:
+        """Build the snapshot from memory and show it (rows updated in place, the selection kept)."""
+        self.refreshes += 1
+        self.snapshot = self.sources.snapshot()
+        self._render_now()
+        if activity.HISTORY.version != self._history_version:
+            self._render_history()
+        counts = self.snapshot.counts
+        groups = {task.group for task in self.snapshot.tasks}
+        self.summary.setText(f"{counts.text} · {len(self.snapshot.tasks):,} task"
+                             f"{'' if len(self.snapshot.tasks) == 1 else 's'} listed"
+                             + (f" · history {len(activity.HISTORY):,}" if len(activity.HISTORY) else ""))
+        self.summary.setToolTip("I/O: " + counts.text + "\nGroups: " + (", ".join(
+            activity.GROUP_TITLES[group] for group, _ in activity.GROUPS if group in groups) or "none"))
+        self.pause_button.blockSignals(True)
+        self.pause_button.setChecked(self.snapshot.user_paused)
+        self.pause_button.blockSignals(False)
+        self.pause_button.setText("Resume background I/O" if self.snapshot.user_paused else "Pause background I/O")
+        self._selection_changed()
+
+    def _render_now(self) -> None:
+        tree = self.now
+        selected = self._selected_id()
+        tree.blockSignals(True)
+        wanted: dict[str, QTreeWidgetItem] = {}
+        children: dict[str, list[QTreeWidgetItem]] = {}
+        tops: dict[str, list[QTreeWidgetItem]] = {}  # (By group.)
+        known = {task.id for task in self.snapshot.tasks}
+        for task in self.snapshot.tasks:
+            item = self._items.get(task.id) or QTreeWidgetItem()
+            item.setData(0, Qt.ItemDataRole.UserRole, task.id)
+            self._fill(item, task)
+            wanted[task.id] = item
+            if task.parent and task.parent in known:
+                children.setdefault(task.parent, []).append(item)
+            else:
+                tops.setdefault(task.group, []).append(item)
+        groups: list[QTreeWidgetItem] = []
+        for group, _title in activity.GROUPS:
+            if group not in tops:
+                continue
+            count = sum(task.group == group for task in self.snapshot.tasks)
+            item = self._groups.get(group) or QTreeWidgetItem()
+            item.setText(0, activity.group_heading(group, count))
+            item.setData(0, Qt.ItemDataRole.UserRole, f"group:{group}")
+            self._groups[group] = item
+            groups.append(item)
+        self._groups = {group: item for group, item in self._groups.items() if group in tops}
+        self._sync(tree.invisibleRootItem(), groups)
+        for name, item in self._groups.items():
+            item.setFirstColumnSpanned(True)
+            self._sync(item, tops[name])
+            item.setExpanded(f"group:{name}" not in self._collapsed)
+        for task_id, item in wanted.items():
+            self._sync(item, children.get(task_id, []))
+            if task_id in children:
+                item.setExpanded(task_id not in self._collapsed)
+        self._items = wanted
+        if selected is not None and selected in wanted:
+            tree.setCurrentItem(wanted[selected])
+        tree.blockSignals(False)
+        for column in range(1, len(NOW_COLUMNS)):
+            tree.resizeColumnToContents(column)
+
+    @staticmethod
+    def _sync(parent: Optional[QTreeWidgetItem], items: list[QTreeWidgetItem]) -> None:
+        """Make ``items`` ``parent``'s children, in order, moving them only when the order changed."""
+        if parent is None:
+            return
+        current = [parent.child(index) for index in range(parent.childCount())]
+        if current != items:
+            parent.takeChildren()
+            parent.addChildren(items)
+
+    @staticmethod
+    def _fill(item: QTreeWidgetItem, task: Task) -> None:
+        texts = (task.title, task.tab, _name(task.folder) if task.folder else "", task.state_text,
+                 task.progress.text() if task.progress is not None else "",
+                 "" if task.elapsed is None else clock(task.elapsed),
+                 "" if task.left is None else f"~{clock(task.left)}")
+        tooltip = "\n".join(task.details)
+        for column, text in enumerate(texts):
+            if item.text(column) != text:
+                item.setText(column, text)
+            item.setToolTip(column, task.folder if column == 2 and task.folder else tooltip)
+        brush = QBrush(QColor(AMBER)) if task.state in ("failed", "stalled") else QBrush()
+        item.setForeground(3, brush)
+
+    def _render_history(self) -> None:
+        self._history_version = activity.HISTORY.version
+        self._history = activity.HISTORY.entries()
+        tree = self.history
+        current = tree.currentItem()
+        chosen = current.data(0, Qt.ItemDataRole.UserRole) if current is not None else None
+        tree.blockSignals(True)
+        tree.clear()
+        items = []
+        for index, entry in enumerate(self._history):
+            took = "" if entry.started is None else clock(max(0.0, entry.ended - entry.started))
+            item = QTreeWidgetItem([time.strftime("%H:%M:%S", time.localtime(entry.ended)), entry.title,
+                                    self.sources.tab_text(entry.owners), _name(entry.folder) if entry.folder else "",
+                                    activity.outcome_text(entry), took])
+            item.setData(0, Qt.ItemDataRole.UserRole, f"history:{index}:{entry.id}")
+            item.setToolTip(3, entry.folder)
+            for column in (0, 1, 4, 5):
+                item.setToolTip(column, "\n".join(self._history_details(entry)))
+            if entry.outcome != "ok":
+                item.setForeground(4, QBrush(QColor(AMBER)))
+            items.append(item)
+        tree.addTopLevelItems(items)
+        if chosen is not None:
+            entry_id = str(chosen).split(":", 2)[-1]
+            for item in items:
+                if str(item.data(0, Qt.ItemDataRole.UserRole)).split(":", 2)[-1] == entry_id:
+                    tree.setCurrentItem(item)
+                    break
+        tree.blockSignals(False)
+        for column in range(len(HISTORY_COLUMNS)):
+            tree.resizeColumnToContents(column)
+
+    def _history_details(self, entry: activity.Finished) -> list[str]:
+        took = "" if entry.started is None else f" · took {clock(max(0.0, entry.ended - entry.started))}"
+        lines = [entry.title, f"Folder: {entry.folder}" if entry.folder else "",
+                 f"For: {tab}" if (tab := self.sources.tab_text(entry.owners)) else "",
+                 "Ended " + time.strftime("%H:%M:%S", time.localtime(entry.ended)) + took,
+                 f"Outcome: {activity.outcome_text(entry)}",
+                 f"Attempts: {entry.attempts}" if entry.attempts > 1 else "", *entry.details]
+        lines = [line for line in lines if line]
+        if entry.outcome != "ok":
+            log = activity.LOG_LINES_HANDLER.about(entry.folder, entry.started, entry.ended)
+            if log:
+                lines += ["", "Log:", *log]
+        return lines
+
+    # Selection, details and buttons
+
+    def _selected_id(self) -> Optional[str]:
+        item = self.now.currentItem()
+        value = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        return str(value) if value is not None else None
+
+    def selected_task(self) -> Optional[Task]:
+        if self.tabs.currentWidget() is not self.now:
+            return None
+        chosen = self._selected_id()
+        return None if chosen is None else self.snapshot.by_id().get(chosen)
+
+    def selected_entry(self) -> Optional[activity.Finished]:
+        if self.tabs.currentWidget() is not self.history:
+            return None
+        item = self.history.currentItem()
+        if item is None:
+            return None
+        index = int(str(item.data(0, Qt.ItemDataRole.UserRole)).split(":")[1])
+        return self._history[index] if index < len(self._history) else None
+
+    def _selection_changed(self, *_: object) -> None:
+        task, entry = self.selected_task(), self.selected_entry()
+        if task is not None:
+            text = "\n".join(task.details)
+            if task.state == "failed":
+                log = activity.LOG_LINES_HANDLER.about(task.folder)
+                if log:
+                    text += "\n\nLog:\n" + "\n".join(log)
+        elif entry is not None:
+            text = "\n".join(self._history_details(entry))
+        else:
+            text = ""
+        if self.details.toPlainText() != text:
+            self.details.setPlainText(text)
+        self._update_buttons()
+
+    def available(self) -> dict[str, str]:
+        """Each action's state for the selected row: "" if it can be used, else why not."""
+        task, entry = self.selected_task(), self.selected_entry()
+        result: dict[str, str] = {}
+        for action in self.buttons:
+            if action == "log":
+                result[action] = ""
+            elif task is not None:
+                result[action] = "" if action in task.actions else NOT_FOR.get(action, "Not for this task")
+            elif entry is not None:
+                result[action] = self._entry_action(entry, action)
+            else:
+                result[action] = "Select a task first"
+        return result
+
+    def _entry_action(self, entry: activity.Finished, action: str) -> str:
+        if action == "show":
+            return "" if self.handler.show_target(entry.route) else NOT_FOR["show"]
+        if action == "retry":
+            return self.handler.retry_refusal(entry)
+        return "Not for a finished task"
+
+    def _update_buttons(self) -> None:
+        for action, why in self.available().items():
+            button = self.buttons[action]
+            button.setEnabled(not why)
+            button.setToolTip(ACTION_TIPS[action][1] if not why else why)
+        queued = [task for task in self.snapshot.tasks if task.state == "queued" and "cancel" in task.actions]
+        self.cancel_queued_button.setEnabled(bool(queued))
+
+    @pyqtSlot(QTreeWidgetItem)
+    def _item_collapsed(self, item: QTreeWidgetItem) -> None:
+        self._collapsed.add(str(item.data(0, Qt.ItemDataRole.UserRole)))
+
+    @pyqtSlot(QTreeWidgetItem)
+    def _item_expanded(self, item: QTreeWidgetItem) -> None:
+        self._collapsed.discard(str(item.data(0, Qt.ItemDataRole.UserRole)))
+
+    # The buttons
+
+    def _route(self) -> tuple[Optional[Route], str]:
+        task, entry = self.selected_task(), self.selected_entry()
+        if task is not None:
+            return task.route, task.folder
+        if entry is not None:
+            return entry.route, entry.folder
+        return None, ""
+
+    @pyqtSlot()
+    def _on_show(self) -> None:
+        route, folder = self._route()
+        if route is not None:
+            if route.kind == "question":
+                self.handler.answer(route)
+            else:
+                self.handler.show(route, folder)
+
+    @pyqtSlot()
+    def _on_log(self) -> None:
+        self.handler.open_log()
+
+    @pyqtSlot()
+    def _on_cancel(self) -> None:
+        task = self.selected_task()
+        if task is not None and "cancel" in task.actions:
+            self.handler.cancel(task)
+            self.request_refresh()
+
+    @pyqtSlot()
+    def _on_retry(self) -> None:
+        task, entry = self.selected_task(), self.selected_entry()
+        if task is not None and "retry" in task.actions:
+            self.handler.retry(task.route, task.folder)
+        elif entry is not None and not self.handler.retry_refusal(entry):
+            self.handler.retry(entry.route, entry.folder)
+        self.request_refresh()
+
+    @pyqtSlot()
+    def _on_stop_live(self) -> None:
+        task = self.selected_task()
+        if task is not None and "stop_live" in task.actions:
+            self.handler.stop_live(task.route)
+            self.request_refresh()
+
+    @pyqtSlot(bool)
+    def _on_pause(self, on: bool) -> None:
+        self.sources.service.set_user_hold(on)
+        self.refresh()
+
+    @pyqtSlot()
+    def _on_cancel_queued(self) -> None:
+        self.handler.cancel_queued(self.snapshot)
+        self.request_refresh()
