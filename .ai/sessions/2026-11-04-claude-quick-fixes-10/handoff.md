@@ -317,3 +317,10 @@ proposed above stands, with its cause not found. One idea for the hunt: the refu
 on a timer that a loaded runner's event loop is late to.
 
 RERUN (2) (Windows, real-helper refresh): the known-issues line above, as CoCo asked.
+
+**CI 41762330085** (`feb9985`, handoff only) succeeded. I read all 17 job logs.
+- **One RERUN,** passed on rerun: Windows Tests 2/3 (job 126352703916),
+  `test_quit_confirms.py::test_quitting_with_nothing_to_save_closes_within_a_second`, with
+  `assert (692.18 - 691.02) < 1.0`: quitting took 1.15 s. It is already in known-issues (the Windows sightings
+  of 41578243240 and 41597667363); this is one more for that entry.
+- **The Build jobs:** each log's one "RERUN" match is only this commit's subject in the checkout line.
