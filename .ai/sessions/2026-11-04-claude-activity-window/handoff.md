@@ -29,7 +29,10 @@ with answers (1)–(4) and (a)–(d)).
 | `a69c9d4` | AW-10 · unique history keys; the History tab updated in place |
 | `0c653c1` | AW-12 · log lines name the folder itself |
 | `d4593c8` | AW-11 · the memory-only test covers a tab's rows and the history |
-| (this commit) | the handoff, after the review |
+| `99c74c4`, `16ff65c` | the handoff, after the review |
+| `12d4580` | Gauge's re-check |
+| `8cfd279` | AW-14 · the Now tree keeps its scroll position when rows change place |
+| `5b9a270` | AW-15 · a GUI conversion's failed or cancelled pass is one history entry |
 
 ## What is built
 
@@ -159,6 +162,10 @@ it, the window's buttons, and each owner's history report). Each test file reset
 
 ## Review fixes (Gauge's AW-1 to AW-13, `3afddf4`)
 
+Gauge's re-check (`12d4580`) found AW-1 to AW-13 resolved and two Minor ones, both fixed with tests that
+fail on the old code: AW-14 (AW-1's detach reset the scroll position) and AW-15 (a GUI conversion's failed
+or cancelled pass was in the history twice).
+
 All fixed as Gauge suggested, with CoCo's decisions on AW-3 (one row's Cancel stays the toolbar's Cancel,
 said in its tooltip and the manual; Cancel all queued never stops a running task) and AW-10 (unique ids):
 AW-1 (the Now tree's re-parenting, three regroup/reparent tests that fail on the old render), AW-2
@@ -198,13 +205,17 @@ below follows them.
 > Cancel all queued (never a running task: a tab's selected load is left to its tab's Cancel,
 > `cancel(…, queued_only=True)`; saves stay). **The Now tree** fills rows in place; when any row's group or
 > parent changes it detaches every item before placing it again, holding the taken items until the render
-> ends, under `try/finally` (AW-1); a group's heading counts the rows shown under it. **The history**
+> ends, under `try/finally` (AW-1), and keeps both scroll bars' values across it (AW-14); a group's heading
+> counts the rows shown under it. **The history**
 > (`activity.HISTORY`, the last 200, newest first; added to on the GUI thread only; each entry's `key` is
 > unique, `Finished.seq`): each owner reports its task's end once (`activity.record`): IOService at a
 > request's first terminal event, before its owner hears (`_report_end`; a retried timeout or a requeue is
 > no end), the runner from a GUI-thread slot, Live off, Live's auto-convert stopping without a helper's
 > failure (`_convert_stopped`), a GUI conversion's end (including one whose pass couldn't be queued), a
-> test import's end, the cache move's end. Every failure and cancellation is kept; successes are kept but
+> test import's end, the cache move's end. A GUI conversion's pass is reported by the conversion only: its
+> `ExplorerConverter` is in `FolderCache.self_reporting`, FolderCache marks the helper requests such an owner
+> asks for or joins, and IOService skips them (`reports_end_itself`; AW-15); Live's auto-convert reports no
+> pass, so IOService's entry is a failed pass's. Every failure and cancellation is kept; successes are kept but
 > Live's checks, Live's plot reruns, every conversion pass (the Live session or the GUI conversion is the
 > entry), listings, details scans, cached reads, icons and other frequent small work (`kept_in_history`,
 > `NOT_KEPT_WHEN_OK`; AW-2). A listener's error is logged, never raised into the reporter. The History tab
