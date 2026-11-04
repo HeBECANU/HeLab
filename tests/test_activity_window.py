@@ -170,11 +170,28 @@ def test_rendering_reads_memory_only(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
     """A refresh submits no I/O and never touches a source folder."""
     source = tmp_path / "source"
     (source / "run_1").mkdir(parents=True)
+    from types import SimpleNamespace
+    from test_activity import fake_explorer
+    from helab.utils.folder_cache import Dataset
+    from helab.views.explorer_convert import FolderConversion
+    from helab.views.explorer_live import AutoConvert, LiveSession
     service = quiet_service(monkeypatch)
     cache = get_folder_cache(service)
     service.submit("a", 0, str(source / "run_1"), "load")
     service.submit("b", 0, str(source / "run_2"), "scan")
-    window = make_window(qtbot, service, cache)
+    # (AW-11: a tab's rows too, and the history's.)
+    live = str(source / "live")
+    session = LiveSession(live, time.time(), set(), Dataset(live, "sig", {}, {"fingerprint": []}, 0), unsettled=1)
+    session.convert = AutoConvert(time.time(), error="the conversion failed")
+    conversion = FolderConversion(str(source / "raw"), "cache", time.time(), request=True, todo=3, done=1)
+    box = SimpleNamespace(windowTitle=lambda: "Convert on a share?", text=lambda: f"{source} is on a share.")
+    explorer = fake_explorer("tab", [session], {conversion.path: conversion}, convert_box=box)
+    activity.install_log_lines()
+    logging.warning("Load data failed: %s — broken", source / "run_3")
+    activity.record(Finished("io:x", "loads", "Load data", str(source / "run_3"), time.time(), "failed", "broken",
+                             started=time.time() - 3))
+    window = ActivityWindow(ActivitySources(service, cache, lambda: [("tab", explorer)], mover=lambda: None))
+    qtbot.addWidget(window)
     touched: list[str] = []
     top = os.path.normcase(str(source))
 
@@ -197,8 +214,15 @@ def test_rendering_reads_memory_only(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(cache, "submit", refused)
     window.show()
     window.refresh()
-    window.now.setCurrentItem(window.now.topLevelItem(0))
+    titles = {row.title for row in window.snapshot.tasks}
+    assert {"Live", "Auto-convert", "Convert raw files to TXY", "Question: Convert on a share?"} <= titles
+    for index in range(window.now.topLevelItemCount()):
+        group = window.now.topLevelItem(index)
+        assert group is not None and group.child(0) is not None
+        window.now.setCurrentItem(group.child(0))
     window.tabs.setCurrentWidget(window.history)
+    window.history.setCurrentItem(window.history.topLevelItem(0))
+    assert "Log:" in window.details.toPlainText()
     window.refresh()
     assert touched == []
     monkeypatch.undo()
