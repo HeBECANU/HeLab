@@ -51,6 +51,11 @@ that branch.
 - [ ] Open questions ([DECISIONS_TODO](../.ai/DECISIONS_TODO.md)): Q58.1 and Q58.2 (the try-import's wording and
   time limit; proposed as built), Q14.4 (a folder's status counting HeLab's TXY; to ask again).
 
+- [ ] The Activity window (Q62.1–Q62.5; Tony, 2026-11-04; [plan](activity-window.md)): every background task
+  (loads, saves, Live, conversions launched from the GUI, cache upkeep, analysis jobs, script probes) with its
+  details and status, Cancel / Retry / Pause, and this session's history; Window › Activity or a click on the
+  status bar. A floor on this Mac.
+
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
 **Carried over from v0.0.8:**
@@ -158,7 +163,7 @@ Bugs, gaps and flaky tests, open and recently fixed: [known issues](known-issues
   (2026-10-20).
 - [ ] Show the analysis worker beside I/O: status-bar counts and Folder
   details' activity, each job with script, input, revision, time and Cancel;
-  later remote/CLI workers in the same list (Tony, 2026-10-19).
+  later remote/CLI workers in the same list (Tony, 2026-10-19). Planned in the [Activity window](activity-window.md) (v0.0.9).
 - [ ] Packaged builds: record bundled scripts' SHA-256 at build time (in
   `_build_info.json`), since PyInstaller leaves no `.py` files to hash
   (2026-10-19).
