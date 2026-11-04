@@ -107,6 +107,7 @@ nav:
   - How-to guides:
       - how-to/data-root.md
       - how-to/live.md
+      - how-to/activity.md
       - how-to/convert-txy.md
       - how-to/write-a-script.md
   - Reference:
