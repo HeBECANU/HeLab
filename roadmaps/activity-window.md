@@ -1,7 +1,7 @@
 # Activity window
 
 Horizon: v0.0.9 (Tony, 2026-11-04, Q62.5). Added: 2026-11-04, from Tony in Chat (block 62: Q62.1–Q62.5,
-decided). **Status:** planned; to be built as one floor on this Mac (the dev computer) from `dev/v0.0.9`.
+decided). **Status:** done (v0.0.9): the Activity Window floor, landed `5af4a89` on `dev/v0.0.9` (handoff and review in `.ai/sessions/2026-11-04-claude-activity-window/`). Tony's follow-up answers: Q63.1–Q63.4. Not in scope (v1), below, stays for later.
 Priority and completion: [overview](_readme.md). It covers the Near term item "Show the analysis worker
 beside I/O" (Tony, 2026-10-19). Related: [io-and-browsing](../.ai/architecture/io-and-browsing.md),
 [live](../.ai/architecture/live.md), [plots-and-scripts](../.ai/architecture/plots-and-scripts.md).

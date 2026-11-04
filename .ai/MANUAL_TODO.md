@@ -326,6 +326,16 @@ and M42.1 on a lab PC with the switch on (one Live session).
   `github.com` (not `api.github.com`), the build list and the asset manifest; no `::warning::` in the release job's
   log about the releases, the history or GitHub's notes.
 
+## Activity window (added 2026-11-04, block 63)
+
+- [ ] **M63.1 The Activity window on a real screen** (macOS and Windows; `5af4a89`): open it from Window › Activity
+  and from a click on the status bar; follow a load, a Live session with auto-convert, a Folder details conversion
+  and a plot run; Cancel a load, Retry a failed listing, Stop Live, and Pause and Resume background I/O during a
+  background scan ("paused by you" on the status bar meanwhile); check that its size is remembered and History marks
+  failures.
+- [ ] **M63.2 Pause background I/O on a share** (the lab PC, or any slow share): pause while a background load reads
+  it, and confirm that it pauses and resumes, and that quitting while paused quits normally.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

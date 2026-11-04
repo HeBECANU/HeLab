@@ -51,6 +51,19 @@ since the v0.0.7a1 tidy-up):
 - **Q62.4** this session's history, the last 200 ("ok").
 - **Q62.5** in v0.0.9, a floor on this Mac ("ok").
 
+## Activity window follow-ups (block 63; [handoff](sessions/2026-11-04-claude-activity-window/handoff.md))
+
+All four decided as proposed (Tony in Chat, 2026-11-04: "Q~1 ok / Q~2 ok / Q~3 ok / Q~4 ok"); built in `5af4a89`.
+
+- **Q63.1** Saves, cache upkeep and script test imports are listed without Cancel in v1; the quit window's Quit now
+  stays the only stop for saves.
+- **Q63.2** The history leaves out successful Live checks, Live's plot reruns, every successful conversion pass (the
+  Live session or the GUI conversion is the entry), folder listings, details scans, cached reads, icons and other
+  frequent small work; every failure and cancellation is kept.
+- **Q63.3** The status bar's counts say "paused by you" while Pause background I/O is on.
+- **Q63.4** Retry of a failed load whose folder is no longer selected is disabled, with "Select the folder in its
+  tab to load it again (Show in tab)", in v1.
+
 ## v0.0.8 follow-ups (block 58)
 
 From the Follow-ups floor's [handoff](sessions/2026-11-03-claude-followups/handoff.md) (landed `72ab47a`). Both

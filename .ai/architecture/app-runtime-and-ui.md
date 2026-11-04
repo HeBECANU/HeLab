@@ -43,3 +43,49 @@ The active browser additionally uses session-only `FolderCache` (`helab/utils/fo
 **The TXY list editor and Convert this folder…** (Q53.2, Q55.4; `agent/txy-priority`, landed `9bf99ff`; [converter](converter.md#txy-priority-lists)): one editor (`helab/views/txy_list.py`: `TxyListEditor`, `TxyListDialog`, `ask_txy_list`, `known_names`) in three places: Settings › TXY converter's "TXY priority (tabs and Live)" row with its summary and Edit…; right-click › TXY for this folder… ("As Settings" first; the folder only); each plot's TXY button ("As the folder's tab"). Rows are a checkbox and a name ("Conversion profile (m19v1)", "External (MATLAB converter)", then every profile as "matlab-2023-lab-edit (m23v1)"); the ticked rows in order are the list (drag, or Move up / Move down); OK is off with nothing ticked; a one-line summary, detail in the tooltip; every control `identify`d (`txy_list*`, `tabs_txy_list`, the convert dialog's `convert_folder_*`; both dialogs in `test_accessible_names.py`'s walk). Folder details names a folder's own list and adds "· N fallback". Right-click › Convert this folder… and File › Convert "<folder>"… open `ConvertFolderDialog` ([converter](converter.md#convert-this-folder)); while a converter question is open or Live converts the folder, the items are disabled with the reason.
 
 **Help › User manual** (Q54.4 (a); `662a287`, Docs floor, landed `b0e3aac`): the action `help_user_manual` (`HelabMainWindow.open_user_manual`; targets in the Qt-free `helab/utils/user_manual.py`) always opens the system browser (`QDesktopServices.openUrl`), never a QtWebEngine view (some lab PCs' can't draw). In order: the running version's site on the GitHub Pages of the build's repository (`BuildInfo.repository`: `https://<owner>.github.io/<name>/<version>/`), checked first by an asynchronous HEAD request through `QNetworkAccessManager` (3 s transfer timeout, `SITE_CHECK_TIMEOUT_MS`; no thread, the GUI never waits; a click during a check adds none); else the bundled copy (`helab/manual/index.html` beside the package, as a `file://` URL); else `github.com/<repo>/blob/HEAD/docs/index.md`. A build with no site (a source run, or an older stamp) opens the fallback at once; a source run's repository is `DEFAULT_REPOSITORY` (`TonyXTYan/HeLab`; Q56.2).
+
+**The Activity window** (Q62.1–Q62.5; `agent/activity-window`, landed `5af4a89`; manual: "See and manage
+what HeLab is doing"): Window › Activity (`window_activity`) and a click on the status bar's message
+(`status_activity`, its tooltip's last line "Click for Activity", `HelabMainWindow.ACTIVITY_HINT`;
+`ActivityWindow.ClickOpens`) open one non-modal `ActivityWindow` per main window, built hidden at start.
+Its model is Qt-free (`helab/utils/activity.py`, in `PURE`): `Task` rows in a `Snapshot`, built from memory
+only by `ActivitySources` (`helab/views/ActivityWindow.py`) from IOService's `active`, `pending` and
+`retired` (a retry held behind its stopping attempt is one row), FolderCache (`job_of`, `admin_action`,
+`finishing_of`, `raw_filling`, `quit_entries`' waiting and held saves), each tab's Live sessions
+(`LiveController.sessions`) with their checks, saves and auto-convert under them, GUI conversions and the
+converter's open questions, the analysis runners (`AnalysisQueue.jobs`, `RunInfo`), the Scripts panel's
+test imports and a waiting reload, and the cache move. Groups: Loads and scans, Saves, Live, Conversions,
+Cache upkeep, Analysis, Scripts (Other for anything new). States: running, queued (its place, or why
+held), paused (by the foreground, the mismatch hold or the user), stopping (until the exit flag), waiting
+for N files to settle, no progress for M:SS (`LoadClock.STALL_SECONDS`), failed. Its counts are
+`activity_counts`'. **Hidden, it does nothing** (no timer, no connection); shown, a 200 ms coalesced
+refresh on `activityChanged`, terminal `resultReady` kinds, `quitSavesChanged`, runners' `finished` and
+history appends, plus a 1 s tick; rows update in place. **Actions go through each owner's own path**
+(`ActivityActions`): Cancel (a tab's selected load through `cancel_loading`, the toolbar's Cancel, which
+also stops that tab's background loads, as its tooltip and the manual say (CoCo, AW-3); else
+`FolderCache.cancel`, auto-convert's toggle, `cancel_raw_fill`, `CacheMover.cancel`,
+`AnalysisRunner.cancel`; saves, cache upkeep and test imports have none), Retry (`resume_live`, the Convert row's `clicked`, `refresh_folder`, `FolderExplorer.retry`,
+a plot's `run`, `reload_scripts`; refused while `IOService.unexited(operation, path)`), Show in tab, Stop
+Live, Open log (this session's log file), Pause / Resume background I/O (`IOService.set_user_hold`) and
+Cancel all queued (never a running task: a tab's selected load is left to its tab's Cancel,
+`cancel(…, queued_only=True)`; saves stay). **The Now tree** fills rows in place; when any row's group or
+parent changes it detaches every item before placing it again, holding the taken items until the render
+ends, under `try/finally` (AW-1), and keeps both scroll bars' values across it (AW-14); a group's heading
+counts the rows shown under it. **The history**
+(`activity.HISTORY`, the last 200, newest first; added to on the GUI thread only; each entry's `key` is
+unique, `Finished.seq`): each owner reports its task's end once (`activity.record`): IOService at a
+request's first terminal event, before its owner hears (`_report_end`; a retried timeout or a requeue is
+no end), the runner from a GUI-thread slot, Live off, Live's auto-convert stopping without a helper's
+failure (`_convert_stopped`), a GUI conversion's end (including one whose pass couldn't be queued), a
+test import's end, the cache move's end. A GUI conversion's pass is reported by the conversion only: its
+`ExplorerConverter` is in `FolderCache.self_reporting`, FolderCache marks the helper requests such an owner
+asks for or joins, and IOService skips them (`reports_end_itself`; AW-15); `FolderCache.cancel` takes
+the mark off a pass that goes on with no self-reporting subscriber left (AW-16); Live's auto-convert reports no
+pass, so IOService's entry is a failed pass's. Every failure and cancellation is kept; successes are kept but
+Live's checks, Live's plot reruns, every conversion pass (the Live session or the GUI conversion is the
+entry), listings, details scans, cached reads, icons and other frequent small work (`kept_in_history`,
+`NOT_KEPT_WHEN_OK`; AW-2). A listener's error is logged, never raised into the reporter. The History tab
+adds new entries on top and drops the oldest at the bottom, leaving the rest. `activity.LogLines` keeps
+the session's last 500 warnings in memory for a failure's details (lines naming the folder itself, not a
+longer name; the main window adds it to the root logger at start and removes it on close). The window's
+size is `activity_window_size`, fitted to its screen when it first shows.

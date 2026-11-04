@@ -509,6 +509,16 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   QLabel, is cut off. Elide it in the middle with the whole text in its tooltip, as the Cache tab's path now is. Mind
   `test_main_split`'s 250 px panel check, which has no slack on the preset row.
 
+## Activity window (block 63)
+
+- [ ] **A63.1 A cancelled shared job's history entry keeps its tabs** (the Activity Window floor's A~1;
+  `helab/utils/folder_cache.py`, `io_service.py`). FolderCache forgets a job before cancelling its helper, so the
+  cancellation's history entry names the producer's owner, not its tabs, and History offers no Show in tab or Retry
+  for it. Pass the subscribers to IOService before cancelling (e.g. `owners_of` reading a just-forgotten job).
+- [ ] **A63.2 Refresh the Activity window on each tab's own signals** (the floor's A~2; optional,
+  `helab/views/ActivityWindow.py`). Live's and conversions' state changes show within the 1 s tick; connect each
+  tab's `liveChanged` and `loadStateChanged` too if that delay shows in use.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

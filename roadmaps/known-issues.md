@@ -242,8 +242,12 @@ How to use it:
   once on macOS CI (run 40790093719, `agent/quick-fixes-5` `ed0635c`, job 123172940859, 2026-10-29);
   passed on its rerun. Again: gw2 on Ground CI 41161254527 (Windows Tests 2/2, job 124419124616,
   `f128623`; "node down: Not properly terminated", a stack at line 449), passed on gw4. Again: gw3 on
-  `agent/caching-v2` CI 41386150963 (`df17761`, Ubuntu Tests 2/2, job 125087377900), passed on retry. A
-  crash, not an assertion (a native fault in a GUI test?); cause unknown.
+  `agent/caching-v2` CI 41386150963 (`df17761`, Ubuntu Tests 2/2, job 125087377900), passed on retry. Again on
+  `agent/activity-window` CI 41810647028 (`de386d2`, macOS Tests 1/3, job 126508807739), passed on retry; its
+  faulthandler stack shows a likely cause: `ManualMarkerDialog._result`'s modal `QMessageBox.warning`
+  (`DataRootDialogs.py:235`), shown for the cancelled marker save during the test's `service.shutdown()`. Fix
+  proposed by the Activity Window floor: close the dialog before the shutdown in the test, or show the warning
+  without a modal loop (`open()`), as the converter's questions do.
 - [ ] `test_test_isolation.py::test_pytest_imports_the_checkout_it_runs_in_before_any_other`: a
   collection error in pathlib `lstat` on Windows CI (run 40754482305, `agent/txy-packaging` `7d2bff9`),
   passed on retry. Again on Windows Tests (2/2): `agent/byte-units` CI 40989130996 (job
@@ -372,6 +376,22 @@ How to use it:
   verification" job and a "Disk cache convert_prefs" read were cancelled: check whether the conversion waits
   behind them while offline instead of being refused at once (Rivet's hypothesis, unconfirmed). Cause not yet
   found (Quick Fixes 10's handoff).
+  Again on `agent/activity-window` CI 41818074716 (`a2f040f`, macOS Tests 2/3, job 126533965855, `[a Live check comes due
+  while offline]`), passed on rerun. The branch's AW-5 change (`384f93f`) to `_convert_event`'s offline branch sets
+  `convert.error`, which line 626 waits for, before `_convert_stopped`, and the offline answer still comes from
+  `FolderCache.submit`'s single-shot path; the Reviewer ran it 12 times under 16 CPU burners with `--reruns 0`,
+  all passing.
+- [ ] `test_load_queue.py::test_an_automatic_load_waits_for_the_selection_to_settle_only_while_loads_are_busy`:
+  one RERUN on `agent/activity-window` CI 41794579242 (`a141e60`, Ubuntu Tests 1/3, job 126455595537):
+  `assert explorer.settling` at line 674, right after a third folder is selected while the second's load is busy;
+  passed on rerun. The test drives `FolderExplorer` only, with real settle timers (`SETTLE_MAX` 1.0), so the wait
+  probably ended before the assertion on a slow runner. Cause not confirmed.
+- [ ] `test_gui_responsiveness.py::test_rendering_never_reads_filesystem_or_disk_cache`: two RERUNs in one local
+  run on `agent/activity-window` (`d4593c8`, teardown and then its rerun's setup): `AssertionError: GUI rendering
+  performed I/O` raised in a thread (pytest-qt's "Failed to process unraisable/thread exception"); not reproduced
+  in 3 more runs. Probably a thread another test left behind (a helper's artifact cleanup, `shutil.rmtree`),
+  started during the test and counted by `this_tests` as its own. Fix proposed: count only threads the test's
+  own service starts.
 - [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
   `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
   retry and 5 of 5 alone. Cause not looked into.
