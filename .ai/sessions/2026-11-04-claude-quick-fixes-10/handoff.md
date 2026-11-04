@@ -1,0 +1,244 @@
+# Handoff: Quick Fixes 10 (`agent/quick-fixes-10`)
+
+Worker: Rivet (Quick Fixer), own worktree `.ai/temp/quick-fixes-10`, from `bd349ec` (dev/v0.0.9). Brief:
+[brief.md](brief.md), and its addendum (A56.4, `fdbd962` on dev/v0.0.9; not merged into this branch).
+
+| Item | Commit | Files |
+|---|---|---|
+| A59.1 Release notes that link their tags | `ca0bd61` | `helab/release_draft.py`, `.github/workflows/dev-cicd.yml` (release job), `tests/test_release_recovery.py` |
+| A59.2 (b) The no-stable front page | `bfa2b78` | `docs/publish/no-stable.html`, `docs/publish/site_versions.py`, `tests/test_docs_workflows.py` |
+| A56.7 `helab --help` | `5a4d863` | `helab/main.py`, `tests/test_versioning.py` |
+| A58.2 Folder details' conversion and a read stopped early | `6b22d8d` | `helab/views/explorer_convert.py`, `helab/views/explorer_live.py`, `tests/test_explorer_convert.py` |
+| A56.4 The built-in profiles' descriptions | `0dc4f90` | `helab/convert/profile.py`, `helab/convert/builtin_profiles/*.json`, `tests/test_convert_profile.py`, `tests/test_profile_library.py` |
+
+Earlier work: everything from QF9 (`b0eb914`, its handoff `d57814e`) and the fixed-mount seam (`ee4bbdf`…`e629969`)
+is in dev/v0.0.9's history (checked with `git merge-base --is-ancestor` against `bd349ec`). Nothing of mine is
+unlanded.
+
+## A59.1 Release notes that link their tags (`ca0bd61`)
+
+**Before:** the release job's "Prepare Release Body" step wrote a fixed bash template: no tag link, no comparison
+with the previous release, and a Workflow Run link built from `github.event.repository.url`, which is the API's
+URL (v0.0.8a1's draft, run 41746737106, linked `https://api.github.com/repos/TonyXTYan/HeLab/actions/runs/…`).
+
+**Now:** `release_draft.main` builds a new draft's notes (`release_body`):
+- `## Release [<tag>](<server>/<repo>/tree/<tag>)`, the date, the commit link, and the Workflow Run link from
+  `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}` (`--run-url`);
+- GitHub's generated notes (`POST /repos/{repo}/releases/generate-notes` with `previous_tag_name`: it changes
+  nothing). The notes come with their own "**Full Changelog**" line; ours replaces it, so there is exactly one;
+- the build list and note, as before;
+- `**Full Changelog**: <server>/<repo>/compare/<previous>...<tag>` at the end (`/commits/<tag>` when there is no
+  previous tag), then the asset manifest (`manifest_body`, unchanged).
+
+**The previous tag** (`previous_tag`): the newest `v` + PEP 440 tag of a lower version among the tags in the
+commit's history (`git tag --merged <commit>`, `tags_in_history`). For v0.0.8a1 that is v0.0.6a1: v0.0.7a1 was
+never tagged. `v.0.0.1i`, `v0.0.1x`, `v0.0.2e` (not PEP 440) and `CI-CD-everything-passed` are never chosen. A
+tag on a branch that never merged isn't in the history, so it isn't chosen either.
+
+**Recovery:** `publish_draft` now takes the body as a string or a callable, and calls it only when it creates the
+draft. A resumed draft, or a published release, keeps its notes and never asks GitHub for new ones. Bodies are
+still written only while drafts (`_guard`). If GitHub's notes are unavailable (an API error), the draft is made
+without them, with a `::warning::` line. The draft matters more than its notes.
+
+**The job:** the bash template step is gone. The release step passes `--server-url` and `--run-url`, and a new
+"Install packaging" step comes first, since `release_draft` now imports `packaging` (as `release.py` does). The
+step is unpinned, like get-version's. ci-build.yml's `--check` runs where requirements.lock is installed, so it
+already has packaging.
+
+**Checked against GitHub:** I called `generate-notes` once for `v0.0.8a1` against `v0.0.6a1` to see its format.
+It changes nothing. Its body lists PRs #10 (0.0.7a1) and #11 (0.0.8a1) and ends with the Full Changelog line
+that `release_body` replaces. The job's first real run will be v0.0.9's release.
+
+**Tests:** 15 new tests in `tests/test_release_recovery.py`; 14 fail on the old code, and the resume guard
+already held.
+- The previous-tag choice, over the real tag list's shapes.
+- A real git history (`tmp_path`) with a tag on an unmerged branch.
+- The body, with GitHub's sample notes and without any.
+- `main` end to end, with and without GitHub's notes. The fake is a `MemoryReleases` with `generated_notes`.
+- A resumed or published release keeps its notes, and the body callable is never called for it.
+- The job's step: no `github.event.repository.url`, no `--body`, packaging installed before the first
+  `release_draft` call, and `fetch-depth: 0`.
+
+## A59.2 (b) The no-stable front page (`bfa2b78`)
+
+mike's `set-default --template` renders only `{{href}}` (mike 2.2.0, `commands._add_redirect_to_commit`:
+`template.render(href=href)`). So `site_versions.py` fills in the newest pre-release first:
+- `no-stable.html` gains `{{latest}}`;
+- `no_stable_page(newest)` replaces it with `latest_label(newest)`: "0.0.8a1 (alpha)", "(beta)",
+  "(release candidate)", or "(development version)" for a `.dev` release;
+- `main` writes that page into a temporary folder and hands mike its path (`plan(…, page)`).
+
+`newest_pre_release` is the newest of every deployed version plus the new one while none is stable. So an older
+pre-release published late still names the newest. The page is written exactly when the plan sets it as the
+front page (tested). With a stable release the front page is `latest`, as before.
+
+The page now reads:
+
+> **HeLab manual**
+> Latest: [0.0.8a1 (alpha)](pre-release/)
+> No stable release yet: HeLab has only pre-releases (alpha and beta versions) so far, and the newest is the
+> latest download. Its manual's version menu lists every release.
+> *HeLab's Help › User manual opens the manual of the version you run.*
+
+**Checks:** 3 new tests in `tests/test_docs_workflows.py`, all failing on the old code.
+- The label.
+- The page as mike's jinja2 renders it.
+- Which version is named.
+- `main` handing mike the filled-in page.
+
+`ruff check` passes, and `mkdocs build --strict` passes (a docs venv from requirements-docs.lock, in my scratch
+folder). I didn't run real mike against a gh-pages branch: its `--push` would push to the shared repository.
+
+## A56.7 `helab --help` (`5a4d863`)
+
+`helab/main.py` answers `--help`/`-h` with a short usage and exits 0. The check sits after the frozen helper and
+probe dispatch and the `convert`/`cache` commands, so `helab convert --help` is still convert's own. It comes
+before `--version`, Qt, settings, caches, Dash and `running.lock`:
+
+```
+usage: helab [--geometry WxH+X+Y]   start HeLab (the app)
+       helab --version              print HeLab's version and build, and exit
+       helab --help                 print this help, and exit
+       helab convert --watch FOLDER [options]
+                                    the headless TXY converter (helab convert --help)
+       helab cache dump|export ...  look into the disk cache's .hlb files, read only
+                                    (helab cache --help)
+
+  --geometry WxH+X+Y  this run's main window: W x H points, its top-left at X,Y
+                      (a sign each; "-" for a screen left of or above the main one)
+```
+
+**Tests** (`tests/test_versioning.py`): the help runs in a subprocess for `--help`, `-h` and with `--geometry`. It
+imports `helab.main` as the `helab` script does, with the app folder override pointed at an empty folder.
+- It exits 0.
+- Neither PyQt6, `helab.utils.constants`, `dash_server` nor `cache_locks` is loaded.
+- The app folder stays empty: no `running.lock`.
+
+These 3 fail on the old code ("HeLab would start"). Two more check that convert's and cache's own help are
+unchanged.
+
+## A58.2 Folder details' conversion and a read stopped early (`6b22d8d`)
+
+**Cause:** the read-stop handling (A37.1, Q48.1, Q48.2) lived in `explorer_live.LiveControl._converted` and
+`_notify_read_stopped`. `ExplorerConverter.event` only counted a `shot_converted`.
+
+**Fix:** the handling now lives in `explorer_convert`, shared by both conversions:
+- `note_read_stop(path, event, by)` logs the file and sends the "raw file read stopped early" notification. Its
+  key is unchanged (`READ_STOPPED_RAW`, folder, name, size, mtime), so a file notifies once per session
+  whichever conversion made it;
+- `read_stops_text(stopped)` gives the line's part (one file by name, several counted) and the tooltip line;
+- `READ_STOPPED` moved there too; `explorer_live` re-exports it for `FolderDetailsPanel`.
+
+`FolderConversion.stopped` keeps the stopped files by name. The Convert row names them, while converting and when
+done, with the detail in its tooltip, and drops a file converted again to its end. Live's line, tooltip and
+notification are unchanged; Live's A37.1 test passes unchanged.
+
+**Not done:** Live's Auto-convert row turns amber for a read stopped early; Folder details' Convert ("offer") row
+doesn't. That colour is set in `FolderDetailsPanel.py`, outside this brief's files, so it is A~1.
+
+**Test** (`tests/test_explorer_convert.py`), failing on the old code: a real conversion (in-process helper) of a
+folder with a raw file stopped at line 10, then:
+- the row "3 converted to HeLab's cache folder · d3.txt read stopped at line 10" and its tooltip;
+- the notification's text and event, once;
+- the same file again isn't notified again;
+- several are counted ("2 reads stopped early");
+- read to its end, a file is no longer named.
+
+## A56.4 The built-in profiles' descriptions (`0dc4f90`): for Tony's approval
+
+`notes` is DESCRIPTIVE (outside the content hash), so no tag, hash or file name changed. A test pins each
+built-in's hash to its value before the change: `fbaf4728…14d0` for matlab-2019 and the three plate profiles,
+`a228f236…183e` for matlab-2023-lab-edit. That test also held on the old code. Another test checks that each
+description is user-facing: no internal ID or "content hash", it says whether the profile is calibrated, and
+"Marked uncalibrated" appears exactly for `UNCALIBRATED`. That one fails on the old notes.
+- **Sources:** the profiles' fields, `converter.md`, `roadmaps/txy-converter.md` and `profile.py`.
+- **The JSON files:** rewritten from the definitions (`to_json`), so they stay equal.
+- **On screen:** Settings › TXY converter shows the text above "Plates in since…", "Content hash…" and "TXY
+  files…". Offscreen at 720×640 it wraps and fits; the profile list gives up a few lines.
+
+The five texts (wording is Tony's to approve):
+
+1. **matlab-2019:** "HeLab's default. The lab's MATLAB converter (tdc_autoconverter), unchanged since 2017,
+   which made the d_txy_forc files in the data folders: the same constants and the same quirks, so its TXY match
+   those files byte for byte. Choose it for hits that agree with the lab's existing TXY, on data of any date.
+   Not calibrated: it keeps MATLAB's fixed constants (time sums of 3200 bins on X and Y) for every plate."
+2. **matlab-2023-lab-edit:** "The DLD front panel's copy of the MATLAB converter, as the lab had edited it by
+   2023-08-29. It differs from matlab-2019 in three ways: a 0.5 µs dead time on x1 (an x1 pulse within 0.5 µs
+   after a kept one is dropped), time sums of 3390 bins on X and 3275 on Y for T only, and X and Y worked out
+   from the raw corner times. It finds about 12–14 % fewer hits than matlab-2019 on the lab's sample shots.
+   Choose it to match TXY made with the front panel's edited copy. Not calibrated."
+3. **plates-2017:** "For data taken on the MCP plates fitted on 2017-03-17, until the 2022 swap. For now it holds
+   matlab-2019's constants, so its hits are matlab-2019's, written under its own file names; it changes only
+   when these plates are calibrated. A plot's settings suggest it for a folder dated while its plates were in,
+   but never pick it for you. Not calibrated yet: the 2019–2021 halo runs are to calibrate it."
+4. **plates-2022:** "For data taken on the MCP plates fitted in 2022 (between 2022-08-22 and 2022-11-03; HeLab
+   dates the swap 2022-11-03 for now), until the 2025 swap. For now it holds matlab-2019's constants, so its hits
+   are matlab-2019's, written under its own file names; it changes only when these plates are calibrated. A
+   plot's settings suggest it for a folder dated while its plates were in, but never pick it for you. Not
+   calibrated yet: a run with MCP pulses in November 2022 measured time sums of 3367 bins on X and 3294 on Y on
+   these plates, which it doesn't use yet."
+5. **plates-2025:** "For data taken on the MCP plates fitted on 2025-06-18, the plates in the detector now. For
+   now it holds matlab-2019's constants, so its hits are matlab-2019's, written under its own file names; it
+   changes only when these plates are calibrated. A plot's settings suggest it for a folder dated while its
+   plates were in, but never pick it for you. Marked uncalibrated: there is no calibration data for these plates
+   yet. It doesn't yet turn the image back after the corner cables were swapped (between 2026-06-27 and
+   2026-07-21), which turned it by 180°."
+
+Points for Tony to check:
+- (3) names the planned calibration data (the roadmap's stage 3).
+- (5)'s cable swap and 180° come from `converter.md`'s provisional finding (2026-10-29 session) and may be more
+  than users need.
+- (2) uses "DLD front panel" for the lab's MATLAB analysis.
+
+## Checks (before the handoff)
+
+All runs used `pytest -n 12 --reruns 5 --reruns-delay 1` on macOS, with the worktree's code first on
+`PYTHONPATH`.
+
+- **First run** (after all five commits): 1 failed, 9322 passed, 673 skipped, 5 reruns.
+  `test_profile_library.py::test_the_plate_profiles_start_as_matlab_2019` failed on all 5 reruns. It isn't a
+  flake: it checked plates-2025's notes for "Uncalibrated" with a capital U, and A56.4's text says "Marked
+  uncalibrated". I fixed it in A56.4's commit (`0dc4f90`, amended before any push): it now matches
+  "uncalibrated" in any case.
+- **Second run** (`0dc4f90`): **9323 passed, 673 skipped, no RERUN.**
+- **Types:** `mypy helab/ --strict`, `mypy tests --strict`, `mypy helab/ --strict --platform win32`,
+  `pyright helab tests` and `pyright --pythonplatform Windows helab tests` were all clean. `mypy tests` and both
+  pyright runs were repeated after the fix; `helab/` didn't change after the first run.
+- **Docs:** `ruff check` and `mkdocs build --strict` passed (A59.2).
+
+## Proposals (the Coordinator applies them)
+
+**`release-and-ci.md`**:
+- **The release job (A59.1):** `release_draft` writes a new draft's notes (`release_body`): the tag linked,
+  GitHub's generated notes (`generate-notes` with `previous_tag_name`), the Workflow Run from
+  `github.server_url`, and one "Full Changelog: <previous>...<tag>" link. The previous tag is the newest `v` +
+  PEP 440 tag of a lower version in the commit's history (`git tag --merged`; v0.0.8a1's is v0.0.6a1). A resumed
+  draft keeps its notes, and GitHub's notes failing leaves a draft without them (a warning). The job installs
+  `packaging`.
+- **The publishing step (A59.2 (b), the rule):** a pre-release version may be published as a full GitHub release
+  (v0.0.8a1 is GitHub's "Latest"). The site goes by the version number: its `latest` stays the newest stable
+  version. Until there is one, the front page (`no-stable.html`, filled in by `site_versions.no_stable_page`
+  since mike renders only `{{href}}`) names the newest pre-release, "Latest: 0.0.8a1 (alpha)", linked to
+  `pre-release/`.
+
+**`converter.md`**:
+- **Profiles in the app (A56.4):** each built-in's `notes` is user-facing text, shown in Settings › TXY
+  converter: what it is, when to choose it, how it differs, whether it is calibrated. It carries no internal ID.
+  Rewording it changes no hash (`tests/test_convert_profile.py` pins the five hashes).
+- **Folder details' conversions (A58.2):** a read stopped early is named in the Convert row and notified once
+  per file, through `explorer_convert.note_read_stop` and `read_stops_text`, which Live's auto-convert uses
+  too.
+
+**`app-runtime-and-ui.md`** (or `AGENTS.md`'s commands block, one line):
+- `helab --help` (`-h`) prints a short usage and exits 0 before Qt, settings, caches, Dash and `running.lock`,
+  after the frozen dispatch and the `convert`/`cache` commands (A56.7).
+
+**Known issues:** nothing new from this batch (RERUNs, if any, are listed under the checks).
+
+## Provisional items
+
+- **A~1 Folder details' Convert row amber for a read stopped early** (`FolderDetailsPanel.py`). Live's
+  Auto-convert row is amber when it names one (`READ_STOPPED`); the Convert ("offer") row, which now names them
+  (A58.2), isn't. It is a two-line change beside the `convert` row's style, in a file outside this brief.
+- **A~2 Pin `packaging` in the release jobs.** get-version and now the release job run `pip install packaging`
+  unpinned; requirements.lock has `packaging==26.3`.
