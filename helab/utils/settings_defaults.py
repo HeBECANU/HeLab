@@ -177,7 +177,7 @@ SETTINGS: tuple[Setting, ...] = (
             "The main window's folder panel and plot settings panel widths in logical pixels, \"<folders>,<settings>\", "
             "saved as HeLab quits; the plots take the rest of the window. Folders 80 to 4000, settings 250 to 4000; "
             "otherwise the default (Q33.2)."),
-    Setting(ACTIVITY_SIZE_SETTING, str, "760,420",
+    Setting(ACTIVITY_SIZE_SETTING, str, "1080,440",
             "The Activity window's size in logical pixels, \"<width>,<height>\", saved when it closes; at most the "
             "screen's, at least 400 by 200; otherwise the default (Q62.1)."),
     Setting(STORE_V4_SETTING, bool, True,

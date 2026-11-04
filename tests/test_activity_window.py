@@ -208,20 +208,20 @@ def test_rendering_reads_memory_only(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
 def test_its_size_is_remembered(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
     service = quiet_service(monkeypatch)
     window = make_window(qtbot, service)
-    assert (window.width(), window.height()) == (760, 420)
+    assert (window.width(), window.height()) == (1080, 440)
     window.show()
-    window.resize(900, 500)
+    window.resize(1300, 600)  # (Wider than its buttons need on every OS: Windows' fonts need about 1,070 px.)
     window.hide()
-    assert read_setting(app_settings(), ACTIVITY_SIZE_SETTING) == "900,500"
+    assert read_setting(app_settings(), ACTIVITY_SIZE_SETTING) == "1300,600"
     again = make_window(qtbot, service)
-    assert (again.width(), again.height()) == (900, 500)
+    assert (again.width(), again.height()) == (1300, 600)
     service.shutdown()
 
 
 def test_parse_size() -> None:
     assert parse_size("900,500") == (900, 500)
     assert parse_size("10,10") == (400, 200)
-    assert parse_size("junk") == parse_size(None) == parse_size("-1,5") == (760, 420)
+    assert parse_size("junk") == parse_size(None) == parse_size("-1,5") == (1080, 440)
 
 
 def test_window_activity_and_the_status_bars_click_open_it(qtbot: QtBot) -> None:

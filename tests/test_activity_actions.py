@@ -144,7 +144,7 @@ def test_cancel_reaches_each_owner(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
     actions = actions_for(service, cache, [("live", explorer)], runners=lambda: [runner], mover=lambda: mover)
     assert cache.submit("tab:bg", 0, "/bg", "load", {})
     assert actions.cancel(row(actions, f"io:{service.active[-1].owner}:"))
-    assert asked[-1] == ("tab:bg", "load", "/bg")
+    assert asked[-1] == ("tab:bg", "load", FolderCache.key("/bg"))
     assert actions.cancel(activity.Task("c", "convert", "Convert", "/raw", "", "running", "",
                                         route=Route("conversion", "tab:convert", "convert", "/raw")))
     assert asked[-1] == ("tab:convert", "convert", "/raw")

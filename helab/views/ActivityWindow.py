@@ -47,6 +47,22 @@ def _name(path: str) -> str:
     return os.path.basename(path.rstrip("/\\")) or path
 
 
+def same(one: str, other: str) -> bool:
+    """Whether two owners' paths name one folder (``FolderCache.key``: lexical, no disk)."""
+    return bool(one) and bool(other) and FolderCache.key(one) == FolderCache.key(other)
+
+
+def session_of(explorer: FolderExplorer, path: str) -> Optional[LiveSession]:
+    """The tab's Live session of ``path``, its paths compared as folders."""
+    return next((session for session in explorer.live_control.sessions() if same(session.path, path)), None)
+
+
+def watching(explorer: FolderExplorer, path: str) -> bool:
+    """Live on for ``path`` in this tab (``LiveController.watching``, its paths compared as folders)."""
+    live = explorer.live_control.live
+    return live is not None and same(live.path, path)
+
+
 @dataclass(frozen=True)
 class Owner:
     """Whom an I/O owner works for: a tab (its text and explorer) and in what role, or a plot."""
@@ -189,15 +205,18 @@ class ActivitySources:
     @staticmethod
     def _live_parent(found: Sequence[Owner], path: str) -> str:
         for owner in found:
-            if owner.explorer is not None and owner.explorer.live_control.session(path) is not None:
-                return live_id(owner.explorer, path)
+            if owner.explorer is not None and (session := session_of(owner.explorer, path)) is not None:
+                return live_id(owner.explorer, session.path)
         return ""
 
     @staticmethod
     def _conversion_parent(found: Sequence[Owner], path: str) -> str:
         for owner in found:
-            if owner.explorer is not None and path in owner.explorer.converter.conversions:
-                return conversion_id(owner.explorer, path)
+            if owner.explorer is None:
+                continue
+            folder = next((known for known in owner.explorer.converter.conversions if same(known, path)), None)
+            if folder is not None:
+                return conversion_id(owner.explorer, folder)
         return ""
 
     def why_paused(self, request: IORequest) -> str:
@@ -444,7 +463,7 @@ def _question_task(tab: str, explorer: FolderExplorer, box: Any, kind: str) -> T
 
 # The window
 
-def parse_size(text: object, default: tuple[int, int] = (760, 420)) -> tuple[int, int]:
+def parse_size(text: object, default: tuple[int, int] = (1080, 440)) -> tuple[int, int]:
     """``"W,H"`` as (width, height), at least ``MIN_SIZE``; the default when it can't be read."""
     try:
         width, height = (int(part) for part in str(text).split(","))
@@ -565,7 +584,7 @@ class ActivityActions:
             return self._cancel_move()
         if route.kind == "autoconvert":
             explorer = self._tab(route.owner)
-            if explorer is None or not explorer.live_control.watching(route.path):
+            if explorer is None or not watching(explorer, route.path):
                 return False
             explorer.live_control.set_auto_convert(False)  # (Its own toggle: one pass cancelled would only restart.)
             return True
@@ -589,7 +608,7 @@ class ActivityActions:
                 continue
             explorer = found.explorer
             if found.role == "live" and request.operation == "convert" and explorer is not None:
-                if explorer.live_control.watching(request.path):
+                if watching(explorer, request.path):
                     explorer.live_control.set_auto_convert(False)
                 else:
                     cache.cancel(name, "convert", request.path)
@@ -637,7 +656,7 @@ class ActivityActions:
             if explorer is None:
                 return "Its tab is closed"
             session = explorer.live_control.live
-            if session is None or session.path != route.path:
+            if session is None or not same(session.path, route.path):
                 return "Live is off there: turn it on in its tab"
             if route.kind == "live" and not session.error:
                 return "Live isn't stopped by an error"
@@ -648,7 +667,8 @@ class ActivityActions:
             explorer = self._tab(route.owner)
             if explorer is None:
                 return "Its tab is closed"
-            conversion = explorer.converter.conversions.get(route.path)
+            conversion = next((known for folder, known in explorer.converter.conversions.items()
+                               if same(folder, route.path)), None)
             return "" if conversion is not None and conversion.error else "This conversion isn't stopped now"
         if route.kind == "analysis":
             if not route.owner or not self.sources.plot_title(route.owner):
@@ -665,7 +685,7 @@ class ActivityActions:
             if route.operation in LISTINGS:
                 return ""
             if route.operation in ("load", "cached"):
-                return ("" if explorer.selected_path_globally == route.path
+                return ("" if same(explorer.selected_path_globally, route.path)
                         else "Select the folder in its tab to load it again (Show in tab)")
             return "Its owner tries again by itself"
         return NOT_FOR["retry"]
@@ -681,8 +701,10 @@ class ActivityActions:
             return explorer is not None
         if route.kind == "conversion":
             explorer = self._tab(route.owner)
+            folder = next((known for known in explorer.converter.conversions if same(known, route.path)),
+                          route.path) if explorer is not None else route.path
             if explorer is not None:
-                explorer.converter.clicked(route.path)  # (The Convert row's click.)
+                explorer.converter.clicked(folder)  # (The Convert row's click.)
             return explorer is not None
         if route.kind == "analysis":
             return self.run_plot(route.owner)
@@ -701,7 +723,7 @@ class ActivityActions:
     def stop_live(self, route: Route) -> bool:
         """Turn Live off for the task's folder (the toolbar's Live; its new shots are saved)."""
         explorer = self._explorer(route) if route.kind == "io" else self._tab(route.owner)
-        if explorer is None or not explorer.live_control.watching(route.path):
+        if explorer is None or not watching(explorer, route.path):
             return False
         explorer.stop_live()
         return True

@@ -1053,8 +1053,9 @@ class IOService(QObject):
         """Whether a helper of ``operation`` on ``path`` is running or stopping, its exit not yet confirmed:
         a retry from the Activity window waits until none is (a retry never runs beside the attempt it
         replaces; the owners' own paths start new owners, which ``blocker`` wouldn't hold)."""
-        return any(request.operation == operation and request.path == path and not request.exited.is_set()
-                   for request in (*self.active, *self.retired))
+        target = os.path.abspath(path)  # (Lexical, as ``FolderCache.key``: owners name a folder either way.)
+        return any(request.operation == operation and os.path.abspath(request.path) == target
+                   and not request.exited.is_set() for request in (*self.active, *self.retired))
 
     def _retire(self, request: IORequest, reason: str = "cancelled") -> None:
         request.retirement_reason = reason
