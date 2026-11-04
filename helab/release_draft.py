@@ -407,7 +407,15 @@ def main(argv: list[str] | None = None) -> None:
         api = GitHubReleases(args.repository)
 
         def body() -> str:
-            previous = previous_tag(args.tag, tags_in_history(Path(__file__).resolve().parent.parent, args.commit))
+            # The draft matters more than its notes: neither a failing git nor GitHub's notes stops it (the tag is
+            # pushed by now, so a failure here would stop every rerun the same way).
+            try:
+                history = tags_in_history(Path(__file__).resolve().parent.parent, args.commit)
+            except (subprocess.SubprocessError, OSError) as exc:
+                print(f"::warning::The tags in {args.commit}'s history are unavailable ({exc}); the notes compare "
+                      "with no previous tag.", file=sys.stderr)
+                history = []
+            previous = previous_tag(args.tag, history)
             try:
                 notes = api.generated_notes(args.tag, args.commit, previous)
             except (subprocess.SubprocessError, ValueError) as exc:  # The draft matters more than its notes.

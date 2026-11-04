@@ -531,13 +531,19 @@ class NotedReleases(MemoryReleases):
         return self.notes
 
 
-def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, notes: str | Exception) -> NotedReleases:
+def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, notes: str | Exception,
+             git_fails: Exception | None = None) -> NotedReleases:
     from helab import release_draft
+
+    def tags_in_history(root: Path, commit: str) -> list[str]:
+        if git_fails is not None:
+            raise git_fails
+        return ["v0.0.3b", "v0.0.5a1", "CI"]
     monkeypatch.setattr(NotedReleases, "notes", notes)
     monkeypatch.setattr(NotedReleases, "made", [])
     monkeypatch.setattr(NotedReleases, "asked", [])
     monkeypatch.setattr(release_draft, "GitHubReleases", NotedReleases)
-    monkeypatch.setattr(release_draft, "tags_in_history", lambda root, commit: ["v0.0.3b", "v0.0.5a1", "CI"])
+    monkeypatch.setattr(release_draft, "tags_in_history", tags_in_history)
     archives(tmp_path)
     release_draft.main(["--repository", "o/r", "--tag", TAG, "--commit", SHA, "--artifacts", str(tmp_path),
                         "--server-url", "https://github.com", "--run-url", "https://github.com/o/r/actions/runs/7"])
@@ -562,6 +568,20 @@ def test_a_draft_is_made_without_githubs_notes_when_they_are_unavailable(
     assert api.release is not None and api.creations == 1 and len(api.uploads) == len(ASSET_NAMES)
     assert "What's Changed" not in api.release.body and "compare/v0.0.3b...v0.0.5a1" in api.release.body
     assert "::warning::GitHub's generated notes are unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("failure", [subprocess.CalledProcessError(128, "git tag --merged", stderr="fatal: bad object"),
+                                     FileNotFoundError(2, "No such file or directory: 'git'")])
+def test_a_draft_is_made_when_the_tags_history_is_unavailable(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], failure: Exception) -> None:
+    """The tag is pushed before the notes are built: a failing ``git tag --merged`` must not stop the draft (every
+    rerun would fail the same way). The notes then compare with no previous tag; GitHub's are still asked for."""
+    api = run_main(monkeypatch, tmp_path, GITHUB_NOTES, git_fails=failure)
+    assert api.release is not None and api.creations == 1 and len(api.uploads) == len(ASSET_NAMES)
+    assert NotedReleases.asked == [(TAG, SHA, None)]
+    assert f"**Full Changelog**: https://github.com/o/r/commits/{TAG}" in api.release.body
+    assert read_manifest(api.release.body) is not None
+    assert "::warning::The tags in" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("draft", [True, False])
