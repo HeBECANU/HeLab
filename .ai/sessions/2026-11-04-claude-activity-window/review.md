@@ -330,3 +330,50 @@ forgotten, keep the mark, so the cancelled request's end is still the conversion
 **Summary of Re-check 2:**
 - AW-14 and AW-15 are resolved, and I found no Blocker or Major.
 - There is 1 new finding, AW-16 (Minor), which comes from AW-15's mark.
+
+## Re-check 3 (Gauge, fix `ef0a8c9..a2f040f`)
+
+I read only `a2f040f` (AW-16). I also checked CoCo's question about the macOS RERUN in CI 41818074716.
+
+**Checks rerun at `a2f040f`:**
+- Full suite, `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-gauge`: **9393 passed, 673
+  skipped, no RERUN**. Output is kept whole in `.ai/temp/gauge-recheck3-suite.log`.
+  - This run happened to be under heavy load. The 16 CPU burners from the stress loop below were still running
+    on the 16 cores, because zsh doesn't split an unquoted `$pids` and the `kill` missed them. I stopped them
+    afterwards.
+- The five type checks are clean (`.ai/temp/gauge-recheck3-types.log`).
+
+| AW | Re-check 3 |
+|---|---|
+| AW-16 | **Resolved, with no new bug.** When `FolderCache.cancel` removes a subscriber and the job runs on, the mark is now removed if no remaining subscriber's owner is in `self_reporting`. If the job has no subscribers left, it is forgotten and its mark kept, so a cancelled GUI-only pass is still the conversion's entry alone (AW-15's test still passes). `cancel` and `transfer` are the only places a subscriber is removed, and `transfer` handles only loads and cached reads, which are never marked. If the GUI conversion joins again, `_note_self_reported` marks the job again. The new test (GUI first, then Live joins) fails on `ef0a8c9`'s `helab/` with `assert [] == [('Convert raw files to TXY', 'failed', 'io')]`. My Re-check 2 script (Live first, then GUI joins) now gives that one entry too. On the hot path the change adds one dict lookup to a cancel that leaves a job running. |
+
+**The RERUN (`test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so[a Live check comes due while offline]`, the 5 s `waitUntil` at `:626`).**
+
+Beacon is right: this branch can't delay what line 626 waits for, and I see no way it makes the RERUN more likely.
+- **What line 626 waits for.** `session.convert.error` is set by `LiveController._convert_event`'s `offline`
+  branch. That branch is reached through `answer`, which `FolderCache.submit`'s Work Offline path schedules with
+  `QTimer.singleShot(0, …)` (`folder_cache.py:2817-2827`). That path, `_convert_tick`'s checks and the event
+  routing are unchanged by the branch: `git diff 63b9a15..a2f040f` touches none of them.
+- **What the branch adds on that path.**
+  - `_convert_event` calls `_convert_stopped` on the line after `convert.error = "not while working offline"`.
+    So the condition is already true before `activity.record` runs, and even an exception there couldn't
+    unset it.
+  - `activity.record` itself costs a `dataclasses.replace` and a deque append. Its listeners run under
+    `try/except` (AW-6), and this test has no window, so it has none.
+  - `FolderCache.convert` → `submit` gains a set lookup (`_note_self_reported`). The offline answer goes
+    through `_deliveries` and never reaches it.
+  - The user hold and `_report_end` are in IOService's dispatch and end paths. The offline answer uses neither.
+- **Evidence.**
+  - Under 16 CPU burners on 16 cores, I ran `test_activity*.py` and `test_live_convert.py` together 12 times
+    with `-n 4 --reruns 0`, both cases of this test included. All 12 runs passed (81 tests each).
+  - The full suite then passed under the same load with no RERUN.
+  - The known-issues entry already shows the flake on `agent/quick-fixes-10` and on its base `bd349ec`, without
+    this branch.
+- **The likelier cause** is the one known-issues already names: Live itself stopping, or the conversion
+  waiting behind other work, before the offline answer arrives. If the session's `convert` becomes `None`, the
+  condition can never be true. That is for the known-issues entry, not this floor.
+
+**Summary of Re-check 3:**
+- AW-16 is resolved.
+- **There are no open findings**: AW-1 to AW-16 are all resolved, and I found no Blocker, Major or Minor in
+  the fix diffs.
