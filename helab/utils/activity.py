@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, replace
 import logging
+import re
 import threading
 import time
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Protocol, Sequence, TYPE_CHECKING, TypeVar
@@ -236,8 +237,10 @@ class LogLines(logging.Handler):
             return []
         start = -float("inf") if since is None else since - 60.0
         end = float("inf") if until is None else until + 60.0
+        # (The folder itself or a path inside it: not a longer name that starts with it, run10 for run1: AW-12.)
+        named = re.compile(re.escape(folder.rstrip("/\\")) + r"(?![\w\-])")
         with self._guard:
-            lines = [line for at, line in self._lines if start <= at <= end and folder in line]
+            lines = [line for at, line in self._lines if start <= at <= end and named.search(line)]
         return lines[-limit:]
 
     def clear(self) -> None:

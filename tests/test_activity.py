@@ -164,6 +164,10 @@ def test_log_lines_name_a_folder_within_its_time() -> None:
     lines = handler.about("/data/run_1", time.time() - 5, time.time())
     assert len(lines) == 1 and "WARNING Load data failed: /data/run_1 — broken" in lines[0]
     assert handler.about("/data/run_1", until=time.time() - 3600) == [] and handler.about("") == []
+    logging.warning("Load data failed: /data/run_10 — broken")  # (AW-12: another folder.)
+    logging.warning("Shot file unreadable: /data/run_1/d_txy_forc3.txt")
+    assert [line.split("WARNING ")[1] for line in handler.about("/data/run_1")] == [
+        "Load data failed: /data/run_1 — broken", "Shot file unreadable: /data/run_1/d_txy_forc3.txt"]
     activity.remove_log_lines()
     assert handler not in logging.getLogger().handlers
 
