@@ -372,7 +372,12 @@ def test_a_saved_size_larger_than_the_screen_is_fitted_to_it(qtbot: QtBot, monke
     screen = window.screen()
     assert screen is not None
     room = screen.availableGeometry()
-    assert window.width() <= max(room.width(), 400) and window.height() <= max(room.height(), 200)
+    # (Never below the window's own least size: its button row needs about 1,070 px with Windows' fonts, more
+    # than the offscreen screen's 800.)
+    least = window.minimumSizeHint()
+    assert window.width() <= max(room.width(), least.width(), 400)
+    assert window.height() <= max(room.height(), least.height(), 200)
+    assert window.width() < 20000 and window.height() < 15000
     service.shutdown()
 
 
