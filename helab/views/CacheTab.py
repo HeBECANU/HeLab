@@ -37,6 +37,8 @@ from helab.views.ElidedLabel import ElidedLabel
 from helab.views.gaps import COLUMN_GAP, ROW_SPACING
 
 DAY = 86400.0
+# The narrowest a purge row's name gets before it wraps, in characters.
+PURGE_NAME_CHARS = 28
 DEFAULT_PURGE_DAYS = 90
 # The rows of the disk cache, by record kind: label and button.
 # The cache policy's choices (caching v2, Q45.1), in the words S~6 proposed (Tony to confirm).
@@ -430,6 +432,7 @@ class CacheTab(QWidget):
         presets = self._row()
         presets.addWidget(QLabel("Presets"))
         self.presets_label = QLabel()
+        self.presets_label.setWordWrap(True)  # (Unwrapped, its summary held the tab past 800 px on Windows.)
         presets.addWidget(self.presets_label, 1)
         self.presets_button = QPushButton("Presets…")
         self.presets_button.setToolTip("The saved presets of plots and of folders with their plots: their values, "
@@ -460,6 +463,7 @@ class CacheTab(QWidget):
         purges = QGridLayout()
         purges.setVerticalSpacing(0)
         purges.setHorizontalSpacing(COLUMN_GAP)
+        purges.setColumnStretch(0, 3)  # (Names take most of the spare width, so they wrap only when it runs out.)
         purges.setColumnStretch(2, 1)
         # One row per purge by age (A47.4): store-v4 adds TXY data and raw pulses; Everything takes them all.
         self.purge_rows: dict[str, tuple[QLabel, QSpinBox, QLabel, QPushButton]] = {}
@@ -471,6 +475,9 @@ class CacheTab(QWidget):
                 ("results", "Cached analysis not shown in the last", self.purge_results),
                 ("all", "Everything not used, checked or shown in the last", self.purge_all))):
             name, days, estimate, button = QLabel(text), self._days(), QLabel(""), QPushButton("Remove…")
+            # A narrow window wraps the longest names instead of widening the tab (Windows: past 800 px).
+            name.setWordWrap(True)
+            name.setMinimumWidth(name.fontMetrics().horizontalAdvance("x" * PURGE_NAME_CHARS))
             button.clicked.connect(slot)
             self.purge_rows[kind] = (name, days, estimate, button)
             for column, widget in enumerate((name, days, estimate, button)):
@@ -485,9 +492,17 @@ class CacheTab(QWidget):
             for widget in self.purge_rows[kind]:
                 widget.setVisible(False)  # (store-v4 only: shown with its inventory.)
         layout.addLayout(purges)
-        self.include_failures = QCheckBox("Include scan failures (automatic checks will try those folders again)")
+        # The box and its note apart, the note wrapping: as one check box's text it held the tab at 900 px on
+        # Windows, past Settings' 800 px (CI 41785919415).
+        failures_row = self._row()
+        self.include_failures = QCheckBox("Include scan failures")
         self.include_failures.toggled.connect(self._show_estimates)
-        layout.addWidget(self.include_failures)
+        failures_row.addWidget(self.include_failures)
+        failures_note = QLabel("(automatic checks will try those folders again)")
+        failures_note.setWordWrap(True)
+        failures_note.setBuddy(self.include_failures)
+        failures_row.addWidget(failures_note, 1)
+        layout.addLayout(failures_row)
 
         layout.addWidget(self._heading("Memory"))
         memory = self._row()
@@ -559,7 +574,8 @@ class CacheTab(QWidget):
             _, days, _, button = self.purge_rows[kind]
             identify(days, f"purge_{kind}_days", f"Remove {what} older than")
             identify(button, f"purge_{kind}", f"Remove old {what}…")
-        identify(self.include_failures, "purge_include_failures")
+        identify(self.include_failures, "purge_include_failures",
+                 "Include scan failures (automatic checks will try those folders again)")
         identify(self.ram_budget, "ram_budget_setting", "RAM budget")
         identify(self.plot_auto_reload, "plot_auto_reload")
 
