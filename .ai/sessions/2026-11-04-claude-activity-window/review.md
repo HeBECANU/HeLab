@@ -273,3 +273,60 @@ Then add a test that runs a pass's `error` through FolderCache and the tab, and 
 - There are 2 new findings, both Minor:
   - AW-14 is a regression from AW-1's fix.
   - AW-15 predates the fixes; I missed it in the first review.
+
+## Re-check 2 (Gauge, fixes `12d4580..6f1b4f4`)
+
+I read only `8cfd279` (AW-14), `5b9a270` (AW-15) and the handoff commit `6f1b4f4`.
+
+**Checks rerun at `6f1b4f4`:**
+- Full suite, `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-gauge`: **9392 passed, 673
+  skipped, no RERUN**. Output is kept whole in `.ai/temp/gauge-recheck2-suite.log`.
+- The five type checks are clean (`.ai/temp/gauge-recheck2-types.log`).
+- **Both new tests fail on the old code.** I ran HEAD's tests against `12d4580`'s `helab/`, in a scratch copy.
+  - The scroll test fails with `assert 0 == 67`.
+  - The one-entry test fails with "Left contains one more item: ('Convert raw files to TXY', 'failed', 'io')".
+
+| AW | Re-check 2 |
+|---|---|
+| AW-14 | **Resolved.** Both scroll bars' values are read before the detach and set again inside the `try`, before `setCurrentItem`. My earlier probe (80 queued scans, scrolled to the bottom, one more queued) now keeps 75, as `b2e996a` did. With a row selected, the tree scrolls only as far as that row (76 → 41, where it used to be 36). |
+| AW-15 | **Resolved** for the case it targets: a GUI conversion's failed or cancelled pass now gives one entry, with the conversion's route. Checked as CoCo asked: (1) **Bounded and cleared.** The marks are an `OrderedDict` capped at 1024, oldest dropped first, and `reports_end_itself` pops each mark at the request's first terminal event. A mark can be left behind (`service.submit` refusing after `_note_self_reported`, or a request that never reaches `_report_end`), but producer owners are `uuid4().hex`, so a leftover mark can never match a later request. (2) **No change when the window is closed.** The history is written whether or not the window is open, and the new cost on the hot path is one set lookup per subscribe and one dict pop per end. Owners outside `self_reporting` are unchanged. (3) **Live's own pass** is never marked, and a failed one keeps IOService's entry (the test's last case). (4) **A shared job** is where the mark goes wrong: AW-16, below. A load another tab also wants is never marked, because only the converter's owner is in `self_reporting`, and it subscribes only to `convert`. |
+
+### AW-16 · Minor · `helab/utils/folder_cache.py:3352-3356` (`_note_self_reported`), `:3314-3319` (`cancel`)
+
+**A mark set when the GUI conversion joins Live's pass stays after the GUI conversion leaves, so Live's failure
+is lost.** The mark is set on the producer when a self-reporting owner subscribes, and it is only removed at
+the request's end. FolderCache runs one conversion per folder, and a second asker with the same profile joins
+it (`convert`, and `_convert_tick` checks `converting_with`). So a GUI conversion and Live's auto-convert of
+one folder share the job, in either order.
+
+When the GUI conversion's subscription is cancelled and Live's keeps the job running:
+1. The conversion reports `cancelled`.
+2. The mark stays.
+3. When that pass then fails, IOService skips it.
+4. Live reports no helper failure of its own (`_convert_stopped` covers only ends where no helper ran).
+
+So nothing reaches the history, although Live's auto-convert stops on the error.
+
+The GUI conversion's subscription can be cancelled by the Activity window's Cancel on the conversion row
+(`cache.cancel(route.owner, "convert", path)`), or by `ExplorerConverter.close` when only its own tab closes.
+
+Checked by script, with the real IOService and FolderCache and `"tab:convert"` in `self_reporting`:
+- `convert("tab:live", p)`, then `convert("tab:convert", p)`: the job's subscribers are `['tab:live', 'tab:convert']`.
+- `cancel("tab:convert", "convert", p)`: the job runs on for `['tab:live']`.
+- The helper's `error`: `HISTORY` is `[]`. At `12d4580`, IOService recorded this failure.
+
+A related but acceptable case: when both owners are still subscribed and the pass fails, the conversion's entry
+is the only one. That is still one entry for one failure.
+
+**Fix:** remove the mark when the last self-reporting subscriber leaves a job that runs on. In
+`cancel`'s subscriber loop, after `del job.subscribers[key]`, if `job.subscribers` isn't empty and no remaining
+subscriber's owner is in `self_reporting`, call `self._self_reported.pop(job.owner, None)`. If the job is
+forgotten, keep the mark, so the cancelled request's end is still the conversion's alone. Add a test:
+- Live's pass joined by a GUI conversion.
+- The GUI conversion cancelled.
+- The pass's `error`.
+- Expect one `('Convert raw files to TXY', 'failed', 'io')` entry.
+
+**Summary of Re-check 2:**
+- AW-14 and AW-15 are resolved, and I found no Blocker or Major.
+- There is 1 new finding, AW-16 (Minor), which comes from AW-15's mark.
