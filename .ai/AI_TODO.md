@@ -659,10 +659,16 @@ v0.0.8a1 and v0.0.6a1 just now"). For v0.0.9, before its PR.
 
   Keep the recovery path (`release_draft` resuming an existing draft) and its tests working. Draft bodies are
   rewritten only while they are drafts, never after publishing.
-- **A59.2 The pre-release flag at publishing.** CI made the v0.0.8a1 draft a pre-release (`RELEASE_PRERELEASE:
-  true`), but the published release isn't marked as one. Find out whether GitHub's publish form cleared it. If it
-  did, say in `release-and-ci.md`'s publishing step that an alpha or beta keeps "Set as a pre-release" ticked.
-  The manual's site is unaffected: `site_versions.py` reads the version number.
+- **A59.2 GitHub's pre-release flag vs the manual's "stable".** CI made the v0.0.8a1 draft a pre-release
+  (`RELEASE_PRERELEASE: true`). Tony published it as a full release on purpose, so GitHub's "Latest" is v0.0.8a1;
+  as a pre-release, "Latest" would fall back to v0.0.3b. The manual's site goes by the version number
+  (`site_versions.py`, PEP 440), so its front page still says "No stable release yet". Tony chooses (asked in Chat,
+  2026-11-04):
+  - (a) tick "Set as a pre-release" again;
+  - (b) keep the release, and reword the no-stable front page (e.g. "Latest: 0.0.8a1 (alpha)"), CoCo's pick;
+  - (c) the site follows GitHub's flag.
+
+  Then record the rule in `release-and-ci.md`'s publishing step.
 
 ## Not AI work (stays in MANUAL_TODO)
 
