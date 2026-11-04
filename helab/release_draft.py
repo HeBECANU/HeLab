@@ -41,15 +41,25 @@ def _tag_version(tag: str) -> Version | None:
 
 
 def previous_tag(tag: str, history: Iterable[str]) -> str | None:
-    """The release ``tag`` is compared against: the newest ``v`` tag of a lower version among ``history``
-    (the tags in its commit's history, ``git tag --merged``). A version never tagged has no say: v0.0.8a1's
-    is v0.0.6a1, v0.0.7a1's release job having failed before tagging it."""
+    """The newest ``v`` tag of a lower version than ``tag`` among ``history`` (the tags in its commit's history,
+    ``git tag --merged``; ``previous_release`` passes only published full releases' tags). A version never tagged
+    has no say: v0.0.8a1's is v0.0.6a1, v0.0.7a1's release job having failed before tagging it. Alone (the
+    releases unavailable), it is the notes' fallback."""
     current = _tag_version(tag)
     if current is None:
         raise ValueError(f"Not a release tag: {tag}")
     earlier = [(version, name) for name in history if name != tag
                for version in [_tag_version(name)] if version is not None and version < current]
     return max(earlier)[1] if earlier else None
+
+
+def previous_release(tag: str, history: Iterable[str], released: Iterable[str]) -> str | None:
+    """The release ``tag``'s notes compare with (Tony, 2026-11-04): the previous published full GitHub release, an
+    alpha published as one included (v0.0.9's is v0.0.8a1). Of ``released`` (``GitHubReleases.full_release_tags``:
+    published, not marked pre-release), those in the commit's ``history``, the highest version lower than
+    ``tag``'s."""
+    full = set(released)
+    return previous_tag(tag, [name for name in history if name in full])
 
 
 def tags_in_history(root: Path, commit: str) -> list[str]:
@@ -365,6 +375,15 @@ class GitHubReleases:
         return _string(_object(self._request("POST", f"repos/{self.repository}/releases/generate-notes",
                                              payload)).get("body") or "")
 
+    def full_release_tags(self) -> list[str]:
+        """The tags of this repository's published full releases: neither drafts nor marked pre-release."""
+        tags = []
+        for item in self._pages(f"repos/{self.repository}/releases"):
+            data = _object(item)
+            if data.get("draft") is False and data.get("prerelease") is False:
+                tags.append(_string(data.get("tag_name")))
+        return tags
+
     def save_body(self, release_id: int, body: str, prerelease: bool) -> None:
         self._request("PATCH", f"repos/{self.repository}/releases/{release_id}",
                       {"body": body, "prerelease": prerelease})
@@ -415,7 +434,14 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"::warning::The tags in {args.commit}'s history are unavailable ({exc}); the notes compare "
                       "with no previous tag.", file=sys.stderr)
                 history = []
-            previous = previous_tag(args.tag, history)
+            # Compared with the previous published full release; if the releases can't be listed, with the newest
+            # lower v-tag in the history (the draft matters more than its notes).
+            try:
+                previous = previous_release(args.tag, history, api.full_release_tags())
+            except (subprocess.SubprocessError, ValueError, OSError) as exc:
+                print(f"::warning::The published releases are unavailable ({exc}); the notes compare with the newest "
+                      "earlier tag instead.", file=sys.stderr)
+                previous = previous_tag(args.tag, history)
             try:
                 notes = api.generated_notes(args.tag, args.commit, previous)
             except (subprocess.SubprocessError, ValueError) as exc:  # The draft matters more than its notes.

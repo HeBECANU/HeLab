@@ -275,8 +275,8 @@ jobs:
 
       - name: Create or resume the draft and its verified assets
         # A new draft's notes (release_draft.release_body, A59.1): its tag, linked; GitHub's generated notes
-        # and a "Full Changelog" link since the previous v* tag in the commit's history; this run's page on
-        # github.server_url (the repository's event URL is the API's). A draft resumed keeps its notes.
+        # and a "Full Changelog" link since the previous published full release in the commit's history; this
+        # run's page on github.server_url (the repository's event URL is the API's). A draft resumed keeps its notes.
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}

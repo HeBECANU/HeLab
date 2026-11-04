@@ -516,6 +516,7 @@ def test_notes_without_a_previous_tag_or_generated_notes_still_link_the_tags_com
 class NotedReleases(MemoryReleases):
     """MemoryReleases as main makes GitHubReleases, with GitHub's generated notes."""
     notes: str | Exception = GITHUB_NOTES
+    released: list[str] | Exception = ["v0.0.3b"]  # Its published full releases' tags.
     made: list["NotedReleases"] = []
     asked: list[tuple[str, str, str | None]] = []
 
@@ -523,6 +524,11 @@ class NotedReleases(MemoryReleases):
         super().__init__()
         assert repository == "o/r"
         NotedReleases.made.append(self)
+
+    def full_release_tags(self) -> list[str]:
+        if isinstance(self.released, Exception):
+            raise self.released
+        return list(self.released)
 
     def generated_notes(self, tag: str, commit: str, previous: str | None) -> str:
         NotedReleases.asked.append((tag, commit, previous))
@@ -532,14 +538,17 @@ class NotedReleases(MemoryReleases):
 
 
 def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, notes: str | Exception,
-             git_fails: Exception | None = None) -> NotedReleases:
+             git_fails: Exception | None = None, history: tuple[str, ...] = ("v0.0.3b", "v0.0.5a1", "CI"),
+             released: list[str] | Exception | None = None) -> NotedReleases:
     from helab import release_draft
 
     def tags_in_history(root: Path, commit: str) -> list[str]:
         if git_fails is not None:
             raise git_fails
-        return ["v0.0.3b", "v0.0.5a1", "CI"]
+        return list(history)
     monkeypatch.setattr(NotedReleases, "notes", notes)
+    if released is not None:
+        monkeypatch.setattr(NotedReleases, "released", released)
     monkeypatch.setattr(NotedReleases, "made", [])
     monkeypatch.setattr(NotedReleases, "asked", [])
     monkeypatch.setattr(release_draft, "GitHubReleases", NotedReleases)
@@ -582,6 +591,73 @@ def test_a_draft_is_made_when_the_tags_history_is_unavailable(
     assert f"**Full Changelog**: https://github.com/o/r/commits/{TAG}" in api.release.body
     assert read_manifest(api.release.body) is not None
     assert "::warning::The tags in" in capsys.readouterr().err
+
+
+# Tony (2026-11-04): the notes compare with the previous published full GitHub release (an alpha published as one
+# counts), in the commit's history and of a lower version.
+
+@pytest.mark.parametrize(("tag", "released", "previous"), [
+    ("v0.0.9", ["v0.0.8a1", "v0.0.6a1", "v0.0.3b"], "v0.0.8a1"),  # An alpha published as a full release counts.
+    ("v0.0.8a1", ["v0.0.8a1", "v0.0.3b", "v0.0.3"], "v0.0.3"),  # v0.0.6a1, v0.0.5a1: not full releases.
+    ("v0.0.6a1", ["v0.0.8a1", "v0.0.3b"], "v0.0.3b"),  # A higher version isn't earlier.
+    ("v0.0.9", ["v0.0.8b1", "v0.0.10"], None),  # Not in the history; or higher.
+    ("v0.0.9", [], None),
+])
+def test_the_notes_compare_with_the_previous_full_release_in_the_history(
+        tag: str, released: list[str], previous: str | None) -> None:
+    from helab.release_draft import previous_release
+    assert previous_release(tag, HISTORY, released) == previous
+
+
+def test_only_published_full_releases_are_listed_as_previous(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drafts and releases marked pre-release on GitHub are skipped, across pages; an alpha published as a full
+    release is listed."""
+    api = GitHubReleases("owner/repo")
+    first = [{"tag_name": "v0.0.8a1", "draft": False, "prerelease": False}] + [
+        {"tag_name": f"untagged-{n}", "draft": True, "prerelease": True} for n in range(99)]
+    second = [{"tag_name": "v0.0.6a1", "draft": False, "prerelease": True},
+              {"tag_name": "v0.0.9", "draft": True, "prerelease": False},
+              {"tag_name": "v0.0.3b", "draft": False, "prerelease": False}]
+
+    def request(method: str, endpoint: str, payload: dict[str, object] | None = None,
+                file: Path | None = None) -> object:
+        assert method == "GET"
+        if endpoint.endswith("releases?per_page=100&page=1"):
+            return first
+        if endpoint.endswith("releases?per_page=100&page=2"):
+            return second
+        raise AssertionError(endpoint)
+    monkeypatch.setattr(api, "_request", request)
+    assert api.full_release_tags() == ["v0.0.8a1", "v0.0.3b"]
+
+
+LONG_HISTORY = ("v0.0.1", "v0.0.3", "v0.0.3b", "v0.0.4a1", "v0.0.5a1", "CI-CD-everything-passed")
+
+
+def test_a_new_draft_compares_with_the_previous_full_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """v0.0.3 and v0.0.4a1 are newer, but not published full releases: the notes compare with v0.0.3b."""
+    api = run_main(monkeypatch, tmp_path, GITHUB_NOTES, history=LONG_HISTORY, released=["v0.0.1", "v0.0.3b"])
+    assert NotedReleases.asked == [(TAG, SHA, "v0.0.3b")]
+    assert api.release is not None and "compare/v0.0.3b...v0.0.5a1" in api.release.body
+
+
+def test_unlisted_releases_fall_back_to_the_newest_earlier_tag(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    api = run_main(monkeypatch, tmp_path, GITHUB_NOTES, history=LONG_HISTORY,
+                   released=subprocess.CalledProcessError(1, "gh api", stderr="HTTP 502"))
+    assert NotedReleases.asked == [(TAG, SHA, "v0.0.4a1")]
+    assert api.release is not None and api.creations == 1 and "compare/v0.0.4a1...v0.0.5a1" in api.release.body
+    assert "::warning::The published releases are unavailable" in capsys.readouterr().err
+
+
+def test_with_neither_releases_nor_history_the_draft_has_no_previous_tag(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    api = run_main(monkeypatch, tmp_path, GITHUB_NOTES, git_fails=FileNotFoundError(2, "git"),
+                   released=ValueError("Expected paginated API list"))
+    assert NotedReleases.asked == [(TAG, SHA, None)] and api.release is not None and api.creations == 1
+    assert f"**Full Changelog**: https://github.com/o/r/commits/{TAG}" in api.release.body
+    err = capsys.readouterr().err
+    assert "::warning::The tags in" in err and "::warning::The published releases are unavailable" in err
 
 
 @pytest.mark.parametrize("draft", [True, False])
