@@ -234,6 +234,15 @@ class LiveController:
         """The Live session of ``path``: watched, or with a save still to run or finish."""
         return self._live_sessions.get(path)
 
+    def sessions(self) -> list[LiveSession]:
+        """This tab's Live sessions, the watched one first, then those whose save hasn't ended (memory
+        only; the Activity window)."""
+        sessions = list(self._live_sessions.values())
+        if self.live is not None and self.live in sessions:
+            sessions.remove(self.live)
+            sessions.insert(0, self.live)
+        return sessions
+
     def watching(self, path: str | None) -> bool:
         """Live is on for ``path`` (checking, or stopped by an error until Retry)."""
         return self.live is not None and self.live.path == path

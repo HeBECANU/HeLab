@@ -173,6 +173,18 @@ class FolderProbes(QObject):
     def busy(self) -> bool:
         return bool(self._queue or self._running)
 
+    def activity(self) -> List[Tuple[str, str, Optional[float]]]:
+        """Each probe running or queued (the Activity window): its folder, "importing", "starting" (its
+        process not ready yet), "stopping" (killed, its exit not yet seen) or "queued", and when it started
+        (``time.monotonic()``; None while queued). Memory only."""
+        rows: List[Tuple[str, str, Optional[float]]] = []
+        for item in self._running.values():
+            state = ("stopping" if item.killed or item.lingered else "importing" if item.ready is not None
+                     else "starting")
+            rows.append((item.folder, state, item.started))
+        rows += [(item.folder, "queued", None) for item in self._queue]
+        return rows
+
     def probe(self, folders: List[str], answer: Callable[[Dict[str, Optional[ProbeFailure]]], None]) -> None:
         if not folders:
             answer({})
@@ -797,6 +809,16 @@ class TreePanelWidget(QWidget):
             instance.hold_for_reload()
 
     @pyqtSlot()
+    def probe_activity(self) -> List[Tuple[str, str, Optional[float]]]:
+        """The script folders' test imports running or queued (``FolderProbes.activity``)."""
+        return self._probes.activity()
+
+    def reload_waiting(self) -> Tuple[List[str], int]:
+        """A reload waiting (the Activity window): its folders, and the runs of their scripts it waits for
+        to end (0: none, or it waits for a round of test imports). Memory only."""
+        folders = sorted(self._pending)
+        return folders, (self._busy(self._pending) if folders else 0)
+
     def _reload_clicked(self) -> None:
         self.reload_scripts()  # (Not connected directly: ``clicked`` would pass its ``checked`` as the folders.)
 

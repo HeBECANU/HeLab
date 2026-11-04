@@ -3340,6 +3340,25 @@ class FolderCache(QObject):
         if job.paused:
             self.resultReady.emit(request, {"kind": "paused"})
 
+    def job_of(self, owner: str) -> SharedJob | None:
+        """The shared job a helper's request (``owner``) works for, if it is one (memory only; the
+        Activity window)."""
+        return self._producers.get(owner)
+
+    def admin_action(self, owner: str) -> str:
+        """The ``cache_admin`` action a helper's request runs ("sweep", "trim"…; "" if none)."""
+        return self._admin.get(owner, "")
+
+    def finishing_of(self, owner: str) -> tuple[str, bool] | None:
+        """A finished load still writing the disk cache (its job forgotten): its folder, and whether it
+        is Live's new shots; None if ``owner`` is no such load."""
+        path = self._finishing.get(owner)
+        return None if path is None else (path, bool(self._finishing_live.get(owner)))
+
+    def raw_filling(self, owner: str) -> bool:
+        """Whether a helper's request is a folder's ``raw_fill``."""
+        return owner in self._raw_fills
+
     def load_clock(self, path: str) -> LoadClock | None:
         """The running load's clock for this folder, if it is loading."""
         job = self.jobs.get(("load", self.key(path)))

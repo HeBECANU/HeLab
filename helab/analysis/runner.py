@@ -16,7 +16,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.results import AnalysisContext, AnalysisResult, RamResults
-from helab.analysis.runner_core import AnalysisQueue
+from helab.analysis.runner_core import AnalysisQueue, RunInfo
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.utils import app_log
 
@@ -70,6 +70,10 @@ class AnalysisRunner(QObject):
     def in_flight(self) -> tuple[DatasetAnalysis, ...]:
         """The scripts of the jobs queued or computing now (``AnalysisQueue.in_flight``)."""
         return self.core.in_flight()
+
+    def jobs(self) -> tuple[RunInfo, ...]:
+        """The jobs queued or computing now (``AnalysisQueue.jobs``; the Activity window)."""
+        return self.core.jobs()
 
     def stop(self, timeout: float = 5.0) -> bool:
         """Cancel every job and end the worker; True once it has exited (``AnalysisQueue.stop``)."""

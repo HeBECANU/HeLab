@@ -27,6 +27,7 @@ PURE = (
         "backends.cython", "backends.mlx_gpu", "backends.numba_backend", "backends.numpy_backend", "backends.reference",
         "backends.rust", "check", "fastio", "pipeline", "profile", "provenance", "raw", "raw_layer", "reconstruct",
         "samples", "split", "timing", "txy", "txy_layer", "user_profiles")),
+    "helab.utils.activity",  # (The Activity window's model, Q62.)
     "helab.utils.hlb",
     "helab.utils.ram_buffers",
     *(f"helab.analysis.{name}" for name in (

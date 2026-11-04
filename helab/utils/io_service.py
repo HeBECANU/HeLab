@@ -68,6 +68,9 @@ class IORequest:
     # Bytes the helper needs from this process (a result save's packed data, R2): written to its
     # private folder before it starts (``blob_file``), off the GUI thread.
     blob: bytes | None = None
+    # The Activity window's: the kind of its helper's last event, and when it was queued (monotonic).
+    last_event: str = ""
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 # Help › Record I/O trace (this session): every helper's operations on source folders, one JSON line
@@ -127,6 +130,8 @@ BACKGROUND = "background"
 # Reads of the local disk cache only; they never touch source folders.
 LOCAL = "local"
 REQUEUED = "moved to the background queue"
+# The status bar's counts while the Activity window's Pause background I/O is on (Q~3).
+USER_HOLD_NOTE = "paused by you"
 
 
 class IOService(QObject):
@@ -215,6 +220,9 @@ class IOService(QObject):
         # Cached data doesn't match several folders: loads and scans pause, and none start,
         # until the user answers (``FolderCache.resume_after_mismatch`` and friends).
         self.mismatch_hold = False
+        # The Activity window's Pause background I/O (``set_user_hold``): background loads, scans, conversions
+        # and the like pause, and none start, until Resume (or quitting, ``FolderCache.cancel_for_quit``).
+        self.user_hold = False
         # Work Offline (``set_offline``): only ``OFFLINE_OPERATIONS`` start; the operations refused
         # so far this session (logged once each).
         self.offline = False
@@ -439,6 +447,24 @@ class IOService(QObject):
         return (self.mismatch_hold and request.operation in self.MISMATCH_HELD
                 and not self.mismatch_spared(request))
 
+    def set_user_hold(self, held: bool) -> None:
+        """Pause background I/O, and start none, or let it go on (the Activity window's Pause background
+        I/O): the mismatch hold's twin for every ``PAUSABLE`` operation in the background lane. Never the
+        current tab's (foreground) or the local lane, saves or Live checks (``mismatch_spared``)."""
+        if held != self.user_hold:
+            self.user_hold = held
+            logging.info("Background I/O %s (Activity)", "paused" if held else "resumed")
+            self.reschedule()
+
+    def user_held(self, request: IORequest) -> bool:
+        """Whether the user's hold pauses (or, queued, holds) this request: a ``PAUSABLE`` request outside
+        the foreground and local lanes, not a save or a Live check."""
+        if not self.user_hold or request.operation not in self.PAUSABLE or self.mismatch_spared(request):
+            return False
+        if request in self.pending:
+            return not self.wants_foreground(request) and request.operation not in self.LOCAL_OPERATIONS
+        return request.lane == BACKGROUND
+
     def cancel_held(self) -> None:
         """Cancel every queued or running load and scan the mismatch hold holds (``held_by_mismatch``
         with the hold on); a finished load still writing its disk cache is left to finish."""
@@ -546,7 +572,7 @@ class IOService(QObject):
                 continue
             if not self._background_room():
                 break
-            if hold and request.operation in self.PAUSABLE:
+            if request.operation in self.PAUSABLE and (hold or self.user_held(request)):
                 continue
             self._start(request, BACKGROUND)
 
@@ -558,8 +584,9 @@ class IOService(QObject):
             # stop and start it; a load starting after the listings ended has nothing to give way to.
             hold_load = listing or listed_lately and request.pause_requested
             pause = (request.operation in self.PAUSABLE and not request.completed
-                     and (self.held_by_mismatch(request) or (hold_background if request.lane != FOREGROUND
-                                                             else request.operation == "load" and hold_load)))
+                     and (self.held_by_mismatch(request) or self.user_held(request)
+                          or (hold_background if request.lane != FOREGROUND
+                              else request.operation == "load" and hold_load)))
             if pause != request.pause_requested:
                 with request.control:
                     # Not written (the flag held by another process for a moment): the next tick tries again,
@@ -752,6 +779,8 @@ class IOService(QObject):
             now = time.monotonic()
             ages = [age for r in self.retired if (age := self.stopping_for(r, now)) is not None]
             parts.append(f"{len(self.retired):,} stopping" + (f" ({duration(max(ages))})" if ages else ""))
+        if self.user_hold:
+            parts.append(USER_HOLD_NOTE)
         return " · ".join(parts) or "Ready"
 
     LANE_NOTES = {FOREGROUND: " (current tab)", BACKGROUND: " (background)", LOCAL: " (local disk cache)"}
@@ -786,7 +815,8 @@ class IOService(QObject):
         paused = [f"{self.label(r)}: {r.path}" for r in self.active if r.paused]
         if paused:
             why = ("Paused: cached data doesn't match several folders (see the status bar's ⚠)"
-                   if self.mismatch_hold else "Paused while the current tab browses or loads")
+                   if self.mismatch_hold else "Paused by you (Activity: Resume background I/O)" if self.user_hold
+                   else "Paused while the current tab browses or loads")
             parts.append(f"{why}:\n" + "\n".join(paused))
         rows: dict[tuple[str, str], str] = {}
         for request in self.pending:
@@ -1022,6 +1052,7 @@ class IOService(QObject):
                 self._forget(request)
             elif not request.cancelled.is_set() and not self.closed:
                 kind = event["kind"]
+                request.last_event = kind
                 if kind == "error":
                     # One line per failure; timeouts are logged where they are detected.
                     logging.warning("%s failed: %s — %s", self.label(request), request.path,
