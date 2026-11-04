@@ -29,6 +29,24 @@ How to use this list:
 - Features stay in `roadmaps/_readme.md` and bugs in `roadmaps/known-issues.md`; only the
   question goes here.
 
+## Activity window (block 62; open)
+
+Tony in Chat, 2026-11-04: "shall we have a dedicated window showing all running tasks, show their details and
+status and manage them?" Proposal: one non-modal **Activity** window, drawn from memory only (IOService's
+running and queued requests, the analysis runner's jobs, Live sessions, conversions, cache upkeep, script
+probes), grouped by kind, with a details pane and actions. It covers the roadmap's "Show the analysis worker
+beside I/O" (2026-10-19).
+
+- **Q62.1 Name and where it opens.** **Proposed:** "Activity", from Window › Activity and a click on the
+  status bar's counts.
+- **Q62.2 What v1 shows.** **Proposed:** loads and scans, saves, Live (sessions, checks, autosaves,
+  auto-convert), conversions, cache upkeep (raw_fill, sweep, budget trim, cache move), analysis jobs, script
+  probes and reloads; `helab convert` processes beside the app later (they need a channel to the app).
+- **Q62.3 Managing.** **Proposed:** Cancel, Retry (failed), Show in tab, Stop Live, Open log, Pause/Resume
+  background I/O, Cancel all queued; reordering the queue later.
+- **Q62.4 History.** **Proposed:** this session's finished and failed tasks, newest first, the last 200.
+- **Q62.5 When.** **Proposed:** a floor on this Mac in v0.0.9 (about a day plus review).
+
 ## Recently decided
 
 Cleared at the v0.0.8a1 tidy-up (2026-11-04) where each was recorded in memory, an architecture file,
