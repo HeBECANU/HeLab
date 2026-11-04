@@ -536,3 +536,26 @@ def test_auto_converts_passes_add_no_successes_to_the_history(qtbot: QtBot, monk
     assert [(entry.title, entry.outcome) for entry in activity.HISTORY.entries()] == [
         ("Convert raw files to TXY", "failed")]
     service.shutdown()
+
+
+def test_cancel_all_queued_never_stops_a_running_task(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-3: a tab's queued selected load is left to the tab's own Cancel (which would also stop the tab's
+    running background loads); the running background load goes on, the queued scan is cancelled."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    calls = Calls()
+    explorer = fake_explorer(calls, selected="/a")
+    actions = actions_for(service, cache, [("tab", explorer)])
+    assert cache.submit("tab:bg", 0, "/bg", "load", {})
+    running = service.active[0]
+    assert cache.submit("tab", 0, "/a", "load", {})  # (Queued: the one background slot is taken.)
+    assert cache.submit("tab", 0, "/b", "scan", {})
+    assert [request.operation for request in service.pending] == ["load", "scan"]
+    assert actions.cancel_queued(actions.sources.snapshot()) == 1
+    assert "cancel_loading" not in calls.names()
+    assert running in service.active and not running.cancelled.is_set()
+    assert [(request.operation, request.path) for request in service.pending] == [("load", FolderCache.key("/a"))]
+    # (One row's Cancel on it is the tab's Cancel, as the toolbar's.)
+    selected = next(task for task in actions.sources.snapshot().tasks if task.folder == FolderCache.key("/a"))
+    assert actions.cancel(selected) and calls.names() == ["cancel_loading"]
+    service.shutdown()

@@ -483,7 +483,9 @@ HISTORY_COLUMNS = ("Ended", "Task", "Tab", "Folder", "Outcome", "Took")
 REFRESH_KINDS = frozenset({"queued", "started", "paused", "resumed", "done", "error", "cancelled", "loaded"})
 # Why each action can't be used on the selected row (its tooltip).
 ACTION_TIPS: dict[str, tuple[str, str]] = {
-    "cancel": ("Cancel", "Stop the selected task, as its own Cancel does (it shows stopping until its process exits)"),
+    "cancel": ("Cancel", "Stop the selected task, as its own Cancel does; it shows stopping until its process exits. "
+                         "A tab's selected load stops as the toolbar's Cancel stops it, with that tab's other "
+                         "background loads"),
     "retry": ("Retry", "Run the failed task again, as its own Retry does"),
     "show": ("Show in tab", "Show the selected task's folder in its tab, or its plot"),
     "stop_live": ("Stop Live", "Turn Live off for the selected folder; its new shots are saved as always"),
@@ -573,8 +575,10 @@ class ActivityActions:
 
     # Cancel (Q62.3): each through its owner's own path; a helper then shows "stopping" until its exit.
 
-    def cancel(self, task: Task) -> bool:
-        """Cancel ``task`` as its owner's own Cancel does; whether anything was asked to stop."""
+    def cancel(self, task: Task, *, queued_only: bool = False) -> bool:
+        """Cancel ``task`` as its owner's own Cancel does; whether anything was asked to stop. A tab's selected
+        load goes through the tab's Cancel (``cancel_loading``, the toolbar's), which also stops that tab's
+        background loads; ``queued_only`` (Cancel all queued) leaves it, so nothing running is stopped."""
         route, cache = task.route, self.sources.cache
         if route.kind == "analysis":
             for runner in unique(self.sources.runners()):
@@ -613,6 +617,8 @@ class ActivityActions:
                 else:
                     cache.cancel(name, "convert", request.path)
             elif found.role == "select" and request.operation in ("load", "cached") and explorer is not None:
+                if queued_only:
+                    continue  # (Its tab's Cancel would stop the tab's running background loads too: AW-3.)
                 explorer.cancel_loading()  # (The toolbar's Cancel: the tab says "Cancelled — Retry".)
                 if self._subscribed(request, name):
                     cache.cancel(name, request.operation, request.path)
@@ -635,10 +641,11 @@ class ActivityActions:
         return True
 
     def cancel_queued(self, snapshot: Snapshot) -> int:
-        """Cancel every queued task that can be cancelled, each through its own path; how many."""
+        """Cancel every queued task that can be cancelled, each through its own path; how many. Never a running
+        one: a tab's selected load is left to its tab's Cancel (``cancel``'s ``queued_only``)."""
         count = 0
         for task in snapshot.tasks:
-            if task.state == "queued" and "cancel" in task.actions and self.cancel(task):
+            if task.state == "queued" and "cancel" in task.actions and self.cancel(task, queued_only=True):
                 count += 1
         return count
 
@@ -807,7 +814,8 @@ class ActivityWindow(QWidget):
         self.cancel_queued_button = identify(QPushButton("Cancel all queued"), "activity_cancel_queued",
                                              "Cancel all queued", "Cancel every queued task that can be cancelled")
         self.cancel_queued_button.setToolTip("Cancel every queued task that can be cancelled, each as its own "
-                                             "Cancel does. Saves stay queued.")
+                                             "Cancel does. Nothing running stops: a tab's selected load is "
+                                             "left to that tab's Cancel. Saves stay queued.")
         self.cancel_queued_button.setAutoDefault(False)
         self.cancel_queued_button.clicked.connect(self._on_cancel_queued)
         row.addWidget(self.cancel_queued_button)

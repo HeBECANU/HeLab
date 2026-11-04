@@ -59,10 +59,11 @@ icons) aren't listed; every failure and every cancellation is.
 
 Select a row, then:
 
-- **Cancel** stops it the same way its own Cancel does (the toolbar's Cancel for a tab's load, Live's
-  auto-convert switch, the cache move's Cancel). It then shows **stopping** until its process has
-  exited. Saves of your data and settings can't be cancelled here: they finish by themselves, and
-  stop on their own if they make no progress.
+- **Cancel** stops it the same way its own Cancel does (Live's auto-convert switch, the cache move's
+  Cancel). A tab's selected load stops as the toolbar's Cancel stops it, so that tab's other
+  background loads stop too. It then shows **stopping** until its process has exited. Saves of your
+  data and settings can't be cancelled here: they finish by themselves, and stop on their own if they
+  make no progress.
 - **Retry** runs a failed task again through its own Retry (Live's, the Convert row's, the tab's, a
   plot's Run, a script folder's Reload). It waits until the attempt it replaces has exited. A failed
   load of a folder you've since left is retried by selecting the folder again: **Show in tab** takes
@@ -76,4 +77,6 @@ For everything at once:
 - **Pause background I/O** pauses background loads, scans and conversions, and starts no new ones,
   until you click **Resume background I/O**. The current tab, saves, Live and reading the local disk
   cache carry on. The status bar says `paused by you` meanwhile, and quitting HeLab resumes it.
-- **Cancel all queued** cancels every queued task that can be cancelled. Saves stay queued.
+- **Cancel all queued** cancels every queued task that can be cancelled, and never one that is
+  running. A tab's selected load is left for that tab's own Cancel, which would stop the tab's other
+  loads too. Saves stay queued.
