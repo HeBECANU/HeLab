@@ -629,3 +629,24 @@ def test_a_gui_conversions_failed_or_cancelled_pass_is_one_history_entry(
     assert not explorer.model.cache._self_reported  # (Every mark is taken as its request ends.)
     explorer.close_cleanup()
     service.shutdown()
+
+
+def test_a_live_pass_left_running_by_a_cancelled_gui_conversion_keeps_its_failure(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-16: the GUI conversion and Live's auto-convert share one pass of a folder; the GUI side is cancelled,
+    Live's goes on, so the pass is no longer the conversion's to report: its failure is IOService's entry."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    cache.self_reporting.add("tab:convert")
+    assert cache.submit("tab:convert", 0, "/raw", "convert", {})
+    assert cache.submit("tab:live", 0, "/raw", "convert", {})  # (Joins the same pass.)
+    request = service.active[0]
+    assert len(service.active) == 1
+    cache.cancel("tab:convert", "convert", FolderCache.key("/raw"))
+    assert request in service.active  # (Live still wants it.)
+    service.messages.put((request, {"kind": "error", "message": "Permission denied"}))
+    service._tick()
+    assert [(entry.title, entry.outcome, entry.route.kind) for entry in activity.HISTORY.entries()] == [
+        ("Convert raw files to TXY", "failed", "io")]
+    assert not cache._self_reported
+    service.shutdown()

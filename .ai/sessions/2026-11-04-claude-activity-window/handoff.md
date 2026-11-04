@@ -33,6 +33,8 @@ with answers (1)–(4) and (a)–(d)).
 | `12d4580` | Gauge's re-check |
 | `8cfd279` | AW-14 · the Now tree keeps its scroll position when rows change place |
 | `5b9a270` | AW-15 · a GUI conversion's failed or cancelled pass is one history entry |
+| `ef0a8c9` | Gauge's re-check 2 |
+| (AW-16 commit) | AW-16 · a pass the GUI conversion leaves to Live is reported by IOService again |
 
 ## What is built
 
@@ -214,7 +216,8 @@ below follows them.
 > failure (`_convert_stopped`), a GUI conversion's end (including one whose pass couldn't be queued), a
 > test import's end, the cache move's end. A GUI conversion's pass is reported by the conversion only: its
 > `ExplorerConverter` is in `FolderCache.self_reporting`, FolderCache marks the helper requests such an owner
-> asks for or joins, and IOService skips them (`reports_end_itself`; AW-15); Live's auto-convert reports no
+> asks for or joins, and IOService skips them (`reports_end_itself`; AW-15); `FolderCache.cancel` takes
+> the mark off a pass that goes on with no self-reporting subscriber left (AW-16); Live's auto-convert reports no
 > pass, so IOService's entry is a failed pass's. Every failure and cancellation is kept; successes are kept but
 > Live's checks, Live's plot reruns, every conversion pass (the Live session or the GUI conversion is the
 > entry), listings, details scans, cached reads, icons and other frequent small work (`kept_in_history`,

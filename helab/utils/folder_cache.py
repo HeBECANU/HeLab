@@ -3320,6 +3320,11 @@ class FolderCache(QObject):
             if not job.subscribers:
                 self._forget_job(job)
                 self.service.cancel(job.owner)
+            elif job.owner in self._self_reported and not any(
+                    subscriber.owner in self.self_reporting for subscriber in job.subscribers.values()):
+                # (The GUI conversion left a pass that goes on for another owner, Live's: no longer the
+                # conversion's to report, so IOService reports its end: AW-16.)
+                del self._self_reported[job.owner]
 
     def transfer(self, owner: str, generation: int, path: str,
                  new_owner: str, new_generation: int, operation: str = "load") -> bool:
