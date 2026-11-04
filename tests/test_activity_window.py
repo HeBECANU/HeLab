@@ -236,7 +236,7 @@ def test_window_activity_and_the_status_bars_click_open_it(qtbot: QtBot) -> None
         assert activity_window.isVisible() and activity_window.watching
         assert window.action_activity.objectName() == "window_activity"
         activity_window.hide()
-        qtbot.mouseClick(window.status_bar_message_left, Qt.MouseButton.LeftButton)
+        qtbot.mouseClick(window.status_bar_message_left, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
         assert activity_window.isVisible()
         window.update_status_bar_left()
         assert window.status_bar_message_left.toolTip().endswith(f"\n\n{ACTIVITY_HINT}") or \
