@@ -641,6 +641,35 @@ Q56.1 (b)'s shim are done.
   at once, `PROBES_AT_ONCE`). If a lab PC's cold frozen start makes it slow, reuse one probe process per round for
   several folders (a protocol change).
 
+## The v0.0.8a1 release (block 59)
+
+From CoCo's check of the v0.0.8a1 release (2026-11-04, Tony in Chat: "ok ya add to todo since i had to manually tag
+v0.0.8a1 and v0.0.6a1 just now"). For v0.0.9, before its PR.
+
+- **A59.1 Release notes that link their tags** (`dev-cicd.yml`'s release job, `helab/release_draft.py`). CI's
+  draft (`v0.0.8a1`, run 41746737106) had a fixed template. Tony had to link the tags by hand. Make the draft's notes:
+  1. name and link their tag;
+  2. compare against the previous release tag, a "Full Changelog: <previous>...<tag>" link. The previous tag is the
+     newest earlier `v*` tag in the commit's history: v0.0.7a1 has none, its release job having failed (run
+     41110274554). Pass it as GitHub's `previous_tag_name`;
+  3. add GitHub's generated notes (`generate_release_notes`, or `POST /releases/generate-notes` once and merged
+     into the body with the manifest marker kept);
+  4. fix "Workflow Run": `github.event.repository.url` is the API URL (`api.github.com/repos/…`). Use
+     `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`.
+
+  Keep the recovery path (`release_draft` resuming an existing draft) and its tests working. Draft bodies are
+  rewritten only while they are drafts, never after publishing.
+- **A59.2 GitHub's pre-release flag vs the manual's "stable".** CI made the v0.0.8a1 draft a pre-release
+  (`RELEASE_PRERELEASE: true`). Tony published it as a full release on purpose, so GitHub's "Latest" is v0.0.8a1;
+  as a pre-release, "Latest" would fall back to v0.0.3b. The manual's site goes by the version number
+  (`site_versions.py`, PEP 440), so its front page still says "No stable release yet". Tony chooses (asked in Chat,
+  2026-11-04):
+  - (a) tick "Set as a pre-release" again;
+  - (b) keep the release, and reword the no-stable front page (e.g. "Latest: 0.0.8a1 (alpha)"), CoCo's pick;
+  - (c) the site follows GitHub's flag.
+
+  Then record the rule in `release-and-ci.md`'s publishing step.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:
