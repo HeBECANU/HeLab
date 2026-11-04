@@ -853,6 +853,7 @@ class ActivityWindow(QWidget):
         self._tick.setInterval(self.TICK_MS)
         self._tick.timeout.connect(self.refresh)
         self.resize(*parse_size(read_setting(app_settings(), ACTIVITY_SIZE_SETTING)))
+        self._fitted = False  # (Fitted to its screen when it first shows: AW-9.)
         self._update_buttons()
 
     def _tree(self, ident: str, name: str, columns: Sequence[str]) -> QTreeWidget:
@@ -876,8 +877,21 @@ class ActivityWindow(QWidget):
         self.raise_()
         self.activateWindow()
 
+    def fit_screen(self) -> None:
+        """At most the screen's available size (a size saved on a larger monitor), at least ``MIN_SIZE``."""
+        screen = (self.parentWidget() or self).screen()
+        if screen is None:
+            return
+        room = screen.availableGeometry()
+        width, height = min(self.width(), room.width()), min(self.height(), room.height())
+        if (width, height) != (self.width(), self.height()):
+            self.resize(max(MIN_SIZE[0], width), max(MIN_SIZE[1], height))
+
     def showEvent(self, a0: Optional[QShowEvent]) -> None:
         super().showEvent(a0)
+        if not self._fitted:
+            self._fitted = True
+            self.fit_screen()
         self._connect()
         self.refresh()
         self._tick.start()

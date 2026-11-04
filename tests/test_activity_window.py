@@ -336,3 +336,17 @@ def test_a_live_session_that_ends_before_its_save(qtbot: QtBot, monkeypatch: pyt
     assert shown_rows(window) == [("Saves (1)", "Load data")]
     still_works(window)
     service.shutdown()
+
+
+def test_a_saved_size_larger_than_the_screen_is_fitted_to_it(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-9: a size saved on a larger monitor opens no larger than this screen."""
+    service = quiet_service(monkeypatch)
+    app_settings().setValue(ACTIVITY_SIZE_SETTING, "20000,15000")
+    window = make_window(qtbot, service)
+    assert (window.width(), window.height()) == (20000, 15000)
+    window.show()
+    screen = window.screen()
+    assert screen is not None
+    room = screen.availableGeometry()
+    assert window.width() <= max(room.width(), 400) and window.height() <= max(room.height(), 200)
+    service.shutdown()
