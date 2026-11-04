@@ -245,3 +245,94 @@ def test_window_activity_and_the_status_bars_click_open_it(qtbot: QtBot) -> None
         window.close()
     assert activity.LOG_LINES_HANDLER not in logging.getLogger().handlers
     assert not window.activity_window.isVisible()
+
+
+# AW-1: rows that change group or parent while the old one leaves
+
+def sources_with(service: IOService, cache: FolderCache, tabs: list[tuple[str, Any]]) -> ActivitySources:
+    return ActivitySources(service, cache, lambda: tabs, mover=lambda: None)
+
+
+def shown_rows(window: ActivityWindow) -> list[tuple[str, ...]]:
+    """Every row as (group heading, its row's title, and its children's titles)."""
+    rows = []
+    for index in range(window.now.topLevelItemCount()):
+        group = window.now.topLevelItem(index)
+        assert group is not None
+        for n in range(group.childCount()):
+            child = group.child(n)
+            assert child is not None
+            rows.append((group.text(0), child.text(0),
+                         *[grand.text(0) for grand in (child.child(m) for m in range(child.childCount()))
+                           if grand is not None]))
+    return rows
+
+
+def still_works(window: ActivityWindow) -> None:
+    assert not window.now.signalsBlocked()
+    group = window.now.topLevelItem(0)
+    assert group is not None and group.child(0) is not None
+    window.now.setCurrentItem(group.child(0))
+    assert window.details.toPlainText()  # (Selection reaches the details pane: signals flow.)
+
+
+def test_a_load_that_becomes_a_cache_write_moves_to_saves(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    window = make_window(qtbot, service, cache)
+    window.show()
+    assert cache.submit("tab", 0, "/data/run_1", "load", {})
+    window.refresh()
+    assert [row[:2] for row in shown_rows(window)] == [("Loads and scans (1)", "Load data")]
+    service.active[0].completed = True  # (It delivered its data and goes on writing the disk cache.)
+    window.refresh()
+    window.refresh()
+    assert [row[:2] for row in shown_rows(window)] == [("Saves (1)", "Save data cache")]
+    still_works(window)
+    service.shutdown()
+
+
+def test_a_conversion_that_finishes_while_its_pass_is_listed(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    from test_activity import fake_explorer
+    from helab.views.explorer_convert import FolderConversion
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    conversion = FolderConversion(FolderCache.key("/raw"), "cache", time.time(), request=True)
+    explorer = fake_explorer("tab", conversions={conversion.path: conversion})
+    window = ActivityWindow(sources_with(service, cache, [("raw", explorer)]))
+    qtbot.addWidget(window)
+    window.show()
+    assert cache.submit("tab:convert", 0, "/raw", "convert", {})
+    window.refresh()
+    assert shown_rows(window) == [("Conversions (2)", "Convert raw files to TXY", "Convert raw files to TXY")]
+    conversion.request, conversion.finished = False, True  # (Its row leaves; its pass is still exiting.)
+    window.refresh()
+    window.refresh()
+    assert shown_rows(window) == [("Conversions (1)", "Convert raw files to TXY")]
+    still_works(window)
+    service.shutdown()
+
+
+def test_a_live_session_that_ends_before_its_save(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    from test_activity import fake_explorer
+    from helab.utils.folder_cache import Dataset
+    from helab.views.explorer_live import LiveSession
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    path = FolderCache.key("/live")
+    session = LiveSession(path, time.time(), set(), Dataset(path, "sig", {}, {"fingerprint": []}, 0), on=False)
+    sessions = [session]
+    explorer = fake_explorer("tab", sessions)
+    explorer.live_control.sessions = lambda: list(sessions)
+    window = ActivityWindow(sources_with(service, cache, [("live", explorer)]))
+    qtbot.addWidget(window)
+    window.show()
+    assert cache.save("tab:live-save", path, {"save_memory": True})
+    window.refresh()
+    assert shown_rows(window) == [("Live (2)", "Live", "Load data")]
+    sessions.clear()  # (Live's session ends; its save still runs.)
+    window.refresh()
+    window.refresh()
+    assert shown_rows(window) == [("Saves (1)", "Load data")]
+    still_works(window)
+    service.shutdown()

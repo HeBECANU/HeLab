@@ -775,6 +775,7 @@ class ActivityWindow(QWidget):
         identify(self, "activity_window", "Activity", "Every task HeLab runs, and this session's history")
         self._items: dict[str, QTreeWidgetItem] = {}
         self._groups: dict[str, QTreeWidgetItem] = {}
+        self._shape: dict[str, list[str]] = {}  # (Each parent's children's ids as last shown; "" the top level.)
         self._collapsed: set[str] = set()
         self._history: list[activity.Finished] = []
         self._history_version = -1
@@ -947,58 +948,90 @@ class ActivityWindow(QWidget):
         self._selection_changed()
 
     def _render_now(self) -> None:
+        """Show the snapshot in the Now tree: rows filled in place and, when any row's place changed (a task
+        moved to another group or parent, a group or parent left), every item detached from its old parent
+        before it is attached again, so no item is deleted with a parent that leaves (AW-1). Items taken
+        out are held until the render ends; the tree's signals are restored whatever happens."""
         tree = self.now
         selected = self._selected_id()
+        held: list[QTreeWidgetItem] = []  # (Taken out of the tree: alive until the render ends.)
         tree.blockSignals(True)
-        wanted: dict[str, QTreeWidgetItem] = {}
-        children: dict[str, list[QTreeWidgetItem]] = {}
-        tops: dict[str, list[QTreeWidgetItem]] = {}  # (By group.)
-        known = {task.id for task in self.snapshot.tasks}
-        for task in self.snapshot.tasks:
-            item = self._items.get(task.id) or QTreeWidgetItem()
-            item.setData(0, Qt.ItemDataRole.UserRole, task.id)
-            self._fill(item, task)
-            wanted[task.id] = item
-            if task.parent and task.parent in known:
-                children.setdefault(task.parent, []).append(item)
-            else:
-                tops.setdefault(task.group, []).append(item)
-        groups: list[QTreeWidgetItem] = []
-        for group, _title in activity.GROUPS:
-            if group not in tops:
-                continue
-            count = sum(task.group == group for task in self.snapshot.tasks)
-            item = self._groups.get(group) or QTreeWidgetItem()
-            item.setText(0, activity.group_heading(group, count))
-            item.setData(0, Qt.ItemDataRole.UserRole, f"group:{group}")
-            self._groups[group] = item
-            groups.append(item)
-        self._groups = {group: item for group, item in self._groups.items() if group in tops}
-        self._sync(tree.invisibleRootItem(), groups)
-        for name, item in self._groups.items():
-            item.setFirstColumnSpanned(True)
-            self._sync(item, tops[name])
-            item.setExpanded(f"group:{name}" not in self._collapsed)
-        for task_id, item in wanted.items():
-            self._sync(item, children.get(task_id, []))
-            if task_id in children:
-                item.setExpanded(task_id not in self._collapsed)
-        self._items = wanted
-        if selected is not None and selected in wanted:
-            tree.setCurrentItem(wanted[selected])
-        tree.blockSignals(False)
+        try:
+            self._place_rows(tree, held)
+            if selected is not None and selected in self._items:
+                tree.setCurrentItem(self._items[selected])
+        finally:
+            tree.blockSignals(False)
+            held.clear()
         for column in range(1, len(NOW_COLUMNS)):
             tree.resizeColumnToContents(column)
 
-    @staticmethod
-    def _sync(parent: Optional[QTreeWidgetItem], items: list[QTreeWidgetItem]) -> None:
-        """Make ``items`` ``parent``'s children, in order, moving them only when the order changed."""
-        if parent is None:
-            return
-        current = [parent.child(index) for index in range(parent.childCount())]
-        if current != items:
-            parent.takeChildren()
-            parent.addChildren(items)
+    def _item(self, task: Task) -> QTreeWidgetItem:
+        """The task's row, filled: the one shown before, or a new one if it has gone (a stale wrapper)."""
+        item = self._items.get(task.id)
+        if item is not None:
+            try:
+                item.setData(0, Qt.ItemDataRole.UserRole, task.id)
+                self._fill(item, task)
+                return item
+            except RuntimeError:  # (Its C++ item was deleted: never reused.)
+                self._items.pop(task.id, None)
+        item = QTreeWidgetItem()
+        item.setData(0, Qt.ItemDataRole.UserRole, task.id)
+        self._fill(item, task)
+        return item
+
+    def _place_rows(self, tree: QTreeWidget, held: list[QTreeWidgetItem]) -> None:
+        wanted: dict[str, QTreeWidgetItem] = {}
+        children: dict[str, list[str]] = {}
+        tops: dict[str, list[str]] = {}  # (By group.)
+        known = {task.id for task in self.snapshot.tasks}
+        for task in self.snapshot.tasks:
+            wanted[task.id] = self._item(task)
+            if task.parent and task.parent in known:
+                children.setdefault(task.parent, []).append(task.id)
+            else:
+                tops.setdefault(task.group, []).append(task.id)
+
+        def shown(task_id: str) -> int:
+            return 1 + sum(shown(child) for child in children.get(task_id, []))
+        groups: dict[str, QTreeWidgetItem] = {}  # (By group, in GROUPS' order.)
+        for group, _title in activity.GROUPS:
+            if group not in tops:
+                continue
+            item = self._groups.get(group) or QTreeWidgetItem()
+            # (Counts the rows shown under it, children included, wherever their own group is: AW-13.)
+            item.setText(0, activity.group_heading(group, sum(shown(top) for top in tops[group])))
+            item.setData(0, Qt.ItemDataRole.UserRole, f"group:{group}")
+            groups[group] = item
+        shape = {"": [f"group:{group}" for group in groups],
+                 **{f"group:{group}": list(ids) for group, ids in tops.items()},
+                 **{task_id: list(ids) for task_id, ids in children.items()}}
+        replaced = any(item is not self._items.get(task_id) for task_id, item in wanted.items()) or any(
+            item is not self._groups.get(group) for group, item in groups.items())
+        if shape != self._shape or replaced:
+            # Detach everything first (children from their parents, then the top level), so each item is
+            # parentless when it is placed again and none goes with a parent that is dropped.
+            for item in (*self._items.values(), *self._groups.values()):
+                try:
+                    held.extend(item.takeChildren())
+                except RuntimeError:
+                    pass
+            root = tree.invisibleRootItem()
+            assert root is not None
+            held.extend(root.takeChildren())
+            root.addChildren([groups[name] for name in groups])
+            for name, item in groups.items():
+                item.addChildren([wanted[task_id] for task_id in tops[name]])
+            for task_id, ids in children.items():
+                wanted[task_id].addChildren([wanted[child] for child in ids])
+            self._shape = shape
+        for name, item in groups.items():
+            item.setFirstColumnSpanned(True)
+            item.setExpanded(f"group:{name}" not in self._collapsed)
+        for task_id in children:
+            wanted[task_id].setExpanded(task_id not in self._collapsed)
+        self._items, self._groups = wanted, groups
 
     @staticmethod
     def _fill(item: QTreeWidgetItem, task: Task) -> None:
