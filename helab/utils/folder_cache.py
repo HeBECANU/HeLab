@@ -196,6 +196,7 @@ def store_options() -> dict[str, Any]:
 
 
 class FolderCache(QObject):
+    MAX_SELF_REPORTED = 1024  # (``_self_reported``: requests that never ended are dropped oldest first.)
     resultReady = pyqtSignal(object, object)
     snapshotChanged = pyqtSignal(str)
     datasetChanged = pyqtSignal(str)
@@ -302,6 +303,11 @@ class FolderCache(QObject):
         # new shots wait in RAM before the folder is saved (Settings → Cache).
         self.live_interval = DEFAULT_LIVE_INTERVAL
         self.live_autosave_shots = DEFAULT_LIVE_AUTOSAVE
+        # Owners that report their tasks' ends to the Activity history themselves (a tab's GUI conversions,
+        # ``ExplorerConverter``: the conversion is the entry, AW-15), and the helpers' requests (producer owners)
+        # working for one: IOService doesn't report those (``reports_end_itself``). Bounded, oldest dropped.
+        self.self_reporting: set[str] = set()
+        self._self_reported: OrderedDict[str, None] = OrderedDict()
         # Saves (loads with ``save`` in their payload) waiting for the folder's running save to
         # end, so saves of one folder never overlap: folder → (owner, payload).
         self._deferred_saves: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -2667,6 +2673,7 @@ class FolderCache(QObject):
             if timeout is not None and math.isinf(timeout):
                 self.service.set_timeout(job.owner, timeout)
             job.subscribers[(owner, generation)] = request
+            self._note_self_reported(owner, job.owner)
             self._catch_up(job, request)
             self.service.reschedule()
             return True
@@ -2726,6 +2733,7 @@ class FolderCache(QObject):
             job.payload = payload = {**payload, "scan_operation_id": job.owner,
                                      "scan_revision": time.time_ns(), "scan_manual": manual}
         job.subscribers[(owner, generation)] = request
+        self._note_self_reported(owner, job.owner)
         self.jobs[job.key] = job
         self._producers[job.owner] = job
         if not self.service.submit(job.owner, 0, path, operation, payload, priority=priority, timeout=timeout,
@@ -3340,6 +3348,18 @@ class FolderCache(QObject):
             self.resultReady.emit(request, job.load_status)
         if job.paused:
             self.resultReady.emit(request, {"kind": "paused"})
+
+    def _note_self_reported(self, subscriber: str, producer: str) -> None:
+        if subscriber in self.self_reporting:
+            self._self_reported[producer] = None
+            while len(self._self_reported) > self.MAX_SELF_REPORTED:
+                self._self_reported.popitem(last=False)
+
+    def reports_end_itself(self, producer: str) -> bool:
+        """Whether the helper's request (its producer owner) works for an owner that reports the task's end
+        to the Activity history itself (``self_reporting``), so IOService doesn't (AW-15); asked once, as it
+        ends."""
+        return self._self_reported.pop(producer, 0) is None
 
     def job_of(self, owner: str) -> SharedJob | None:
         """The shared job a helper's request (``owner``) works for, if it is one (memory only; the

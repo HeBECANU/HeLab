@@ -1034,9 +1034,11 @@ class IOService(QObject):
         request.reported = True
         kind = event["kind"]
         outcome: activity.Outcome = "ok" if kind == "done" else "cancelled" if kind == "cancelled" else "failed"
+        cache = self.folder_cache
+        if cache is not None and cache.reports_end_itself(request.owner):
+            return  # (A GUI conversion's pass: the conversion's own entry is the one, AW-15.)
         if not activity.kept_in_history(request.operation, request.payload, outcome):
             return
-        cache = self.folder_cache
         try:
             # (Named by what it was asked to do: a load that delivered its data and then failed writing
             # the cache is still a load, its message says what failed.)

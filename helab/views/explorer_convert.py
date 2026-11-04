@@ -347,6 +347,7 @@ class ExplorerConverter:
         self._timer.timeout.connect(self._next_passes)
         cache = explorer.model.cache
         self._cache = cache
+        cache.self_reporting.add(self.owner)  # (This reports its conversions' ends: ``_report``, AW-15.)
         cache.folderPrefsChanged.connect(self._flag_changed)
         cache.cacheAdminResult.connect(self._admin_result)
 
@@ -652,5 +653,6 @@ class ExplorerConverter:
         for conversion in self.conversions.values():
             if conversion.request:
                 self.explorer.model.cache.cancel(self.owner, "convert", conversion.path)
+        self._cache.self_reporting.discard(self.owner)
         if self.box is not None:
             self.box.close()

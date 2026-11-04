@@ -578,3 +578,54 @@ def test_cancel_all_queued_never_stops_a_running_task(qtbot: QtBot, monkeypatch:
     selected = next(task for task in actions.sources.snapshot().tasks if task.folder == FolderCache.key("/a"))
     assert actions.cancel(selected) and calls.names() == ["cancel_loading"]
     service.shutdown()
+
+
+def test_a_gui_conversions_failed_or_cancelled_pass_is_one_history_entry(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """AW-15: a pass of Folder details' conversion that fails, or is cancelled, is the conversion's own entry
+    only (its route, its Retry), not IOService's as well; a failed Live auto-convert pass still has one."""
+    service = IOService()
+    service.timer.stop()
+    monkeypatch.setattr(service, "_dispatch", lambda: None)
+    monkeypatch.setattr(service, "_run", lambda request: None)
+    monkeypatch.setattr("helab.models.SnapshotFileSystemModel.get_io_service", lambda: service)
+    run = tmp_path / "run"
+    run.mkdir()
+    for shot in (1, 2):
+        write_shot(run, shot)
+    age_folder(run, 120)
+    explorer: FolderExplorer = open_loaded(qtbot, service, run, tmp_path)
+    path = str(run)
+    activity.HISTORY.clear()
+
+    def started(operation: str) -> IORequest:
+        request = next(r for r in service.pending if r.operation == operation and r.path == path)
+        service._start(request, BACKGROUND)
+        return request
+
+    def entries() -> list[tuple[str, str, str]]:
+        return [(entry.title, entry.outcome, entry.route.kind) for entry in activity.HISTORY.entries()
+                if entry.folder == path]
+    converter = explorer.converter
+    assert converter.start(path, "cache")
+    request = started("convert")
+    service.messages.put((request, {"kind": "error", "message": "Permission denied"}))
+    service._tick()
+    assert entries() == [("Convert raw files to TXY", "failed", "conversion")]
+    activity.HISTORY.clear()
+    converter.conversions.pop(path)
+    assert converter.start(path, "cache")
+    request = started("convert")
+    converter.close()  # (As closing the tab does: the pass is cancelled.)
+    assert entries() == [("Convert raw files to TXY", "cancelled", "conversion")]
+    activity.HISTORY.clear()
+    exit_helper(service, request)
+    # Live's auto-convert reports no pass of its own: IOService's entry is its failure's.
+    assert explorer.model.cache.convert(explorer.live_owner, path)
+    request = started("convert")
+    service.messages.put((request, {"kind": "error", "message": "Permission denied"}))
+    service._tick()
+    assert entries() == [("Convert raw files to TXY", "failed", "io")]
+    assert not explorer.model.cache._self_reported  # (Every mark is taken as its request ends.)
+    explorer.close_cleanup()
+    service.shutdown()
