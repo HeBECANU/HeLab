@@ -136,7 +136,9 @@ How to use it:
   `92f9d1a`); "Disk cache inventory: Cancelled" was logged just after. Unchecked whether store-v4's quit path
   (the inventory, `raw_fill`) adds the time or the runner was busy. Again on Windows, Ground CI 41597667363
   (Tests 2/3, job 125788785096, `413b2a0`, 2026-11-03): reran twice, `assert (674.56 - 671.49) < 1.0`, quitting
-  took 3.07 s; passed on the second rerun.
+  took 3.07 s; passed on the second rerun. Again on Windows, Ground CI 41750756742 (Tests 2/3, job 126315040588,
+  `25f3ae6`, dev/v0.0.9's first run, 2026-11-04): `assert (911.83 - 910.77) < 1.0`, quitting took 1.06 s;
+  passed on rerun. All three on Windows Tests 2/3 since store-v4 went on.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -248,7 +250,7 @@ How to use it:
   125055805809) and CI 41379212072 (`6b0f998`, job 125066159186); `agent/v4-switch-on` CI 41490797588
   (`d3b4931`, 2026-11-03); `agent/txy-priority` CI 41587970080 (Windows Tests 1/3, job 125757887948,
   `bf3fb85`, 2026-11-03); Ground CI 41660788301 (Windows Tests 1/3, job 126003261482, `3ab75b2`,
-  2026-11-03).
+  2026-11-03); Ground CI 41752079691 (Windows Tests 1/3, job 126319407975, `ec308ac`, 2026-11-04).
 - [ ] `test_io_lanes.py::test_tab_switch_moves_work_to_background_and_requeued_load_reuses_ram_shots`:
   `KeyError: 'memory'` at line 262 (the requeued load's payload had no RAM shots), macOS Tests (3/3) on
   Ground CI 41660788301 (job 126003261256, `3ab75b2`, 2026-11-03); passed on rerun. Likely cause, not
