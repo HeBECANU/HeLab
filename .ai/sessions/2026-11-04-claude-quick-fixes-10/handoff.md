@@ -30,10 +30,11 @@ URL (v0.0.8a1's draft, run 41746737106, linked `https://api.github.com/repos/Ton
 - `**Full Changelog**: <server>/<repo>/compare/<previous>...<tag>` at the end (`/commits/<tag>` when there is no
   previous tag), then the asset manifest (`manifest_body`, unchanged).
 
-**The previous tag** (`previous_tag`): the newest `v` + PEP 440 tag of a lower version among the tags in the
-commit's history (`git tag --merged <commit>`, `tags_in_history`). For v0.0.8a1 that is v0.0.6a1: v0.0.7a1 was
-never tagged. `v.0.0.1i`, `v0.0.1x`, `v0.0.2e` (not PEP 440) and `CI-CD-everything-passed` are never chosen. A
-tag on a branch that never merged isn't in the history, so it isn't chosen either.
+**The previous tag** (as first built in `ca0bd61`; Tony's rule replaced it in `9e06bcb`, below): the newest `v` +
+PEP 440 tag of a lower version among the tags in the commit's history (`git tag --merged <commit>`,
+`tags_in_history`). For v0.0.8a1 that is v0.0.6a1: v0.0.7a1 was never tagged. `v.0.0.1i`, `v0.0.1x`, `v0.0.2e`
+(not PEP 440) and `CI-CD-everything-passed` are never chosen. A tag on a branch that never merged isn't in the
+history, so it isn't chosen either. This rule is now the fallback, used when the releases can't be listed.
 
 **Recovery:** `publish_draft` now takes the body as a string or a callable, and calls it only when it creates the
 draft. A resumed draft, or a published release, keeps its notes and never asks GitHub for new ones. Bodies are
@@ -211,10 +212,17 @@ All runs used `pytest -n 12 --reruns 5 --reruns-delay 1` on macOS, with the work
 **`release-and-ci.md`**:
 - **The release job (A59.1):** `release_draft` writes a new draft's notes (`release_body`): the tag linked,
   GitHub's generated notes (`generate-notes` with `previous_tag_name`), the Workflow Run from
-  `github.server_url`, and one "Full Changelog: <previous>...<tag>" link. The previous tag is the newest `v` +
-  PEP 440 tag of a lower version in the commit's history (`git tag --merged`; v0.0.8a1's is v0.0.6a1). A resumed
-  draft keeps its notes, and GitHub's notes failing leaves a draft without them (a warning). The job installs
-  `packaging`.
+  `github.server_url`, and one "Full Changelog: <previous>...<tag>" link.
+  - **The previous tag** (Tony, 2026-11-04): the previous **published full** GitHub release. Of the repository's
+    releases that are published and not marked pre-release (`full_release_tags`), take those whose tag is in the
+    commit's history (`git tag --merged`) and pick the highest PEP 440 version lower than the new one
+    (`previous_release`). An alpha published as a full release counts, so v0.0.9 compares with v0.0.8a1. Drafts
+    and GitHub pre-releases never do.
+  - **Fallbacks:** if the releases can't be listed, the newest earlier `v` tag in the history, with a warning; if
+    the history can't be read either, no previous tag, and the Full Changelog links the tag's commits.
+
+  A resumed draft keeps its notes, and GitHub's notes failing leaves a draft without them (a warning). The job
+  installs `packaging`.
 - **The publishing step (A59.2 (b), the rule):** a pre-release version may be published as a full GitHub release
   (v0.0.8a1 is GitHub's "Latest"). The site goes by the version number: its `latest` stays the newest stable
   version. Until there is one, the front page (`no-stable.html`, filled in by `site_versions.no_stable_page`
@@ -370,3 +378,28 @@ artifacts, `test_the_profiles_list_shows_each_tag_in_aligned_columns`, and the t
 (`test_the_builtins_are_listed_read_only`, `test_unreadable_files_are_named`), passed on macOS, Windows and Ubuntu.
 While the run went on, this Mac's DNS for api.github.com dropped in and out, so I fetched the logs with retries;
 every log came down whole.
+
+## The Full Changelog compares with the previous published full release (`9e06bcb`)
+
+Tony chose (via CoCo, 2026-11-04) the previous **published full** GitHub release: not a draft, not marked
+pre-release on GitHub, whatever its version string. Tony: "I think we include alpha full releases too, v0.0.3 was
+a very long time ago". The rule (`release_draft.previous_release`):
+- of the repository's releases that are published with `prerelease` false (`GitHubReleases.full_release_tags`,
+  every page), keep those whose tag is in the commit's history;
+- take the highest PEP 440 version lower than the new one. So v0.0.9 compares with v0.0.8a1.
+
+**Fallbacks:**
+- An API error listing the releases (`SubprocessError`, `ValueError` or `OSError`): the newest earlier `v` tag in
+  the history (the A59.1 rule), with a `::warning::`.
+- With the history unavailable too: no previous tag (as in `be2f0e5`).
+
+**Tests** (`tests/test_release_recovery.py`): 9 new, all failing on the previous `release_draft.py`.
+- The choice with fake release lists: an alpha full release chosen; releases that aren't full, aren't in the
+  history, or are higher, all skipped.
+- `full_release_tags` over two pages, skipping drafts and GitHub pre-releases.
+- `main` comparing with the full release (v0.0.3b) over newer tags that aren't full releases (v0.0.3, v0.0.4a1).
+- The API-failure fallback to v0.0.4a1, with its warning.
+- Neither releases nor history: no previous tag.
+
+The file's 56 tests pass and the five type checks are clean (whole `helab/` and `tests`). The release job's
+comment says the new rule. The `release-and-ci.md` proposal above states it.
