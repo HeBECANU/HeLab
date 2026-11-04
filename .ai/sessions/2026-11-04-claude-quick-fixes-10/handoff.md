@@ -403,3 +403,35 @@ a very long time ago". The rule (`release_draft.previous_release`):
 
 The file's 56 tests pass and the five type checks are clean (whole `helab/` and `tests`). The release job's
 comment says the new rule. The `release-and-ci.md` proposal above states it.
+
+**CI 41770471113** (`1ab4864`, with `9e06bcb`) succeeded. I read all 17 job logs (fetched with retries through this
+Mac's DNS dropouts). The 9 new tests passed on macOS, Windows and Ubuntu (junit).
+
+**One RERUN,** passed on its rerun: macOS Tests 2/3 (job 126378820117),
+`test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so[a Live check comes due while
+offline]`, the 5 s wait at line 626. This is the same test as RERUN (1) above, in its other case, so it is the
+second sighting on this branch's macOS CI.
+
+**More evidence:**
+- **Reproduced on the base.** I ran a CI-like overload: `-n 4` against 32 CPU burners on 16 cores, with `gw3`'s
+  files (`test_live_check.py`, `test_live_convert.py`, beside `test_live.py`) and `--reruns 0`. In 15 passes each,
+  alternating, **`bd349ec` failed once** (pass 4, `[a Live check comes due while offline]`, the same wait at line
+  626). The branch passed 15 of 15. So the flake predates this branch. In the base failure's teardown, a
+  "Volume verification" job and a "Disk cache convert_prefs" read were still pending and were cancelled. That
+  hints the conversion waited behind them rather than being refused at once; not confirmed.
+- **Other branches' CI.** None of 147 macOS Tests jobs in 43 recent runs (dev/v0.0.8, dev/v0.0.9, main,
+  release/v0.0.8a1, five agent branches; 2026-11-03 to 04) shows this test's RERUN. On this branch it reran in 2
+  of 4 runs. One unverified guess: this branch's new tests shift `--test-group`'s split, which changes what runs
+  beside the test on a worker.
+
+**Updated known-issues line** (it replaces RERUN (1)'s above):
+
+- [ ] `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so` (both cases): macOS CI
+  on `agent/quick-fixes-10`, 41758844145 (Tests 1/3, `[as it comes]`) and 41770471113 (Tests 2/3, `[a Live check
+  comes due while offline]`), one RERUN each. The `waitUntil` (5 s) at line 626 for "not while working offline"
+  timed out.
+  - It reproduced on `bd349ec` under overload (1 of 15 passes; `-n 4`, 32 burners), and the code path is unchanged
+    by the branch.
+  - In that failure's teardown, a pending "Volume verification" job and a "Disk cache convert_prefs" read were
+    cancelled. Check whether the conversion waits behind them while offline.
+  - Cause not yet found.
