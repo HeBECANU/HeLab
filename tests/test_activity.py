@@ -133,6 +133,18 @@ def test_the_history_is_added_to_on_the_gui_thread_only() -> None:
     assert called == [1] and len(activity.HISTORY) == 1
 
 
+def test_a_failing_listener_never_reaches_the_reporter(caplog: pytest.LogCaptureFixture) -> None:
+    """AW-6: a view's error is logged; the owner's report returns, and later listeners still hear."""
+    heard: list[int] = []
+
+    def broken() -> None:
+        raise RuntimeError("wrapped C/C++ object has been deleted")
+    activity.HISTORY.listeners += [broken, lambda: heard.append(1)]
+    activity.record(Finished("x", "loads", "Load data", "/data", 0.0, "ok"))
+    assert heard == [1] and len(activity.HISTORY) == 1
+    assert "Activity history listener" in caplog.text
+
+
 def test_progress_and_ordinals() -> None:
     assert Progress(123, 579).text() == "123 of 579 files · 21%"
     assert Progress(0, 0).text() == "no files" and Progress().text() == "" and Progress().fraction is None

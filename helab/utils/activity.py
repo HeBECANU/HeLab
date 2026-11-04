@@ -177,7 +177,10 @@ class History:
         self._entries.append(entry)
         self.version += 1
         for listener in list(self.listeners):
-            listener()
+            try:
+                listener()
+            except Exception:  # (A view never breaks the owner reporting its task's end: AW-6.)
+                logging.exception("Activity history listener")
 
     def entries(self) -> list[Finished]:
         """Newest first."""
