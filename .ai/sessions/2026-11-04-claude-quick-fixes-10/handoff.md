@@ -256,3 +256,30 @@ From the junit artifacts, every new or changed test passed on all three OSes:
 - A56.7: 5;
 - A58.2: 1;
 - A56.4: 2, plus test_profile_library's plate test.
+
+## Review fix (`be2f0e5`) and its CI
+
+The independent review had no High or Medium findings. It had one Low for me:
+- **The finding:** `main`'s `body()` called `tags_in_history` (`git tag --merged`) outside the try that guards
+  GitHub's notes. A failing git aborted `publish_draft` before `api.create`, after the tag was pushed, and every
+  rerun would fail the same way.
+- **The fix:** `subprocess.SubprocessError` and `OSError` are caught there. HeLab warns and builds the notes with
+  no previous tag; GitHub's notes are still asked for, and the Full Changelog links the tag's commits.
+- **The test:** a `CalledProcessError` and a `FileNotFoundError` from `tags_in_history`. The draft is made with
+  all three assets and the manifest. Both cases fail on `298b601`'s `release_draft.py`.
+
+The file's 47 tests pass. mypy --strict (also `--platform win32`) and pyright (also `--pythonplatform Windows`)
+are clean on the files. As asked, I didn't run the full suite for this fix.
+
+**CI 41758844145** (`be2f0e5`) succeeded. I read all 17 job logs. The new test passed on all three OSes (junit).
+**Two RERUNs**, each passed on its rerun. Neither is in known-issues, and neither test's path is one this branch
+changes. I haven't looked for their causes. Proposed known-issues lines:
+
+- [ ] `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so[as it comes]`:
+  macOS CI 41758844145 (Tests 1/3, job 126341476955), one RERUN. The `waitUntil` (5 s) at line 626, for the
+  conversion's "not while working offline" error after `_convert_tick` while offline, timed out once. Cause not
+  yet found.
+- [ ] `test_gui_responsiveness.py::test_real_helper_loads_data_and_refresh_replaces_changed_data`: Windows CI
+  41758844145 (Tests 3/3, job 126341477058), one RERUN. The `waitUntil` (15 s) at line 788 timed out once, with
+  real helper processes. That job took 12 min 43 s; the other Windows groups took about 7–10 min. Cause not yet
+  found.
