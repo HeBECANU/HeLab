@@ -33,12 +33,17 @@ on as Folder details' offer does; the folder only, never its subfolders; the hel
 ``d_txy_helab_<tag>_<N>.txt`` by its rules (a temporary name, then a rename; never over an existing TXY).
 Not while Live's Auto-convert converts that folder (one conversion per folder: its menu's Convert with… instead).
 
+**A read stopped early** (A37.1, Q48.1, Q48.2; A58.2 for Folder details): a raw file whose read stopped at a
+line textscan can't read converts (the hits before it); ``note_read_stop`` logs it and sends a system
+notification once per file (its name, size and mtime) whichever conversion made it, Live's auto-convert or
+Folder details', and ``read_stops_text`` names it: one by name, several counted.
+
 Every question is a non-modal ``QMessageBox`` (``open``) but the beside confirmation, which answers a
 click: none waits on a helper. Each button has an ID (``<prefix>_<choice>``).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import math
 import os
@@ -51,7 +56,8 @@ from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QDialogButtonBox,
                              QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
 from helab.convert.profile import DetectorProfile, file_tag
-from helab.utils import cache_location, folder_cache
+from helab.convert.raw import ReadStop
+from helab.utils import cache_location, events, folder_cache
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
 from helab.views.explorer_text import plural
@@ -72,6 +78,37 @@ MAX_PASSES = 6
 WHERE = {"cache": "HeLab's cache folder", "temp": "HeLab's temp folder", "beside": "beside the raw files"}
 # A shot_waiting reason that settles by itself (written just now, or changed between two looks).
 SETTLING = ("settling", "changed", "")
+# How a conversion's line names raw files whose read stopped early (A37.1): one by name, several counted. Folder
+# details colours its Auto-convert row amber on either.
+READ_STOPPED = ("read stopped at line", "reads stopped early")
+
+
+def note_read_stop(path: str, event: dict[str, Any], by: str) -> ReadStop:
+    """A ``shot_converted`` whose raw file's read stopped early (A37.1), by Live's auto-convert or Folder details'
+    conversion (``by``, for the log): logged, and a system notification once per file (its name, size and mtime)
+    this session, as a damaged one's (Q48.2), since its TXY lacks the hits after that line."""
+    stop = ReadStop.of(event["read_stop"])
+    raw_name = str(event["raw_name"])
+    logging.warning("%s: %s in %s: %s", by, raw_name, path, stop.detail())
+    events.notify(events.READ_STOPPED_RAW, f"{raw_name} in {_name(path)}: {stop.detail()}. Later shots go on.",
+                  title="HeLab: raw file read stopped early",
+                  key=(events.READ_STOPPED_RAW, path, raw_name, int(event["raw_size"]), int(event["raw_mtime_ns"])),
+                  desktop=True, path=path, shot=int(event["shot"]), line=stop.line, source="convert")
+    return stop
+
+
+def read_stops_text(stopped: dict[str, ReadStop]) -> tuple[str, str]:
+    """Raw files whose read stopped early (by name): a conversion line's part (one by name, several counted) and
+    its tooltip line ("" for none)."""
+    if not stopped:
+        return "", ""
+    if len(stopped) == 1:
+        name, stop = next(iter(stopped.items()))
+        part = f"{name} {stop.summary()}"
+    else:
+        part = f"{len(stopped):,} {READ_STOPPED[1]}"
+    return part, (f"Read stopped early ({len(stopped):,}): " + "; ".join(
+        f"{name}: {stop.detail()}" for name, stop in sorted(stopped.items())[:8]) + (" …" if len(stopped) > 8 else ""))
 
 
 def share_to_confirm(path: str) -> str:
@@ -293,6 +330,8 @@ class FolderConversion:
     finished: bool = False
     flag: bool = False  # Beside: waiting for the store to say the folder's flag is on.
     profile: DetectorProfile | None = None  # Convert this folder… 's (Q~4); None: Settings' conversion profile.
+    # Raw files converted whose read stopped early (A37.1, A58.2), by name.
+    stopped: dict[str, ReadStop] = field(default_factory=dict)
 
 
 class ExplorerConverter:
@@ -337,19 +376,22 @@ class ExplorerConverter:
         conversion = self.conversions.get(path)
         if conversion is not None:
             where = WHERE.get(conversion.output or conversion.destination, conversion.destination)
+            stop_part, stop_line = read_stops_text(conversion.stopped)
             if conversion.error:
                 text = f"Conversion stopped: {conversion.error}"
             elif conversion.flag:
                 text = "Saving the folder's beside setting, then converting beside the raw files…"
             elif not conversion.finished:
                 text = (f"Converting to {where}… {conversion.done:,} of {conversion.todo:,}" if conversion.todo
-                        else f"Converting to {where}…")
+                        else f"Converting to {where}…") + (f" · {stop_part}" if stop_part else "")
             else:
                 parts = [f"{conversion.converted:,} converted to {where}"]
                 if conversion.waiting:
                     parts.append(f"{conversion.waiting:,} still being written")
                 if conversion.stuck:
                     parts.append(f"{conversion.stuck:,} not convertible")
+                if stop_part:
+                    parts.append(stop_part)
                 text = " · ".join(parts)
             with_profile = f" with {file_tag(conversion.profile)}" if conversion.profile is not None else ""
             lines = [f"Converting {path}'s raw files{with_profile}, since "
@@ -357,6 +399,8 @@ class ExplorerConverter:
                      + (f" ({conversion.fallback})" if conversion.fallback else ""),
                      f"Passes: {conversion.passes:,} (the first only records each file; a file converts once "
                      "unchanged between two passes, a check interval apart)"]
+            if stop_line:
+                lines.append(stop_line)
             if conversion.finished and conversion.waiting:
                 lines.append(f"{plural(conversion.waiting, 'raw file')} still being written after {MAX_PASSES} "
                              "passes: Live's auto-convert converts them as they settle.")
@@ -542,6 +586,10 @@ class ExplorerConverter:
             conversion.done, conversion.todo = int(event["done"]), int(event["todo"])
         elif kind == "shot_converted":
             conversion.converted += 1
+            if event.get("read_stop"):
+                conversion.stopped[str(event["raw_name"])] = note_read_stop(conversion.path, event, "Converting")
+            else:
+                conversion.stopped.pop(str(event["raw_name"]), None)  # (Converted again, read to its end.)
         elif kind == "beside_refused":
             conversion.refused = str(event["message"])
         elif kind == "convert_summary":
