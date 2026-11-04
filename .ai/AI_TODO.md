@@ -502,6 +502,13 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   `packaging==26.3`. Pin it to the lock's version (or install it from the lock), keeping `--check`'s builds as they
   are.
 
+## UI audit (block 61)
+
+- [ ] **A61.1 Elide the plot's "Data source" line** (the UI audit's leftover, `49a02f1`;
+  `.ai/sessions/2026-11-04-claude-ui-audit/README.md`). In an 1100 px window the plot's "Data source: …" line, a plain
+  QLabel, is cut off. Elide it in the middle with the whole text in its tooltip, as the Cache tab's path now is. Mind
+  `test_main_split`'s 250 px panel check, which has no slack on the preset row.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:
