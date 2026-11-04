@@ -245,8 +245,10 @@ MATLAB_2019 = DetectorProfile(
     version=1,
     tag="m19v1",
     calibrated=False,
-    notes="MATLAB tdc_autoconverter's dld_read_5channels_reconst_multi_imp (unchanged since 2017), "
-          "flags 1,0,1,0: byte-identical to its _txy_forc files, quirks included.",
+    notes="HeLab's default. The lab's MATLAB converter (tdc_autoconverter), unchanged since 2017, which made the "
+          "d_txy_forc files in the data folders: the same constants and the same quirks, so its TXY match those "
+          "files byte for byte. Choose it for hits that agree with the lab's existing TXY, on data of any date. "
+          "Not calibrated: it keeps MATLAB's fixed constants (time sums of 3200 bins on X and Y) for every plate.",
     bin_time=25e-12,
     channel_x1=0, channel_x2=1, channel_y1=2, channel_y2=3, channel_mcp=4, channel_trigger=5,
     subtract_time_zero=True,
@@ -268,8 +270,11 @@ MATLAB_2019 = DetectorProfile(
 MATLAB_2023_LAB_EDIT = MATLAB_2019.replace(
     name="matlab-2023-lab-edit",
     tag="m23v1",
-    notes="The front panel's copy synced from the lab on 2023-08-29: an x1 dead time of 0.5 µs "
-          "(uniquetol), time sums 3390/3275 in T only, X/Y from the raw corner times.",
+    notes="The DLD front panel's copy of the MATLAB converter, as the lab had edited it by 2023-08-29. It differs "
+          "from matlab-2019 in three ways: a 0.5 µs dead time on x1 (an x1 pulse within 0.5 µs after a kept one "
+          "is dropped), time sums of 3390 bins on X and 3275 on Y for T only, and X and Y worked out from the raw "
+          "corner times. It finds about 12–14 % fewer hits than matlab-2019 on the lab's sample shots. Choose it to "
+          "match TXY made with the front panel's edited copy. Not calibrated.",
     dead_time_x1=0.5e-6,
     time_sum_t_x=3390.0, time_sum_t_y=3275.0,
     position_formula="raw",
@@ -278,22 +283,31 @@ MATLAB_2023_LAB_EDIT = MATLAB_2019.replace(
 
 # The plate profiles (Q6.11): the 2017, 2022 and 2025 MCP plates. They start as copies of
 # ``matlab-2019`` (equal output, so equal content hash) and change only through calibration (stage 3).
-_PLATES_NOTES = ("Copy of matlab-2019 until this plate is calibrated (stage 3): same output, so same content "
-                 "hash. ")
+# Every built-in's ``notes`` is user-facing text (Settings › TXY converter shows it; A56.4): what the profile
+# is, when to choose it, how it differs and whether it is calibrated; no internal IDs. ``notes`` is
+# descriptive, outside the content hash, so rewording it changes no tag, hash or file.
+_PLATES_NOTES = ("For now it holds matlab-2019's constants, so its hits are matlab-2019's, written under its own "
+                 "file names; it changes only when these plates are calibrated. A plot's settings suggest it for a "
+                 "folder dated while its plates were in, but never pick it for you.")
 PLATES_2017 = MATLAB_2019.replace(
     name="plates-2017",
     tag="p17v1",
-    notes=_PLATES_NOTES + "The MCP plates fitted on 2017-03-17.")
+    notes="For data taken on the MCP plates fitted on 2017-03-17, until the 2022 swap. " + _PLATES_NOTES
+          + " Not calibrated yet: the 2019–2021 halo runs are to calibrate it.")
 PLATES_2022 = MATLAB_2019.replace(
     name="plates-2022",
     tag="p22v1",
-    notes=_PLATES_NOTES + "The MCP plates fitted in ~2022 (between 2022-08-22 and 2022-11-03; 2022-11-03 for "
-                          "now). Measured with MCP pulses in 2022-11: time sums x 3367, y 3294 bins.")
+    notes="For data taken on the MCP plates fitted in 2022 (between 2022-08-22 and 2022-11-03; HeLab dates the "
+          "swap 2022-11-03 for now), until the 2025 swap. " + _PLATES_NOTES + " Not calibrated yet: a run with "
+          "MCP pulses in November 2022 measured time sums of 3367 bins on X and 3294 on Y on these plates, which "
+          "it doesn't use yet.")
 PLATES_2025 = MATLAB_2019.replace(
     name="plates-2025",
     tag="p25t1",
-    notes="Uncalibrated: no calibration data for these plates yet (Q6.11). " + _PLATES_NOTES
-          + "The MCP plates fitted on 2025-06-18.")
+    notes="For data taken on the MCP plates fitted on 2025-06-18, the plates in the detector now. " + _PLATES_NOTES
+          + " Marked uncalibrated: there is no calibration data for these plates yet. It doesn't yet turn the "
+          "image back after the corner cables were swapped (between 2026-06-27 and 2026-07-21), which turned it "
+          "by 180°.")
 # Marked uncalibrated in the profile manager: a plate with no calibration data at all (Q6.11,
 # Tony 2026-10-28: "the 2025 profile is marked uncalibrated").
 UNCALIBRATED = frozenset({"plates-2025"})
