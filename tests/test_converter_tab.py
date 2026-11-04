@@ -47,10 +47,20 @@ def tab_for(qtbot: QtBot, tmp_path: Path, cache: Any = None, ini: QSettings | No
     return tab
 
 
+def rows(tab: ConverterTab) -> list[list[str]]:
+    """The profiles list's rows, each its columns' texts."""
+    found = []
+    for row in range(tab.list.topLevelItemCount()):
+        item = tab.list.topLevelItem(row)
+        assert item is not None
+        found.append([item.text(column) for column in range(tab.list.columnCount())])
+    return found
+
+
 def select(tab: ConverterTab, name: str) -> None:
-    for row in range(tab.list.count()):
-        item = tab.list.item(row)
-        if item is not None and item.data(0x0100) == name:
+    for row in range(tab.list.topLevelItemCount()):
+        item = tab.list.topLevelItem(row)
+        if item is not None and item.data(0, 0x0100) == name:
             tab.list.setCurrentItem(item)
             return
     raise AssertionError(f"{name} not listed")
@@ -58,14 +68,54 @@ def select(tab: ConverterTab, name: str) -> None:
 
 def test_the_builtins_are_listed_read_only(qtbot: QtBot, tmp_path: Path) -> None:
     tab = tab_for(qtbot, tmp_path)
-    labels = [tab.list.item(row).text() for row in range(tab.list.count())]  # type: ignore[union-attr]
-    assert [label.split(" ")[0] for label in labels] == list(BUILTIN_PROFILES)
-    assert "uncalibrated" in labels[-1] and "default" in labels[0]
+    listed = rows(tab)
+    assert [row[0] for row in listed] == list(BUILTIN_PROFILES)
+    assert listed[-1][4] == "uncalibrated" and listed[0][4] == "default"
     select(tab, "plates-2022")
     assert not tab.edit_button.isEnabled() and not tab.delete_button.isEnabled()
     assert tab.duplicate_button.isEnabled() and "Plates in since 2022-11-03" in tab.details.text()
     assert tab.profile_combo.currentData() == "matlab-2019" and tab.backend_combo.currentData() == "numpy"
     assert tab.output_combo.currentData() == "cache"
+
+
+def test_the_profiles_list_shows_each_tag_in_aligned_columns(qtbot: QtBot, tmp_path: Path) -> None:
+    """Tony (2026-11-04): each profile's TXY file tag in the list, and its columns aligned: one header, a column
+    per field sized to its widest text, one line a row. A user profile's tag is the one its files carry."""
+    from PyQt6.QtWidgets import QHeaderView
+    from helab.convert.profile import file_tag
+    columns = ("Profile", "Version", "TXY tag", "Kind", "Notes", "Hash")
+    folder = tmp_path / "profiles"
+    folder.mkdir()
+    mine = MATLAB_2019.replace(name="halo-fit", version=3, tag="", notes="mine", search_depth=40)
+    (folder / "halo-fit.json").write_text(mine.to_json(), encoding="utf-8")
+    tab = tab_for(qtbot, tmp_path)
+    header, titles = tab.list.header(), tab.list.headerItem()
+    assert header is not None and titles is not None
+    assert [titles.text(column) for column in range(tab.list.columnCount())] == list(columns)
+    assert all(header.sectionResizeMode(column) == QHeaderView.ResizeMode.ResizeToContents
+               for column in range(tab.list.columnCount()))
+    assert tab.list.uniformRowHeights() and not tab.list.rootIsDecorated()
+    assert rows(tab) == [
+        ["matlab-2019", "v1", "m19v1", "built in", "default", MATLAB_2019.content_hash()[:12]],
+        ["matlab-2023-lab-edit", "v1", "m23v1", "built in", "", BUILTIN_PROFILES["matlab-2023-lab-edit"].content_hash()[:12]],
+        ["plates-2017", "v1", "p17v1", "built in", "", MATLAB_2019.content_hash()[:12]],
+        ["plates-2022", "v1", "p22v1", "built in", "", MATLAB_2019.content_hash()[:12]],
+        ["plates-2025", "v1", "p25t1", "built in", "uncalibrated", MATLAB_2019.content_hash()[:12]],
+        ["halo-fit", "v3", file_tag(mine), "yours", "", mine.content_hash()[:12]]]
+    assert file_tag(mine).startswith("u") and not any("\n" in text for row in rows(tab) for text in row)
+    item = tab.list.topLevelItem(5)
+    assert item is not None and item.toolTip(columns.index("TXY tag")) == (
+        f"TXY files: d_txy_helab_{file_tag(mine)}_<N>.txt")
+    select(tab, "halo-fit")
+    assert tab.selected() == "halo-fit" and tab.edit_button.isEnabled()
+    # Shown, each column is as wide as its widest text (its title's or a row's), so none is cut.
+    tab.resize(900, 500)
+    tab.show()
+    qtbot.waitExposed(tab)
+    for column in range(tab.list.columnCount()):
+        width = header.sectionSize(column)
+        texts = [row[column] for row in rows(tab)] + [columns[column]]
+        assert width >= max(tab.list.fontMetrics().horizontalAdvance(text) for text in texts), columns[column]
 
 
 def test_duplicate_edit_export_import_and_delete(qtbot: QtBot, tmp_path: Path) -> None:
@@ -155,8 +205,7 @@ def test_unreadable_files_are_named(qtbot: QtBot, tmp_path: Path) -> None:
     folder.mkdir()
     (folder / "broken.json").write_text("{")
     tab = tab_for(qtbot, tmp_path)
-    texts = [tab.list.item(row).text() for row in range(tab.list.count())]  # type: ignore[union-attr]
-    assert any(text.startswith("⚠ broken.json") for text in texts)
+    assert any(row[0].startswith("⚠ broken.json") for row in rows(tab))
 
 
 def test_the_editor_validates_shows_the_hash_and_bumps_the_version(qtbot: QtBot) -> None:

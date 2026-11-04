@@ -18,9 +18,9 @@ from typing import Any, Optional
 from PyQt6.QtCore import QSettings, Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSpinBox, QVBoxLayout,
-    QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from helab.convert.profile import (BUILTIN_PROFILES, CANDIDATE_HANDLING, DEFAULT_PROFILE, PLATE_SWAPS, POSITION_FORMULAS,
@@ -52,15 +52,22 @@ def plate_dates() -> dict[str, str]:
     return {name: since for since, name in PLATE_SWAPS}
 
 
-def profile_label(profile: DetectorProfile, builtin: bool) -> str:
-    marks = ["built in" if builtin else "yours"]
+# The profiles list's columns (one line a profile, aligned under a header): the TXY tag is the one its files are
+# named with (``file_tag``: a built-in's own, else ``u`` and its hash's digits).
+PROFILE_COLUMNS = ("Profile", "Version", "TXY tag", "Kind", "Notes", "Hash")
+
+
+def profile_columns(profile: DetectorProfile, builtin: bool) -> list[str]:
+    """A profile's row in the profiles list, one text per ``PROFILE_COLUMNS``."""
+    notes = []
     if profile.name in UNCALIBRATED:
-        marks.append("uncalibrated")
+        notes.append("uncalibrated")
     elif profile.calibrated:
-        marks.append("calibrated")
+        notes.append("calibrated")
     if profile.name == DEFAULT_PROFILE:
-        marks.append("default")
-    return f"{profile.name} v{profile.version} · {' · '.join(marks)} · {profile.content_hash()[:12]}"
+        notes.append("default")
+    return [profile.name, f"v{profile.version}", file_tag(profile), "built in" if builtin else "yours",
+            ", ".join(notes), profile.content_hash()[:12]]
 
 
 class ProfileEditor(QDialog):
@@ -241,7 +248,15 @@ class ConverterTab(QWidget):
         layout.addLayout(grid)
         profiles_label = QLabel("Profiles (changes to profiles are saved at once; the choices above with Save)")
         layout.addWidget(profiles_label)
-        self.list = QListWidget()
+        self.list = QTreeWidget()
+        self.list.setHeaderLabels(list(PROFILE_COLUMNS))
+        self.list.setRootIsDecorated(False)
+        self.list.setUniformRowHeights(True)
+        self.list.setAllColumnsShowFocus(True)
+        header = self.list.header()
+        assert header is not None
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.list.currentItemChanged.connect(self._selected)
         layout.addWidget(self.list, 1)
         self.details = QLabel()
@@ -327,24 +342,27 @@ class ConverterTab(QWidget):
         self.profile_combo.setCurrentIndex(max(0, self.profile_combo.findData(chosen)))
         self.profile_combo.blockSignals(False)
         self.list.clear()
+        tag_column = PROFILE_COLUMNS.index("TXY tag")
         for name, profile in self.profiles().items():
-            item = QListWidgetItem(profile_label(profile, name in BUILTIN_PROFILES))
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            self.list.addItem(item)
+            item = QTreeWidgetItem(profile_columns(profile, name in BUILTIN_PROFILES))
+            item.setData(0, Qt.ItemDataRole.UserRole, name)
+            item.setToolTip(tag_column, f"TXY files: d_txy_helab_{file_tag(profile)}_<N>.txt")
+            self.list.addTopLevelItem(item)
             if name == select:
                 self.list.setCurrentItem(item)
         for entry in self.unreadable:
-            item = QListWidgetItem(f"⚠ {os.path.basename(entry.file)}: {entry.reason}")
+            item = QTreeWidgetItem([f"⚠ {os.path.basename(entry.file)}: {entry.reason}"])
             item.setFlags(Qt.ItemFlag.NoItemFlags)
-            item.setToolTip(entry.file)
-            self.list.addItem(item)
-        if self.list.currentItem() is None and self.list.count():
-            self.list.setCurrentRow(0)
+            item.setToolTip(0, entry.file)
+            self.list.addTopLevelItem(item)
+            item.setFirstColumnSpanned(True)  # (Its one text across the columns; set once it is in the list.)
+        if self.list.currentItem() is None and self.list.topLevelItemCount():
+            self.list.setCurrentItem(self.list.topLevelItem(0))
         self._selected()
 
     def selected(self) -> Optional[str]:
         item = self.list.currentItem()
-        name = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        name = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
         return str(name) if name else None
 
     def _selected(self, *_: Any) -> None:
@@ -499,4 +517,4 @@ class ConverterTab(QWidget):
             self.cache.set_tab_source(source)
 
 
-__all__ = ["ConverterTab", "ProfileEditor", "plate_dates", "profile_label"]
+__all__ = ["ConverterTab", "PROFILE_COLUMNS", "ProfileEditor", "plate_dates", "profile_columns"]
