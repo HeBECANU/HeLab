@@ -53,9 +53,11 @@ ANALYSIS_OPERATIONS = frozenset({"result_find"})
 ADMIN_SAVES = frozenset({"folder_prefs", "convert_prefs", "folder_constants", "presets", "folder_choice",
                          "mark_used", "adopt_result"})
 # Successful requests the history leaves out (Q~2): frequent small work that would push everything else
-# out of the last 200. Failures and cancellations of anything are always kept.
-NOT_KEPT_WHEN_OK = frozenset({"list", "resolve", "saved_list", "icons", "subtree_save", "volumes_verify",
-                              "roots_verify", "drives", "trace_check"})
+# out of the last 200 (a folder's details scan and cached read come with each folder browsed into). A
+# conversion's passes too: Live's auto-convert runs one with each check, and the Live session or the GUI
+# conversion is the entry (AW-2). Failures and cancellations of anything are always kept.
+NOT_KEPT_WHEN_OK = frozenset({"list", "resolve", "saved_list", "details", "cached", "icons", "subtree_save",
+                              "volumes_verify", "roots_verify", "drives", "trace_check", "convert"})
 
 
 @dataclass(frozen=True)

@@ -331,14 +331,14 @@ def test_the_window_pauses_and_resumes(qtbot: QtBot, monkeypatch: pytest.MonkeyP
 def test_iosevice_reports_each_requests_end_once(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
     service = quiet_service(monkeypatch)
     service.configure_concurrency(4)
-    service.submit("a", 0, "/a", "details")
+    service.submit("a", 0, "/a", "scan")
     service.submit("b", 0, "/b", "scan")
     service.submit("c", 0, "/c", "load")
-    service.submit("d", 0, "/d", "list")
+    service.submit("d", 0, "/d", "details")  # (A details scan's success: not kept, AW-2.)
     a, b, c, d = service.active
     service.messages.put((a, {"kind": "done"}))
     service.messages.put((b, {"kind": "error", "message": "Permission denied — Retry"}))
-    service.messages.put((d, {"kind": "done"}))  # (A listing's success: not kept.)
+    service.messages.put((d, {"kind": "done"}))
     service._tick()
     service.cancel("c")
     service.cancel("c")
@@ -515,4 +515,24 @@ def test_the_windows_buttons_call_the_owners(qtbot: QtBot, monkeypatch: pytest.M
     assert window.buttons["retry"].isEnabled()
     window.buttons["retry"].click()
     assert calls.names()[-1] == "retry"
+    service.shutdown()
+
+
+def test_auto_converts_passes_add_no_successes_to_the_history(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-2: Live's auto-convert runs a pass with each check; only a failed one is kept."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    for _ in range(20):
+        assert cache.submit("tab:live", 0, "/live", "convert", {})
+        request = service.active[-1]
+        service.messages.put((request, {"kind": "done"}))
+        service._tick()
+        exit_helper(service, request)
+    assert activity.HISTORY.entries() == []
+    assert cache.submit("tab:live", 0, "/live", "convert", {})
+    request = service.active[-1]
+    service.messages.put((request, {"kind": "error", "message": "Permission denied"}))
+    service._tick()
+    assert [(entry.title, entry.outcome) for entry in activity.HISTORY.entries()] == [
+        ("Convert raw files to TXY", "failed")]
     service.shutdown()

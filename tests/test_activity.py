@@ -96,10 +96,11 @@ def test_every_io_operation_has_a_group() -> None:
 def test_the_history_keeps_failures_and_leaves_out_frequent_successes() -> None:
     assert not activity.kept_in_history("load", {"live": True}, "ok")
     assert activity.kept_in_history("load", {"live": True}, "failed")
-    for operation in ("list", "icons", "subtree_save", "volumes_verify"):
+    for operation in ("list", "details", "cached", "icons", "subtree_save", "volumes_verify", "convert"):
         assert not activity.kept_in_history(operation, {}, "ok")
         assert activity.kept_in_history(operation, {}, "cancelled")
-    assert activity.kept_in_history("load", {}, "ok") and activity.kept_in_history("convert", {}, "ok")
+        assert activity.kept_in_history(operation, {}, "failed")
+    assert activity.kept_in_history("load", {}, "ok") and activity.kept_in_history("scan", {}, "ok")
 
 
 def test_the_history_holds_the_last_200_newest_first() -> None:
