@@ -285,3 +285,39 @@ from its start that keeps its code runs it then (`keep_script`)".
   round. That is not a `compute`, and the rule is about `compute`.
 - `answered` checks `sip.isdeleted(self)`. `_run_ended` is a bound slot, so Qt disconnects it when the panel is
   deleted.
+
+## Re-check: C4-1 and C4-2 (`git diff d91c3d3..afe7057`)
+
+Reviewer: Probe2, 2026-11-04. The new commits are `b19a07e` (C4-1), `364ee45` (C4-2) and `afe7057` (handoff).
+Nothing else changed: the range touches only `instance.py` (`keep_script`), `script_tree.py` (`_listen`,
+`_end_round`, `_try_reload`, `_wait_for_runs`), `tests/test_live_scripts.py` and `handoff.md`.
+
+- **C4-1, `b19a07e`: closed.** When `keep_script` finds no run in flight and the plot isn't waiting for its data, it
+  now calls `run()` if the plot has no result yet (`shown is None`) and isn't waiting on its own TXY choice. It calls
+  `_follow_next()` otherwise, as before. The kept code is the code that stays loaded: a skipped folder isn't
+  imported, and a removed one is left out of `_end_round`'s `listed`. So this first run happens under no import of
+  its folder.
+  - Test: `test_a_plot_held_from_its_start_whose_folder_keeps_its_code_runs_it`, parametrized over a failed test
+    import and the folder removed (my scratch test's two cases), asserting the plot draws "old".
+  - With `b19a07e`'s `helab/` change reverted, in a throwaway worktree, **both cases fail** (`waitUntil` timed out).
+- **C4-2, `364ee45`: closed.** `_listen()` connects every runner's `finished` before each count, in `_end_round` and
+  in `_try_reload` (L2's wait). Both still disconnect through `_stop_waiting` when nothing is busy. `_try_reload`,
+  while an answered round waits, calls `_end_round` to count again, so a click on Reload recovers too. There is no
+  recursion: `_end_round` clears `_answered` before its `then` and its own `_try_reload`.
+  - Test: `test_a_run_ending_as_the_reload_counts_it_doesnt_leave_the_reload_waiting`. A `_busy` wrapper lets the
+    counted run end, its `finished` seen on the worker thread through a direct connection, before the count
+    returns.
+  - With `364ee45`'s `helab/` change reverted, **it fails** (`waitUntil` timed out); the other tests pass.
+- **Checks at `afe7057`:**
+  - full suite, `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review -rR`: **9296 passed, 673
+    skipped, 2 warnings in 164.23 s, no RERUN**;
+  - the five type checks: clean, as in round 1;
+  - CI run 41741318883 on `afe7057`: success. I didn't read its job logs for RERUN; the landing check does.
+- **The handoff** matches the code, including the added `plots-and-scripts.md` sentence.
+
+Not a finding, noted for the record: when the reload *did* import the folder but this plot's class or action is gone,
+`keep_script` now runs the plot's old class after that import. Its helper modules are then the new ones. That is
+the same thing held plots with a result already did before C-4 ("Rerun and Live run the code it has", L-series), and
+no import is under that run.
+
+**Open findings: none.** Round 2 has nothing left open.
