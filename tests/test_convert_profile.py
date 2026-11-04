@@ -12,7 +12,7 @@ import pytest
 from helab.convert.pipeline import convert_raw
 from helab.convert.profile import (BUILTIN_PROFILES, DEFAULT_PROFILE, DESCRIPTIVE, MATLAB_2019, MATLAB_2023_LAB_EDIT,
                                    NEUTRAL, UNUSED_BY_OUTPUT, USER_TAG_DIGITS, DetectorProfile, ProfileError,
-                                   builtin_profile, file_tag)
+                                   UNCALIBRATED, builtin_files, builtin_profile, file_tag)
 from helab.convert.reconstruct import NoRowsError
 
 CASES = Path(__file__).resolve().parents[1] / "tests" / "data" / "convert" / "cases"
@@ -150,6 +150,32 @@ def test_a_builtins_tag_never_changes() -> None:
     assert {name: file_tag(profile) for name, profile in BUILTIN_PROFILES.items()} == {
         name: profile.tag for name, profile in BUILTIN_PROFILES.items()}
     assert len({profile.tag for profile in BUILTIN_PROFILES.values()}) == len(BUILTIN_PROFILES)
+
+
+def test_a_builtins_content_hash_never_changes() -> None:
+    """A56.4: the built-ins' descriptions were reworded; ``notes`` is descriptive, so no hash changed (HeLab's TXY
+    and caches recorded under them stay current). A change here means a built-in's output changed."""
+    plain = "fbaf472897b0745fd5eca1249862e37ab43dc553adcf0dc6122648dfdfd414d0"
+    assert {name: profile.content_hash() for name, profile in BUILTIN_PROFILES.items()} == {
+        "matlab-2019": plain, "plates-2017": plain, "plates-2022": plain, "plates-2025": plain,
+        "matlab-2023-lab-edit": "a228f236d31749608e9853d7f69954d47174cb08d7d2f1adaea40a364739183e"}
+    assert {name: profile.content_hash() for name, profile in builtin_files().items()} == {
+        name: profile.content_hash() for name, profile in BUILTIN_PROFILES.items()}
+
+
+def test_each_builtin_describes_itself_for_users() -> None:
+    """A56.4: Settings › TXY converter shows each built-in's notes: user-facing text that says whether it is
+    calibrated, with no internal ID ("Q6.11", "stage 3", "A10.3") or "content hash"."""
+    import re
+    for name, profile in BUILTIN_PROFILES.items():
+        notes = profile.notes
+        assert len(notes) > 150, name
+        assert not re.search(r"\b[QAM]~?\d+\.\d+|\bstage \d|content hash|reconst", notes), (name, notes)
+        assert "calibrated" in notes.lower(), name
+        assert ("Marked uncalibrated" in notes) == (name in UNCALIBRATED), name
+    assert BUILTIN_PROFILES[DEFAULT_PROFILE].notes.startswith("HeLab's default.")
+    for name in ("plates-2017", "plates-2022", "plates-2025"):
+        assert "matlab-2019's constants" in BUILTIN_PROFILES[name].notes, name
 
 
 def test_any_other_profile_is_tagged_by_its_hash() -> None:

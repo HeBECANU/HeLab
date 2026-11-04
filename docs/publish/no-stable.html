@@ -1,6 +1,7 @@
 <!DOCTYPE html>
-<!-- The manual site's front page until there is a stable release (Q56.3): mike's set-default template
-     (docs/publish/site_versions.py), {{href}} being the newest pre-release's manual. -->
+<!-- The manual site's front page until there is a stable release (Q56.3, A59.2 (b)): mike's set-default
+     template (docs/publish/site_versions.py). site_versions fills in {{latest}}, the newest pre-release and
+     its kind ("0.0.8a1 (alpha)"), before mike renders {{href}}, that pre-release's manual (pre-release/). -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -16,15 +17,17 @@
     main { max-width: 36rem; margin: 15vh auto 0; padding: 0 16px; }
     h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
     p { margin: 0.5rem 0; }
+    .latest { font-size: 1.2rem; margin: 0.25rem 0 1rem; }
     .note { color: var(--muted); }
     a { color: var(--link); }
   </style>
 </head>
 <body>
   <main>
-    <h1>No stable release yet</h1>
-    <p>HeLab has only pre-releases (alpha and beta versions) so far. Read the
-      <a href="{{href}}">newest pre-release's manual</a>; its version menu lists every release.</p>
+    <h1>HeLab manual</h1>
+    <p class="latest">Latest: <a href="{{href}}">{{latest}}</a></p>
+    <p>No stable release yet: HeLab has only pre-releases (alpha and beta versions) so far, and the newest is
+      the latest download. Its manual's version menu lists every release.</p>
     <p class="note">HeLab's Help › User manual opens the manual of the version you run.</p>
   </main>
 </body>

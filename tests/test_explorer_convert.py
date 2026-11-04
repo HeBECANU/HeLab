@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from types import SimpleNamespace
 from typing import Any, Iterator
 
 import pytest
@@ -21,7 +22,8 @@ from helab.views.FolderExplorer import FolderExplorer
 from test_convert_helab import raw_bytes
 from helab.io_ops.loading import load
 from test_live import age_folder, deliver, job_of, producer, replay, service  # noqa: F401
-from test_live_convert import check, cycle, line, run_convert, watching_raw_folder, write_raw
+from test_live_convert import (FakeNotifier, check, cycle, line, notifier, run_convert,  # noqa: F401
+                               watching_raw_folder, write_raw)
 
 SHARE = "//labserver/data"
 
@@ -495,3 +497,71 @@ def test_the_choice_after_a_refusal_holds_for_the_folder_in_live_and_folder_deta
     assert explorer_convert.instead_of_beside(path) == "cache"
     explorer.stop_live(save=False)
     explorer.close_cleanup()
+
+
+# A read stopped early in Folder details' conversion (A58.2), as in Live's (A37.1, Q48.1, Q48.2).
+
+def stopped_raw() -> bytes:
+    """A raw file whose read stops at line 10 ("abc" isn't a number): its TXY holds the 2 hits before it."""
+    return raw_bytes(10_000, 20_000) + b"0,12abc\r\n" + raw_bytes(30_000)[len(b"5,1000\r\n"):]
+
+
+def test_folder_details_conversion_names_a_read_stopped_early_and_notifies_once_per_file(
+        qtbot: QtBot, service: IOService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        notifier: FakeNotifier) -> None:
+    """A58.2: a raw file whose read stopped early, converted by Folder details' conversion (Convert this
+    folder…, the offer), is named in its row (one by name, several counted), with the detail in the tooltip,
+    and sends Live's system notification, once per file (name, size, mtime) this session: a second conversion
+    of the same file doesn't notify again. Read to its end later, it is no longer named."""
+    from helab.utils import events
+    monkeypatch.setattr(cache_location, "share_of", lambda path, mounts=None, *, resolve=False: "")
+    explorer, path, panel = raw_folder(qtbot, tmp_path)
+    write_raw(Path(path), 3, stopped_raw())
+    cache, converter = explorer.model.cache, explorer.converter
+
+    def convert_folder() -> list[dict[str, Any]]:
+        assert converter.start(path, "cache")
+        sent: list[dict[str, Any]] = []
+        for _ in (1, 2):
+            qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
+            sent += run_convert(cache, path)
+        assert converter.conversions[path].finished
+        return sent
+
+    def notified() -> list[tuple[str, str]]:
+        return [sent for sent in notifier.sent if sent[0] == "HeLab: raw file read stopped early"]
+
+    sent = convert_folder()
+    [converted] = [event for event in sent if event["kind"] == "shot_converted" and event["shot"] == 3]
+    assert converted["hits"] == 2 and converted["read_stop"]["line"] == 10
+    panel.show_explorer(explorer, None)
+    assert panel.text("offer") == "3 converted to HeLab's cache folder · d3.txt read stopped at line 10"
+    assert 'Read stopped early (1): d3.txt: read stopped at line 10, at "abc"' in panel.values["offer"].toolTip()
+    assert notified() == [("HeLab: raw file read stopped early",
+                           'd3.txt in raw-only: read stopped at line 10, at "abc", which isn\'t a number: as '
+                           "MATLAB's converter reads the file, its TXY holds only the hits of what was read before "
+                           f"it ({converted['read_stop']['unread']:,} bytes not read). Later shots go on.")]
+    [said] = [event for event in events.hub().history if event.kind == events.READ_STOPPED_RAW]
+    assert (said.data["path"], said.data["shot"], said.data["line"]) == (path, 3, 10)
+    # The same file in a later conversion of this session: named again, not notified again.
+    conversion = converter.conversions[path]
+    conversion.request = True
+    converter.event(producer_like(path), {**converted})
+    assert len(notified()) == 1 and list(conversion.stopped) == ["d3.txt"]
+    # Several are counted; one read to its end is no longer named.
+    converter.event(producer_like(path), {**converted, "shot": 4, "raw_name": "d4.txt", "raw_size": 1})
+    assert len(notified()) == 2
+    conversion.finished = True
+    row = converter.row(path)
+    assert row is not None and "2 reads stopped early" in row[0]
+    converter.event(producer_like(path), {**converted, "read_stop": None})
+    converter.event(producer_like(path), {**converted, "shot": 4, "raw_name": "d4.txt", "read_stop": None})
+    row = converter.row(path)
+    assert conversion.stopped == {} and row is not None and "stopped" not in row[0] and "Read stopped" not in row[1]
+    explorer.close_cleanup()
+
+
+
+def producer_like(path: str) -> Any:
+    """What ``ExplorerConverter.event`` reads of a request: its path and operation."""
+    return SimpleNamespace(path=path, operation="convert")

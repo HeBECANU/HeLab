@@ -30,6 +30,24 @@ if len(sys.argv) > 1 and sys.argv[1] == "cache":
     from helab.cache_cli import main as cache_main
     raise SystemExit(cache_main(sys.argv[2:]))
 
+# ``helab --help`` (A56.7): a short usage, before Qt, settings, caches, Dash or the one-app lock.
+USAGE = """\
+usage: helab [--geometry WxH+X+Y]   start HeLab (the app)
+       helab --version              print HeLab's version and build, and exit
+       helab --help                 print this help, and exit
+       helab convert --watch FOLDER [options]
+                                    the headless TXY converter (helab convert --help)
+       helab cache dump|export ...  look into the disk cache's .hlb files, read only
+                                    (helab cache --help)
+
+  --geometry WxH+X+Y  this run's main window: W x H points, its top-left at X,Y
+                      (a sign each; "-" for a screen left of or above the main one)
+"""
+if "--help" in sys.argv[1:] or "-h" in sys.argv[1:]:
+    if sys.stdout is not None:  # (A windowed frozen app may have none.)
+        print(USAGE, end="")
+    raise SystemExit(0)
+
 # Query provenance before importing Qt, opening settings/caches or starting Dash.
 if "--version" in sys.argv:
     from helab.build_info import get_build_info

@@ -65,9 +65,8 @@ def no_hits_text(shots: list[int]) -> tuple[str, str]:
     return (plural(len(shots), "shot") + " with no hits",
             f"No hits ({len(shots):,}): shot{'' if len(shots) == 1 else 's'} {numbers}. HeLab converted "
             "each to an empty TXY (0 bytes): its raw file holds no matched pulses (check the detector).")
-# How the Live line names raw files whose read stopped early (A37.1): one by name, several counted. Folder
-# details colours its Auto-convert row amber on either.
-READ_STOPPED = ("read stopped at line", "reads stopped early")
+# How the Live line names raw files whose read stopped early (A37.1; shared with Folder details' conversions).
+READ_STOPPED = explorer_convert.READ_STOPPED
 # What the Live line calls each place HeLab's TXY go (``convert_plan.output``).
 CONVERT_OUTPUTS = {"beside": "beside the raw files", "cache": "HeLab's disk cache folder",
                    "temp": "HeLab's temp folder"}
@@ -995,18 +994,6 @@ class LiveController:
                            int(event["raw_mtime_ns"])),
                       desktop=True, path=session.path, shot=int(event["shot"]), source="convert")
 
-    @staticmethod
-    def _notify_read_stopped(session: LiveSession, event: dict[str, Any], stop: ReadStop) -> None:
-        """A raw file whose read stopped early (A37.1): a system notification, once per file (its name, size
-        and mtime), as a damaged one's (Q48.2), since its TXY lacks the hits after that line."""
-        name = os.path.basename(session.path.rstrip(os.sep)) or session.path
-        raw_name = str(event["raw_name"])
-        events.notify(events.READ_STOPPED_RAW, f"{raw_name} in {name}: {stop.detail()}. Later shots go on.",
-                      title="HeLab: raw file read stopped early",
-                      key=(events.READ_STOPPED_RAW, session.path, raw_name, int(event["raw_size"]),
-                           int(event["raw_mtime_ns"])),
-                      desktop=True, path=session.path, shot=int(event["shot"]), line=stop.line, source="convert")
-
     def _converted(self, session: LiveSession, convert: AutoConvert, event: dict[str, Any]) -> None:
         """A shot converted: its TXY reaches the data through Live's next check (now, or as soon
         as the running one ends); a low-count one notifies (Q9.4), once per shot."""
@@ -1017,10 +1004,8 @@ class LiveController:
             convert.no_hits.add(shot)
         raw_name = str(event["raw_name"])
         convert.waiting.pop(raw_name, None)
-        if event.get("read_stop"):
-            convert.stopped[raw_name] = stop = ReadStop.of(event["read_stop"])
-            logging.warning("Live auto-convert: %s in %s: %s", raw_name, session.path, stop.detail())
-            self._notify_read_stopped(session, event, stop)
+        if event.get("read_stop"):  # (Logged and notified once per file, as Folder details' conversions do.)
+            convert.stopped[raw_name] = explorer_convert.note_read_stop(session.path, event, "Live auto-convert")
         else:
             convert.stopped.pop(raw_name, None)  # (Converted again, read to its end.)
         threshold = low_hits_threshold()
@@ -1066,11 +1051,8 @@ class LiveController:
                 parts.append(f"{len(stuck):,} waiting")
             if convert.damaged:
                 parts.append(f"{len(convert.damaged):,} damaged")
-            if len(convert.stopped) == 1:
-                name, stop = next(iter(convert.stopped.items()))
-                parts.append(f"{name} {stop.summary()}")
-            elif convert.stopped:
-                parts.append(f"{len(convert.stopped):,} {READ_STOPPED[1]}")
+            if stop_part := explorer_convert.read_stops_text(convert.stopped)[0]:
+                parts.append(stop_part)
             if empty_text:
                 parts.append(empty_text)
             if others := len(convert.unconvertible) - len(convert.damaged):
@@ -1100,10 +1082,8 @@ class LiveController:
             lines.append(f"This folder reads {file_tag(offer)} only (its TXY list), so the TXY Auto-convert writes "
                          f"with {self.explorer.model.cache.convert_profile_tag()} aren't read here. Auto-convert's "
                          f"menu › Convert with {file_tag(offer)}, for this session.")
-        if convert.stopped:
-            lines.append(f"Read stopped early ({len(convert.stopped):,}): " + "; ".join(
-                f"{name}: {stop.detail()}" for name, stop in sorted(convert.stopped.items())[:8])
-                + (" …" if len(convert.stopped) > 8 else ""))
+        if stop_line := explorer_convert.read_stops_text(convert.stopped)[1]:
+            lines.append(stop_line)
         settling = len(convert.waiting) - len(convert.stuck())
         if settling:
             lines.append(f"Being written: {plural(settling, 'raw file')} (converted once written)")

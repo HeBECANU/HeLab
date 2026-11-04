@@ -3,7 +3,7 @@
   "name": "matlab-2019",
   "version": 1,
   "calibrated": false,
-  "notes": "MATLAB tdc_autoconverter's dld_read_5channels_reconst_multi_imp (unchanged since 2017), flags 1,0,1,0: byte-identical to its _txy_forc files, quirks included.",
+  "notes": "HeLab's default. The lab's MATLAB converter (tdc_autoconverter), unchanged since 2017, which made the d_txy_forc files in the data folders: the same constants and the same quirks, so its TXY match those files byte for byte. Choose it for hits that agree with the lab's existing TXY, on data of any date. Not calibrated: it keeps MATLAB's fixed constants (time sums of 3200 bins on X and Y) for every plate.",
   "tag": "m19v1",
   "bin_time": 2.5e-11,
   "channel_x1": 0,

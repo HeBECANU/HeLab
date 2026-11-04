@@ -1,5 +1,6 @@
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -52,6 +53,44 @@ def test_version_query_does_not_initialize_gui_services(tmp_path: Path) -> None:
     result = subprocess.run([sys.executable, "-c", code, str(ROOT)], cwd=tmp_path,
                             capture_output=True, text=True, check=True)
     assert f"HeLab {__version__}" in result.stdout
+
+
+HELP_CHECK = (
+    # As the helab script runs it: import helab.main (whose top handles the commands), then main().
+    "import os, sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['helab', *sys.argv[2:]]"
+    "\ntry: import helab.main"
+    "\nexcept SystemExit as exc: print('exit', exc.code)"
+    "\nelse: print('no exit: HeLab would start')"
+    "\nprint('loaded', sorted(m for m in ('PyQt6', 'helab.utils.constants', 'helab.utils.dash_server',"
+    " 'helab.utils.cache_locks') if m in sys.modules))"
+)
+
+
+@pytest.mark.parametrize("args", [["--help"], ["-h"], ["--geometry", "800x600+0+0", "--help"]])
+def test_help_prints_the_usage_and_starts_nothing(tmp_path: Path, args: list[str]) -> None:
+    """A56.7: ``helab --help`` prints a short usage and exits 0 before Qt, settings, caches, Dash or the
+    one-app lock (``running.lock``, taken in the app folder) start."""
+    app = tmp_path / "app"
+    app.mkdir()
+    env = dict(os.environ, HELAB_APP_DIR_OVERRIDE=str(app), QT_QPA_PLATFORM="offscreen")
+    result = subprocess.run([sys.executable, "-c", HELP_CHECK, str(ROOT), *args], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    lines = result.stdout.splitlines()
+    assert lines[-2:] == ["exit 0", "loaded []"], result.stdout[-2000:]
+    usage = "\n".join(lines[:-2])
+    assert usage.startswith("usage: helab")
+    for part in ("--version", "--geometry WxH+X+Y", "helab convert --watch FOLDER", "helab convert --help",
+                 "helab cache dump|export", "helab cache --help", "--help"):
+        assert part in usage, part
+    assert not list(app.iterdir())  # (No running.lock, settings or logs.)
+
+
+@pytest.mark.parametrize("command", ["convert", "cache"])
+def test_a_commands_help_is_still_its_own(tmp_path: Path, command: str) -> None:
+    result = subprocess.run([sys.executable, "-c", HELP_CHECK, str(ROOT), command, "--help"], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=120)
+    assert result.stdout.startswith(f"usage: helab {command} [-h]") and "exit 0" in result.stdout, result.stdout
 
 
 def test_checkout_git_failure_is_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

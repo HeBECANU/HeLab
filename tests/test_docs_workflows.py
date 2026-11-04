@@ -211,3 +211,50 @@ def test_a_newer_stable_release_removes_the_pre_release_alias_until_the_next_pre
         ({"0.0.8a1": [], "0.0.8b1": [], "0.0.8": ["latest"], "0.0.9a1": ["pre-release"], "0.0.8rc1": []}, "latest")]
     # A stable release older than the alias's target (0.0.8.1 after 0.0.9a1) leaves it alone.
     assert ["mike", "delete", "--push", "pre-release"] not in site.plan("0.0.8.1", deployed)
+
+
+def test_the_no_stable_front_page_names_the_newest_pre_release_as_latest() -> None:
+    """A59.2 (b) (Tony, 2026-11-04): v0.0.8a1 is GitHub's "Latest" (published as a full release), so the
+    front page names the newest pre-release as the latest download, linked to ``pre-release``; the site
+    still goes by the version number, so it is a pre-release here. mike fills in only ``{{href}}``."""
+    import jinja2
+    site = _site_versions()
+    assert [site.latest_label(site.Version(text)) for text in ("0.0.8a1", "0.0.8b2", "0.0.9rc1", "0.1.dev3")] == [
+        "0.0.8a1 (alpha)", "0.0.8b2 (beta)", "0.0.9rc1 (release candidate)", "0.1.dev3 (development version)"]
+    page = site.no_stable_page(site.Version("0.0.8a1"))
+    assert "{{latest}}" not in page and 'Latest: <a href="{{href}}">0.0.8a1 (alpha)</a>' in page
+    rendered = jinja2.Template(page).render(href="pre-release/")  # (As mike's set-default renders it.)
+    assert 'Latest: <a href="pre-release/">0.0.8a1 (alpha)</a>' in rendered and "{{" not in rendered
+
+
+def test_the_front_page_names_the_newest_pre_release_until_a_stable_release() -> None:
+    site = _site_versions()
+    assert site.newest_pre_release("0.0.8a1", []) == site.Version("0.0.8a1")
+    # An older pre-release published late: the newest is still named.
+    assert site.newest_pre_release("0.0.7a1", _deployed(("0.0.8a1", ["pre-release"]))) == site.Version("0.0.8a1")
+    assert site.newest_pre_release("0.0.9a1", [*_deployed(("0.0.8a1", [])), {"version": "dev", "aliases": []}]) == \
+        site.Version("0.0.9a1")
+    assert site.newest_pre_release("0.0.8", _deployed(("0.0.8a1", ["pre-release"]))) is None
+    assert site.newest_pre_release("0.0.9a1", _deployed(("0.0.8", ["latest"]))) is None
+    # The page is written exactly when the plan sets it as the front page.
+    for version, deployed in (("0.0.8a1", []), ("0.0.8", []), ("0.0.9a1", _deployed(("0.0.8", ["latest"])))):
+        uses_page = any("--template" in command for command in site.plan(version, deployed))
+        assert uses_page == (site.newest_pre_release(version, deployed) is not None), version
+
+
+def test_the_deploy_hands_mike_the_filled_in_front_page(monkeypatch: Any, capsys: Any) -> None:
+    import subprocess
+    site = _site_versions()
+    pages: list[str] = []
+
+    def mike(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["mike", "list"]:
+            return subprocess.CompletedProcess(command, 0, '[{"version": "0.0.6a1", "aliases": ["pre-release"]}]', "")
+        if "--template" in command:
+            pages.append(Path(command[command.index("--template") + 1]).read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(site.subprocess, "run", mike)
+    assert site.main(["0.0.8a1"]) == 0
+    [page] = pages
+    assert "0.0.8a1 (alpha)" in page and "0.0.6a1" not in page
+    assert "Front page: Latest: 0.0.8a1 (alpha)" in capsys.readouterr().out

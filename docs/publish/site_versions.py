@@ -7,8 +7,10 @@
   every stable release: a stable release newer than its target removes the alias (``mike delete`` of the alias
   only, Q58.3 (b), Tony 2026-11-03), and the next pre-release brings it back. Removed rather than pointed at
   ``latest``, which would label the stable release a pre-release too.
-- Until there is a stable release, the front page is a short "No stable release yet" page
-  (``no-stable.html``, mike's ``set-default`` template) linking to the newest pre-release.
+- Until there is a stable release, the front page is a short page (``no-stable.html``, mike's ``set-default``
+  template) naming the newest pre-release as the latest download, "Latest: 0.0.8a1 (alpha)", linked to its
+  manual (``pre-release``). A pre-release published as a full GitHub release (v0.0.8a1, A59.2 (b)) is still a
+  pre-release here: the site goes by the version number.
 - No development channel: a development manual is built locally (the README's User manual section).
 
 An older release published after a newer one gets its version, but moves no alias back.
@@ -25,6 +27,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from typing import Any, List, Sequence
 
 from packaging.version import InvalidVersion, Version
@@ -57,12 +60,35 @@ def _alias_target(deployed: Sequence[dict[str, Any]], alias: str) -> Version | N
     return None
 
 
-def plan(version: str, deployed: Sequence[dict[str, Any]]) -> List[List[str]]:
+KINDS = {"a": "alpha", "b": "beta", "rc": "release candidate"}
+
+
+def newest_pre_release(version: str, deployed: Sequence[dict[str, Any]]) -> Version | None:
+    """The newest pre-release once ``version`` is deployed beside ``deployed``, while there is no stable
+    release (None once there is one: the front page is then ``latest``)."""
+    new = Version(version)
+    every = [*_versions(deployed, new), new]
+    return None if any(not item.is_prerelease for item in every) else max(every)
+
+
+def latest_label(version: Version) -> str:
+    """How the front page names a pre-release: ``0.0.8a1 (alpha)``, ``0.0.9rc1 (release candidate)``."""
+    kind = KINDS.get(version.pre[0], "pre-release") if version.pre else "development version"
+    return f"{version} ({kind})"
+
+
+def no_stable_page(newest: Version, template: str = NO_STABLE_TEMPLATE) -> str:
+    """The front page's template with the newest pre-release filled in; mike then fills in ``{{href}}``."""
+    with open(template, encoding="utf-8") as stream:
+        return stream.read().replace("{{latest}}", latest_label(newest))
+
+
+def plan(version: str, deployed: Sequence[dict[str, Any]], page: str = NO_STABLE_TEMPLATE) -> List[List[str]]:
     """The mike commands that publish ``version`` (a PEP 440 version, no ``v``) beside ``deployed`` (``mike
     list --json``): its deploy, with ``latest`` or ``pre-release`` when it is the newest of its kind (a
     pre-release also newer than every stable release); for a stable release newer than ``pre-release``'s
-    target, that alias's removal; then the front page: ``latest`` once a stable release exists, else the "No
-    stable release yet" page."""
+    target, that alias's removal; then the front page: ``latest`` once a stable release exists, else ``page``
+    (``no_stable_page``'s, written by ``main``) linking to ``pre-release``."""
     new = Version(version)
     others = _versions(deployed, new)
     stable = [other for other in others if not other.is_prerelease]
@@ -78,7 +104,7 @@ def plan(version: str, deployed: Sequence[dict[str, Any]]) -> List[List[str]]:
     if stable or not new.is_prerelease:
         commands.append(["mike", "set-default", "--push", STABLE_ALIAS])
     else:
-        commands.append(["mike", "set-default", "--push", "--template", NO_STABLE_TEMPLATE, PRE_RELEASE_ALIAS])
+        commands.append(["mike", "set-default", "--push", "--template", page, PRE_RELEASE_ALIAS])
     return commands
 
 
@@ -93,10 +119,17 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(f"mike list failed ({listed.returncode}): {listed.stderr.strip()}\n")
         return 1
     deployed = json.loads(listed.stdout) if listed.stdout.strip() else []
-    for command in plan(argv[0], deployed):
-        print(" ".join(command), flush=True)
-        if len(argv) == 1:
-            subprocess.run(command, check=True)
+    with tempfile.TemporaryDirectory() as folder:
+        page = os.path.join(folder, "no-stable.html")
+        newest = newest_pre_release(argv[0], deployed)
+        if newest is not None:
+            with open(page, "w", encoding="utf-8") as stream:
+                stream.write(no_stable_page(newest))
+            print(f"Front page: Latest: {latest_label(newest)}", flush=True)
+        for command in plan(argv[0], deployed, page):
+            print(" ".join(command), flush=True)
+            if len(argv) == 1:
+                subprocess.run(command, check=True)
     return 0
 
 

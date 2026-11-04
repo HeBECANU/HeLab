@@ -3,7 +3,7 @@
   "name": "plates-2025",
   "version": 1,
   "calibrated": false,
-  "notes": "Uncalibrated: no calibration data for these plates yet (Q6.11). Copy of matlab-2019 until this plate is calibrated (stage 3): same output, so same content hash. The MCP plates fitted on 2025-06-18.",
+  "notes": "For data taken on the MCP plates fitted on 2025-06-18, the plates in the detector now. For now it holds matlab-2019's constants, so its hits are matlab-2019's, written under its own file names; it changes only when these plates are calibrated. A plot's settings suggest it for a folder dated while its plates were in, but never pick it for you. Marked uncalibrated: there is no calibration data for these plates yet. It doesn't yet turn the image back after the corner cables were swapped (between 2026-06-27 and 2026-07-21), which turned it by 180\u00b0.",
   "tag": "p25t1",
   "bin_time": 2.5e-11,
   "channel_x1": 0,

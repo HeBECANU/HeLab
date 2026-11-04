@@ -27,7 +27,7 @@ def test_the_plate_profiles_start_as_matlab_2019() -> None:
         assert changed <= set(DESCRIPTIVE)
         # Same output, so the same content hash: their TXY are current for each other.
         assert profile.content_hash() == MATLAB_2019.content_hash()
-    assert UNCALIBRATED == {"plates-2025"} and "Uncalibrated" in BUILTIN_PROFILES["plates-2025"].notes
+    assert UNCALIBRATED == {"plates-2025"} and "uncalibrated" in BUILTIN_PROFILES["plates-2025"].notes.lower()
     assert [name for _, name in PLATE_SWAPS] == ["plates-2017", "plates-2022", "plates-2025"]
 
 
