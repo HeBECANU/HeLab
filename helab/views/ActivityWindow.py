@@ -786,7 +786,7 @@ class ActivityWindow(QWidget):
         self._groups: dict[str, QTreeWidgetItem] = {}
         self._shape: dict[str, list[str]] = {}  # (Each parent's children's ids as last shown; "" the top level.)
         self._collapsed: set[str] = set()
-        self._history: list[activity.Finished] = []
+        self._history: dict[str, activity.Finished] = {}  # (By ``Finished.key``.)
         self._history_version = -1
         self._connected: list[tuple[Any, Callable[..., None]]] = []
         layout = QVBoxLayout(self)
@@ -1072,38 +1072,48 @@ class ActivityWindow(QWidget):
         item.setForeground(3, brush)
 
     def _render_history(self) -> None:
+        """Show the history, newest first: new entries put on top and dropped ones taken off the bottom, the
+        rest left as they are (their scroll position and selection with them; AW-10). Each row's tooltip is
+        the entry's own lines; the session's log lines are read only for the details pane."""
         self._history_version = activity.HISTORY.version
-        self._history = activity.HISTORY.entries()
+        entries = activity.HISTORY.entries()
+        self._history = {entry.key: entry for entry in entries}
         tree = self.history
-        current = tree.currentItem()
-        chosen = current.data(0, Qt.ItemDataRole.UserRole) if current is not None else None
         tree.blockSignals(True)
-        tree.clear()
-        items = []
-        for index, entry in enumerate(self._history):
-            took = "" if entry.started is None else clock(max(0.0, entry.ended - entry.started))
-            item = QTreeWidgetItem([time.strftime("%H:%M:%S", time.localtime(entry.ended)), entry.title,
-                                    self.sources.tab_text(entry.owners), _name(entry.folder) if entry.folder else "",
-                                    activity.outcome_text(entry), took])
-            item.setData(0, Qt.ItemDataRole.UserRole, f"history:{index}:{entry.id}")
-            item.setToolTip(3, entry.folder)
-            for column in (0, 1, 4, 5):
-                item.setToolTip(column, "\n".join(self._history_details(entry)))
-            if entry.outcome != "ok":
-                item.setForeground(4, QBrush(QColor(AMBER)))
-            items.append(item)
-        tree.addTopLevelItems(items)
-        if chosen is not None:
-            entry_id = str(chosen).split(":", 2)[-1]
-            for item in items:
-                if str(item.data(0, Qt.ItemDataRole.UserRole)).split(":", 2)[-1] == entry_id:
-                    tree.setCurrentItem(item)
-                    break
-        tree.blockSignals(False)
-        for column in range(len(HISTORY_COLUMNS)):
-            tree.resizeColumnToContents(column)
+        try:
+            items = [tree.topLevelItem(index) for index in range(tree.topLevelItemCount())]
+            shown = [str(item.data(0, Qt.ItemDataRole.UserRole)) for item in items if item is not None]
+            keys = [entry.key for entry in entries]
+            if shown and shown[0] in self._history:
+                for index in reversed(range(len(shown))):
+                    if shown[index] not in self._history:
+                        tree.takeTopLevelItem(index)  # (Dropped from the history's oldest end.)
+                fresh = entries[:keys.index(shown[0])]
+            else:
+                tree.clear()  # (First, or the history was cleared.)
+                fresh = entries
+            tree.insertTopLevelItems(0, [self._history_item(entry) for entry in fresh])
+        finally:
+            tree.blockSignals(False)
+        if fresh:
+            for column in range(len(HISTORY_COLUMNS)):
+                tree.resizeColumnToContents(column)
 
-    def _history_details(self, entry: activity.Finished) -> list[str]:
+    def _history_item(self, entry: activity.Finished) -> QTreeWidgetItem:
+        took = "" if entry.started is None else clock(max(0.0, entry.ended - entry.started))
+        item = QTreeWidgetItem([time.strftime("%H:%M:%S", time.localtime(entry.ended)), entry.title,
+                                self.sources.tab_text(entry.owners), _name(entry.folder) if entry.folder else "",
+                                activity.outcome_text(entry), took])
+        item.setData(0, Qt.ItemDataRole.UserRole, entry.key)
+        item.setToolTip(3, entry.folder)
+        tooltip = "\n".join(self._history_details(entry, log=False))
+        for column in (0, 1, 2, 4, 5):
+            item.setToolTip(column, tooltip)
+        if entry.outcome != "ok":
+            item.setForeground(4, QBrush(QColor(AMBER)))
+        return item
+
+    def _history_details(self, entry: activity.Finished, *, log: bool = True) -> list[str]:
         took = "" if entry.started is None else f" · took {clock(max(0.0, entry.ended - entry.started))}"
         lines = [entry.title, f"Folder: {entry.folder}" if entry.folder else "",
                  f"For: {tab}" if (tab := self.sources.tab_text(entry.owners)) else "",
@@ -1111,10 +1121,10 @@ class ActivityWindow(QWidget):
                  f"Outcome: {activity.outcome_text(entry)}",
                  f"Attempts: {entry.attempts}" if entry.attempts > 1 else "", *entry.details]
         lines = [line for line in lines if line]
-        if entry.outcome != "ok":
-            log = activity.LOG_LINES_HANDLER.about(entry.folder, entry.started, entry.ended)
-            if log:
-                lines += ["", "Log:", *log]
+        if log and entry.outcome != "ok":
+            found = activity.LOG_LINES_HANDLER.about(entry.folder, entry.started, entry.ended)
+            if found:
+                lines += ["", "Log:", *found]
         return lines
 
     # Selection, details and buttons
@@ -1136,8 +1146,7 @@ class ActivityWindow(QWidget):
         item = self.history.currentItem()
         if item is None:
             return None
-        index = int(str(item.data(0, Qt.ItemDataRole.UserRole)).split(":")[1])
-        return self._history[index] if index < len(self._history) else None
+        return self._history.get(str(item.data(0, Qt.ItemDataRole.UserRole)))
 
     def _selection_changed(self, *_: object) -> None:
         task, entry = self.selected_task(), self.selected_entry()

@@ -350,3 +350,34 @@ def test_a_saved_size_larger_than_the_screen_is_fitted_to_it(qtbot: QtBot, monke
     room = screen.availableGeometry()
     assert window.width() <= max(room.width(), 400) and window.height() <= max(room.height(), 200)
     service.shutdown()
+
+
+def test_history_rows_are_added_on_top_and_keep_their_selection(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AW-10: entries have unique keys though their ids repeat (Live sessions of one folder); a new entry
+    goes on top without rebuilding the others, so the chosen row stays chosen; the oldest drops off."""
+    service = quiet_service(monkeypatch)
+    window = make_window(qtbot, service)
+    window.show()
+    now = time.time()
+    activity.record(Finished("live:tab:live:/live", "live", "Live", "/live", now - 9, "failed", "first"))
+    activity.record(Finished("live:tab:live:/live", "live", "Live", "/live", now - 5, "ok"))
+    window.refresh()
+    window.tabs.setCurrentWidget(window.history)
+    older = window.history.topLevelItem(1)
+    assert older is not None
+    window.history.setCurrentItem(older)
+    chosen = window.selected_entry()
+    assert chosen is not None and chosen.message == "first"
+    keys = [entry.key for entry in activity.HISTORY.entries()]
+    assert len(set(keys)) == 2
+    activity.record(Finished("live:tab:live:/live", "live", "Live", "/live", now, "failed", "third"))
+    window.refresh()
+    assert window.history.topLevelItemCount() == 3 and window.history.topLevelItem(2) is older
+    assert window.history.currentItem() is older and window.selected_entry() == chosen
+    for n in range(activity.HISTORY_SIZE):
+        activity.record(Finished(f"t{n}", "loads", "Load data", f"/data/{n}", now, "ok"))
+    window.refresh()
+    assert window.history.topLevelItemCount() == activity.HISTORY_SIZE
+    first = window.history.topLevelItem(0)
+    assert first is not None and first.text(3) == str(activity.HISTORY_SIZE - 1)
+    service.shutdown()

@@ -12,7 +12,7 @@ so this module never imports Qt (``tests/test_headless_imports.py``'s ``PURE``).
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import threading
 import time
@@ -156,10 +156,16 @@ class Finished:
     attempts: int = 1
     route: Route = Route()
     details: tuple[str, ...] = ()
+    seq: int = 0  # Its place in the session's history (``History.add``), so ``key`` is unique (AW-10).
 
     @property
     def failed(self) -> bool:
         return self.outcome == "failed"
+
+    @property
+    def key(self) -> str:
+        """Unique among the session's entries: two Live sessions of a folder share their ``id``."""
+        return f"{self.id}#{self.seq}"
 
 
 class History:
@@ -171,10 +177,12 @@ class History:
         self._entries: deque[Finished] = deque(maxlen=size)
         self.listeners: list[Callable[[], None]] = []
         self.version = 0  # Counts changes, so a view redraws only after one.
+        self._serial = 0  # The next entry's ``seq``.
 
     def add(self, entry: Finished) -> None:
         assert threading.current_thread() is threading.main_thread(), "History.add off the GUI thread"
-        self._entries.append(entry)
+        self._serial += 1
+        self._entries.append(replace(entry, seq=self._serial))
         self.version += 1
         for listener in list(self.listeners):
             try:
