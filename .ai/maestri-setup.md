@@ -11,7 +11,7 @@ have run since 2026-10-19.
 ## What you get
 
 - **Ground**: your own checkout (`HeLab/`), on the current dev branch (the
-  roadmap's *Now*, e.g. `dev/v0.0.7`). You and the coordinator live here.
+  roadmap's *Now*, e.g. `dev/v0.0.9`). You and the coordinator live here.
   Agents never commit here without asking.
 - **Floors**: one per task. Each is a git worktree of HeLab on its own branch,
   in `.maestri/floors` next to the project, with its own canvas and terminals.
@@ -40,7 +40,7 @@ haven't been done on a second machine yet. Then continue with sections 1–4.
 
    ```bash
    git clone --recurse-submodules https://github.com/TonyXTYan/HeLab.git
-   cd HeLab && git switch dev/v0.0.7   # the current dev branch: the roadmap's "Now"
+   cd HeLab && git switch dev/v0.0.9   # the current dev branch: the roadmap's "Now"
    ```
 
 6. **Python and packages** (the README's "Setup (any machine)"):
@@ -640,7 +640,7 @@ on Windows and turned the dev branch red):
 
 - [ ] The Reviewer has no open findings.
 - [ ] The branch contains the current dev branch (`git merge-base
-      --is-ancestor dev/v0.0.7 agent/<task>`), so what was tested is what
+      --is-ancestor dev/v0.0.9 agent/<task>`), so what was tested is what
       lands.
 - [ ] The branch's latest CI run, on the commit that lands, is green on
       macOS, Windows and Ubuntu: every job, all three test groups ("Tests (1/3)",
@@ -679,7 +679,7 @@ sidebar.
 
 - Click the airplane button beside the floor, or **Land Floor** in its menu.
 - **Merge Locally**: pick the target branch (the current dev branch, e.g.
-  `dev/v0.0.7`). **Sync** first pulls the target's latest changes into the
+  `dev/v0.0.9`). **Sync** first pulls the target's latest changes into the
   floor. A merge is refused when the floor or the target's checkout has
   uncommitted work, or lists the conflicting files and stops.
 - **Pull Request**: pick **Into**; title and description come from the commit
@@ -688,7 +688,7 @@ sidebar.
 - The floor is removed after landing unless **Keep this floor after landing**
   is ticked. The branch stays in the repo.
 - CLI equivalent, from a Ground terminal only:
-  `maestri floor land "<Task>" --into dev/v0.0.7 --keep-floor` (the current
+  `maestri floor land "<Task>" --into dev/v0.0.9 --keep-floor` (the current
   dev branch). Without `--keep-floor` the floor is deleted. Never pass
   `--delete-branch`.
 

@@ -22,8 +22,8 @@ computer use with the [runbook](sessions/2026-10-30-claude-smoke-handoff/runbook
 ([results](sessions/2026-10-30-claude-smoke-final-mac/results.md)): M1.1, M1.2-1 and M1.2-3, M1.6-1,
 M1.6-2 and M1.6-4 passed; M1.7's 13 DLD plots all drew (the physics is Tony's to review); M1.4-1 is to
 review. Its one bug, the plot settings table's Value column off the right edge in a narrow panel, was
-fixed before the release (`42a82b0`). Tony released without waiting for the rest (2026-10-31), so these
-are open for v0.0.8:
+fixed before the release (`42a82b0`). Tony released without waiting for the rest (2026-10-31), and
+0.0.8a1 (2026-11-04, TonyXTYan/HeLab#11) shipped without them too, so these are still open for v0.0.9:
 - on a Mac: M1.4-2 to M1.4-4, M1.5, M1.6-3, M1.8, M1.9 and M36.1–M36.4; by hand, the plot/settings
   splitter drags and two newly floated plots opening offset (Q33.3). M1.3 (nothing acquiring) and M1.10
   were skipped;
@@ -250,11 +250,11 @@ Mac (A5.1, 2026-10-28, Sonnet 5.5) is in
   more (Folder details' activity, or the I/O trace in the log); note whether it slows browsing or the next
   load. If it does, Q51.1 (c) follows.
 
-**Before the v0.0.8 PR** (Q50.18, Tony 2026-11-02, about 15 minutes; store-v4 is on on `dev/v0.0.8` since `92f9d1a`,
-2026-11-03, so run these on `dev/v0.0.8` with the run sheet's isolated folders,
-`.ai/sessions/2026-10-31-claude-caching-v2/` once the floor's docs land): M44.1 and
-M47.1 on screen, then M47.2 (with Q51.1's extra listing) and M42.1 on a lab PC with the switch on (one
-Live session).
+**Q50.18's checks** (Tony 2026-11-02, about 15 minutes; asked for before the v0.0.8 PR, still open after 0.0.8a1
+shipped with store-v4 on, 2026-11-04; run them on 0.0.8a1, since v0.0.9 drops the store-v3 question M44.1 looks
+at and its Older cache row offers only Clear…; with the run sheet's isolated folders,
+`.ai/sessions/2026-10-31-claude-caching-v2/`): M44.1 and M47.1 on screen, then M47.2 (with Q51.1's extra listing)
+and M42.1 on a lab PC with the switch on (one Live session).
 
 ## Converter UX (added 2026-11-03, block 48)
 
@@ -296,7 +296,8 @@ Live session).
   the code; the wording, the order and what is left out are yours.
 - [ ] **M56.2 Turn on GitHub Pages** on TonyXTYan/HeLab (Settings › Pages › Deploy from a branch: `gh-pages`, `/`)
   once the first published release's Docs site run has made the branch; the same on HeBECANU/HeLab when releases
-  are made there.
+  are made there. TonyXTYan/HeLab: Pages served `gh-pages` before the v0.0.8 PR, and publishing 0.0.8a1 deployed
+  the first version (docs-site run 41749646827, 2026-11-04); left: HeBECANU/HeLab.
 - [ ] **M56.3 Help › User manual in a release build**: on a networked computer (the site's version page opens in
   the browser), offline or on a lab PC (the bundled copy opens, and its search works), and from a source run (the
   GitHub page).
@@ -309,7 +310,8 @@ Live session).
 - [ ] **M58.2 The bundled manual offline**: Help › User manual with the network off, on a packaged build. The
   bundled copy opens and its search finds results.
 - [ ] **M58.3 The site after the first published pre-release**: the site's root shows "No stable release yet",
-  linking to `pre-release/`, and the version menu lists the pre-release.
+  linking to `pre-release/`, and the version menu lists the pre-release. On 0.0.8a1 (2026-11-04) the root said
+  "No stable release yet"; Tony chose to reword it (A59.2 (b)), so check the root again once that lands.
 
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
