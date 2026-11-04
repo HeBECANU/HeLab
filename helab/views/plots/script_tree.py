@@ -816,7 +816,6 @@ class TreePanelWidget(QWidget):
         if self._folder_key(instance) in {os.path.normcase(folder) for folder in self._round | self._pending}:
             instance.hold_for_reload()
 
-    @pyqtSlot()
     def probe_activity(self) -> List[Tuple[str, str, Optional[float]]]:
         """The script folders' test imports running or queued (``FolderProbes.activity``)."""
         return self._probes.activity()
@@ -827,6 +826,7 @@ class TreePanelWidget(QWidget):
         folders = sorted(self._pending)
         return folders, (self._busy(self._pending) if folders else 0)
 
+    @pyqtSlot()
     def _reload_clicked(self) -> None:
         self.reload_scripts()  # (Not connected directly: ``clicked`` would pass its ``checked`` as the folders.)
 
