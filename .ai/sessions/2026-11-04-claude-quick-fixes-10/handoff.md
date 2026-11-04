@@ -324,3 +324,43 @@ RERUN (2) (Windows, real-helper refresh): the known-issues line above, as CoCo a
   `assert (692.18 - 691.02) < 1.0`: quitting took 1.15 s. It is already in known-issues (the Windows sightings
   of 41578243240 and 41597667363); this is one more for that entry.
 - **The Build jobs:** each log's one "RERUN" match is only this commit's subject in the checkout line.
+
+## Tony's A56.4 OK, and the profiles list's TXY tags in aligned columns (`6722408`)
+
+Tony approved A56.4's five texts (via CoCo, 2026-11-04). He then asked for two more:
+1. Show each profile's TXY file tag in Settings › TXY converter's profiles list, and align the list's columns
+   ("each column in the profiles list should be aligned"). Done in `6722408`.
+2. Change the Full Changelog's previous-tag rule (a stable release compares with the previous stable release).
+   On hold until CoCo confirms which "stable" Tony means.
+
+**The list:** a `QTreeWidget` with one header and a column per field: Profile, Version, TXY tag, Kind, Notes,
+Hash.
+- Each column is sized to its widest text (`ResizeToContents`); rows are uniform, one line each, and there's no
+  root decoration.
+- The TXY tag is the one the profile's files are named with (`file_tag`): a built-in's own (`m19v1`), or a user
+  profile's `u` + 32 hex digits. Its tooltip gives the file pattern.
+- An unreadable profile file's row spans the columns.
+- `profile_label` (one " · "-joined string) became `profile_columns`. The ID and accessible name
+  (`profiles_list`, "Profiles") are kept, and `test_accessible_names` passes.
+
+A user profile's tag is long (33 characters), so its column is wide. It still fits at 720 px; a narrower window
+scrolls sideways. I kept it whole, since it is exactly what the profile's files carry.
+
+**Screenshots** (offscreen, 720×640, plates-2022 selected, with a user profile `halo-fit` v3; gitignored, on the
+Mac):
+- before: `/Users/tonyyan/GitHub-Local/HeLab/.ai/temp/quick-fixes-10/.ai/temp/qf10-shots/converter-profiles-before.png`
+- after: `/Users/tonyyan/GitHub-Local/HeLab/.ai/temp/quick-fixes-10/.ai/temp/qf10-shots/converter-profiles-after.png`
+
+**Checks:** a new test in `tests/test_converter_tab.py`. It fails on the old code, whose list has no header or
+columns. It checks:
+- the header's titles, every column `ResizeToContents`, and uniform rows;
+- each row's six texts, for the built-ins and a user profile;
+- the tag's tooltip, and selection;
+- once shown, every column is at least as wide as its widest text, so nothing is cut.
+
+The module's helpers now read the tree's rows. test_converter_tab, test_accessible_names, test_typing and the
+Settings dialog tests: 324 passed, no RERUN. mypy --strict (also win32) and pyright (also Windows) are clean on
+the files. As for the review fix, I didn't run the full suite for this one.
+
+**Proposal (`converter.md`, Profiles in the app):** the profile manager's list has one aligned column per field:
+Profile, Version, TXY tag (`file_tag`), Kind, Notes, Hash.
