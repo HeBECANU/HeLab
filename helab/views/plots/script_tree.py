@@ -820,6 +820,11 @@ class TreePanelWidget(QWidget):
         """The script folders' test imports running or queued (``FolderProbes.activity``)."""
         return self._probes.activity()
 
+    @staticmethod
+    def probe_limits() -> Tuple[float, float]:
+        """A test import's time limits: to start, and to import once started (the Activity window says them)."""
+        return PROBE_START_SECONDS, PROBE_SECONDS
+
     def reload_waiting(self) -> Tuple[List[str], int]:
         """A reload waiting (the Activity window): its folders, and the runs of their scripts it waits for
         to end (0: none, or it waits for a round of test imports). Memory only."""

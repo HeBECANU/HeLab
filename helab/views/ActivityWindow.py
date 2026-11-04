@@ -372,8 +372,8 @@ class ActivitySources:
         scripts = self.scripts()
         if scripts is None:
             return []
-        from helab.views.plots.script_tree import PROBE_SECONDS, PROBE_START_SECONDS
-        limits = f"Its own time limits end it ({PROBE_START_SECONDS:g} s to start, {PROBE_SECONDS:g} s to import)"
+        start, imports = scripts.probe_limits()
+        limits = f"Its own time limits end it ({start:g} s to start, {imports:g} s to import)"
         tasks = []
         for folder, state, started in scripts.probe_activity():
             text = {"importing": "test-importing", "starting": "starting its test import",

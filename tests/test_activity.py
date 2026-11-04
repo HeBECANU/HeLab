@@ -394,7 +394,7 @@ def test_script_probes_and_a_waiting_reload(qtbot: QtBot, monkeypatch: pytest.Mo
     service = quiet_service(monkeypatch)
     panel = SimpleNamespace(probe_activity=lambda: [("/scripts/a", "importing", time.monotonic() - 2),
                                                     ("/scripts/b", "queued", None)],
-                            reload_waiting=lambda: (["/scripts/a"], 2))
+                            reload_waiting=lambda: (["/scripts/a"], 2), probe_limits=lambda: (60.0, 10.0))
     built = sources(service, scripts=lambda: panel).snapshot()
     rows = [row for row in built.tasks if row.group == "scripts"]
     assert [(row.folder, row.state, row.state_text) for row in rows] == [
