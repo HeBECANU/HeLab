@@ -1008,3 +1008,23 @@ def test_a_trim_records_its_budget_only_if_it_runs(tmp_path: Path, monkeypatch: 
     with CacheStore(root) as store:
         assert store.record_budget(GB, set_at - 30) == 5000 and store.usage() > 5000 > 0
         assert not store.read_dataset_row("/a").value
+
+
+def test_a_short_window_scrolls_the_tab_instead_of_squeezing_its_rows(qtbot: QtBot, tmp_path: Path) -> None:
+    """Tony, 2026-11-04: in a short Settings window the rows' buttons and the policy box were cut off and the
+    names ran into their values. The tab now scrolls, rows keep their height, and a long cache path is elided
+    instead of widening the tab."""
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    tab = CacheTab(None, settings)
+    qtbot.addWidget(tab)
+    tab.location_label.setText("/" + "a-very-long-folder-name/" * 40 + "store-v4")
+    tab.resize(800, 300)
+    tab.show()
+    qtbot.waitExposed(tab)
+    bar = tab.scroll_area.verticalScrollBar()
+    assert bar is not None and bar.maximum() > 0
+    content = tab.scroll_area.widget()
+    assert content is not None and content.width() <= tab.scroll_area.viewport().width()  # type: ignore[union-attr]
+    for button in (*tab.kind_buttons.values(), tab.presets_button):
+        assert button.height() >= button.minimumSizeHint().height()
+    assert tab.policy_combo.height() >= tab.policy_combo.sizeHint().height()

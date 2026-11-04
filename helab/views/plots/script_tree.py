@@ -18,8 +18,8 @@ from PyQt6.QtCore import (QCoreApplication, QFileSystemWatcher, QObject, QProces
                           pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import QAction, QBrush, QColor, QPalette
 from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
-                             QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                             QWidget)
+                             QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
+                             QVBoxLayout, QWidget)
 
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.presets import SavedPlot, ScriptRef, waiting_view
@@ -32,6 +32,7 @@ from helab.utils.colours import AMBER
 from helab.utils.settings_defaults import SCRIPT_AUTO_RELOAD_SETTING, SCRIPT_FOLDERS_SETTING, read_setting
 from helab.utils.settings_store import app_settings
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views.gaps import LABEL_GAP
 from helab.views.plots.dock import AnalysisDock, DockTabCloser
 from helab.views.plots.instance import AnalysisInstance, LinkedAnalysisInstance
 if TYPE_CHECKING:
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
 
 # ``_add_dock``'s default: tab the new plot with the shown one (``tab_target``).
 AUTO = "auto"
+# The narrowest a run column gets (its "Run" heading); it widens to its buttons ("Plot").
+RUN_COLUMN_WIDTH = 48
 # Auto-reload: a change starts this wait (ms) before the folder's files are compared, so an editor's save
 # (often a temporary file, then a rename) has finished.
 SETTLE_MS = 750
@@ -379,8 +382,9 @@ class TreePanelWidget(QWidget):
         self.group_selector = identify(QComboBox(), "script_group", "Script group",
                                        "Choose which group's scripts are listed")
         self.group_selector.currentTextChanged.connect(self._on_group_changed)
-        controls_layout.addWidget(QLabel("Group:"))
-        controls_layout.addWidget(self.group_selector)
+        # No "Group:" label: in the panel's usual ~320 px it left the group's name cut to "Basic p" (the combo's
+        # name and tooltip say what it is). It takes the row's spare width.
+        controls_layout.addWidget(self.group_selector, 1)
 
         # Add script directory button; its menu: the remembered folders and auto-reload.
         self.load_dir_button = identify(QToolButton(), "load_scripts", "Load Scripts...",
@@ -410,7 +414,6 @@ class TreePanelWidget(QWidget):
         for button in (self.load_dir_button, self.reload_button):
             button.setMinimumWidth(button.fontMetrics().horizontalAdvance(button.text()) + 8)
 
-        controls_layout.addStretch()
         self.panel_layout_right_bottom.addLayout(controls_layout)
         # One line, only when remembered folders weren't loaded at start (the folders and why: its tooltip).
         self.start_note = identify(ElidedLabel(), "scripts_start_note")
@@ -425,7 +428,8 @@ class TreePanelWidget(QWidget):
 
         # Tree list widget
         self.tree_widget = identify(QTreeWidget(), "scripts", "Scripts", "The group's scripts and their run buttons")
-        self.tree_widget.setHeaderLabels(["Script", "Run", "Run"])
+        # One "Run" heading over the run buttons (a second column only shows for a script with two).
+        self.tree_widget.setHeaderLabels(["Script", "Run", ""])
         self.tree_widget.setColumnCount(3)
         header = self.tree_widget.header()
         if header:
@@ -433,8 +437,8 @@ class TreePanelWidget(QWidget):
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
             header.setStretchLastSection(False)
-            self.tree_widget.setColumnWidth(1, 100)
-            self.tree_widget.setColumnWidth(2, 100)
+            self.tree_widget.setColumnWidth(1, RUN_COLUMN_WIDTH)
+            self.tree_widget.setColumnWidth(2, RUN_COLUMN_WIDTH)
 
         # Add tree widget to the layout
         self.panel_layout_right_bottom.addWidget(self.tree_widget)
@@ -1211,7 +1215,27 @@ class TreePanelWidget(QWidget):
                     error_item.setToolTip(0, f"{type(e).__name__}: {e}")
 
         group_item.setExpanded(True)
+        self._fit_run_columns()
         self._show_errors()
+
+    def _fit_run_columns(self) -> None:
+        """The run columns as wide as their buttons, the second hidden when no script has a second action,
+        so the scripts' names get the rest (they were cut to "3D scatt…" beside an empty column)."""
+        widths = {1: 0, 2: 0}
+        root = self.tree_widget.invisibleRootItem()
+        groups = [root.child(i) for i in range(root.childCount())] if root is not None else []
+        for group in groups:
+            if group is None:
+                continue
+            for index in range(group.childCount()):
+                item = group.child(index)
+                for column in widths:
+                    widget = self.tree_widget.itemWidget(item, column) if item is not None else None
+                    if widget is not None:
+                        widths[column] = max(widths[column], widget.sizeHint().width())
+        for column, width in widths.items():
+            self.tree_widget.setColumnHidden(column, column == 2 and not width)
+            self.tree_widget.setColumnWidth(column, max(width, RUN_COLUMN_WIDTH) + 4)
 
     def _action_callback(self, metadata: ScriptMetadata, script: Any, action: str) -> Callable[[], None]:
         if isinstance(script, DatasetAnalysis):

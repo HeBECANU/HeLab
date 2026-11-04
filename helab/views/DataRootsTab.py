@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabe
 
 from helab.utils import folder_cache
 from helab.utils.accessible import identify, identify_buttons
+from helab.views.gaps import CELL_PADDING_STYLE
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, FolderCache, marker_path
 from helab.utils.number_format import byte_size
 from helab.utils.io_service import IORequest
@@ -101,6 +102,7 @@ class DataRootsTab(QWidget):
         self.list = QTreeWidget()
         self.list.setHeaderLabels(list(self.COLUMNS))
         self.list.setRootIsDecorated(False)
+        self.list.setStyleSheet(CELL_PADDING_STYLE)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.itemSelectionChanged.connect(self._update)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -114,9 +116,10 @@ class DataRootsTab(QWidget):
             line.setStyleSheet("background: transparent")
             layout.addWidget(line)
         self.path_line.setPlaceholderText(DETAIL_NONE)
-        footer = QHBoxLayout()
+        # The count on a line of its own: beside six buttons it pushed the last ones off a narrow window.
         self.status_label = QLabel("Checking…")
-        footer.addWidget(self.status_label, 1)
+        layout.addWidget(self.status_label)
+        footer = QHBoxLayout()
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
         footer.addWidget(self.refresh_button)
@@ -140,6 +143,7 @@ class DataRootsTab(QWidget):
         self.review_button.setToolTip(REVIEW_TOOLTIP)
         self.review_button.clicked.connect(self.review_selected)
         footer.addWidget(self.review_button)
+        footer.addStretch(1)
         layout.addLayout(footer)
         # IDs and names (helab/utils/accessible.py).
         for widget, ident, name in (

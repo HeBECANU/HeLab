@@ -35,6 +35,7 @@ from helab.utils.constants import (
 )
 from helab.utils.folder_cache import FolderCache
 from helab.utils.settings_defaults import CONVERT_OUTPUTS, read_setting
+from helab.views.gaps import CELL_PADDING_STYLE, COLUMN_GAP
 from helab.views.txy_list import AskList, ask_txy_list, list_summary
 
 # Backends by name (``reconstruct._MODULES``), without importing them: whether one can run here is the
@@ -206,6 +207,7 @@ class ConverterTab(QWidget):
         self.unreadable: list[Unreadable] = []
         layout = QVBoxLayout(self)
         grid = QGridLayout()
+        grid.setHorizontalSpacing(COLUMN_GAP)
         grid.addWidget(QLabel("Conversions use the profile"), 0, 0)
         self.profile_combo = QComboBox()
         self.profile_combo.setToolTip("The detector profile HeLab's conversions use. HeLab's TXY made with another "
@@ -257,6 +259,7 @@ class ConverterTab(QWidget):
         assert header is not None
         header.setStretchLastSection(False)
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.list.setStyleSheet(CELL_PADDING_STYLE)
         self.list.currentItemChanged.connect(self._selected)
         layout.addWidget(self.list, 1)
         self.details = QLabel()

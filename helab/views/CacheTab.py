@@ -16,8 +16,8 @@ from typing import Any, Callable, Mapping
 from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QValidator
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+    QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from helab.analysis.budget_core import RELEASE_SHARE
@@ -33,6 +33,8 @@ from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size, byte_unit
 from helab.utils.settings_defaults import CACHE_POLICY_SETTING, RESULT_REUSE_SETTING, read_setting
 from helab.utils.time_format import relative_age
+from helab.views.ElidedLabel import ElidedLabel
+from helab.views.gaps import COLUMN_GAP, ROW_SPACING
 
 DAY = 86400.0
 DEFAULT_PURGE_DAYS = 90
@@ -241,11 +243,27 @@ class CacheTab(QWidget):
         self.message = ""
         self.confirm: Callable[[str, str, str], bool] = self._confirm
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(2)
+        # The rows scroll when the Settings window is shorter than they are, so a short window never squeezes
+        # them (buttons and the policy box cut off, Tony 2026-11-04).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        self.scroll_area.setWidget(content)
+        viewport = self.scroll_area.viewport()
+        if viewport is not None:
+            viewport.setAutoFillBackground(False)
+        content.setAutoFillBackground(False)
+        outer.addWidget(self.scroll_area)
+        layout = QVBoxLayout(content)
+        layout.setSpacing(ROW_SPACING)
         layout.addWidget(self._heading("Disk cache"))
-        location = QHBoxLayout()
-        self.location_label = QLabel()
+        location = self._row()
+        # Elided in the middle (the full path in its tooltip), so a long path never widens the tab past the window.
+        self.location_label = ElidedLabel(mode=Qt.TextElideMode.ElideMiddle)
         self.location_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         location.addWidget(self.location_label, 1)
         self.open_button = QPushButton("Open")
@@ -259,7 +277,7 @@ class CacheTab(QWidget):
             refused.setWordWrap(True)
             layout.addWidget(refused)
 
-        usage = QHBoxLayout()
+        usage = self._row()
         self.usage_label = QLabel("Checking…")
         usage.addWidget(self.usage_label)
         self.usage_bar = QProgressBar()
@@ -287,6 +305,7 @@ class CacheTab(QWidget):
 
         grid = QGridLayout()
         grid.setVerticalSpacing(0)
+        grid.setHorizontalSpacing(COLUMN_GAP)
         grid.setColumnStretch(1, 1)
         self.kind_labels: dict[str, QLabel] = {}
         self.kind_buttons: dict[str, QPushButton] = {}
@@ -347,7 +366,7 @@ class CacheTab(QWidget):
         grid.addWidget(self.policy_name, row + 3, 0)
         grid.addWidget(self.policy_combo, row + 3, 1, 1, 2)
         layout.addLayout(grid)
-        legacy = QHBoxLayout()
+        legacy = self._row()
         self.legacy_name = QLabel("Older cache (store-v3)")
         legacy.addWidget(self.legacy_name)
         self.legacy_label = QLabel("")
@@ -368,9 +387,10 @@ class CacheTab(QWidget):
             "On: a costly plot (Correlations, Release time) shows its result saved for the same data, script and "
             "settings at once instead of computing it again, and saves new ones; its source line says so. Off: "
             "plots compute every run and save nothing (saved results stay until cleared).")
-        layout.addWidget(self.result_reuse)
 
-        footer = QHBoxLayout()
+        # One row: the reuse switch, when the inventory was checked, Refresh and Clear all.
+        footer = self._row()
+        footer.addWidget(self.result_reuse)
         self.checked_label = QLabel("Checking…")
         footer.addWidget(self.checked_label, 1)
         self.refresh_button = QPushButton("Refresh")
@@ -382,7 +402,7 @@ class CacheTab(QWidget):
         layout.addLayout(footer)
 
         # The user's choices (S10): not part of Clear all, never removed to make room.
-        prefs = QHBoxLayout()
+        prefs = self._row()
         prefs.addWidget(QLabel("Folder preferences"))
         self.prefs_label = QLabel("Checking…")
         self.prefs_label.setToolTip("Folders you chose not to cache, not to auto-load, or to have HeLab's converted "
@@ -396,7 +416,7 @@ class CacheTab(QWidget):
 
         # HeLab's own TXY under the cache and temp folders (converted-txy/, Q27.5): not in the store, outside
         # the budget, removed only by this Clear (Q12.3), through a helper and each folder's index.
-        converted = QHBoxLayout()
+        converted = self._row()
         converted.addWidget(QLabel("HeLab's converted TXY"))
         self.converted_label = QLabel("Checking…")
         self.converted_label.setToolTip(CONVERTED_TIP)
@@ -407,7 +427,7 @@ class CacheTab(QWidget):
         layout.addLayout(converted)
 
         # Presets (helab/views/PresetsInspector.py): the user's too, kept by Clear all and purges.
-        presets = QHBoxLayout()
+        presets = self._row()
         presets.addWidget(QLabel("Presets"))
         self.presets_label = QLabel()
         presets.addWidget(self.presets_label, 1)
@@ -422,7 +442,7 @@ class CacheTab(QWidget):
         self.presets_window: QWidget | None = None
 
         # Live (roadmaps/live-monitoring.md): new shots wait in RAM, then the folder is saved.
-        live = QHBoxLayout()
+        live = self._row()
         live.addWidget(QLabel("Live: save to the disk cache every"))
         self.live_autosave = QSpinBox()
         self.live_autosave.setRange(1, MAX_LIVE_AUTOSAVE)
@@ -439,6 +459,7 @@ class CacheTab(QWidget):
         layout.addWidget(self._heading("Remove old entries"))
         purges = QGridLayout()
         purges.setVerticalSpacing(0)
+        purges.setHorizontalSpacing(COLUMN_GAP)
         purges.setColumnStretch(2, 1)
         # One row per purge by age (A47.4): store-v4 adds TXY data and raw pulses; Everything takes them all.
         self.purge_rows: dict[str, tuple[QLabel, QSpinBox, QLabel, QPushButton]] = {}
@@ -469,7 +490,7 @@ class CacheTab(QWidget):
         layout.addWidget(self.include_failures)
 
         layout.addWidget(self._heading("Memory"))
-        memory = QHBoxLayout()
+        memory = self._row()
         memory.addWidget(QLabel("RAM budget"))
         self.ram_budget = RamBudgetSpinBox(total_ram())
         self.ram_budget.setValue(read_ram_budget_steps(settings, self.ram_budget.total))
@@ -499,6 +520,13 @@ class CacheTab(QWidget):
         self.show_memory()
         self._update()
         self.refresh()
+
+    @staticmethod
+    def _row() -> QHBoxLayout:
+        """A row of the tab: a name, its value and its buttons, ``COLUMN_GAP`` apart."""
+        row = QHBoxLayout()
+        row.setSpacing(COLUMN_GAP)
+        return row
 
     @staticmethod
     def _heading(text: str) -> QLabel:

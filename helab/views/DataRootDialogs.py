@@ -136,6 +136,10 @@ def ask_place_root(parent: QWidget | None, cache: FolderCache, path: str) -> str
     return box.choice()
 
 
+# The widest the file's box opens (px); a longer line scrolls.
+MARKER_TEXT_MAX_WIDTH = 900
+
+
 class ManualMarkerDialog(QDialog):
     """No write permission: the exact file name and contents, to Copy or save to a folder and move into place.
 
@@ -162,6 +166,11 @@ class ManualMarkerDialog(QDialog):
         self.text = identify(QPlainTextEdit(contents), "marker_contents", "File contents")
         self.text.setReadOnly(True)
         self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        # The file as it is, a line a line (its UUID line wrapped mid-value), wide enough for its longest line.
+        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        metrics = self.text.fontMetrics()
+        widest = max((metrics.horizontalAdvance(line) for line in contents.splitlines()), default=0)
+        self.text.setMinimumWidth(min(widest + 4 * metrics.averageCharWidth(), MARKER_TEXT_MAX_WIDTH))
         layout.addWidget(self.text)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         copy = QPushButton("Copy")

@@ -31,6 +31,10 @@ def constant_editor(constant: Constant, value: float) -> UnitSpinBox:
     position). A coded row (the trap's axial axis) takes its codes, whole numbers, with their labels
     in the tooltip (a drop-down: proposed)."""
     box = identify(UnitSpinBox(), f"constant_{constant.key}", constant.title)
+    # pyqtgraph caps a spin box at its font's height (``compactHeight``), which cuts the value off under
+    # HeLab's Fusion style (Tony, 2026-11-04): the box takes its own height, centred in its row
+    # (``CENTRED``; a grid otherwise stretches it to a row made tall by a wrapped source).
+    box.setOpts(compactHeight=False)
     if constant.choices:
         box.setOpts(value=int(value), int=True, step=1, bounds=[min(constant.choices), max(constant.choices)])
         box.setToolTip(constant.source)
@@ -44,6 +48,12 @@ def constant_editor(constant: Constant, value: float) -> UnitSpinBox:
     box.sigValueChanged.connect(lambda *_: fit_width(box))
     return box
 
+
+# The status column's narrowest: its longest line before "unconfirmed" wraps under it.
+STATUS_WIDTH_TEXT = "default · shown only ·"
+
+# Where a constant's box sits in its grid cell: its own height, centred.
+CENTRED = Qt.AlignmentFlag.AlignVCenter
 
 # The widest a constant's value usually shows: grouped digits, decimals and a sign, in the box's unit.
 WIDE_NUMBER = "−0,000.000000"
@@ -97,6 +107,8 @@ class LabParametersTab(QWidget):
             grid.addWidget(name_label(constant), row, 0)
             status = QLabel()
             status.setWordWrap(True)
+            # Wide enough for "default · shown only ·" on one line (it wrapped to three).
+            status.setMinimumWidth(status.fontMetrics().horizontalAdvance(STATUS_WIDTH_TEXT))
             self.status[constant.key] = status
             grid.addWidget(status, row, 2)
             if not editable(constant):
@@ -109,7 +121,7 @@ class LabParametersTab(QWidget):
             box = constant_editor(constant, constant.value)
             box.sigValueChanged.connect(lambda *_, key=constant.key: self._update(key))
             self.editors[constant.key] = box
-            grid.addWidget(box, row, 1)
+            grid.addWidget(box, row, 1, CENTRED)
             restore = identify(QPushButton("Restore"), f"restore_{constant.key}", f"Restore {constant.title}")
             restore.setToolTip(f"Default: {constant.value:.10g} {constant.unit}")
             restore.clicked.connect(lambda _=False, key=constant.key: self.restore(key))

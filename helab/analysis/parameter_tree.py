@@ -67,6 +67,14 @@ class UnitSpinBox(SpinBox):  # type: ignore[misc]
         if kwargs:
             self.setOpts(**kwargs)
 
+    def sizeHint(self) -> QSize:
+        """pyqtgraph's (no height, for compact rows), or with ``compactHeight`` off a spin box's own height,
+        so a box in a row taller than it (Settings › Lab parameters, Folder constants) keeps that height."""
+        hint = QSize(super().sizeHint())
+        if not self.opts.get("compactHeight", True):
+            hint.setHeight(self.minimumSizeHint().height())
+        return hint
+
     def formatText(self) -> str:
         """pyqtgraph's text, or with ``fixedPrefix`` the value in that prefix, grouped by thousands."""
         letter = self.opts.get("fixedPrefix")

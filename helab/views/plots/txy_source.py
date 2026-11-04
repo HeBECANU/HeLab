@@ -24,6 +24,7 @@ from helab.convert.profile import BUILTIN_PROFILES, UNCALIBRATED, DetectorProfil
 from helab.utils.accessible import identify
 from helab.utils.txy_sources import Entries
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views.gaps import LABEL_GAP
 from helab.views.txy_list import AskList, ask_txy_list, known_names, list_summary
 
 
@@ -105,6 +106,7 @@ class TxySourceRow(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("TXY:"))
+        row.addSpacing(LABEL_GAP)
         self.button = identify(ElidedButton(""), "txy_source", "TXY priority",
                                "Which TXY this plot's data is made of, in order: each shot from the first entry with "
                                "a usable TXY (External: the MATLAB converter's d_txy_forc; HeLab's "

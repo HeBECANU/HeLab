@@ -15,8 +15,8 @@ import math
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QLabel, QLayout, QPushButton,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFrame, QGridLayout, QLabel, QPushButton,
+                             QScrollArea, QVBoxLayout, QWidget)
 
 from helab.analysis.constant_layers import folder_layer
 from helab.analysis.parameter_tree import UnitSpinBox
@@ -24,7 +24,8 @@ from helab.analysis.physics import CONSTANTS, TABLE, Constant, ResolvedConstants
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
 from helab.utils.colours import AMBER as AMBER
-from helab.views.LabParametersTab import UNCONFIRMED_TIP, constant_editor, name_label, number
+from helab.views.ElidedLabel import ElidedLabel
+from helab.views.LabParametersTab import CENTRED, UNCONFIRMED_TIP, constant_editor, name_label, number
 
 FOLDER_ROWS: tuple[Constant, ...] = tuple(constant for constant in CONSTANTS if constant.level == "folder")
 INHERITANCE_NOTE = ("A folder's values apply to it and to its subfolders that don't set their own, up to its "
@@ -37,14 +38,19 @@ def short_name(path: str) -> str:
     return os.path.basename(path.rstrip(os.sep)) or path
 
 
+# Characters across the names column (its sources wrap within it).
+NAME_COLUMN_CHARS = 46
+
+
 class FolderConstantsDialog(QDialog):
     def __init__(self, path: str, cache: FolderCache, owner: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.path, self.cache, self.owner = path, cache, owner
         self.setWindowTitle(f"Folder constants · {short_name(path)}")
         layout = QVBoxLayout(self)
-        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)  # Never smaller than its content.
-        heading = QLabel(path)
+        # Elided in the middle (the full path in its tooltip), so a long path never widens the dialog.
+        heading = ElidedLabel(path, mode=Qt.TextElideMode.ElideMiddle)
+        heading.setToolTip(path)
         heading.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(heading)
         note = QLabel(INHERITANCE_NOTE)
@@ -54,7 +60,11 @@ class FolderConstantsDialog(QDialog):
         self.session_label.setWordWrap(True)
         self.session_label.setStyleSheet(f"color: {AMBER};")
         layout.addWidget(self.session_label)
-        grid = QGridLayout()
+        # The rows scroll when the screen is shorter than they are (Tony, 2026-11-04: the dialog opened
+        # taller than a laptop's screen, its rows spread apart); never narrower than they are.
+        self.rows = QWidget()
+        grid = QGridLayout(self.rows)
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setColumnStretch(0, 1)
         self.set_here: dict[str, QCheckBox] = {}
         self.editors: dict[str, UnitSpinBox] = {}
@@ -65,7 +75,11 @@ class FolderConstantsDialog(QDialog):
         # with nothing to start from (from the data) is saved only once typed (``untyped``).
         self._typed: set[str] = set(own)
         for row, constant in enumerate(FOLDER_ROWS):
-            grid.addWidget(name_label(constant), row, 0)
+            # Names and sources a readable width: a wrapped label's height is reckoned at its minimum
+            # width, so a narrow one (a few words a line) made every row tall.
+            name = name_label(constant)
+            name.setMinimumWidth(self.fontMetrics().horizontalAdvance("x" * NAME_COLUMN_CHARS))
+            grid.addWidget(name, row, 0)
             check = identify(QCheckBox("Set by hand" if constant.key == "fall_time" else "Set here"),
                              f"set_here_{constant.key}", f"Set {constant.title} here")
             check.setChecked(constant.key in own)
@@ -78,7 +92,7 @@ class FolderConstantsDialog(QDialog):
             box.sigValueChanged.connect(lambda *_, key=constant.key: self._typed.add(key))
             self.editors[constant.key] = box
             grid.addWidget(check, row, 1)
-            grid.addWidget(box, row, 2)
+            grid.addWidget(box, row, 2, CENTRED)
             source = QLabel()
             self.sources[constant.key] = source
             grid.addWidget(source, row, 3)
@@ -87,7 +101,13 @@ class FolderConstantsDialog(QDialog):
             restore.clicked.connect(lambda _=False, key=constant.key: self.restore(key))
             self.restore_buttons[constant.key] = restore
             grid.addWidget(restore, row, 4)
-        layout.addLayout(grid)
+        grid.setRowStretch(len(FOLDER_ROWS), 1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setWidget(self.rows)
+        layout.addWidget(self.scroll_area, 1)
         self.notes_label = QLabel()
         self.notes_label.setWordWrap(True)
         self.notes_label.setStyleSheet(f"color: {AMBER};")
@@ -103,7 +123,22 @@ class FolderConstantsDialog(QDialog):
             check.toggled.connect(lambda *_: self._update())
         for box in self.editors.values():
             box.sigValueChanged.connect(lambda *_: self._update())
-        self.adjustSize()  # Sized to its content once the values (and their widths) are in.
+        self._fit_to_screen()  # Sized to its content once the values (and their widths) are in.
+
+    def _fit_to_screen(self) -> None:
+        """As wide as the rows need and as tall, up to most of the screen (the rest scrolls)."""
+        bar = self.scroll_area.verticalScrollBar()
+        width = self.rows.sizeHint().width() + (bar.sizeHint().width() if bar is not None else 0)
+        self.scroll_area.setMinimumWidth(width)
+        self.adjustSize()
+        rows = self.rows.layout()
+        rows_height = rows.totalHeightForWidth(width) if rows is not None and rows.hasHeightForWidth() else -1
+        if rows_height < 0:
+            rows_height = self.rows.sizeHint().height()
+        screen = self.screen()
+        room = int(screen.availableGeometry().height() * 0.85) if screen is not None else 800
+        others = self.sizeHint().height() - self.scroll_area.sizeHint().height()
+        self.resize(self.width(), min(room, others + rows_height))
 
     def _above(self) -> dict[str, tuple[float, str]]:
         """What the folder inherits: the nearest folder above it (never itself) setting each value."""
