@@ -424,3 +424,166 @@ def test_duplicate_or_missing_digest_assets_do_not_count_as_complete(tmp_path: P
     assert not release_complete(duplicate, SHA)
     missing_digest = replace(snapshot, assets=(replace(snapshot.assets[0], digest=None),) + snapshot.assets[1:])
     assert not release_complete(missing_digest, SHA)
+
+
+# A59.1: a new draft's notes link their tag, the previous release's and this run's page.
+HISTORY = ["CI-CD-everything-passed", "reverted-cicd", "v.0.0.1i", "v0.0.1", "v0.0.1b", "v0.0.1x", "v0.0.2e",
+           "v0.0.3", "v0.0.3b", "v0.0.5a1", "v0.0.6a1", "v0.0.8a1"]
+GITHUB_NOTES = ("## What's Changed\n* HeLab 0.0.7a1: the TXY converter by @someone in https://github.com/o/r/pull/10\n"
+                "* HeLab 0.0.8a1: caching v2 by @someone in https://github.com/o/r/pull/11\n\n\n"
+                "**Full Changelog**: https://github.com/o/r/compare/v0.0.6a1...v0.0.8a1")
+
+
+@pytest.mark.parametrize(("tag", "previous"), [
+    ("v0.0.8a1", "v0.0.6a1"),  # No v0.0.7a1: its release job failed before tagging it.
+    ("v0.0.6a1", "v0.0.5a1"),
+    ("v0.0.5a1", "v0.0.3"),
+    ("v0.0.3", "v0.0.3b"),  # 0.0.3b is 0.0.3's beta, before it.
+    ("v0.0.3b", "v0.0.1"),  # v0.0.2e and v0.0.1x aren't PEP 440 versions.
+    ("v0.0.9a1", "v0.0.8a1"),  # Not yet tagged itself.
+    ("v0.0.9", "v0.0.8a1"),
+])
+def test_the_previous_tag_is_the_newest_lower_version_in_the_history(tag: str, previous: str) -> None:
+    from helab.release_draft import previous_tag
+    assert previous_tag(tag, HISTORY) == previous
+
+
+def test_a_first_release_or_a_history_of_other_tags_has_no_previous_tag() -> None:
+    from helab.release_draft import previous_tag
+    assert previous_tag("v0.0.1", HISTORY) == "v0.0.1b"
+    assert previous_tag("v0.0.1b", HISTORY) is None
+    assert previous_tag("v0.0.5a1", ["CI-CD-everything-passed", "v.0.0.1i", "v0.0.1x", "v0.0.6a1"]) is None
+    with pytest.raises(ValueError, match="Not a release tag"):
+        previous_tag("v.0.0.1i", HISTORY)
+
+
+def test_only_tags_in_the_commits_history_are_candidates(tmp_path: Path) -> None:
+    """A tag on a branch never merged (a release job that tagged and failed) isn't the previous one."""
+    from helab.release_draft import previous_tag, tags_in_history
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c",
+                                        "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                                        "-c", "tag.gpgsign=false", *args], text=True).strip()
+    git("init", "-q", "-b", "main")
+    for tag in ("v0.0.5a1", "v0.0.6a1", "CI-CD-everything-passed"):
+        git("commit", "-q", "--allow-empty", "-m", tag)
+        git("tag", tag)
+    git("checkout", "-q", "-b", "side")
+    git("commit", "-q", "--allow-empty", "-m", "v0.0.7a1")
+    git("tag", "v0.0.7a1")
+    git("checkout", "-q", "main")
+    git("commit", "-q", "--allow-empty", "-m", "v0.0.8a1")
+    git("tag", "v0.0.8a1")
+    history = tags_in_history(tmp_path, git("rev-parse", "HEAD"))
+    assert "v0.0.7a1" not in history and "v0.0.8a1" in history
+    assert previous_tag("v0.0.8a1", history) == "v0.0.6a1"
+
+
+def test_the_notes_link_the_tag_the_changes_since_the_previous_tag_and_the_run() -> None:
+    from datetime import datetime, timezone
+
+    from helab.release_draft import release_body
+    body = release_body(tag="v0.0.8a1", commit=SHA, previous="v0.0.6a1", server_url="https://github.com/",
+                        repository="o/r", run_url="https://github.com/o/r/actions/runs/41746737106",
+                        notes=GITHUB_NOTES, when=datetime(2026, 11, 4, 11, 47, tzinfo=timezone.utc))
+    assert body.startswith("## Release [v0.0.8a1](https://github.com/o/r/tree/v0.0.8a1)\n")
+    assert "**Date:** 2026-11-04 11:47 UTC" in body
+    assert f"**Commit:** [{SHA}](https://github.com/o/r/commit/{SHA})" in body
+    assert "**Workflow Run:** [View Details](https://github.com/o/r/actions/runs/41746737106)" in body
+    assert "api.github.com" not in body
+    assert "## What's Changed\n* HeLab 0.0.7a1" in body and "pull/11" in body
+    assert body.count("Full Changelog") == 1  # GitHub's own line gives way to ours, at the end.
+    assert body.rstrip().endswith("**Full Changelog**: https://github.com/o/r/compare/v0.0.6a1...v0.0.8a1")
+    assert body.index("What's Changed") < body.index("### Build Artifacts")
+
+
+def test_notes_without_a_previous_tag_or_generated_notes_still_link_the_tags_commits() -> None:
+    from datetime import datetime, timezone
+
+    from helab.release_draft import release_body
+    body = release_body(tag="v0.0.1", commit=SHA, previous=None, server_url="https://github.com", repository="o/r",
+                        run_url="https://github.com/o/r/actions/runs/1", notes="",
+                        when=datetime(2026, 11, 4, tzinfo=timezone.utc))
+    assert body.rstrip().endswith("**Full Changelog**: https://github.com/o/r/commits/v0.0.1")
+    assert "\n\n\n" not in body
+    marked = release_body(tag="v0.0.1", commit=SHA, previous=None, server_url="https://github.com",
+                          repository="o/r", run_url="r", notes=manifest_body("Notes", Manifest(SHA, {})),
+                          when=datetime(2026, 11, 4, tzinfo=timezone.utc))
+    assert read_manifest(marked) is None  # Only manifest_body adds the manifest, once.
+
+
+class NotedReleases(MemoryReleases):
+    """MemoryReleases as main makes GitHubReleases, with GitHub's generated notes."""
+    notes: str | Exception = GITHUB_NOTES
+    made: list["NotedReleases"] = []
+    asked: list[tuple[str, str, str | None]] = []
+
+    def __init__(self, repository: str) -> None:
+        super().__init__()
+        assert repository == "o/r"
+        NotedReleases.made.append(self)
+
+    def generated_notes(self, tag: str, commit: str, previous: str | None) -> str:
+        NotedReleases.asked.append((tag, commit, previous))
+        if isinstance(self.notes, Exception):
+            raise self.notes
+        return self.notes
+
+
+def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, notes: str | Exception) -> NotedReleases:
+    from helab import release_draft
+    monkeypatch.setattr(NotedReleases, "notes", notes)
+    monkeypatch.setattr(NotedReleases, "made", [])
+    monkeypatch.setattr(NotedReleases, "asked", [])
+    monkeypatch.setattr(release_draft, "GitHubReleases", NotedReleases)
+    monkeypatch.setattr(release_draft, "tags_in_history", lambda root, commit: ["v0.0.3b", "v0.0.5a1", "CI"])
+    archives(tmp_path)
+    release_draft.main(["--repository", "o/r", "--tag", TAG, "--commit", SHA, "--artifacts", str(tmp_path),
+                        "--server-url", "https://github.com", "--run-url", "https://github.com/o/r/actions/runs/7"])
+    [api] = NotedReleases.made
+    return api
+
+
+def test_a_new_draft_gets_githubs_notes_since_the_previous_tag(monkeypatch: pytest.MonkeyPatch,
+                                                                 tmp_path: Path) -> None:
+    api = run_main(monkeypatch, tmp_path, GITHUB_NOTES)
+    assert NotedReleases.asked == [(TAG, SHA, "v0.0.3b")]
+    assert api.release is not None and api.creations == 1
+    assert "## What's Changed" in api.release.body and "actions/runs/7" in api.release.body
+    assert "compare/v0.0.3b...v0.0.5a1" in api.release.body
+    assert read_manifest(api.release.body) is not None  # The manifest marker is kept, after the notes.
+    assert api.release.body.index("Full Changelog") < api.release.body.index("helab-release-manifest")
+
+
+def test_a_draft_is_made_without_githubs_notes_when_they_are_unavailable(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    api = run_main(monkeypatch, tmp_path, subprocess.CalledProcessError(1, "gh api", stderr="HTTP 502"))
+    assert api.release is not None and api.creations == 1 and len(api.uploads) == len(ASSET_NAMES)
+    assert "What's Changed" not in api.release.body and "compare/v0.0.3b...v0.0.5a1" in api.release.body
+    assert "::warning::GitHub's generated notes are unavailable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("draft", [True, False])
+def test_a_resumed_or_published_release_keeps_its_notes_and_asks_for_none(tmp_path: Path, draft: bool) -> None:
+    api = MemoryReleases()
+    api.release = Draft(1, draft, "Tony's edited notes", ())
+    asked: list[str] = []
+
+    def body() -> str:
+        asked.append("asked")
+        return "New notes"
+    publish_draft(api, TAG, SHA, True, archives(tmp_path), body)
+    assert not asked and api.release is not None and "Tony's edited notes" in api.release.body
+    assert api.creations == 0 and api.body_updates == (len(ASSET_NAMES) if draft else 0)
+
+
+def test_the_release_job_passes_the_run_page_from_the_server_url() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "dev-cicd.yml").read_text(encoding="utf-8")
+    job = workflow.split("\n  release:\n", 1)[1]
+    assert "github.event.repository.url" not in job and "--body" not in job
+    step = job.split("- name: Create or resume the draft and its verified assets", 1)[1]
+    assert "RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" in step
+    assert '--server-url "$SERVER_URL" --run-url "$RUN_URL"' in step
+    assert job.index("pip install packaging") < job.index("python -m helab.release_draft")
+    assert "fetch-depth: 0" in job  # tags_in_history needs the tags and history.

@@ -220,6 +220,9 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Install packaging
+        run: pip install packaging
+
       - name: Download macOS Build Artifact
         uses: actions/download-artifact@v8
         with:
@@ -270,28 +273,11 @@ jobs:
             git push origin "refs/tags/$RELEASE_TAG"
           fi
 
-      - name: Prepare Release Body
-        run: |
-          RELEASE_BODY="## Release ${{ needs.get-version.outputs.tag_name }}
-
-          **Date:** $(date +'%Y-%m-%d %H:%M') UTC
-
-          **Commit:** [$RELEASE_SHA](${{ github.server_url }}/${{ github.repository }}/commit/$RELEASE_SHA)
-
-          **Workflow Run:** [View Details](${{ github.event.repository.url }}/actions/runs/${{ github.run_id }})
-
-          ### Build Artifacts
-
-          - **macOS ARM64** build (Python 3.13)
-          - **Windows Intel64** build (Python 3.13)
-          - **Ubuntu Intel64** build (Python 3.13)
-
-          **Note:** This is an automated release. Please verify builds before production use."
-
-          printf '%s\n' "$RELEASE_BODY" > dist/release-body.md
-
-          echo "Release body preview:"
-          echo "$RELEASE_BODY"
-
       - name: Create or resume the draft and its verified assets
-        run: python -m helab.release_draft --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_SHA" --prerelease "$RELEASE_PRERELEASE" --artifacts dist/release --body dist/release-body.md
+        # A new draft's notes (release_draft.release_body, A59.1): its tag, linked; GitHub's generated notes
+        # and a "Full Changelog" link since the previous v* tag in the commit's history; this run's page on
+        # github.server_url (the repository's event URL is the API's). A draft resumed keeps its notes.
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: python -m helab.release_draft --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_SHA" --prerelease "$RELEASE_PRERELEASE" --artifacts dist/release --server-url "$SERVER_URL" --run-url "$RUN_URL"

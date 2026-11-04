@@ -1,7 +1,9 @@
 """Validate release archives and resume owned assets on an unpublished GitHub draft."""
 
 import argparse
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -9,9 +11,12 @@ import posixpath
 import re
 import stat
 import subprocess
+import sys
 from typing import Protocol, cast
 from urllib.parse import quote
 import zipfile
+
+from packaging.version import InvalidVersion, Version
 
 ASSET_NAMES = ("HeLab-macos.zip", "HeLab-windows.zip", "HeLab-ubuntu.zip")
 
@@ -19,7 +24,73 @@ ASSET_NAMES = ("HeLab-macos.zip", "HeLab-windows.zip", "HeLab-ubuntu.zip")
 def release_name(tag: str) -> str:
     """The name CI gives a release (how ``get_release`` knows its draft, listed as "untagged-…")."""
     return f"Automated Release {tag}"
+
+
 MARKER = re.compile(r"<!-- helab-release-manifest:(.*?) -->", re.DOTALL)
+
+
+def _tag_version(tag: str) -> Version | None:
+    """A release tag's version: ``v`` and a PEP 440 version (``v0.0.8a1``), else None (``v.0.0.1i``,
+    ``CI-CD-everything-passed``)."""
+    if not tag.startswith("v"):
+        return None
+    try:
+        return Version(tag[1:])
+    except InvalidVersion:
+        return None
+
+
+def previous_tag(tag: str, history: Iterable[str]) -> str | None:
+    """The release ``tag`` is compared against: the newest ``v`` tag of a lower version among ``history``
+    (the tags in its commit's history, ``git tag --merged``). A version never tagged has no say: v0.0.8a1's
+    is v0.0.6a1, v0.0.7a1's release job having failed before tagging it."""
+    current = _tag_version(tag)
+    if current is None:
+        raise ValueError(f"Not a release tag: {tag}")
+    earlier = [(version, name) for name in history if name != tag
+               for version in [_tag_version(name)] if version is not None and version < current]
+    return max(earlier)[1] if earlier else None
+
+
+def tags_in_history(root: Path, commit: str) -> list[str]:
+    """The tags whose commits are in ``commit``'s history (itself included)."""
+    return subprocess.check_output(["git", "-C", str(root), "tag", "--merged", commit], text=True).split()
+
+
+FULL_CHANGELOG = "**Full Changelog**"
+
+
+def release_body(*, tag: str, commit: str, previous: str | None, server_url: str, repository: str,
+                 run_url: str, notes: str, when: datetime) -> str:
+    """A new draft's notes: its tag and commit, linked; the workflow run; GitHub's generated notes; the
+    builds; and a "Full Changelog" link from the previous release's tag (to the tag's commits when there is
+    none). ``manifest_body`` adds the asset manifest below."""
+    site = f"{server_url.rstrip('/')}/{repository}"
+    changes = (f"{site}/compare/{quote(previous, safe='')}...{quote(tag, safe='')}" if previous
+               else f"{site}/commits/{quote(tag, safe='')}")
+    # GitHub's notes end with their own "Full Changelog" line; ours replaces it, so there is one.
+    generated = "\n".join(line for line in MARKER.sub("", notes).strip().splitlines()
+                           if not line.startswith(FULL_CHANGELOG)).strip()
+    return "\n".join([
+        f"## Release [{tag}]({site}/tree/{quote(tag, safe='')})",
+        "",
+        f"**Date:** {when.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC",
+        "",
+        f"**Commit:** [{commit}]({site}/commit/{commit})",
+        "",
+        f"**Workflow Run:** [View Details]({run_url})",
+        "",
+        *([generated, ""] if generated else []),
+        "### Build Artifacts",
+        "",
+        "- **macOS ARM64** build (Python 3.13)",
+        "- **Windows Intel64** build (Python 3.13)",
+        "- **Ubuntu Intel64** build (Python 3.13)",
+        "",
+        "**Note:** This is an automated release. Please verify builds before production use.",
+        "",
+        f"{FULL_CHANGELOG}: {changes}",
+    ]) + "\n"
 
 
 @dataclass(frozen=True)
@@ -170,14 +241,17 @@ def _guard(api: ReleaseAPI, tag: str, commit: str, release_id: int) -> Draft:
 
 
 def publish_draft(api: ReleaseAPI, tag: str, commit: str, prerelease: bool,
-                  artifacts: dict[str, Path], body: str) -> None:
+                  artifacts: dict[str, Path], body: str | Callable[[], str]) -> None:
+    """Create the draft (with ``body``, called only then: a draft resumed keeps its own notes) or resume it,
+    and upload what its manifest doesn't already hold, verified."""
     fingerprints = validate_archives(artifacts, tag, commit)
     api.verify_tag(tag, commit)
     release = api.get_release(tag)
     if release is not None and not release.draft:
         return
     if release is None:
-        release = api.create(tag, commit, prerelease, manifest_body(body, Manifest(commit, fingerprints)))
+        text = body() if callable(body) else body
+        release = api.create(tag, commit, prerelease, manifest_body(text, Manifest(commit, fingerprints)))
     for name in ASSET_NAMES:
         release = _guard(api, tag, commit, release.id)
         manifest = read_manifest(release.body)
@@ -282,6 +356,15 @@ class GitHubReleases:
             "prerelease": prerelease, "name": release_name(tag), "body": body,
         }))
 
+    def generated_notes(self, tag: str, commit: str, previous: str | None) -> str:
+        """GitHub's generated notes for ``tag`` since ``previous`` (``POST /releases/generate-notes``,
+        which changes nothing)."""
+        payload: dict[str, object] = {"tag_name": tag, "target_commitish": commit}
+        if previous is not None:
+            payload["previous_tag_name"] = previous
+        return _string(_object(self._request("POST", f"repos/{self.repository}/releases/generate-notes",
+                                             payload)).get("body") or "")
+
     def save_body(self, release_id: int, body: str, prerelease: bool) -> None:
         self._request("PATCH", f"repos/{self.repository}/releases/{release_id}",
                       {"body": body, "prerelease": prerelease})
@@ -301,7 +384,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--prerelease", choices=["true", "false"], default="true")
     parser.add_argument("--artifacts", type=Path)
-    parser.add_argument("--body", type=Path)
+    parser.add_argument("--server-url", help="the GitHub server's URL (github.server_url), for the notes' links")
+    parser.add_argument("--run-url", help="this workflow run's page, for the notes")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--check", type=Path, metavar="ARCHIVE",
                         help="check one platform archive's build stamps against --commit and this checkout's "
@@ -318,10 +402,25 @@ def main(argv: list[str] | None = None) -> None:
     if args.validate_only:
         validate_archives(artifacts, args.tag, args.commit)
     else:
-        if not args.repository or args.body is None:
-            parser.error("--repository and --body are required when uploading")
-        publish_draft(GitHubReleases(args.repository), args.tag, args.commit,
-                      args.prerelease == "true", artifacts, args.body.read_text(encoding="utf-8"))
+        if not args.repository or not args.server_url or not args.run_url:
+            parser.error("--repository, --server-url and --run-url are required when uploading")
+        api = GitHubReleases(args.repository)
+
+        def body() -> str:
+            previous = previous_tag(args.tag, tags_in_history(Path(__file__).resolve().parent.parent, args.commit))
+            try:
+                notes = api.generated_notes(args.tag, args.commit, previous)
+            except (subprocess.SubprocessError, ValueError) as exc:  # The draft matters more than its notes.
+                print(f"::warning::GitHub's generated notes are unavailable ({exc}); the draft has none.",
+                      file=sys.stderr)
+                notes = ""
+            text = release_body(tag=args.tag, commit=args.commit, previous=previous, server_url=args.server_url,
+                                repository=args.repository, run_url=args.run_url, notes=notes,
+                                when=datetime.now(timezone.utc))
+            print(f"Release body:\n{text}")
+            return text
+
+        publish_draft(api, args.tag, args.commit, args.prerelease == "true", artifacts, body)
 
 
 if __name__ == "__main__":
