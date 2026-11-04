@@ -23,7 +23,7 @@ from helab.utils.folder_cache import Dataset, FolderCache, get_folder_cache
 from helab.utils.io_service import BACKGROUND, FOREGROUND, USER_HOLD_NOTE, IORequest, IOService
 from helab.views.ActivityWindow import ActivityActions, ActivitySources, ActivityWindow
 from helab.views.explorer_convert import FolderConversion
-from helab.views.explorer_live import LiveSession
+from helab.views.explorer_live import AutoConvert, LiveSession
 from helab.views.FolderExplorer import FolderExplorer
 from test_live import age_folder, open_loaded, write_shot  # noqa: E402
 
@@ -455,6 +455,25 @@ def test_live_off_and_a_gui_conversions_end_are_reported(qtbot: QtBot, monkeypat
     entry = activity.HISTORY.entries()[0]
     assert (entry.title, entry.outcome, entry.message, entry.route.kind) == (
         "Convert raw files to TXY", "failed", "broken", "conversion")
+    # AW-5: failures that start no helper are reported too.
+    cache = explorer.model.cache
+    monkeypatch.setattr(cache, "convert", lambda *args, **kwargs: False)
+    assert not converter.start(path, "cache")
+    entry = activity.HISTORY.entries()[0]
+    assert (entry.outcome, entry.message) == ("failed", "the conversion couldn't be queued")
+    assert explorer.start_live()
+    session = explorer.live_control.live
+    assert session is not None
+    session.convert = AutoConvert(time.time())
+    explorer.live_control._convert_tick(session)
+    entry = activity.HISTORY.entries()[0]
+    assert (entry.title, entry.outcome, entry.message, entry.route.kind) == (
+        "Auto-convert", "failed", "the conversion couldn't be queued", "autoconvert")
+    session.convert.error, session.convert.request = "", True
+    explorer.live_control._convert_event(session, {"kind": "offline"})
+    entry = activity.HISTORY.entries()[0]
+    assert (entry.title, entry.message) == ("Auto-convert", "not while working offline")
+    explorer.stop_live(save=False)
     explorer.close_cleanup()
     service.shutdown()
 

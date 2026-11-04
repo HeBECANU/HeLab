@@ -526,6 +526,7 @@ class ExplorerConverter:
                 # The folder's flag first: the helper writes beside only while the store's flag is on.
                 if not cache.set_write_beside(path, True):
                     conversion.error = "the folder's beside setting couldn't be saved (HeLab's work queue is full)"
+                    self._report(conversion, "failed")
                     self.explorer.loadStateChanged.emit()
                     return False
                 conversion.flag = True
@@ -562,6 +563,7 @@ class ExplorerConverter:
             other = cache.converting_with(conversion.path)
             conversion.error = (f"a conversion of this folder with {other} is running; try again when it ends"
                                 if other else "the conversion couldn't be queued")
+            self._report(conversion, "failed")
             self.explorer.loadStateChanged.emit()
             return False
         conversion.request, conversion.todo, conversion.done = True, 0, 0
