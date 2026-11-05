@@ -27,7 +27,7 @@ PURE = (
         "backends.cython", "backends.mlx_gpu", "backends.numba_backend", "backends.numpy_backend", "backends.reference",
         "backends.rust", "check", "fastio", "pipeline", "profile", "provenance", "raw", "raw_layer", "reconstruct",
         "samples", "split", "timing", "txy", "txy_layer", "user_profiles")),
-    "helab.updates.github", "helab.updates.versions",  # (App updates: the check's pure core.)
+    "helab.updates.github", "helab.updates.updater", "helab.updates.versions",  # (App updates' pure parts.)
     "helab.utils.activity",  # (The Activity window's model, Q62.)
     "helab.utils.hlb",
     "helab.utils.ram_buffers",
