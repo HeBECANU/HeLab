@@ -19,6 +19,8 @@ own runs green on all three OSes and skipped or cancelled required jobs not gree
 | `9ca5acf` | Merge of `dev/v0.0.9` at `8690a2f`, clean |
 | `fc2906d` | The handoff, with the review fixes |
 | `f951fc0` | macOS: a framework Python's venv processes (`ps -E`); a test's teardown (CI 42018998611's failure) |
+| `c099caf` | The handoff, with CI 42022523164 |
+| (this) | Re-check 1 (`4c8bbb5`): AU-13, AU-14 |
 
 ## What was built
 
@@ -114,6 +116,16 @@ AU-7 and AU-8 can't be shown here as the reviewer read them (a real lab PC). The
 module check finds a venv module however the venv was linked, and `CREATE_NO_WINDOW` only hides windows. Known-issues
 line and M~3 below.
 
+### Re-check 1 (Sentry, `4c8bbb5`): AU-1 to AU-12 fixed or closed; two new
+
+| ID | Fix | Test (fails on `c099caf`'s updater, passes now) |
+|---|---|---|
+| AU-13 Minor | On "started", `record(...)` first, then `discard_older` (the deletion's errors are ignored, so it never changes the outcome); the new HeLab's 20 s poll no longer races a slow `rmtree`. | `test_the_outcome_is_recorded_before_the_older_venv_is_deleted` (in-process, a slow delete reads `last.json`: "updated" with its token is already there) |
+| AU-14 Info | (1) The `__PYVENV_LAUNCHER__` match now also needs `helab` in the plain command, as the plain match does: a helper re-exec'd as `Python.app` still runs `-m helab.io_helper`; a REPL, Jupyter or pytest from the venv doesn't hold up the update. (2) The `os.environ.pop` comment now calls it a safeguard (3.13 already drops the variable). | `test_a_framework_venvs_python_counts_only_when_it_runs_helab` (macOS, a framework Python's venv: `python -c …` not counted, `python -m helab.io_helper` counted) |
+
+Checks: the touched tests; full suite **9568 passed, 674 skipped, 2 warnings in 191 s, no RERUN**; the five type
+checks clean (and the updater with `--pythonplatform Linux`).
+
 ## Proposed doc changes (for the Coordinator)
 
 **`.ai/architecture/release-and-ci.md`**, a new section "App updates" (or a new area file `updates.md` linked
@@ -134,7 +146,7 @@ from the index and the code map), with:
   whose newest run was cancelled, is not green; other jobs don't count; group count not fixed.
 - The modes and defaults (settings rows; Q~1's default repo through `build_info.upstream_repository`).
 - The updater: request fields, `--check`, handshake (`ready-<token>`), the waits (process handle, locks,
-  processes from the venv: `ps` by folder prefix, and on macOS `ps -E`'s `__PYVENV_LAUNCHER__` for a framework Python's venv; Windows image paths, plus each Python's loaded modules by
+  processes from the venv: `ps` by folder prefix, and on macOS `ps -E`'s `__PYVENV_LAUNCHER__` for a framework Python's venv (both only when the command names `helab`); Windows image paths, plus each Python's loaded modules by
   path), refusals, order of the
   update, the venv rebuild (`REBUILD_FILES`, `uv venv --relocatable`, the check in its own bytecode folder,
   swaps, `DELETE_OLDER_VENV`), relaunch (`HELAB_UPDATE_TOKEN`, popped by `mark_started`), roll back, Restore

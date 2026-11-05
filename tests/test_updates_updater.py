@@ -713,6 +713,62 @@ def test_windows_counts_a_venv_module_a_python_loaded_not_its_hard_link_loaded_e
             process.wait()
 
 
+def test_the_outcome_is_recorded_before_the_older_venv_is_deleted(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The new HeLab polls for its outcome for ``UPDATE_OUTCOME_WAIT_S``; deleting the venv from before the previous
+    one can take longer on a slow disk, so "updated" is already there while it runs (in-process, a slow delete)."""
+    from helab.updates import updater
+    target = lab.publish("0.0.2")
+    for key in [key for key in os.environ if key not in lab.env]:
+        monkeypatch.delenv(key)
+    for key, value in lab.env.items():
+        monkeypatch.setenv(key, value)
+    seen: list[dict[str, Any]] = []
+    real = updater.discard_older
+
+    def slow_discard(older: Any, log: Any) -> None:
+        seen.append(updater.read_json(lab.app_dir / "updates" / "last.json"))
+        time.sleep(1.0)
+        real(older, log)
+
+    monkeypatch.setattr(updater, "discard_older", slow_discard)
+    quit_helab = subprocess.Popen([sys.executable, "-c", "pass"])
+    quit_helab.wait()
+    path = lab.request(pid=quit_helab.pid, mode="branch", branch="main", target=target, token="ab12" * 4)
+    assert updater.main([str(path)]) == 0
+    assert len(seen) == 1 and seen[0].get("token") == "ab12" * 4 and seen[0].get("outcome") == "updated", seen
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS: a framework Python's venv")
+def test_a_framework_venvs_python_counts_only_when_it_runs_helab(tmp_path: Path) -> None:
+    """The launcher match agrees with the plain one: a helper (``-m helab.io_helper``) counts, a REPL or a script
+    from the same venv doesn't."""
+    from helab.updates import updater
+    base = framework_python()
+    if not base or shutil.which("git") is None:
+        pytest.skip("no macOS framework Python here")
+    lab = Lab(tmp_path)
+    shutil.rmtree(lab.venv)
+    subprocess.run([base, "-m", "venv", "--without-pip", str(lab.venv)], check=True)
+    (lab.checkout / "helab" / "io_helper.py").write_text("import time\ntime.sleep(60)\n")
+    job = updater.read_job(lab.request())
+    env = {k: v for k, v in lab.env.items() if k != "PYTHONHOME"}
+    for arguments, counted in ((["-c", "import time; time.sleep(60)"], False), (["-m", "helab.io_helper"], True)):
+        process = subprocess.Popen([str(lab.venv / "bin" / "python"), *arguments], cwd=lab.checkout, env=env)
+        try:
+            deadline = time.monotonic() + 10
+            found = updater.running_from(job)
+            while bool(found) is not counted and time.monotonic() < deadline:
+                time.sleep(0.2)
+                found = updater.running_from(job)
+            if not counted:
+                time.sleep(1.0)
+                found = updater.running_from(job)
+            assert bool(found) is counted, (arguments, found)
+        finally:
+            process.kill()
+            process.wait()
+
+
 def test_the_updater_imports_only_the_standard_library() -> None:
     """It runs as a lone copy with the base Python: nothing from HeLab or the venv."""
     import ast

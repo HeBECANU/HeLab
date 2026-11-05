@@ -352,12 +352,15 @@ def running_from(job: Job) -> list[str]:
         return ["the process list couldn't be read (ps)"]
     places = sorted(set(folders) | {str(job.checkout), str(job.checkout.resolve())})
     launchers = [f"{LAUNCHER_ENV}={folder.rstrip(os.sep)}{os.sep}" for folder in folders]
+    # (As for the plain match, a process counts when its command names HeLab: a helper re-exec'd as Python.app still
+    # runs ``-m helab.io_helper``; a REPL, Jupyter or pytest run from the venv doesn't hold up the update.)
     for pid, command in listing.items():
         if pid == os.getpid():
             continue
         # (By folder only: ``--helab-io-helper`` names a frozen HeLab's helper, which never runs a checkout's code,
         # so it would only ever match another HeLab, a HeLab.app or another checkout's tests.)
-        if _runs_helab_from(command, places) or any(launcher in environments.get(pid, "") for launcher in launchers):
+        launched = "helab" in command and any(launcher in environments.get(pid, "") for launcher in launchers)
+        if _runs_helab_from(command, places) or launched:
             found.append(f"process {pid}: {command[:160]}")
     return found
 
@@ -946,12 +949,14 @@ def update(job: Job, log: Log) -> int:
         relaunch(job, None, log)
         return 1
     if state == "started":
-        discard_older(older, log)
         # (A restore says what it left, so the startup reminder skips it: design §7.)
         left = ({"mode": str(previous_record.get("mode", "")), "tag": str(previous_record.get("tag", ""))}
                 if job.action == RESTORE else {})
+        # Recorded first: the new HeLab is polling for it (``UPDATE_OUTCOME_WAIT_S``), and deleting the older venv
+        # can take a while on a slow disk; the deletion never changes the outcome (its errors are ignored).
         record(job, "restored" if job.action == RESTORE else "updated", "", found.previous, found.target, log,
                stash=stash_message, **left)
+        discard_older(older, log)
     else:
         record(job, "unconfirmed", "The new version is still starting: it wasn't stopped.", found.previous,
                found.target, log, stash=stash_message)
@@ -1001,8 +1006,8 @@ def main(argv: list[str]) -> int:
     if not argv:
         print("usage: updater.py REQUEST.json [--check]", file=sys.stderr)
         return 64
-    # Inherited from a HeLab run by a framework Python: not passed on, so nothing this updater starts (ps, git,
-    # the relaunch) passes for a process of HeLab's venv.
+    # A safeguard: Python 3.13 already drops this variable at start, but if a Python ever leaves it set, nothing
+    # this updater starts (ps, git, the relaunch) inherits it and passes for a process of HeLab's venv.
     os.environ.pop(LAUNCHER_ENV, None)
     job = read_job(Path(argv[0]))
     try:
