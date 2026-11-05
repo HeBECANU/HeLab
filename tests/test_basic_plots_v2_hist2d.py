@@ -3,7 +3,7 @@ summed over the selection; ranges from auto-crop (the summed axis whole) or manu
 bounds limiting the events summed); automatic or set bins; linear or log colour; every library, in place."""
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import numpy as np
 import pyqtgraph as pg
@@ -23,7 +23,7 @@ from helab.scripts.standard_v2 import histograms_2d, xt_histogram, xy_histogram,
 from helab.scripts.standard_v2.histograms_2d import Histogram2DPlot
 from helab.utils.folder_cache import Dataset
 
-PLOTS = {"XY": xy_histogram.XYHistogram, "XT": xt_histogram.XTHistogram, "YT": yt_histogram.YTHistogram}
+PLOTS: dict[str, Callable[[], Histogram2DPlot]] = {"XY": xy_histogram.XYHistogram, "XT": xt_histogram.XTHistogram, "YT": yt_histogram.YTHistogram}
 
 
 def events(seed: int = 3, count: int = 4_000) -> Any:
@@ -195,7 +195,7 @@ def test_nothing_to_sum_says_why(qtbot: QtBot) -> None:
     none = result_of(script, view(), {"shots": "range", "first_shot": 50, "last_shot": 60})
     label = script.draw(none, PYQTGRAPH)
     qtbot.addWidget(label)
-    assert isinstance(label, QLabel) and "chosen" in cast(QLabel, label).text()
+    assert isinstance(label, QLabel) and "chosen" in label.text()
 
 
 def test_the_input_is_left_unchanged() -> None:
