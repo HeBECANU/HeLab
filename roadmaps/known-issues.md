@@ -161,6 +161,8 @@ How to use it:
   on Ubuntu CI 41622979011 (Converter backends, `agent/followups` `fdd895c`, "rerun reasons": `AssertionError:
   assert -2 == 0` from `wait(20)`), passed on rerun; that branch changed only `--output`'s parsing. Next
   step: put the watcher's stderr in the assertion message.
+  Again on Ubuntu CI, `agent/folder-info` 41998150471 (Tests 3/3, job 127146449450, `4dd31db`, 2026-11-05), passed on
+  rerun.
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
@@ -421,6 +423,11 @@ How to use it:
   `Path.resolve()` in the helper launch ("Clean up disk cache failed … share_of stat'ed a source path"), a warning
   only, seen in Mendy's local runs for LR-15 (2026-11-05). Not a RERUN yet; the patch should be scoped to the call it
   tests.
+- [ ] **`test_convert_helab.py::test_a_killed_helpers_workers_exit`** (`AssertionError: the pool started`): under `-n 8`
+  the converting helper's pool workers weren't yet visible to `psutil` when its first `shot_converted` arrived; 2 reruns
+  in Ledger's local run on `agent/folder-info` (`4dd31db`, 2026-11-05), 1 in its final run, and 2 under load ~500 in
+  Relay's on `agent/app-updates`; passed on rerun, unrelated to both branches. Likely fix: wait briefly (bounded) for
+  the children before asserting, or have the helper report its pool's pids.
 
 Tony (2026-10-22): note these, no fixes for now; raise them again only if they keep
 happening. Counted over the last 12 CI runs from `gh api repos/TonyXTYan/HeLab/actions/jobs/<id>/logs`

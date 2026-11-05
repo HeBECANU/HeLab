@@ -533,6 +533,24 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   the last part shows the following parts in its tooltip line ("⚠ X · bins auto"); the count is right and HeLab's own
   scripts put warnings last, so only a user script shows it.
 
+## Folder info (block 67)
+
+- [ ] **A67.1 Activity's name for the Folder info read** (A~1): give it a label ("Folder info read") and leave successful
+  ones out of History (`activity.NOT_KEPT_WHEN_OK`: Live's saves make one each while the window is open).
+- [ ] **A67.2 Raw pulses after a Live save** (A~2): `raw_fill` runs after a save, so the window's raw pulses lag one save;
+  read again on `raw_fill_done` of the watched folder too (bounded by `Reads`).
+- [ ] **A67.3 A read-only store open for `folder_info`** (A~3): the admin opener makes the store folder when it isn't
+  there; open read only (as `helab cache --folder` does) so the window never creates a store (`stores._cache_store`).
+- [ ] **A67.4 Time `folder_contents` on the largest real folder** (A~4, with M67.1): it parses every TXY layer's
+  entries; move the shot range into SQL if it's slow.
+- [ ] **A67.5 A per-folder fence for HeLab's converted TXY** (A~5, Tally's FI-6): a per-folder Clear sets the index's one
+  fence token, so another folder's conversion into the same base waits for its next check with a wrong "cleared"
+  message; a `folder_fences` table (additive within schema 1) read by `fence_of(root, folder)` beside the base's
+  (`helab/convert/provenance.py`, `helab/io_ops/convert.py`).
+- [ ] **A67.6 Read again after Hide HeLab** (Tally's FI-11, Info, optional): a hide that isn't a minimise (Cmd+H) unhooks
+  the window, so it misses Live's saves and doesn't read on reshow ("As of" stays honest); read once on a reshow after a
+  spontaneous hide.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

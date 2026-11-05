@@ -56,10 +56,10 @@ that branch.
   details and status, Cancel / Retry / Pause, and this session's history; Window › Activity or a click on the
   status bar. Landed `5af4a89` (the Activity Window floor; Q63.1–Q63.4 decided; M63.1, M63.2 for Tony).
 
-- [ ] The Folder info window (LR-5; Tony, 2026-11-05; [plan](folder-info.md)): everything HeLab holds about one
+- [x] The Folder info window (LR-5; Tony, 2026-11-05; [plan](folder-info.md)): everything HeLab holds about one
   folder (store contents with the only copies, saved results, flags, TXY list, constants, scan history, converted
-  TXY, data root), read only, beside the folder's existing actions; right-click, Folder details, File menu.
-  Q64.1–Q64.10 open.
+  TXY, data root), read only, beside the folder's existing actions, plus per-folder Clears (Q67.6); right-click, Folder
+  details, File menu. Landed `03f801e` (the Folder Info floor, Ledger + Reviewer Tally; M67.1, M67.2 for Tony).
 
 - [x] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
   all four plots in a v2 with a Shot ID / Shot time x axis (fallback times marked), new XY, XT and YT 2D histograms,

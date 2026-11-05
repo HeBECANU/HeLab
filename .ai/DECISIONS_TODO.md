@@ -81,6 +81,18 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
   checks and shows the releases (notify, with the download link). The venv is rebuilt only when
   `requirements.lock` changed.
 
+## Folder info follow-ups (block 67; [handoff](sessions/2026-11-05-claude-folder-info/handoff.md))
+
+All decided; built in `03f801e`. Tony left the looks to CoCo ("you can decide looks, I'll let you know if I see anything
+strange").
+
+- **Q67.1** the title "Folder info — <path>". **Q67.3** the data root in the header. **Q67.4** Folder details' link
+  shown with the Disk cache row. **Q67.5** sections: This session, Disk cache, Saved plot results, Flags, TXY list and
+  policy, Constants, Scan history, Converted TXY (CoCo).
+- **Q67.2** no per-folder Clear raw pulses in v1 (CoCo; superseded by Q67.6).
+- **Q67.6** per-folder Clear raw pulses (a), with Q64.6 (b)'s per-folder Clear of saved results and converted TXY, in
+  v1 (Tony: "implement now"); each asks first and names only copies.
+
 ## Basic plots v2 (block 66; [handoff](sessions/2026-11-05-claude-basic-plots-v2/handoff.md))
 
 Q66.1–Q66.10 decided (Tony in Chat, 2026-11-05) and built in `559baa5`; Q66.11 and Q66.12 open.

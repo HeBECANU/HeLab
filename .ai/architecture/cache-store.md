@@ -290,6 +290,8 @@ raw file is listed; the two priority modes share one view; whole rows in Make ro
 - **Export** (A44.1): `helab cache export --folder F --kind txy [--layer matlab|<tag>|helab:<hash>]` writes the
   layer's shots as `d_txy<N>.<ext>` (`t_s`, `x_m`, `y_m`); without `--layer`, the only layer, or a list of
   them. A segment `.hlb` exports as one file with a `shot` column. Format: [`docs/hlb-format.md`](../../docs/hlb-format.md).
+- **Folder info's read** (`CacheStore.folder_contents`, `helab/io_ops/folder_info.py`, admin `folder_info`; landed `03f801e`): one folder's rows in one read transaction (raw totals and only copies, layers with `layer_group`, views, seed, store-v4's own results, flags, choices, constants, history, summary, listing) and the converted-TXY indexes read only; event `folder_info` (bounded: no per-shot data, 200 results, 32 layers and views). Make room's per-layer rule is `cache_store.layer_group`, shared by `_txy_groups` ([app-runtime-and-ui](app-runtime-and-ui.md)).
+- **One folder's Clears** (Folder info, Q67.6 and Q64.6 (b)): `clear_raw paths=[path]` (`remove_raw(paths)`, the folder's `raw:` epoch), `clear_results paths=[path]` (`remove_results(paths)`, its results epoch) and `clear_converted_txy path=path` (`helab_txy.clear_converted_folder`: `clear_converted`'s rules for one of HeLab's folders, `_clear_folders`; the index's one fence token, so other folders' conversions into that base wait for their next check, A67.5). Each sends `removed` with the folder's path and trusts only verified volume hints. A converted TXY counts as an only copy when its shot's raw row has `gone_at` (`folder_contents`' raw `gone_shots`).
 
 ### Convert on read (stage 3)
 
