@@ -141,6 +141,7 @@ How to use it:
   passed on rerun. Again on Windows, `agent/quick-fixes-10` CI 41762330085 (Tests 2/3, job 126352703916, `feb9985`,
   2026-11-04): `assert (692.18 - 691.02) < 1.0`, quitting took 1.15 s; passed on rerun. All four on Windows Tests
   2/3 since store-v4 went on.
+  Again on Windows: Ground CI 42031225750 (Tests 2/3, job 127257995304, `90d8d9b`, 2026-11-06), passed on rerun.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -163,6 +164,7 @@ How to use it:
   step: put the watcher's stderr in the assertion message.
   Again on Ubuntu CI, `agent/folder-info` 41998150471 (Tests 3/3, job 127146449450, `4dd31db`, 2026-11-05), passed on
   rerun.
+  Again on Ubuntu: Ground CI 42031225750 (Tests 3/3, job 127257995388, `90d8d9b`).
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
@@ -385,6 +387,7 @@ How to use it:
   `convert.error`, which line 626 waits for, before `_convert_stopped`, and the offline answer still comes from
   `FolderCache.submit`'s single-shot path; the Reviewer ran it 12 times under 16 CPU burners with `--reruns 0`,
   all passing.
+  Again on macOS: Ground CI 42031225750 (Tests 1/3, job 127257995260, `90d8d9b`, the `[as it comes]` case).
 - [ ] `test_load_queue.py::test_an_automatic_load_waits_for_the_selection_to_settle_only_while_loads_are_busy`:
   one RERUN on `agent/activity-window` CI 41794579242 (`a141e60`, Ubuntu Tests 1/3, job 126455595537):
   `assert explorer.settling` at line 674, right after a third folder is selected while the second's load is busy;
