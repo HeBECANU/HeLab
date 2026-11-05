@@ -44,6 +44,10 @@ if TYPE_CHECKING:
 AUTO = "auto"
 # The narrowest a run column gets (its "Run" heading); it widens to its buttons ("Plot").
 RUN_COLUMN_WIDTH = 48
+# A script's Plot button while a plot of it is open (LR-2, Q65.2: Tony's pick); it still opens another plot.
+# Not "Add": that word is kept for adding a folder's data to an open plot (comparing folders).
+NEW_PLOT_TEXT = "New"
+PLOT_ACTION = "Plot"
 # Auto-reload: a change starts this wait (ms) before the folder's files are compared, so an editor's save
 # (often a temporary file, then a rename) has finished.
 SETTLE_MS = 750
@@ -449,6 +453,9 @@ class TreePanelWidget(QWidget):
         # The family version nodes the user opened or closed this session (family, node label) -> expanded.
         self._expanded: Dict[Tuple[str, str], bool] = {}
         self._listing = False  # The tree is being filled: its expansions are HeLab's, not the user's.
+        # LR-2: the listed Plot buttons by script (script_id -> (button, script name, its description)).
+        self._plot_buttons: Dict[str, List[Tuple[QPushButton, str, str]]] = {}
+        self.plotsChanged.connect(self._show_open_plots)
 
         # Analysis instance tracking
         self._instance_counter = 0
@@ -1277,13 +1284,14 @@ class TreePanelWidget(QWidget):
         self._listing = True
         try:
             self.tree_widget.clear()
+            self._plot_buttons = {}
             nodes = nodes_of(group_name, self.script_manager.get_groups())
             for index, node in enumerate(nodes):
                 # A family's newest version opens (or as the user left it this session); other groups open.
                 family = is_family(group_name)
                 self._list_node(group_name, node, expanded=self._expanded.get((group_name, node.label), index == 0)
                                 if family else True)
-            self._fit_run_columns()
+            self._show_open_plots()  # (Fits the run columns.)
             self._show_errors()
         finally:
             self._listing = False
@@ -1309,9 +1317,13 @@ class TreePanelWidget(QWidget):
                         button = self.create_button(action, self._action_callback(metadata, script, action))
                         # "Plot Counts per shot", its ID from the script's analysis ID (not its name); an older
                         # version of a family names its version: "Plot Counts per shot (v1)".
+                        description = f"Run {metadata.name} on this tab's loaded data"
                         identify(button, f"run_{id_part(metadata.identity().analysis_id)}_{id_part(action)}",
-                                 f"{action} {metadata.name}{version}", f"Run {metadata.name} on this tab's loaded data")
+                                 f"{action} {metadata.name}{version}", description)
                         self.tree_widget.setItemWidget(item, column, button)
+                        if column == 1 and action == PLOT_ACTION:
+                            self._plot_buttons.setdefault(metadata.script_id, []).append(
+                                (button, metadata.name, description))
                 except Exception as e:
                     logging.error(f"Error loading script {metadata.name}: {e}")
                     error_item = QTreeWidgetItem(group_item, [f"{metadata.name} (Error)"])
@@ -1332,6 +1344,25 @@ class TreePanelWidget(QWidget):
     @pyqtSlot(QTreeWidgetItem)
     def _node_collapsed(self, item: QTreeWidgetItem) -> None:
         self._node_state(item, False)
+
+    @pyqtSlot()
+    def _show_open_plots(self) -> None:
+        """LR-2: a script's Plot button reads ``NEW_PLOT_TEXT`` while a plot of it is open, its tooltip
+        saying how many ("Open another Counts per shot plot (1 open)"); "Plot" again once none is. Its
+        accessible name stays ("Plot Counts per shot"), so runners and the Debug menu still find it."""
+        counts: Dict[str, int] = {}
+        for instance in self.instances():
+            counts[instance.metadata.script_id] = counts.get(instance.metadata.script_id, 0) + 1
+        for script_id, buttons in self._plot_buttons.items():
+            for button, name, description in buttons:
+                if sip.isdeleted(button):
+                    continue
+                count = counts.get(script_id, 0)
+                button.setText(NEW_PLOT_TEXT if count else PLOT_ACTION)
+                text = f"Open another {name} plot ({count:,} open)" if count else description
+                button.setToolTip(text)
+                button.setAccessibleDescription(text)
+        self._fit_run_columns()
 
     def _fit_run_columns(self) -> None:
         """The run columns as wide as their buttons, the second hidden when no script has a second action,
