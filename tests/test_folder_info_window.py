@@ -215,7 +215,8 @@ def test_while_live_watches_it_reads_after_each_save_and_follows_checks(setup: A
     s = setup
     s.window.show_folder(s.path, s.explorer)
     finish(s.service, reads(s.service)[0], answer(s.path))
-    s.cache.saveEnded.emit(s.path, "saved")  # (Live off: a save alone doesn't read.)
+    s.cache.saveEnded.emit(s.path, "rejected")  # (A save that saved nothing: no read.)
+    s.cache.saveEnded.emit(s.path + "-other", "saved")  # (Another folder's: no read.)
     assert not reads(s.service)
     s.explorer.live_path = s.path
     s.window.live_changed()  # (Live on: the header and This session say so.)
@@ -419,3 +420,65 @@ def test_each_clear_asks_first_then_clears_this_folder_and_says_so(setup: Any) -
     s.window.show_folder(s.path + "-other", s.explorer)  # (Retargeted: that Clear's end says nothing here.)
     finish(s.service, txy)
     assert not any(text.startswith(("Removed", "Couldn't remove")) for text in labels(s.window))
+
+
+def test_it_reads_after_lives_save_on_stop(setup: Any, qtbot: QtBot) -> None:
+    """FI-1: ``stop_live`` turns Live off before its last save, so the read follows the save of the window's folder,
+    not Live being on."""
+    s = setup
+    s.window.show_folder(s.path, s.explorer)
+    finish(s.service, reads(s.service)[0], answer(s.path))
+    s.explorer.live_path = s.path
+    s.window.live_changed()
+    s.explorer.live_path = ""  # (Live off, as ``stop_live`` sets it before its save.)
+    s.window.live_changed()
+    assert not reads(s.service)
+    s.cache.saveEnded.emit(s.path, "saved")  # (The stop's save.)
+    assert len(reads(s.service)) == 1
+
+
+def test_minimised_it_keeps_following_and_reads_once_restored(setup: Any, qtbot: QtBot) -> None:
+    """FI-5: a minimised window stays hooked up; a save meanwhile is read once it is restored (one read)."""
+    from PyQt6.QtGui import QHideEvent, QShowEvent
+    s = setup
+    s.window.show_folder(s.path, s.explorer)
+    finish(s.service, reads(s.service)[0], answer(s.path))
+    s.window.setWindowState(Qt.WindowState.WindowMinimized)
+    s.window.hideEvent(QHideEvent())  # (What minimising sends; the offscreen platform sends none.)
+    s.cache.saveEnded.emit(s.path, "saved")
+    s.cache.saveEnded.emit(s.path, "saved")
+    assert not reads(s.service) and s.window._connected
+    s.window.setWindowState(Qt.WindowState.WindowNoState)
+    s.window.showEvent(QShowEvent())
+    assert len(reads(s.service)) == 1
+    finish(s.service, reads(s.service)[0], answer(s.path))
+    s.window.hideEvent(QHideEvent())  # (Closed, not minimised: unhooked, nothing waits.)
+    assert not s.window._connected and not s.window._missed
+
+
+def test_every_show_and_retarget_fits_its_screen(setup: Any, qtbot: QtBot) -> None:
+    """FI-8: not only the first show: reopened after a larger size (another monitor), it fits the screen again."""
+    s = setup
+    screen = QApplication.primaryScreen()
+    assert screen is not None
+    room = screen.availableGeometry()
+    s.window.show_folder(s.path, s.explorer)
+    s.window.hide()
+    s.window.resize(room.width() * 2, room.height() * 2)
+    s.window.show_folder(s.path + "-other", s.explorer)
+    assert s.window.width() <= room.width() and s.window.height() <= room.height()
+
+
+def test_the_detail_pane_never_moves_the_window_down(setup: Any, qtbot: QtBot) -> None:
+    """FI-3: open and close the pane a few times; the window's frame stays where it was. (The offscreen platform has
+    no frames, so the title bar's creep itself shows only on a screen: M~1.)"""
+    s = setup
+    s.window.show_folder(s.path, s.explorer)
+    s.window.resize(480, 400)
+    finish(s.service, reads(s.service)[0], answer(s.path, results=results(40)))
+    top = s.window.frameGeometry().topLeft()
+    for _ in range(3):
+        button(s.window, "folder_info_results_more").click()
+        qtbot.waitUntil(lambda: s.window.pane.isVisible())
+        button(s.window, "folder_info_detail_close").click()
+    assert s.window.frameGeometry().y() == top.y()

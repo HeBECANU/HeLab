@@ -89,6 +89,7 @@ CLEARS = {"clear_raw": "raw", "clear_results": "results", "clear_converted": "co
 _CLEARED = {"raw": "this folder's cached raw pulses", "results": "this folder's saved results",
             "converted": "this folder's converted TXY"}
 READ_FIRST = "Read this folder's disk cache first (Refresh)"
+UNVERIFIED = "Not now: this drive isn't verified yet this session"
 REMOVING = "Removing…"
 
 
@@ -137,6 +138,7 @@ class Memory:
     txy_own: bool = False
     policy: str = ""
     policy_own: bool = False
+    policy_id: str = ""  # The policy in effect as saved ("raw+used", "raw", "txy"; "" not known).
     constants: Mapping[str, tuple[float, str]] = field(default_factory=dict)
     constants_note: str = ""
     history: Mapping[str, Any] | None = None
@@ -478,6 +480,7 @@ def _flags(event: Mapping[str, Any] | None, memory: Memory) -> Section:
         rows.append(Row(f"{label}: {'on' if on else 'off'}" + (" (not saved yet)" if differs else ""),
                         "This folder only, never its subfolders." + (
                             f"\nThe disk cache says {'on' if stored else 'off'}." if differs else ""), warn=differs))
+    rows[:0] = _saved_errors(event, (("prefs", "flags"), ("convert_prefs", "Write TXY beside flag")))
     tip = "This folder only, never its subfolders" if rooted else NEEDS_ROOT
     actions = (Action("flag_no_cache", "Don't cache", tip, rooted, bool(memory.flags.get("no_cache"))),
                Action("flag_no_auto_load", "Don't auto-load", tip, rooted, bool(memory.flags.get("no_auto_load"))),
@@ -487,6 +490,17 @@ def _flags(event: Mapping[str, Any] | None, memory: Memory) -> Section:
     return Section("flags", "Flags", tuple(rows), actions)
 
 
+def _saved_errors(event: Mapping[str, Any] | None, parts: Sequence[tuple[str, str]]) -> list[Row]:
+    """A warning line for each of ``parts`` (part, what it holds) the read couldn't read (FI-7): the section's lines are
+    what HeLab applies now; the saved row is unknown, never "none"."""
+    if event is None:
+        return []
+    return [Row(f"Couldn't read the saved {what}: {_part_error(event, name)}",
+                "The lines here are what HeLab applies this session; what the disk cache holds for this folder "
+                "couldn't be read, so whether they are saved is unknown.", warn=True)
+            for name, what in parts if _part(event, name) == "error"]
+
+
 def _whose(own: bool) -> str:
     return "this folder's own" if own else "Settings'"
 
@@ -494,12 +508,14 @@ def _whose(own: bool) -> str:
 def _choices(event: Mapping[str, Any] | None, memory: Memory, now: float) -> Section:
     enabled = memory.root is not None and memory.store_v4 and not memory.pending_root
     saved = (event or {}).get("choices") or {}
-    rows = (Row(f"TXY: {memory.txy_list} ({_whose(memory.txy_own)})" if memory.txy_list else "TXY: unknown",
+    rows: tuple[Row, ...] = (
+            Row(f"TXY: {memory.txy_list} ({_whose(memory.txy_own)})" if memory.txy_list else "TXY: unknown",
                 "Which TXY this folder's tab and Live load." + (
                     f"\nSaved for this folder {ago(saved.get('source_set_at'), now)}." if saved.get("source") else "")),
             Row(f"Cache policy: {memory.policy} ({_whose(memory.policy_own)})" if memory.policy else "Cache policy: unknown",
                 "What this folder's saves keep in the disk cache." + (
                     f"\nSaved for this folder {ago(saved.get('policy_set_at'), now)}." if saved.get("policy") else "")))
+    rows = (*_saved_errors(event, (("choices", "TXY list and cache policy"),)), *rows)
     tip = "" if enabled else NEEDS_ROOT if memory.store_v4 else STORE_V4_ONLY
     actions = (Action("txy_choose", "TXY for this folder…", tip or "Which TXY this folder's tab and Live load",
                       enabled),
@@ -531,6 +547,7 @@ def _constants(event: Mapping[str, Any] | None, memory: Memory, now: float) -> S
                         for key, value in sorted(saved["values"].items()))
         rows[0] = Row(rows[0].text, f"{rows[0].tooltip}\n\nSaved for this folder ({ago(saved.get('set_at'), now)}): "
                                     f"{own}", rows[0].warn)
+    rows[:0] = _saved_errors(event, (("constants", "constants"),))
     detail = Detail("Constants", ("Constant",), tuple(((row.text,), row.tooltip) for row in rows))
     shown, more = _listed(rows, detail, "constants")
     return Section("constants", "Constants", shown, (Action("constants_edit", "Folder constants…",
@@ -641,6 +658,8 @@ def _clear_action(event: Mapping[str, Any] | None, part: str, memory: Memory, cl
         return Action(ident, label, NEEDS_ROOT, False)
     if event is None:
         return Action(ident, label, READ_FIRST, False)
+    if event.get("root_state") == "unverified":
+        return Action(ident, label, UNVERIFIED, False)  # (Its Clear would be refused: never the wrong folder's.)
     if part == "raw":
         if _part(event, "raw") == "skipped":
             return Action(ident, label, STORE_V4_ONLY, False)
@@ -662,9 +681,11 @@ def _clear_action(event: Mapping[str, Any] | None, part: str, memory: Memory, cl
                                 "never TXY written beside the raw files")
 
 
-def clear_question(event: Mapping[str, Any] | None, ident: str, path: str, now: float) -> Question | None:
+def clear_question(event: Mapping[str, Any] | None, ident: str, path: str, now: float,
+                   memory: Memory | None = None) -> Question | None:
     """The question a per-folder Clear (``ident``, one of ``CLEARS``) asks, naming the sizes and counts the last read
-    (``event``) found and the only copies among them; None when there is nothing to ask about."""
+    (``event``) found and the only copies among them, and for raw pulses whether they come back (``memory``: the
+    folder's flags and policy now); None when there is nothing to ask about."""
     part = CLEARS.get(ident)
     if event is None or part is None:
         return None
@@ -675,7 +696,8 @@ def clear_question(event: Mapping[str, Any] | None, ident: str, path: str, now: 
             return None
         only = int(raw.get("only_copy") or 0)
         # S4~1's question and only-copy paragraph (Tony's wording, 2026-11-02), for this folder (Q~6 (a)).
-        text = (f"Remove HeLab's cached raw pulses of {name} ({size(raw['bytes'])})? Your d files aren't touched."
+        text = (f"Remove HeLab's cached raw pulses of {name} ({size(raw['bytes'])})? Your d files aren't touched. "
+                + _raw_again(memory)
                 + (f"\n\n{only:,} of them are the only copy: their raw files are gone from the folder, so they can't "
                    "be read again." if only else ""))
         return Question("Clear raw pulses of this folder", text, "Remove cached raw pulses", warn=bool(only))
@@ -705,6 +727,16 @@ def clear_question(event: Mapping[str, Any] | None, ident: str, path: str, now: 
                f"converted from them again. {known}" if only else f"\n\nNone of them is known to be the only copy. "
                                                                   f"{known}"))
     return Question("Clear this folder's converted TXY", text, "Remove converted TXY", warn=bool(only))
+
+
+def _raw_again(memory: Memory | None) -> str:
+    """Whether a folder's cleared raw pulses are cached again (FI-4, CoCo's wording): from its d files at its next
+    load, unless Don't cache or a TXY only policy stops that."""
+    if memory is not None and memory.flags.get("no_cache"):
+        return "They aren't cached again: this folder is set to Don't cache."
+    if memory is not None and memory.policy_id == "txy":
+        return "They aren't cached again: this folder's cache policy is TXY only."
+    return "They're cached again the next time this folder loads."
 
 
 def cleared(ident: str, now: float) -> Row:

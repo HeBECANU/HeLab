@@ -17,7 +17,9 @@ C~1, C~2, C~3, C~5 yes; Q~2 (c); Q~1, Q~3, Q~4, Q~5 as proposed, with Tony in Ch
 | `0f09f06` | Handoff |
 | `0f95d61` | Times Windows can't show read "unknown" (CI 41998150471's Windows failures) |
 | `9da2bee` | Handoff notes the Windows fix |
-| (next) | Per-folder Clears: raw pulses, saved results, converted TXY (Q~6 and Q64.6 (b), Tony 2026-11-05) |
+| `8620de5` | Per-folder Clears: raw pulses, saved results, converted TXY (Q~6 and Q64.6 (b), Tony 2026-11-05) |
+| `25bdbda` | Review (Tally): [review.md](review.md), 2 Major, 3 Minor, 3 Info |
+| (next) | Review fixes FI-1, FI-2, FI-3, FI-4, FI-5, FI-7, FI-8 (FI-6 stays A~5) |
 
 Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); CoCo pushes from Ground.
 
@@ -95,7 +97,45 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
   instead of cutting buttons off.
 - `LiveController.set_write_beside` (C~3): a public name over the existing asked path, for the Flags toggle.
 
+## Review fixes (Tally's [review.md](review.md), CoCo's calls)
+
+Each with a test that fails on `8620de5` (checked by running the new tests against the old sources):
+
+- **FI-1 (Major) Live's save on stop:** `_save_ended` now reads after any `saved` / `superseded` save of the
+  window's folder, Live on or not (`stop_live` turns Live off before its last save). A save of another folder, or
+  one that saved nothing, doesn't read. Test: Live on, Live off, then the stop's `saveEnded` → one read; the old
+  Live test's "Live off: a save alone doesn't read" now checks a rejected save and another folder's instead.
+- **FI-2 (Major) an unverified drive read as RAM only:** `io_ops.folder_info.folder_key(store, path)` turns the
+  admin opener's plain `NoDataRoot` on a mount in `store._unverified_mounts` into `VolumeUnverified` (as
+  `constants` and the offline listing check). The read says "unverified"; all three Clears refuse with that reason
+  (`admin._refuse_unverified` for `clear_raw` / `clear_results` with `paths`; `_converted_folders` for the
+  converted one, never falling back to the temp folder by path); the model greys the Clears with "Not now: this
+  drive isn't verified yet this session". The helper tests now use the real opener and resolver on a hinted mount
+  (`verified_volumes=[]` against `[[mount, source]]`, `test_store_migration`'s setup), for the read and all three
+  Clears; the `_path_key` fakes are gone.
+- **FI-3 the pane moved the window:** `open_detail` takes the position from `frameGeometry()` and `move`s in frame
+  coordinates, the size by `resize`. The test (open and close three times, the frame's top stays) fails on the old
+  code even offscreen: the offscreen platform has 6 px frame margins, and the old `setGeometry(x(), y(), …)` moved
+  the frame by them.
+- **FI-4 (CoCo's wording):** the raw pulses question adds "They're cached again the next time this folder loads.",
+  or "They aren't cached again: this folder is set to Don't cache." / "…: this folder's cache policy is TXY only."
+  (`Memory.policy_id`, the policy in effect). The manual's table says so.
+- **FI-5 minimised:** a hide by the system (`isMinimized()` or a spontaneous hide) keeps the window hooked up; a
+  read that falls due waits (`_missed`), and the restore reads once and refreshes This session. Closing unhooks
+  as before. Test: minimised, two saves → no read; restored → one read; closed → unhooked.
+- **FI-7:** Flags, TXY list and cache policy, and Constants show "Couldn't read the saved <…>: <why>" in amber when
+  their part failed (`_saved_errors`), as the other sections do.
+- **FI-8:** `fit_screen` on every show (and so every retarget that shows it), not only the first. Test: resized
+  past its screen while hidden, reopened → fits.
+- **FI-6:** stays A~5.
+
 ## Checks
+
+- **After the review fixes:** full suite **9507 passed, 673 skipped, no reruns**; the five type checks, `ruff
+  check` and `mkdocs build --strict` clean. (The first run had 4 failures with 20 reruns, all `tests/test_typing.py`'s
+  four mypy checks on one annotation in `_choices`, fixed before this run.) Ten new tests: helper (FI-2's read and
+  the three Clears on the real opener), model (FI-2, FI-4, FI-7), window (FI-1, FI-3, FI-5, FI-8). All eight in the
+  model and window files fail on the `8620de5` sources, and FI-2's two fail without its helper fix.
 
 - **After the per-folder Clears:** full suite (`pytest -n 4 --reruns 5 --reruns-delay 1
   --basetemp=.ai/temp/pytest`) **9500 passed, 673 skipped, no reruns**; the five type checks, `ruff check` and
@@ -138,8 +178,9 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 > → `cache_admin` "folder_info" (local lane) → `folderInfoRead(owner, event)`, the job's end on
 > `cacheAdminDone`; `folder_info.Reads` keeps one read in flight (a newer ask replaces the queued one; a retarget
 > drops the old answer). It reads on open, Refresh, and after an action started from it at the folder's next
-> change (armed 10 min); while Live watches the folder, `datasetChanged` re-renders This session and `saveEnded`
-> (saved, superseded) reads again. Memory parts (`FolderInfoSources.memory`): the data root, flags, the TXY list
+> change (armed 10 min), and after every `saveEnded` (saved, superseded) of its folder, Live on or not (Live's last
+> save comes after Live is off); while Live watches the folder, `datasetChanged` re-renders This session.
+> Minimised, it stays hooked up and reads once on the restore if one fell due; it fits its screen on every show. Memory parts (`FolderInfoSources.memory`): the data root, flags, the TXY list
 > and policy in effect, inherited constants, the session's scan history, the subfolders' derived status, This
 > session (RAM, Live, plots on it, newest shot). Its buttons call the tab's existing actions, and links to Settings
 > › Cache and Data roots (the latter with the root selected, `DataRootsTab.select_root`); its own are the
@@ -169,7 +210,9 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 
 **`.ai/architecture/io-and-browsing.md`**, where `ADMIN_ACTIONS` is named: add `folder_info` (read only; trusts
 only verified volume hints, as `constants`), and that `clear_raw`, `clear_results` (new `paths`) and
-`clear_converted_txy` (new `path`) do too when the app sends them (Folder info's per-folder Clears).
+`clear_converted_txy` (new `path`) do too when the app sends them (Folder info's per-folder Clears): a folder on a
+mount in `store._unverified_mounts` is refused as `VolumeUnverified` (`io_ops.folder_info.folder_key`), as
+`constants` does.
 
 **`AGENTS.md`** (one line, the code map's `helab/views/` row): after `ActivityWindow.py (…)`, add
 "`FolderInfoWindow.py` (File › Folder info…: one folder's cache, results, flags and choices; model
@@ -221,6 +264,8 @@ details' link hidden with the Disk cache row; **Q~5** section order as built.
   following each shot and a read after each save (every N shots and on stop). The three Clears on a copy of a
   real folder: each question's sizes against Settings › Cache's, the only-copy paragraph (a raw file moved away,
   Retry / Refresh, then Clear raw pulses…), "Removed …" and the lines read again, and another folder's cache
-  untouched.
+  untouched. On macOS and Windows: open and close the detail pane several times (the window stays put: FI-3);
+  move the main window to the laptop screen and reopen Folder info (it fits: FI-8); minimise it during Live and
+  restore it after a save (FI-5).
 - **M~2 Windows:** Ctrl+I, the fonts (the title lines' buttons on Windows' wider fonts), and the detail pane at
   1366-pixel-wide screens.

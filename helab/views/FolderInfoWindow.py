@@ -88,7 +88,7 @@ class FolderInfoSources:
             flags=cache.folder_prefs(path), write_beside=cache.write_beside(path),
             txy_list=txy_sources.summary(cache.folder_list(path), cache.convert_profile_tag()),
             txy_own=bool(choices.get("source")),
-            policy=dict(POLICY_LABELS).get(policy, policy).removesuffix(" (default)"),
+            policy=dict(POLICY_LABELS).get(policy, policy).removesuffix(" (default)"), policy_id=policy,
             policy_own=bool(choices.get("policy")), constants=cache.inherited_constants(path),
             constants_note=cache.constants_session_only(path),
             history=dict(history) if int(history.get("revision") or 0) else None, subtree=cache.subtree(path),
@@ -143,10 +143,11 @@ class FolderInfoWindow(QWidget):
         self._detail = ""  # The section shown in the detail pane ("" closed).
         self._pane_width = 0
         self._connected = False
-        self._fitted = False
         self._clears: dict[str, tuple[str, str]] = {}  # A Clear's owner: (its folder, its action ID).
         self.notice: Optional[Row] = None  # The header's line for the last Clear of this folder.
         self.ask_clear: Optional[Callable[[Question], bool]] = None  # (Tests answer the question.)
+        self._away = False  # Minimised (or hidden by the system): still hooked up, reads wait for the restore.
+        self._missed = False  # A read was due while away.
         identify(self, "folder_info_window", "Folder info")
         self.setWindowTitle("Folder info")
         self.resize(*parse_size(read_setting(app_settings(), FOLDER_INFO_SIZE_SETTING), DEFAULT_SIZE))
@@ -218,6 +219,7 @@ class FolderInfoWindow(QWidget):
         self._explorer = weakref.ref(explorer) if explorer is not None else None
         self.setWindowTitle(f"Folder info — {path}")
         self.setWindowFilePath(path)
+        self._away = False
         self.request_read()
         if self.isMinimized():
             self.showNormal()
@@ -235,6 +237,9 @@ class FolderInfoWindow(QWidget):
     def request_read(self) -> None:
         """Read the folder: now, or after the read in flight (one queued at most)."""
         if not self.path:
+            return
+        if self._away:
+            self._missed = True  # (Read on the restore: one read, however many were due.)
             return
         if self.reads.ask(self.path):
             self._submit()
@@ -315,16 +320,17 @@ class FolderInfoWindow(QWidget):
     @pyqtSlot()
     def live_changed(self) -> None:
         """A tab's Live started or stopped (``FolderExplorer.liveChanged``): the header and This session say so. Its
-        last save, on stop, reads again through ``saveEnded``."""
+        last save, on stop (made after Live is off), reads again through ``saveEnded``."""
         if self.isVisible() and self.path:
             self._memory_timer.start()
 
     @pyqtSlot(str, str)
     def _save_ended(self, path: str, outcome: str) -> None:
-        """A save of the folder ended: while Live watches it, read (Live saves every N shots and on stop)."""
+        """A save of the folder ended: read when it saved (Live's every N shots and its last on stop, which comes after
+        Live is off; a load's), whether or not Live is on now (FI-1); otherwise as any change of the folder."""
         if path != self.path:
             return
-        if outcome in ("saved", "superseded") and self.live():
+        if outcome in ("saved", "superseded"):
             self.request_read()
         else:
             self._changed(path)
@@ -400,7 +406,8 @@ class FolderInfoWindow(QWidget):
         the header says when it worked, or why not, and the folder is read again."""
         path = self.path
         part = folder_info.CLEARS[ident]
-        question = folder_info.clear_question(None if self.error else self.answer, ident, path, time.time())
+        question = folder_info.clear_question(None if self.error else self.answer, ident, path, time.time(),
+                                              self.sources.memory(path, self.explorer()))
         if question is None or self._clearing(path, part):
             return
         if not (self.ask_clear or self._ask_clear)(question) or path != self.path:
@@ -564,15 +571,21 @@ class FolderInfoWindow(QWidget):
         if self.pane.isHidden():
             left = self.sections_area.width()
             self._pane_width = max(360, self.fontMetrics().averageCharWidth() * 60)
-            width, x = self.width() + self._pane_width, self.x()
+            # (One coordinate system: the frame's for the position, as ``move`` takes it, the client's for the size. A
+            # ``setGeometry`` from ``x()``/``y()``, which are the frame's, moved it down by its title bar each time.)
+            frame = self.frameGeometry()
+            border = frame.width() - self.width()
+            width, x = self.width() + self._pane_width, frame.x()
             screen = self.screen()
             if screen is not None:
                 room = screen.availableGeometry()
-                width = min(width, room.width())
-                if x + width > room.right():
-                    x = max(room.left(), room.right() - width)
+                width = min(width, room.width() - border)
+                if x + width + border > room.x() + room.width():
+                    x = max(room.x(), room.x() + room.width() - width - border)
             self.pane.show()
-            self.setGeometry(x, self.y(), width, self.height())
+            self.resize(width, self.height())
+            if x != frame.x():
+                self.move(x, frame.y())
             self.splitter.setSizes([max(MIN_SIZE[0] // 2, min(left, width - self._pane_width)), self._pane_width])
 
     def _fill_detail(self) -> bool:
@@ -616,13 +629,29 @@ class FolderInfoWindow(QWidget):
 
     def showEvent(self, a0: Optional[QShowEvent]) -> None:
         super().showEvent(a0)
-        if not self._fitted:
-            self._fitted = True
-            self.fit_screen()
+        self.fit_screen()  # (Every show: its screen may be another, smaller one since, FI-8.)
         self._connect()
+        if self._away:
+            self._away = False
+            self._memory_timer.start()  # (This session as it is now.)
+            if self._missed:
+                self._missed = False
+                self.request_read()
+
+    def _minimised(self, a0: Optional[QHideEvent]) -> bool:
+        """A hide by the system (minimised, the app hidden), not by closing: the window comes back as it was."""
+        return self.isMinimized() or (a0 is not None and a0.spontaneous())
 
     def hideEvent(self, a0: Optional[QHideEvent]) -> None:
         super().hideEvent(a0)
+        if self._minimised(a0):
+            # Minimised: still hooked up to Live and the cache (FI-5); a read that falls due waits for the restore.
+            self._away = True
+            if self._read_timer.isActive():
+                self._read_timer.stop()
+                self._missed = True
+            return
+        self._away = self._missed = False
         self._disconnect()
         self._read_timer.stop()
         self._memory_timer.stop()

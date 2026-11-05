@@ -329,7 +329,8 @@ def folder_info_store_v4() -> tuple[str, ...]:
 def test_each_clear_asks_naming_sizes_counts_and_the_only_copies() -> None:
     raw = folder_info.clear_question(answer(), "clear_raw", PATH, NOW)
     assert raw == folder_info.Question("Clear raw pulses of this folder", "Remove HeLab's cached raw pulses of x "
-                                       "(18.0 MB)? Your d files aren't touched.", "Remove cached raw pulses")
+                                       "(18.0 MB)? Your d files aren't touched. They're cached again the next time "
+                                       "this folder loads.", "Remove cached raw pulses")
     only = folder_info.clear_question(answer(raw={**answer()["raw"], "only_copy": 7}), "clear_raw", PATH, NOW)
     assert only is not None and only.warn and only.text.endswith(
         "\n\n7 of them are the only copy: their raw files are gone from the folder, so they can't be read again.")
@@ -364,3 +365,42 @@ def test_converted_txy_rows_mark_their_only_copies() -> None:
     info = build(answer(converted=converted(("cache", 4, 4000, 2))), memory(), NOW)
     [row] = section(info, "converted").rows
     assert row.text.endswith(" · ⚠ 2 only copies") and row.warn and "the only copy of that TXY" in row.tooltip
+
+
+def test_the_raw_pulses_question_says_whether_they_come_back() -> None:
+    """FI-4 (CoCo's wording): cached again at the next load, unless Don't cache or a TXY only policy stops that."""
+    def said(**changes: Any) -> str:
+        question = folder_info.clear_question(answer(), "clear_raw", PATH, NOW, memory(**changes))
+        assert question is not None
+        return question.text.split("aren't touched. ")[1]
+    assert said() == "They're cached again the next time this folder loads."
+    assert said(policy_id="raw") == "They're cached again the next time this folder loads."
+    assert said(policy_id="txy") == "They aren't cached again: this folder's cache policy is TXY only."
+    assert said(flags={"no_cache": True}) == "They aren't cached again: this folder is set to Don't cache."
+
+
+def test_saved_flags_choices_and_constants_that_cant_be_read_say_so() -> None:
+    """FI-7: a part that failed shows as an error line, as the other sections do; never as nothing saved."""
+    parts = {**answer()["parts"], **{name: part("error", "Disk cache could not be read: locked")
+                                     for name in ("prefs", "convert_prefs", "choices", "constants")}}
+    info = build(answer(parts=parts), memory(), NOW)
+    expected = {"flags": ["Couldn't read the saved flags: Disk cache could not be read: locked",
+                          "Couldn't read the saved Write TXY beside flag: Disk cache could not be read: locked"],
+                "choices": ["Couldn't read the saved TXY list and cache policy: Disk cache could not be read: locked"],
+                "constants": ["Couldn't read the saved constants: Disk cache could not be read: locked"]}
+    for ident, lines in expected.items():
+        rows = section(info, ident).rows
+        assert [row.text for row in rows[:len(lines)]] == lines and all(row.warn for row in rows[:len(lines)])
+    clean = build(answer(), memory(), NOW)
+    assert not any(row.text.startswith("Couldn't read") for ident in expected for row in section(clean, ident).rows)
+
+
+def test_an_unverified_drives_clears_wait_for_it() -> None:
+    """FI-2: a read that found the drive not verified offers no Clear (it would be refused), and says why."""
+    event = answer(root_state="unverified", key="", parts={name: part("skipped", "not verified")
+                                                           for name in answer()["parts"]},
+                   converted=converted(("cache", 4, 4000, 0)))
+    offered = actions(build(event, memory(), NOW))
+    assert {(offered[ident].enabled, offered[ident].tooltip) for ident in folder_info.CLEARS} == {
+        (False, folder_info.UNVERIFIED)}
+    assert texts(build(event, memory(), NOW), "store") == ["Not read: this drive isn't verified yet this session"]

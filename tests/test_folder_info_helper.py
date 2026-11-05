@@ -70,10 +70,10 @@ def opened(source: Path) -> CacheStore:
     return stores._cache_store(store_options()["directory"], [str(source)])
 
 
-def ask(path: Path, temps: Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def ask(path: Path, temps: Path | None = None, **params: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     sent: list[dict[str, Any]] = []
     cache_admin(store_options(), "folder_info", sent.append, path=str(path),  # type: ignore[arg-type]
-                temps=str(temps or ""))
+                temps=str(temps or ""), **params)
     [info] = [event for event in sent if event["kind"] == "folder_info"]
     assert sent[-1]["kind"] == "admin_result" and sent[-1]["action"] == "folder_info"
     return info, sent
@@ -181,21 +181,43 @@ def test_a_folder_without_a_data_root_is_ram_only_not_an_error(tmp_path: Path) -
     assert not any(event["kind"] == "error" for event in sent)
 
 
-def test_an_unverified_drive_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from helab.utils.data_roots import VolumeUnverified
+@pytest.fixture
+def usb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, list[str]]:
+    """A run on a disk whose mount hint the store keeps (a listing recorded it) with raw pulses, a saved result and a
+    converted TXY in the temp folder by path; and the disk's (mount, source) to pass as verified. The real opener and
+    resolver, as ``test_store_migration``'s constants on an unverified volume."""
+    import uuid
+    from helab.io_ops.browse import list_folder
+    from helab.utils import cache_paths, data_roots
+    from helab.utils.cache_paths import Mount
+    disk = tmp_path / "USB"
+    run = disk / "run"
+    run.mkdir(parents=True)
+    (disk / ".helab-root").write_text(json.dumps({"helab": "root", "version": 1, "uuid": str(uuid.uuid4()),
+                                                  "label": "USB", "created_at": "2026-10-20T00:00:00Z"}),
+                                      encoding="utf-8")
+    mount = Mount("/dev/disk4s1", str(disk), "apfs")
+    monkeypatch.setattr(cache_paths, "current_mounts", lambda: [mount])
+    monkeypatch.setattr(data_roots, "_volume_id", lambda _: "disk-a")
+    list_folder(str(disk), lambda _: None, store_options())
+    with opened(run) as store:
+        store.save_raw_batch(str(run), [raw_entry(store, shot) for shot in (1, 2)], store.start_raw_job(str(run)))
+        store.save_result(str(run), "k1", "f", record({"bins": 5}), store.write_result_file(b"z" * 80),
+                          store.start_result_job(str(run)), analysis_id="tests.corr", action="Plot", computed_at=1.0)
+    converted_folder(str(tmp_path / "temps"), "path:" + os.path.abspath(run), run, {1: "cache"})
+    return run, [mount.path, mount.source]
 
-    def unverified(self: CacheStore, path: str) -> str:
-        raise VolumeUnverified(path)
-    monkeypatch.setattr(cache_store.CacheStore, "folder_contents", lambda *args, **kwargs: pytest.fail("read"))
-    original = stores._cache_store
 
-    def opener(*args: Any, **kwargs: Any) -> CacheStore:
-        store = original(*args, **kwargs)
-        store._path_key = lambda path: unverified(store, path)
-        return store
-    monkeypatch.setattr(stores, "_cache_store", opener)
-    info, _ = ask(tmp_path / "data" / "x")
-    assert info["root_state"] == "unverified" and info["parts"]["raw"]["status"] == "skipped"
+def test_an_unverified_drive_says_so_never_ram_only(usb: tuple[Path, list[str]], tmp_path: Path) -> None:
+    """FI-2: the admin opener leaves an unverified mount out of its resolver (plain ``NoDataRoot`` there); the read says
+    "unverified", never "no data root" (which reads as RAM only, nothing cached)."""
+    run, verified = usb
+    info, _ = ask(run, tmp_path / "temps", verified_volumes=[])
+    assert info["root_state"] == "unverified" and info["key"] == ""
+    assert {part["status"] for name, part in info["parts"].items() if name != "converted"} == {"skipped"}
+    assert "not yet verified" in info["parts"]["raw"]["error"]
+    info, _ = ask(run, tmp_path / "temps", verified_volumes=[verified])
+    assert info["root_state"] == "rooted" and info["raw"]["shots"] == 2
 
 
 def test_a_part_that_cant_be_read_is_its_own_error(tmp_path: Path) -> None:
@@ -448,32 +470,28 @@ def test_clear_converted_txy_takes_this_folders_only_never_beside_and_names_only
     assert untouched == []  # (The source folder, where beside TXY are, is never looked at.)
 
 
-def test_a_refused_or_failed_clear_says_so_and_removes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_refused_or_failed_clear_says_so_and_removes_nothing(usb: tuple[Path, list[str]], tmp_path: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """FI-2: on a drive not verified this session (the real opener) each Clear refuses as unverified, the converted one
+    too (never falling back to the temp folder's by-path folder); a failing store removes nothing either."""
     from helab.utils.data_roots import VolumeUnverified
-    x = seed(tmp_path)
-    original = stores._cache_store
-
-    def unverified(*args: Any, **kwargs: Any) -> CacheStore:
-        store = original(*args, **kwargs)
-
-        def refuse(path: str) -> str:
-            raise VolumeUnverified(path)
-        store._path_key = refuse
-        return store
-    monkeypatch.setattr(stores, "_cache_store", unverified)
-    for action, params in (("clear_raw", {"paths": [str(x)]}), ("clear_results", {"paths": [str(x)]}),
-                           ("clear_converted_txy", {"path": str(x)})):
+    run, verified = usb
+    temps = str(tmp_path / "temps")
+    by_path = folder_for(temps, "path:" + os.path.abspath(run))
+    for action, params in (("clear_raw", {"paths": [str(run)]}), ("clear_results", {"paths": [str(run)]}),
+                           ("clear_converted_txy", {"path": str(run), "temps": temps})):
         with pytest.raises(VolumeUnverified):
-            cache_admin(store_options(), action, lambda event: None, **params)
-    monkeypatch.setattr(stores, "_cache_store", original)
-    assert counts(x) == (3, 3, 3)
+            cache_admin(store_options(), action, lambda event: None, verified_volumes=[], **params)
+    assert counts(run) == (2, 0, 1) and os.listdir(by_path) == ["d_txy_helab_m19v1_1.txt"]
 
     def failing(self: CacheStore, *args: Any, **kwargs: Any) -> Any:
         raise cache_store.StoreError("Disk cache could not be written: disk I/O error")
-    monkeypatch.setattr(cache_store.CacheStore, "remove_raw", failing)
-    with pytest.raises(cache_store.StoreError, match="disk I/O error"):
-        cache_admin(store_options(), "clear_raw", lambda event: None, paths=[str(x)])
-    assert counts(x) == (3, 3, 3)
+    with monkeypatch.context() as patched, pytest.raises(cache_store.StoreError, match="disk I/O error"):
+        patched.setattr(cache_store.CacheStore, "remove_raw", failing)
+        cache_admin(store_options(), "clear_raw", lambda event: None, paths=[str(run)], verified_volumes=[verified])
+    assert counts(run) == (2, 0, 1)
+    clear("clear_raw", paths=[str(run)], verified_volumes=[verified])  # (Verified: it clears.)
+    assert counts(run) == (0, 0, 1)
 
 
 def test_the_app_clears_one_folder_on_the_local_lane_with_its_verified_volumes(monkeypatch: pytest.MonkeyPatch) -> None:

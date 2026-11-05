@@ -66,8 +66,9 @@ root has no disk cache at all, and the window says **RAM only**.
 
 ## Refreshing
 
-The window reads when it opens, when you click **Refresh**, and after you start an action from it
-(once the folder has changed). It doesn't read on a timer.
+The window reads when it opens, when you click **Refresh**, after each save of the folder to the disk
+cache (a load's, or Live's), and after you start an action from it (once the folder has changed). It
+doesn't read on a timer. Minimised, it reads once when you bring it back, if a read fell due meanwhile.
 
 **While Live watches the folder**, the window keeps up by itself: its This session lines follow each
 check that brings new shots, and it reads the disk cache again after each Live save (every few shots,
@@ -103,7 +104,7 @@ the Clear runs.
 
 | Button | What it removes | What stays |
 |---|---|---|
-| **Clear raw pulses…** | HeLab's cached raw pulses of the folder, only copies included | your `d<N>.txt` files, the folder's TXY data and loads saved |
+| **Clear raw pulses…** | HeLab's cached raw pulses of the folder, only copies included (they're cached again the next time the folder loads, unless it is set to Don't cache or its cache policy is TXY only: the question says which) | your `d<N>.txt` files, the folder's TXY data and loads saved |
 | **Clear this folder's saved results…** | the folder's saved plot results | plots open on it (they keep what they show), its cached data and flags |
 | **Clear this folder's converted TXY…** | the TXY HeLab converted from the folder into its cache or temp folder | your `d<N>.txt` files, and TXY written beside them: never touched |
 

@@ -54,7 +54,7 @@ def folder_info(store: CacheStore, path: str, cache_directory: str, temps: str =
     state: RootState = "rooted"
     why = ""
     try:
-        event["key"] = store._path_key(path)
+        event["key"] = folder_key(store, path)
     except VolumeUnverified as exc:
         state, why = "unverified", str(exc) or "its drive isn't verified yet this session"
     except (NoDataRoot, UnresolvedRemotePath) as exc:
@@ -73,6 +73,23 @@ def folder_info(store: CacheStore, path: str, cache_directory: str, temps: str =
                           if "error" in statuses else {"status": "found" if "found" in statuses else "missing",
                                                        "error": ""})
     return event
+
+
+def folder_key(store: CacheStore, path: str) -> str:
+    """``path``'s store key, as the admin job's opener resolves it. A folder on a mount whose volume this session
+    hasn't verified raises ``VolumeUnverified`` (the opener leaves that mount out and raises plain ``NoDataRoot``
+    for it, as ``constants`` and the offline listing find through ``store._unverified_mounts``): never "no data
+    root", which would read as RAM only. No data root at all raises ``NoDataRoot``."""
+    from helab.utils.cache_paths import _inside, _normal
+    from helab.utils.data_roots import NoDataRoot, VolumeUnverified
+    try:
+        return store._path_key(path)
+    except VolumeUnverified:
+        raise
+    except NoDataRoot:
+        if any(_inside(_normal(path), _normal(mount)) for mount in store._unverified_mounts):
+            raise VolumeUnverified(path) from None
+        raise
 
 
 def _part(read: Read[Any]) -> FolderInfoPart:

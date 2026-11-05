@@ -274,6 +274,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 # (S4~1, the global TXY only: the folders that follow Settings' policy; the others keep theirs.)
                 raw = store.remove_raw_following()
             else:
+                _refuse_unverified(store, paths)
                 raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
             send(_raw_removed_event(raw.paths, raw.rows, raw.bytes))
             result.update({"raw": raw.rows, "bytes": raw.bytes})
@@ -350,6 +351,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             # The Cache tab's Clear cached analysis: every saved result; or, with ``paths`` (Folder info's Clear this
             # folder's saved results…, confirmed), those folders' (each one's results epoch). Datasets and records stay.
             paths = params.get("paths")
+            _refuse_unverified(store, paths)
             cleared = store.remove_results(None if paths is None else [str(path) for path in paths])
             send(_results_removed_event(cleared))
             result.update({"results": cleared.results, "bytes": cleared.bytes})
@@ -457,13 +459,29 @@ def _cache_move_step(mover: Any, action: str, app_dir: str, move: dict[str, Any]
 def _converted_folders(store: Any, path: str, cache_directory: str, temps: str) -> list[str]:
     """HeLab's folders for ``path``'s converted TXY (``helab_txy.folders``: the cache folder by its key, the temp folder
     by key and by path); by path only without a data root. A drive not verified this session raises, as its read does."""
+    from helab.io_ops.folder_info import folder_key
     from helab.utils.cache_paths import UnresolvedRemotePath
     from helab.utils.data_roots import VolumeUnverified
     try:
-        key = store._path_key(path)
+        key = folder_key(store, path)
     except VolumeUnverified:
         raise  # (A NoDataRoot too, but not RAM only: refused until the drive is verified.)
     except UnresolvedRemotePath:  # (NoDataRoot among them.)
         key = ""
     options = {"cache_base": os.path.dirname(os.path.abspath(cache_directory)), "temps": temps}
     return helab_txy.folders(path, options, key)
+
+
+def _refuse_unverified(store: Any, paths: Any) -> None:
+    """A Clear of named folders refuses one on a drive not verified this session (``VolumeUnverified``, its reason),
+    rather than failing as "no data root". (Folders without a data root fail in the removal, as before.)"""
+    from helab.io_ops.folder_info import folder_key
+    from helab.utils.cache_paths import UnresolvedRemotePath
+    from helab.utils.data_roots import VolumeUnverified
+    for path in paths or ():
+        try:
+            folder_key(store, str(path))
+        except VolumeUnverified:
+            raise
+        except UnresolvedRemotePath:
+            pass
