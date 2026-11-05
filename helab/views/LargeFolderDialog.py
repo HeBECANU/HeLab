@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QVBoxL
 
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.number_format import byte_size
+from helab.views.explorer_text import breakable
 
 
 class LargeFolderDialog(QDialog):
@@ -17,10 +18,13 @@ class LargeFolderDialog(QDialog):
         name = os.path.basename(path.rstrip(os.sep)) or path
         self.setWindowTitle("Load a large folder?")
         layout = QVBoxLayout(self)
-        self.text = QLabel(
+        self.message = (
             f"{name} would take about {byte_size(estimate, 'ram')} in RAM (its TXY files' size on disk).\n"
             f"RAM budget {byte_size(ram_budget, 'ram')} · this computer has {byte_size(total, 'ram')} of RAM.\n"
             "While it loads, HeLab may briefly use about 2–3× this.")
+        # Wrapped, a long folder name broken where it must be: on one line it set the dialog's width (LR-3).
+        self.text = QLabel(breakable(self.message))
+        self.text.setWordWrap(True)
         self.text.setToolTip(path)
         layout.addWidget(self.text)
         self.understood = identify(QCheckBox("I understand this may slow down or stop HeLab"), "large_understood")

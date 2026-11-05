@@ -403,7 +403,7 @@ def settled(qtbot: QtBot, service: IOService) -> None:
     qtbot.waitUntil(lambda: not service.active and not service.pending, timeout=30_000)
 
 
-@covers("SettingsDialog", "LabParametersTab", "ConverterTab", "CacheTab", "RamBudgetSpinBox", "DataRootsTab",
+@covers("SettingsDialog", "LabParametersTab", "ConverterTab", "CacheTab", "RamBudgetSpinBox", "DataRootsTab", "WrapRow",
         "ProfileEditor")
 def test_settings_and_each_of_its_tabs(qtbot: QtBot) -> None:
     from helab.convert.profile import MATLAB_2019

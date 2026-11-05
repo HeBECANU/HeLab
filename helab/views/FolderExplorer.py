@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 import numpy as np
 import numpy.typing as npt
-from PyQt6.QtCore import QEvent, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QPainter, QPalette, QPen, QResizeEvent
 from PyQt6.QtWidgets import (QApplication, QMessageBox, QHBoxLayout, QLineEdit, QMenu, QPushButton, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QTreeView, QInputDialog,
                              QStyle, QToolButton, QVBoxLayout, QWidget, QSizePolicy)
@@ -37,7 +37,8 @@ from helab.utils.scan_history import history_tooltip
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.explorer_convert import ExplorerConverter
 from helab.views.explorer_live import ARM_AUTO_CONVERT, LiveController, LiveSession, live_brief
-from helab.views.explorer_text import large_text, plural
+from helab.views import tooltips
+from helab.views.explorer_text import large_text, middle, plural
 
 # Where a load's data came from, as the cache summary and Folder details name it.
 LOAD_ORIGINS = {"disk": "disk cache", "files": "TXY files", "memory": "memory"}
@@ -178,6 +179,12 @@ class ScanDelegate(QStyledItemDelegate):
             painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                              QFontMetrics(item.font).elidedText(text, Qt.TextElideMode.ElideRight, rect.width()))
             painter.restore()
+
+
+# The Live line's text while Live is off.
+LIVE_OFF_TEXT = "Live updates off"
+# The least of the Live line Auto-convert leaves beside it; narrower, Auto-convert takes a line of its own (LR-3).
+LIVE_LINE_LEAST = "Live…"
 
 
 class FolderExplorer(QWidget):
@@ -334,7 +341,7 @@ class FolderExplorer(QWidget):
         # _fit_selected_label sets its width; the counts label takes the rest of the line.
         self.selected_folder_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.folder_cache_label = identify(ElidedLabel("Cache not checked", self.summary_widget), "summary_cache")
-        self.folder_freshness_label = identify(ElidedLabel("Live updates off", self.summary_widget),
+        self.folder_freshness_label = identify(ElidedLabel(LIVE_OFF_TEXT, self.summary_widget),
                                                "summary_freshness")
         # At the Live line's end (Q6.8): auto-convert on or off while Live is on, armed before it starts; its menu.
         self.live_row = QWidget(self.summary_widget)
@@ -440,6 +447,18 @@ class FolderExplorer(QWidget):
         live_layout.addWidget(self.folder_freshness_label, 1)
         live_layout.addWidget(self.auto_convert_button)
         summary_layout.addWidget(self.live_row)
+        # Auto-convert's line when the Live line is too tight for it (``_fit_live_row``): the summary then
+        # has four lines, else its fixed three (LR-3, Tony 2026-11-05).
+        self.convert_row = QWidget(self.summary_widget)
+        self.convert_row.setFixedHeight(line_height)
+        convert_layout = QHBoxLayout(self.convert_row)
+        convert_layout.setContentsMargins(0, 0, 0, 0)
+        convert_layout.addStretch(1)
+        summary_layout.addWidget(self.convert_row)
+        self.convert_row.hide()
+        self.live_row.installEventFilter(self)  # (Its resizes re-fit Auto-convert: ``_fit_live_row``.)
+        self.live_fit = ""  # ``_fit_live_row``'s last measure
+        self._summary_line = line_height
         self.summary_widget.setFixedHeight(3 * line_height)
         self.summary_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout = QVBoxLayout(self)
@@ -675,6 +694,8 @@ class FolderExplorer(QWidget):
         if (index.isValid() and index.parent() == top_left.parent()
                 and top_left.row() <= index.row() <= bottom_right.row()):
             text = index.data(Qt.ItemDataRole.ToolTipRole)
+            if isinstance(text, str) and tooltips.needs_wrap(text, metrics := QFontMetrics(QToolTip.font())):
+                text = tooltips.wrap_tip(text, metrics)  # (As the app's filter shows it: LR-3.)
             if isinstance(text, str) and text != QToolTip.text():
                 QToolTip.showText(QCursor.pos(), text, viewport, self.tree.visualRect(index))
 
@@ -1664,13 +1685,23 @@ class FolderExplorer(QWidget):
         return f"{byte_rate(rates[0])} · {files} files/s"
 
     @property
+    def activity_folder(self) -> str:
+        """The folder the status bar's phrase names when it shortened its name (``middle``), for the
+        tooltip; "" otherwise."""
+        path = self.live.path if self.live is not None else self._load_path if self.loading and self._load_path else ""
+        name = os.path.basename(path.rstrip(os.sep)) or path
+        return path if path and middle(name) != name else ""
+
+    @property
     def activity_brief(self) -> str:
         """This tab's most important activity in a few words, for the main status bar."""
+        # A long folder name is shortened in the middle, so what follows it stays in view (LR-3); the
+        # tooltip has the whole path.
         if self.live is not None:
-            name = os.path.basename(self.live.path.rstrip(os.sep)) or self.live.path
+            name = middle(os.path.basename(self.live.path.rstrip(os.sep)) or self.live.path)
             return f"Live stopped: {name}" if self.live.error else live_brief(self.live, name)
         if self.loading and self._load_path:
-            name = os.path.basename(self._load_path.rstrip(os.sep)) or self._load_path
+            name = middle(os.path.basename(self._load_path.rstrip(os.sep)) or self._load_path)
             if self.load_queued:
                 return f"Queued {name}"
             parts = [f"{self.load_verb} {name}"]
@@ -1994,6 +2025,7 @@ class FolderExplorer(QWidget):
         shown = bool(path) and (watching or self.live is None)
         if button.isHidden() == shown:
             button.setVisible(shown)
+            self._fit_live_row()
         on = self.live_control.auto_converting(path) if watching else self.live_control.auto_convert_armed(path)
         if button.isChecked() != on:
             button.setChecked(on)
@@ -2034,6 +2066,46 @@ class FolderExplorer(QWidget):
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         super().resizeEvent(a0)
         self._fit_selected_label()
+        self._fit_live_row()
+
+    def _fit_live_row(self) -> None:
+        """Auto-convert on the Live line while the line has room for it beside "Live…" (the line's text
+        elides, whole in its tooltip); at a tighter width on a line of its own, its text whole (LR-3: it was
+        cut at a narrow panel)."""
+        if not self.isVisible():
+            return  # (Not laid out yet: its rows have Qt's default size. Laid out, the Live line's resize fits it.)
+        button = self.auto_convert_button
+        # The Live line's width: the tab's, less the summary's margin (its own may not be laid out yet).
+        margins = self.summary_widget.contentsMargins()
+        layout = self.summary_widget.layout()
+        if layout is not None:
+            inner = layout.contentsMargins()
+            margins = QMargins(margins.left() + inner.left(), 0, margins.right() + inner.right(), 0)
+        room = self.width() - margins.left() - margins.right()
+        need = button.width() + 4 + self.folder_freshness_label.fontMetrics().horizontalAdvance(LIVE_LINE_LEAST)
+        # A line of its own only while it is shown on a shown Live line that can't hold it.
+        tight = not button.isHidden() and not self.live_row.isHidden() and room < need
+        # What it measured, for a test's message (fonts differ by OS) and the log.
+        self.live_fit = (f"tab {self.width()} px, Live line {self.live_row.width()} px, room {room}, need {need} "
+                         f"(Auto-convert {button.width()} px, hint {button.sizeHint().width()}, "
+                         f"{'hidden' if button.isHidden() else 'shown'}), own line {'shown' if tight else 'hidden'}")
+        if tight == (not self.convert_row.isHidden()):
+            return
+        logging.debug(f"Summary: Auto-convert {'on a line of its own' if tight else 'on the Live line'}: {self.live_fit}")
+        hidden = button.isHidden()
+        live_layout, convert_layout = self.live_row.layout(), self.convert_row.layout()
+        assert isinstance(live_layout, QHBoxLayout) and isinstance(convert_layout, QHBoxLayout)
+        if tight:
+            live_layout.removeWidget(button)
+            button.setParent(self.convert_row)
+            convert_layout.insertWidget(0, button)
+        else:
+            convert_layout.removeWidget(button)
+            button.setParent(self.live_row)
+            live_layout.addWidget(button)
+        button.setVisible(not hidden)  # (A new parent hides it.)
+        self.convert_row.setVisible(tight)
+        self.summary_widget.setFixedHeight((4 if tight else 3) * self._summary_line)
 
     @staticmethod
     def _relative_age(seconds: float) -> str:
@@ -2116,6 +2188,10 @@ class FolderExplorer(QWidget):
         self._update_activity()
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a0 is self.live_row:
+            if a1 is not None and a1.type() == QEvent.Type.Resize:
+                self._fit_live_row()  # (Its width once laid out, and every change: LR-3.)
+            return False
         if a1 and a1.type() in (QEvent.Type.Show, QEvent.Type.Resize):
             self._schedule_visible_checks()
         return super().eventFilter(a0, a1)

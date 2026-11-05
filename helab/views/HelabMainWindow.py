@@ -361,6 +361,7 @@ class HelabMainWindow(QMainWindow):
         loading = bool(explorer and explorer.loading)
         summary = service.activity_summary()
         self.status_bar_message_left.setToolTip("\n\n".join(filter(None, (
+            explorer.activity_folder if explorer else "",
             explorer.loading_tooltip if explorer and loading else "",
             explorer.activity_text if explorer else "",
             explorer.activity_tooltip if explorer and not loading else "",

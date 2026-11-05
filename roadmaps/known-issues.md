@@ -412,6 +412,13 @@ How to use it:
   No rerun in the 36 test jobs since 2026-10-23 (Quick Fixes 2). Its macOS teardown failure
   (`f9faefd`) may have been the same message-handler race as the scatter test's, which
   `--no-qt-log` removes (`cd2b0c3`); keep it open a while longer.
+- [ ] **Auto-load pause state carried across tests** (test isolation): the per-worker shared `FolderCache` keeps an
+  auto-load pause from an earlier test, and its release during a later window test shows "Disk cache below 80% —
+  automatic loading resumed" (`HelabMainWindow._auto_load_pause_changed`) at the start of that test's status bar.
+  Seen as a RERUN of `test_text_length.py::test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrases_end`
+  on macOS, Ground CI 41981742368 (Tests 2/3, job 127093226610, `e638a22`, 2026-11-05). That test now finds the
+  Live phrase anywhere in the text (`98a23af`); tests shouldn't match the status bar's start. The carried state
+  itself isn't reset yet.
 
 Tony (2026-10-22): note these, no fixes for now; raise them again only if they keep
 happening. Counted over the last 12 CI runs from `gh api repos/TonyXTYan/HeLab/actions/jobs/<id>/logs`
@@ -425,6 +432,15 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.9` (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their release-notes lines are in
 TonyXTYan/HeLab#11):
 
+- [x] **An elided label raised in Qt's event loop as it was deleted** (LR-3's T3, `73098fa`): `ElidedLabel.event`'s
+  override was also called for events Qt sends while deleting the label, where `super().event()` raised "wrapped
+  C/C++ object of type ElidedLabel has been deleted". Seen as a RERUN of
+  `test_result_cache_plots.py::test_the_source_line_marks_reuse` on Windows, Ground CI 41981742368 (Tests 1/3, job
+  127093226656, `e638a22`). Fixed in `98a23af`: the override is gone and the app's tooltip filter (`TooltipWrap`)
+  shows an elided label's full text. **LR-3's Windows summary line** (CI 41976935066, 41977069786, 41979494346:
+  `test_folder_summary.py`'s fixed height and `test_text_length.py`'s sizes failing on every rerun): the Live line
+  was measured before its layout sized it, and the tests used macOS sizes; fixed in `fc81f78`, `e638a22`,
+  `c713f4c` (CI's offscreen Windows font needs 259 px where macOS needs 157).
 - [x] **Folder details' conversion said nothing of a raw file whose read stopped early** (A58.2): only Live's
   auto-convert named it and notified. Folder details' Convert row now names it (one by name, several counted, the
   detail in its tooltip) and each file notifies once per session whichever conversion read it, through the shared

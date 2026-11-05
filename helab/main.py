@@ -230,6 +230,8 @@ def main() -> None:
         helab_mono_font = QFont("Monospace", 12)
         logging.warning("SF Mono helab_mono_font not found. Using Monospace helab_mono_font instead.")
     app.setFont(helab_mono_font)
+    from helab.views import tooltips
+    tooltips.install(app)  # Long plain-text tooltips wrapped (LR-3).
 
     IconsInitUtil.initialise_icons()
 
