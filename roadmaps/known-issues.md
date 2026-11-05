@@ -414,15 +414,6 @@ How to use it:
   No rerun in the 36 test jobs since 2026-10-23 (Quick Fixes 2). Its macOS teardown failure
   (`f9faefd`) may have been the same message-handler race as the scatter test's, which
   `--no-qt-log` removes (`cd2b0c3`); keep it open a while longer.
-- [ ] **Auto-load pause state carried across tests** (test isolation): the per-worker shared `FolderCache` keeps an
-  auto-load pause from an earlier test, and its release during a later window test shows "Disk cache below 80% —
-  automatic loading resumed" (`HelabMainWindow._auto_load_pause_changed`) at the start of that test's status bar.
-  Seen as a RERUN of `test_text_length.py::test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrases_end`
-  on macOS, Ground CI 41981742368 (Tests 2/3, job 127093226610, `e638a22`, 2026-11-05). That test now finds the
-  Live phrase anywhere in the text (`98a23af`); tests shouldn't match the status bar's start. The carried state
-  itself isn't reset yet. Again on Windows CI, `agent/folder-info` 42001112700 (Tests 2/3, job 127156351562, `9da2bee`): the
-  notice in front shortened the Live phrase so its end ("latest shot 3 · 1 min") was elided, so `98a23af` isn't
-  enough; the state has to be reset between tests (sent to Mendy, 2026-11-05).
 - [ ] **`test_share_detection` patches `os.path.realpath` process-wide**: a leftover `IOService` request then fails
   `Path.resolve()` in the helper launch ("Clean up disk cache failed … share_of stat'ed a source path"), a warning
   only, seen in Mendy's local runs for LR-15 (2026-11-05). Not a RERUN yet; the patch should be scoped to the call it
@@ -440,6 +431,13 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.9` (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their release-notes lines are in
 TonyXTYan/HeLab#11):
 
+- [x] **Auto-load pause state carried across tests** (test isolation; Ground CI 41981742368 and `agent/folder-info`
+  42001112700, RERUNs of `test_text_length.py`'s long-name test): `test_result_lifecycle`, `test_result_cache_plots` and
+  `test_result_cache_review` patch a tiny disk budget and left the app-wide `FolderCache` paused (ten such tests in a
+  suite trace); the next window test's `update_auto_load_pause()` on the real budget then showed "Disk cache below 80% —
+  automatic loading resumed" in front of its status bar, eliding the Live phrase's end, and auto loads stayed paused in
+  between. Fixed in `626ca02`: conftest's autouse `no_carried_disk_pause` clears the cache's usage and pause state
+  before each test without emitting; `tests/test_carried_disk_pause.py` runs two tests in order and fails without it.
 - [x] **An elided label raised in Qt's event loop as it was deleted** (LR-3's T3, `73098fa`): `ElidedLabel.event`'s
   override was also called for events Qt sends while deleting the label, where `super().event()` raised "wrapped
   C/C++ object of type ElidedLabel has been deleted". Seen as a RERUN of
