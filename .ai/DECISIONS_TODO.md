@@ -73,11 +73,13 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
   linking their download; their self-update later, once signing is settled.
 - **Q65.2** The Plot button's second name while a plot of that script is open (LR-2): **"New" with its tooltip,
   decided** (Tony, 2026-11-05: "ok new with tooltip"); "Add" kept for comparing folders.
-- **Q65.3** What a source checkout updates to (LR-14; Tony: "keep track to latest with v0.0.9 and I can press a
-  button in helab to close app, pull, and start helab up again"); the plan has tags only. Proposed: a setting,
-  Update from: (a) releases (tag to tag; the lab PCs' default) or (b) a branch (`dev/v0.0.9` now: fast-forward
-  only, never past a commit whose CI isn't green on all three OSes, read from GitHub's check runs); the venv is
-  rebuilt only when `requirements.lock` changed, else reused.
+- **Q65.3** What a source checkout updates to (LR-14): **decided** (Tony in Chat, 2026-11-05: "yes add settings
+  update from and defaults to whichever branch helab was run from source. if running the compiled version then
+  only checks and shows the releases"). A source checkout's Settings › General "Update from" defaults to the
+  branch HeLab runs from (fast-forward only, never past a commit whose CI isn't green on all three OSes), with
+  releases (tag to tag) to choose; a checkout on a tag (detached HEAD) defaults to releases. A compiled build only
+  checks and shows the releases (notify, with the download link). The venv is rebuilt only when
+  `requirements.lock` changed.
 
 ## Folder info window (block 64; [plan](../roadmaps/folder-info.md))
 
