@@ -266,3 +266,40 @@ would stay hooked up while closed and skip saving its size: harmless, but worth 
 title bar's button, reopen it, check the size was kept).
 
 **Open findings after Re-check 1:** FI-9 (Minor), FI-10 (Info, M~1), FI-6 (Info, A~5). No Blocker or Major.
+
+## Re-check 2 (fix diff `71f3d91..9ad023c`)
+
+Reviewer, 2026-11-05. Read the fix diff only (`git diff 71f3d91 9ad023c`: one commit, `9ad023c`, touching
+`FolderInfoWindow.py`, its tests and the handoff).
+
+### Checks rerun
+
+- **Touched tests**: `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-tally` on
+  `test_folder_info_window.py`, `test_folder_info_model.py`, `test_folder_info_helper.py`,
+  `test_accessible_names.py`, `test_settings_defaults.py` and `test_headless_imports.py`: **100 passed, no
+  reruns** (`.ai/temp/review-tests-recheck2.txt`). I didn't rerun the full suite: the change is the window's
+  alone (no shared code).
+- **Type checks**: the five and `ruff check` clean (`.ai/temp/review-types-recheck2.txt`).
+- CI: CoCo's run 42023911269, green on every job and 0 RERUN by CoCo's reading. I didn't reread its logs.
+
+### Findings
+
+- **FI-9 fixed.** `fit_screen` measures the main window's screen for the first show only (Qt places the window
+  there), then the window's own (`_shown_once`). `self.screen()` on a hidden window is the screen it was last on.
+  The test uses two fake screens: the first show fits the laptop, and moved to the monitor and made 1200 px tall,
+  a reopen keeps 1200.
+- **FI-10 fixed.** Only `isMinimized()` keeps the window hooked up. Any other hide, spontaneous ones included,
+  unhooks it and saves the size. For a platform that sends the hide before the minimised state,
+  `changeEvent(WindowStateChange)` hooks it up again as minimised, and the restore reads once what fell due.
+  `_connect` is idempotent. Both orders are tested.
+- **FI-6 open as A~5** (agreed).
+
+### FI-11 Info (new): hiding the app now unhooks the window
+
+`helab/views/FolderInfoWindow.py` (`_minimised`, `showEvent`). This is the trade-off FI-10's fix makes: a hide
+that isn't a minimise, such as macOS's Hide HeLab (⌘H), now counts as a close. While hidden, the window misses
+Live's saves, and when the app comes back `showEvent` reconnects without reading. "As of" stays honest, so the
+window is only stale until the next save or check, not wrong. Optional: on a show that isn't `show_folder`'s,
+read once when the window was unhooked by a spontaneous hide. Worth one look in M~1 (⌘H during Live, then back).
+
+**Open findings after Re-check 2:** FI-6 (Info, A~5) and FI-11 (Info, optional). No Blocker, Major or Minor.
