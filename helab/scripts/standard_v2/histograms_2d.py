@@ -224,7 +224,8 @@ class Histogram2DPlot(DatasetAnalysis):
         bounds = list(manual_bounds(values)) if manual(values) else [None, None, None]
         if values.get(OUTSIDE.name):
             bounds[AXES.index(PLANES[self.plane][2])] = None  # The bounds cut only the shown axes.
-        item = histogram2d(events, self.plane, keep_fraction(values),
+        # Manual: a shown axis without bounds (unset or reversed) covers its full extent, as v1's and the note say.
+        item = histogram2d(events, self.plane, 1.0 if manual(values) else keep_fraction(values),
                            (int(values[BINS_ACROSS.name]), int(values[BINS_UP.name])),
                            (bounds[0], bounds[1], bounds[2]), context.check)
         context.check()

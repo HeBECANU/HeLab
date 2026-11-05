@@ -257,3 +257,23 @@ def test_the_input_is_left_unchanged() -> None:
     for cls in PLOTS.values():
         result_of(cls(), data, {"range_mode": "manual", "t_min": 2.0, "t_max": 2.2})
     assert all(np.array_equal(before[shot], data.shots[shot]) for shot in before)
+
+
+@pytest.mark.parametrize("plane", list(PLANES))
+def test_manual_axes_left_unset_or_reversed_use_their_full_extent(plane: str) -> None:
+    """As v1 and the note say: in the manual View range, a shown axis whose min = max (unset) or min > max covers
+    every event of the summed selection, whatever "Auto-crop: keep" was left at (hidden in manual mode)."""
+    script, data = PLOTS[plane](), view()
+    across, up, summed = (("T", "X", "Y").index(name) for name in PLANES[plane])
+    name = PLANES[plane][2].lower()
+    window = {"range_mode": "manual", "keep_percent": 50.0, f"{name}_min": -10.0, f"{name}_max": 10.0}
+    every = np.concatenate([data.shots[shot] for shot in sorted(data.shots)])
+    for values in (window, {**window, **{f"{axis}_min": 1.0 for axis in "txy" if axis != name},
+                            **{f"{axis}_max": -1.0 for axis in "txy" if axis != name}}):
+        result = result_of(script, data, values).data
+        item = result.histogram
+        assert (item.h_edges[0], item.h_edges[-1]) == (every[:, across].min(), every[:, across].max())
+        assert (item.v_edges[0], item.v_edges[-1]) == (every[:, up].min(), every[:, up].max())
+        assert item.outside == 0 and item.inside == item.summed == len(every)
+    assert len(result.notes) == 2 and all("using full extent" in note for note in result.notes)
+    del summed
