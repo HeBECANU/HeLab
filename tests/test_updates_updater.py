@@ -451,13 +451,34 @@ def test_a_refusal_after_helab_quit_changes_nothing_and_starts_the_old_one(lab: 
 
 # -- Waiting --------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("folder", ["lab", "My Projects"])
+def framework_python() -> str:
+    """A macOS framework Python (python.org's, Homebrew's, GitHub's runners'): its venv's ``bin/python`` re-execs as
+    ``Python.app``, so ``ps`` doesn't name the venv. "" when there is none."""
+    import sysconfig
+    if sys.platform != "darwin":
+        return ""
+    if sysconfig.get_config_var("PYTHONFRAMEWORK"):
+        return sys.executable
+    for candidate in (f"/opt/homebrew/bin/python{MINOR}", f"/usr/local/bin/python{MINOR}",
+                      f"/Library/Frameworks/Python.framework/Versions/{MINOR}/bin/python3"):
+        if Path(candidate).is_file():
+            return candidate
+    return ""
+
+
+@pytest.mark.parametrize("folder", ["lab", "My Projects", "framework"])
 def test_the_updater_waits_for_helab_and_its_helpers_before_changing_a_file(tmp_path: Path, folder: str) -> None:
     """The helper as HeLab starts one from source (``<venv python> -m helab.io_helper``), also from a checkout
-    whose path has a space."""
+    whose path has a space, and (macOS) from a venv made by a framework Python."""
     if shutil.which("git") is None:
         pytest.skip("git isn't installed")
     lab = Lab(tmp_path / folder)
+    if folder == "framework":
+        base = framework_python()
+        if not base:
+            pytest.skip("no macOS framework Python here")
+        shutil.rmtree(lab.venv)
+        subprocess.run([base, "-m", "venv", "--without-pip", str(lab.venv)], check=True)
     (lab.checkout / "helab" / "io_helper.py").write_text("import time\ntime.sleep(60)\n")  # (Untracked.)
     target = lab.publish("0.0.2")
     helab = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])

@@ -343,19 +343,37 @@ def running_from(job: Job) -> list[str]:
         return _windows_images(folders + [str(job.checkout), str(job.checkout.resolve())])
     try:
         # -ww: procps (Linux) cuts a piped listing to 80 columns, which would hide a helper's venv path.
-        listing = _run(["ps", "-A", "-ww", "-o", "pid=,command="], timeout=20)
+        listing = _processes(["ps", "-A", "-ww", "-o", "pid=,command="])
+        # macOS: a venv made from a framework Python (python.org's, Homebrew's, CI's) re-execs as ``Python.app``,
+        # so its command line no longer names the venv; its environment does (``__PYVENV_LAUNCHER__``, set by the
+        # venv's stub). Read with -E (this user's processes), matched only, never shown or logged.
+        environments = _processes(["ps", "-A", "-ww", "-E", "-o", "pid=,command="]) if sys.platform == "darwin" else {}
     except (OSError, subprocess.SubprocessError):
         return ["the process list couldn't be read (ps)"]
     places = sorted(set(folders) | {str(job.checkout), str(job.checkout.resolve())})
-    for line in listing.stdout.splitlines():
-        pid, _, command = line.strip().partition(" ")
-        command = command.strip()
-        if not pid.isdigit() or int(pid) == os.getpid():
+    launchers = [f"{LAUNCHER_ENV}={folder.rstrip(os.sep)}{os.sep}" for folder in folders]
+    for pid, command in listing.items():
+        if pid == os.getpid():
             continue
         # (By folder only: ``--helab-io-helper`` names a frozen HeLab's helper, which never runs a checkout's code,
         # so it would only ever match another HeLab, a HeLab.app or another checkout's tests.)
-        if _runs_helab_from(command, places):
+        if _runs_helab_from(command, places) or any(launcher in environments.get(pid, "") for launcher in launchers):
             found.append(f"process {pid}: {command[:160]}")
+    return found
+
+
+# The variable macOS's venv stub sets for a framework Python (the venv's own ``bin/python``).
+LAUNCHER_ENV = "__PYVENV_LAUNCHER__"
+
+
+def _processes(command: list[str]) -> dict[int, str]:
+    """``ps``'s listing: pid → the rest of its line."""
+    listing = _run(command, timeout=20)
+    found: dict[int, str] = {}
+    for line in listing.stdout.splitlines():
+        pid, _, rest = line.strip().partition(" ")
+        if pid.isdigit():
+            found[int(pid)] = rest.strip()
     return found
 
 
@@ -983,6 +1001,9 @@ def main(argv: list[str]) -> int:
     if not argv:
         print("usage: updater.py REQUEST.json [--check]", file=sys.stderr)
         return 64
+    # Inherited from a HeLab run by a framework Python: not passed on, so nothing this updater starts (ps, git,
+    # the relaunch) passes for a process of HeLab's venv.
+    os.environ.pop(LAUNCHER_ENV, None)
     job = read_job(Path(argv[0]))
     try:
         guard(job)  # (Before anything is written: no log, no ready, nothing started.)

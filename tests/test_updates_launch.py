@@ -276,12 +276,18 @@ def test_ready_quits_through_the_normal_path(window: Any) -> None:
     close.assert_called_once()
 
 
-def test_the_quit_note_names_live(window: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_quit_note_names_live(window: Any) -> None:
     assert "Live" not in window._quit_note()
     explorers = window._explorers()
     if explorers:
-        monkeypatch.setattr(explorers[0][1], "live", object(), raising=False)
-        assert "Live is on in 1 tab" in window._quit_note()
+        # (Put back before the fixture closes the window: closing stops Live, which a stand-in can't.)
+        explorer = explorers[0][1]
+        before = explorer.live
+        explorer.live = object()
+        try:
+            assert "Live is on in 1 tab" in window._quit_note()
+        finally:
+            explorer.live = before
 
 
 def test_a_frozen_build_never_offers_update_and_restart(qtbot: QtBot, tmp_path: Path) -> None:

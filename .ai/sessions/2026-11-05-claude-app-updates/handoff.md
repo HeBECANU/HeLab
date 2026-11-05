@@ -75,7 +75,7 @@ updater: 9 of 9 failed; the AU-1/AU-2/AU-6 tests against the previous `launch`/w
 |---|---|---|
 | AU-1 Major | `main` runs `HelabMainWindow.after_start` once the event loop turns: the started mark, then the outcome; a HeLab started by an updater polls (250 ms, up to `UPDATE_OUTCOME_WAIT_S` = 20 s, never waits) for `last.json` carrying its own token. Without a token, as before. | `test_updates_launch.py::test_a_helab_the_updater_started_shows_that_updates_outcome_on_this_start` (the updater's own `wait_started` + `record` in a thread) |
 | AU-2 Major | `trim_compare` keeps parents; `github.branch_line` walks the first-parent line from the tip, keeping commits that contain the running one; "+N" counts it ("+250+" when GitHub's list was cut). The updater refuses a target not in `git rev-list --first-parent <tip> ^HEAD`. | `test_updates_github.py::test_branch_mode_never_moves_onto_a_commit_merged_in_from_another_branch` (old code offered the floor's tip), `…on_a_merged_side_commit…`, `…cut_at_250…`; `test_updates_updater.py::test_branch_mode_refuses_a_commit_merged_in_from_another_branch` (a `--no-ff` merge) |
-| AU-3 | Matched by folder prefix (venv and checkout, raw and resolved), never split at spaces. Also dropped: the global `--helab-io-helper` marker. It only names frozen helpers, so it matched only *other* HeLabs, and it was the likely cause of one local parallel run where 16 updater tests were refused (shown: the old rule lists an unrelated `… --helab-io-helper` process and even the shell that started it; every run since clean). Not covered: a venv made from a Python that re-execs (Homebrew's framework build), since `ps` names the framework; the README's uv Python doesn't. | the waiting test, now a real `<venv python> -m helab.io_helper`, parametrized with `My Projects` |
+| AU-3 | Matched by folder prefix (venv and checkout, raw and resolved), never split at spaces. Also dropped: the global `--helab-io-helper` marker. It only names frozen helpers, so it matched only *other* HeLabs, and it was the likely cause of one local parallel run where 16 updater tests were refused (shown: the old rule lists an unrelated `… --helab-io-helper` process and even the shell that started it; every run since clean). Also covered, after CI run 42018998611 (below): a venv made from a macOS framework Python (python.org's, Homebrew's, GitHub's macOS runners'), which re-execs as `Python.app`, so `ps` doesn't name the venv: macOS also reads `ps -E` for the venv stub's `__PYVENV_LAUNCHER__=<venv>/…` (matched only; the message and log show the plain command, never the environment), and the updater drops that variable at start so its own children (ps, git, the relaunch) never match. Before the review this case was only "seen" through the global marker. | the waiting test, now a real `<venv python> -m helab.io_helper`, parametrized `lab` / `My Projects` / `framework` (macOS: CI's own Python, or Homebrew's here; fails on `cbd42bb`'s updater, passes now) |
 | AU-4 | After "exited", `wait_quiet` (locks + processes, up to `others`) before rolling back; still busy, the new version is left in place, recorded "failed" with how to go back, not relaunched. | `test_a_rollback_waits_for_the_new_versions_helpers` (a helper outliving the crashed HeLab sees 0.0.2's code to its end) |
 | AU-5 | `update`'s second `try` and `rollback` catch `Exception`; every child runs through `_run` (UTF-8, `errors="replace"`, no stdin). | `test_an_unexpected_error_after_the_code_moved_rolls_everything_back` (in-process, a `KeyError` after the merge) |
 | AU-6 | `previous.json` and a restore's `last.json` carry `mode` and `tag`; `launch.restored_key` gives the version (releases) or the commit left, stored as Skip this version. | `test_a_restore_skips_what_it_left…`; the releases test now restores too |
@@ -91,6 +91,18 @@ Checks after the fixes and the merge of `dev/v0.0.9` (`8690a2f`): full suite (`p
 type checks clean (`mypy helab/ --strict` 223 files, `mypy tests --strict` 220, `--platform win32` 223, `pyright
 helab tests` and `--pythonplatform Windows` 0 errors; the updater also with `--pythonplatform Linux`); `ruff check`,
 `mkdocs build --strict`.
+
+CI run **42018998611** on `fc2906d`: **failure**, macOS Tests (1/3) and (2/3) only, all three from one cause (above,
+AU-3: the framework Python's venv): `test_the_updater_waits_for_helab_and_its_helpers_before_changing_a_file[lab]`
+and `[My Projects]` ("it changed files while a helper ran") and `test_a_rollback_waits_for_the_new_versions_helpers`,
+each RERUN 5 times then FAILED (15 RERUNs, 3 FAILED). Every other job green; the other 10 Tests and Converter
+backends logs read: no RERUN. Fixed in the next commit (the `framework` case reproduces it locally).
+
+Before that commit: a full local run had **1 rerun**, `test_updates_launch.py::test_the_quit_note_names_live` at
+teardown (`AttributeError: 'object' object has no attribute 'on'` in `explorer_live.stop_live`): my own step-4
+test set a tab's `live` to a stand-in with `monkeypatch`, which the window fixture's close reached before the undo
+(only when the window had a tab). Fixed: the test puts it back itself. Then the full suite: **9566 passed, 674
+skipped, 2 warnings in 239 s, no RERUN**; the five type checks clean.
 
 AU-7 and AU-8 can't be shown here as the reviewer read them (a real lab PC). The code is safe both ways: the
 module check finds a venv module however the venv was linked, and `CREATE_NO_WINDOW` only hides windows. Known-issues
@@ -116,7 +128,7 @@ from the index and the code map), with:
   whose newest run was cancelled, is not green; other jobs don't count; group count not fixed.
 - The modes and defaults (settings rows; Q~1's default repo through `build_info.upstream_repository`).
 - The updater: request fields, `--check`, handshake (`ready-<token>`), the waits (process handle, locks,
-  processes from the venv: `ps` by folder prefix; Windows image paths, plus each Python's loaded modules by
+  processes from the venv: `ps` by folder prefix, and on macOS `ps -E`'s `__PYVENV_LAUNCHER__` for a framework Python's venv; Windows image paths, plus each Python's loaded modules by
   path), refusals, order of the
   update, the venv rebuild (`REBUILD_FILES`, `uv venv --relocatable`, the check in its own bytecode folder,
   swaps, `DELETE_OLDER_VENV`), relaunch (`HELAB_UPDATE_TOKEN`, popped by `mark_started`), roll back, Restore
