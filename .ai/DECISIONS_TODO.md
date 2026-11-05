@@ -86,24 +86,33 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
 From Tony's live run (LR-5, 2026-11-05). The window, its three ways in, read only, one helper job and its eight
 sections are decided; the plan has each question's options and reasons.
 
-- **Q64.1** Folder details' way in: a "Folder info…" link at the end of the Disk cache row (proposed), or an ⓘ
-  button by the folder's name, or a row of its own.
-- **Q64.2** File › Folder info… acts on the current tab's selected folder, also with the explorer hidden, disabled
-  with none; ⌘I / Ctrl+I (proposed).
-- **Q64.3** One window, showing the folder it was last opened for, not following the selection (proposed); or one
-  per folder; or one that follows the selection.
-- **Q64.4** It reads on open, on Refresh and after an action started from it finishes, "As of HH:MM:SS"; no
-  automatic refresh during Live (proposed).
-- **Q64.5** Its buttons call the folder's existing actions, which ask as today (proposed; the plan lists them); or
-  no buttons in v1.
-- **Q64.6** No per-folder Clear of saved results or converted TXY in v1, links to Settings instead (proposed); or
-  add both.
-- **Q64.7** Saved results grouped by script, one line each (action, settings in short, dates, size); store-v4
-  only (proposed).
-- **Q64.8** "Only copy": raw pulses whose `d*.txt` is gone, and TXY layers whose source is gone and that no raw
-  layer can rebuild, with when HeLab last looked (proposed).
-- **Q64.9** This folder only, a line for its subfolders, and a "This session" section from memory (proposed).
-- **Q64.10** v0.0.9, a floor on this Mac, now (proposed).
+All ten decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decided" section has them in full.
+
+- **Q64.1** (a) a "Folder info…" link at the end of the Disk cache row.
+- **Q64.2** "ok": File › Folder info… on the current tab's selected folder, also with the explorer hidden,
+  disabled with none; ⌘I / Ctrl+I.
+- **Q64.3** (a) one window, showing the folder it was last opened for.
+- **Q64.4** "Live turns on auto refresh too, otherwise just a manual refresh button": while Live watches the
+  folder the window refreshes by itself (its memory parts on each Live check that brings shots, the store read
+  after each Live save); otherwise on open, Refresh, and after an action started from it.
+- **Q64.5** "ok": the buttons call the folder's existing actions, which ask as today.
+- **Q64.6** "a then b": no per-folder Clear in v1 (links to Settings); per-folder Clear of saved results and of
+  converted TXY, asking first, as a follow-up.
+- **Q64.7** "ok and careful about the window height, maybe opens to the side (extend info window width?)": as
+  proposed, store-v4 only; long sections must not make the window tall: it grows sideways (a detail pane to the
+  right, widening the window) rather than down.
+- **Q64.8** "yes (perhaps we need a export cached data copy button and user can manually restore a folder?)": as
+  proposed; the export is Q64.11.
+- **Q64.9** "this folder only, maybe later we can build this folder + N depth subfolders info panel? similar to
+  macOS summary info": this folder only in v1; a summary over the folder and N levels of subfolders (like
+  Finder's Show Summary Info) later.
+- **Q64.10** "yes in v0.0.9": a floor on this Mac.
+- **Q64.11** (open) Export a copy of a folder's cached data so the user can restore it by hand (from Q64.8). The
+  raw layer keeps pulses in time order, not file order, so a rebuilt `d<N>.txt` isn't byte for byte the original,
+  though every converter gives the same TXY from it. Proposed: a follow-up after v1, "Export a copy…" in the
+  Only copy section, writing `d<N>.txt` from raw pulses and TXY text from TXY layers into a new folder the user
+  picks (never a source folder), with the existing `helab cache export` formats (npz, mat, csv) as options. Or:
+  (b) in v1, the existing npz/mat/csv export only; (c) not planned.
 
 ## v0.0.8 follow-ups (block 58)
 

@@ -1,7 +1,7 @@
 # Folder info window
 
-Horizon: v0.0.9 (proposed, Q64.10). Added: 2026-11-05, from Tony in Chat during a live run (LR-5,
-`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** planned; Q64.1–Q64.10 open.
+Horizon: v0.0.9 (Q64.10). Added: 2026-11-05, from Tony in Chat during a live run (LR-5,
+`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** planned; Q64.1–Q64.10 decided (Tony, 2026-11-05), Q64.11 open.
 Priority and completion: [overview](_readme.md). Related: [cache-store](../.ai/architecture/cache-store.md),
 [data-roots](../.ai/architecture/data-roots.md), [converter](../.ai/architecture/converter.md),
 [app-runtime-and-ui](../.ai/architecture/app-runtime-and-ui.md), the [Activity window](activity-window.md) (the
@@ -30,7 +30,44 @@ single folder.
   8. the data root.
 - **Each section sits next to the folder's existing actions.**
 
-## Questions for Tony (block 64; also in [DECISIONS_TODO](../.ai/DECISIONS_TODO.md))
+## Decided: Q64.1–Q64.10 (Tony in Chat, 2026-11-05)
+
+- **Q64.1** (a): a "Folder info…" link at the end of Folder details' Disk cache row.
+- **Q64.2** "ok": File › Folder info… on the current tab's selected folder, with the explorer hidden too,
+  disabled with none; ⌘I / Ctrl+I.
+- **Q64.3** (a): one window, showing the folder it was last opened for (path in the title).
+- **Q64.4** "Live turns on auto refresh too, otherwise just a manual refresh button". While Live watches the
+  folder, the window refreshes by itself: its memory parts (This session, the newest shot) on each Live check
+  that brings shots, and the store read after each Live save (every 10 shots and on stop), never more than one
+  read in flight. Otherwise it reads on open, on Refresh, and after an action started from it. "As of HH:MM:SS"
+  stays in the header; a failed read shows the error.
+- **Q64.5** "ok": each section's buttons call the folder's existing actions, as listed below.
+- **Q64.6** "a then b": no per-folder Clear in v1, the two sections link to Settings; per-folder "Clear this
+  folder's saved results…" and "…converted TXY…" (asking first) are the first follow-up.
+- **Q64.7** "ok and careful about the window height, maybe opens to the side (extend info window width?)": as
+  proposed, store-v4 only. The window must not grow tall: long sections (saved results) show a few lines and
+  open their full list in a detail pane to the right, widening the window, rather than stretching it down.
+  The window never opens taller than its screen.
+- **Q64.8** "yes": as proposed; with "perhaps we need a export cached data copy button and user can manually
+  restore a folder?" (Q64.11, open).
+- **Q64.9** "this folder only, maybe later we can build this folder + N depth subfolders info panel? similar to
+  macOS summary info": this folder only in v1 (with the subfolders line and This session); a summary over the
+  folder and N levels of subfolders, like Finder's Show Summary Info, is a later item.
+- **Q64.10** "yes in v0.0.9": a floor on this Mac.
+
+**Q64.11 (open) Export a copy for restoring.** The raw layer keeps a shot's pulses in time order, not the file's
+order, so a `d<N>.txt` rebuilt from it isn't byte for byte the original, though every converter backend gives the
+same TXY from it. Proposed: a follow-up after v1, "Export a copy…" in the Only copy section: `d<N>.txt` from raw
+pulses and TXY text from TXY layers, into a new folder the user picks (never a source folder), with `helab cache
+export`'s npz, mat and csv as other formats. Or: (b) in v1, npz/mat/csv only; (c) not planned.
+
+## Later (after v1)
+
+- Per-folder Clear of saved results and converted TXY (Q64.6 b).
+- Export a copy for restoring (Q64.11).
+- A summary over the folder and N levels of subfolders (Q64.9).
+
+## The questions as asked (block 64; kept for the record)
 
 - **Q64.1 The Folder details button.** Folder details has no buttons today: it is a grid of one-line rows, and
   its I/O, cache and offer rows are links. Proposed: **a "Folder info…" link at the end of the Disk cache row**
@@ -101,5 +138,5 @@ single folder.
 ## Not in scope (v1)
 
 - Changing anything from the window except through the folder's existing actions (Q64.5).
-- Per-folder Clear of saved results and converted TXY (Q64.6, later).
-- Totals over subfolders (Q64.9).
+- Per-folder Clear of saved results and converted TXY (Q64.6, the first follow-up).
+- Export a copy (Q64.11) and totals over subfolders (Q64.9): see Later.
