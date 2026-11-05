@@ -80,6 +80,18 @@ def test_the_apps_filter_shows_a_long_plain_tooltip_wrapped(qtbot: QtBot) -> Non
         assert QToolTip.text() == tooltips.wrap_tip(long_tip, metrics) and "\n" in QToolTip.text()
         button.setToolTip("Short")
         assert not wrap.eventFilter(button, event)  # (Qt shows it as it is.)
+        # T3: an elided label's tip with its full text, shown by the filter (no event() override there).
+        label = ElidedLabel("3 TXY found · 3 loaded · 1,234 new shots")
+        qtbot.addWidget(label)
+        label.setToolTip("Counts of this folder")
+        label.show()
+        label.resize(label.natural_width() // 3, label.sizeHint().height())
+        qtbot.waitUntil(label.elided, timeout=5_000)
+        assert wrap.eventFilter(label, QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), label.mapToGlobal(QPoint(2, 2))))
+        assert QToolTip.text() == label.hover_tip() == "3 TXY found · 3 loaded · 1,234 new shots\n\nCounts of this folder"
+        label.resize(label.natural_width() + 40, label.sizeHint().height())
+        qtbot.waitUntil(lambda: not label.elided(), timeout=5_000)
+        assert not wrap.eventFilter(label, QHelpEvent(QEvent.Type.ToolTip, QPoint(2, 2), label.mapToGlobal(QPoint(2, 2))))
         tabs = QTabBar()
         qtbot.addWidget(tabs)
         tabs.addTab("General")
@@ -166,7 +178,8 @@ def test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrase
                 window.resize(window.width() + room - label.width(), window.height())
                 qtbot.waitUntil(lambda: label.width() >= room, timeout=5_000)
                 window.update_status_bar_left()
-            assert label.text().startswith(f"Live checking {middle(LONG_PARTS[2])} · 1,234 new shots · latest shot 3")
+            # (After any notice the window shows first, e.g. the disk cache's "below 80 %".)
+            assert f"Live checking {middle(LONG_PARTS[2])} · 1,234 new shots · latest shot 3" in label.text()
             assert "latest shot 3 · 1 min" in QLabel.text(label), QLabel.text(label)  # (Shown: the age too.)
             assert str(run) in label.toolTip()
         finally:

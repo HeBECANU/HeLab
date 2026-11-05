@@ -4,8 +4,8 @@ from __future__ import annotations
 import html
 
 from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtGui import QHelpEvent, QResizeEvent, QTextDocument
-from PyQt6.QtWidgets import QLabel, QSizePolicy, QToolTip, QWidget
+from PyQt6.QtGui import QResizeEvent, QTextDocument
+from PyQt6.QtWidgets import QLabel, QSizePolicy, QWidget
 
 from helab.views.tooltips import rich_text
 
@@ -14,8 +14,9 @@ class ElidedLabel(QLabel):
     """``text()`` returns the full text; the label shows as much as fits.
 
     Its height never depends on the text, so status rows keep their height and
-    the widgets below them do not move. While it is elided, its tooltip shows the full text first
-    (``hover_tip``), so what is cut can always be read (LR-3); ``toolTip()`` stays as set.
+    the widgets below them do not move. While it is elided, the tooltip shown has the full text first
+    (``hover_tip``, shown by the app's ``tooltips.TooltipWrap``), so what is cut can always be read (LR-3);
+    ``toolTip()`` stays as set.
     """
 
     def __init__(self, text: str = "", parent: QWidget | None = None,
@@ -63,12 +64,6 @@ class ElidedLabel(QLabel):
         if self._full in tip:
             return tip
         return f"{self._full}\n\n{tip}" if tip else self._full
-
-    def event(self, e: QEvent | None) -> bool:
-        if e is not None and e.type() == QEvent.Type.ToolTip and isinstance(e, QHelpEvent) and self.elided():
-            QToolTip.showText(e.globalPos(), self.hover_tip(), self, self.rect())
-            return True
-        return super().event(e)
 
     def changeEvent(self, a0: QEvent | None) -> None:
         super().changeEvent(a0)

@@ -3,7 +3,8 @@
 Qt wraps a plain-text tooltip only once it is wider than the screen, so a long one showed as a single
 line across most of it. ``TooltipWrap``, installed on the application, shows any plain-text tooltip
 with a line wider than ``WIDTH`` px wrapped at word boundaries (a long path or name is broken where it
-must be, after a "/" or "_" when it can). Rich-text tooltips stay as they are (Qt wraps those), and so
+must be, after a "/" or "_" when it can), and an elided ``ElidedLabel``'s tooltip with its full text first
+(``hover_tip``: a filter, as an ``event`` override there was called on labels being deleted). Rich-text tooltips stay as they are (Qt wraps those), and so
 does a tooltip that fits. The text is never changed, only how it is shown: ``toolTip()`` and the
 models' tooltips keep what was set.
 """
@@ -91,10 +92,12 @@ class TooltipWrap(QObject):
             return False
         text = tooltip_at(a0, a1)
         metrics = QFontMetrics(QToolTip.font())
-        if not needs_wrap(text, metrics):
+        # Its own: an elided label's full text with its tooltip (``hover_tip``), not what Qt would show.
+        own = getattr(a0, "hover_tip", None) is not None and text != getattr(a0, "toolTip")()
+        if not own and not needs_wrap(text, metrics):
             return False  # (Qt shows it as it is, or hides an empty one.)
         widget = a0 if isinstance(a0, QWidget) else None
-        QToolTip.showText(a1.globalPos(), wrap_tip(text, metrics), widget)
+        QToolTip.showText(a1.globalPos(), wrap_tip(text, metrics) if needs_wrap(text, metrics) else text, widget)
         return True
 
 
