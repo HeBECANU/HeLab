@@ -12,8 +12,8 @@ from typing import Any, Callable, Iterator, Mapping
 
 import numpy as np
 import numpy.typing as npt
-from PyQt6.QtCore import QEvent, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QPainter, QPalette, QPen, QResizeEvent, QShowEvent
+from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QPainter, QPalette, QPen, QResizeEvent
 from PyQt6.QtWidgets import (QApplication, QMessageBox, QHBoxLayout, QLineEdit, QMenu, QPushButton, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QTreeView, QInputDialog,
                              QStyle, QToolButton, QVBoxLayout, QWidget, QSizePolicy)
 from helab.models.SnapshotFileSystemModel import FolderNode, SnapshotFileSystemModel
@@ -456,6 +456,7 @@ class FolderExplorer(QWidget):
         convert_layout.addStretch(1)
         summary_layout.addWidget(self.convert_row)
         self.convert_row.hide()
+        self.live_row.installEventFilter(self)  # (Its resizes re-fit Auto-convert: ``_fit_live_row``.)
         self._summary_line = line_height
         self.summary_widget.setFixedHeight(3 * line_height)
         self.summary_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -2066,18 +2067,20 @@ class FolderExplorer(QWidget):
         self._fit_selected_label()
         self._fit_live_row()
 
-    def showEvent(self, a0: QShowEvent | None) -> None:
-        super().showEvent(a0)
-        QTimer.singleShot(0, self._fit_live_row)  # (Once its rows are laid out.)
-
     def _fit_live_row(self) -> None:
         """Auto-convert on the Live line while the line has room for it beside "Live…" (the line's text
         elides, whole in its tooltip); at a tighter width on a line of its own, its text whole (LR-3: it was
         cut at a narrow panel)."""
         if not self.isVisible():
-            return  # (Not laid out yet: its rows have Qt's default size. Shown, it fits them: ``showEvent``.)
+            return  # (Not laid out yet: its rows have Qt's default size. Laid out, the Live line's resize fits it.)
         button = self.auto_convert_button
-        room = self.live_row.width()  # (The summary's width, as the convert line's.)
+        # The Live line's width: the tab's, less the summary's margin (its own may not be laid out yet).
+        margins = self.summary_widget.contentsMargins()
+        layout = self.summary_widget.layout()
+        if layout is not None:
+            inner = layout.contentsMargins()
+            margins = QMargins(margins.left() + inner.left(), 0, margins.right() + inner.right(), 0)
+        room = self.width() - margins.left() - margins.right()
         need = button.width() + 4 + self.folder_freshness_label.fontMetrics().horizontalAdvance(LIVE_LINE_LEAST)
         tight = not button.isHidden() and room < need
         if tight == (not self.convert_row.isHidden()):
@@ -2178,6 +2181,10 @@ class FolderExplorer(QWidget):
         self._update_activity()
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a0 is self.live_row:
+            if a1 is not None and a1.type() == QEvent.Type.Resize:
+                self._fit_live_row()  # (Its width once laid out, and every change: LR-3.)
+            return False
         if a1 and a1.type() in (QEvent.Type.Show, QEvent.Type.Resize):
             self._schedule_visible_checks()
         return super().eventFilter(a0, a1)

@@ -95,12 +95,14 @@ def test_an_elided_label_shows_its_full_text_in_its_tooltip(qtbot: QtBot) -> Non
     """(b), T3: Folder details' rows and the summary's lines lost the text they cut."""
     label = ElidedLabel("3 TXY found · 3 loaded · 1,234 new shots")
     qtbot.addWidget(label)
-    label.resize(400, 20)
     label.show()
-    assert not label.elided() and label.hover_tip() == ""
+    label.resize(label.natural_width() + 40, label.sizeHint().height())  # (Widths from the font: any OS.)
+    qtbot.waitUntil(lambda: not label.elided(), timeout=5_000)
+    assert label.hover_tip() == ""
     label.setToolTip("Counts of this folder")
-    label.resize(60, 20)
-    assert label.elided() and label.toolTip() == "Counts of this folder"
+    label.resize(label.natural_width() // 3, label.sizeHint().height())
+    qtbot.waitUntil(label.elided, timeout=5_000)
+    assert label.toolTip() == "Counts of this folder"
     assert label.hover_tip() == "3 TXY found · 3 loaded · 1,234 new shots\n\nCounts of this folder"
     label.setToolTip("Folder: 3 TXY found · 3 loaded · 1,234 new shots")  # (Already in it: as it is.)
     assert label.hover_tip() == label.toolTip()
@@ -141,7 +143,10 @@ def test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrase
         button, line = explorer.auto_convert_button, explorer._summary_line
         assert button.isVisible() and button.parent() is explorer.live_row
         assert explorer.summary_widget.height() == 3 * line
-        window._set_split(120, 300, window.splitter.width())
+        # Tight: the line holds the button but not it beside "Live…" (widths from the fonts, any OS).
+        need = button.width() + 4 + explorer.folder_freshness_label.fontMetrics().horizontalAdvance("Live…")
+        offset = window.splitter.sizes()[0] - explorer.live_row.width()
+        window._set_split((button.width() + need) // 2 + offset, 300, window.splitter.width())
         qtbot.waitUntil(lambda: explorer.convert_row.isVisible(), timeout=5_000)
         assert button.parent() is explorer.convert_row and button.isVisible()
         assert explorer.summary_widget.height() == 4 * line and explorer.convert_row.width() >= button.width()
@@ -155,6 +160,12 @@ def test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrase
         try:
             window.update_status_bar_left()
             label = window.status_bar_message_left
+            # A window as wide as the phrase needs with the name shortened (fonts differ by OS).
+            room = label.fontMetrics().horizontalAdvance(explorer.activity_brief) + 40
+            if label.width() < room:
+                window.resize(window.width() + room - label.width(), window.height())
+                qtbot.waitUntil(lambda: label.width() >= room, timeout=5_000)
+                window.update_status_bar_left()
             assert label.text().startswith(f"Live checking {middle(LONG_PARTS[2])} · 1,234 new shots · latest shot 3")
             assert "latest shot 3 · 1 min" in QLabel.text(label), QLabel.text(label)  # (Shown: the age too.)
             assert str(run) in label.toolTip()
