@@ -19,6 +19,7 @@ import pytest
 from helab import io_helper
 from helab.io_ops import infra, stores
 from helab.io_ops.fingerprints import DEFAULT_CHECK_LEVEL
+from helab.utils import crash_file
 from helab.utils.data_roots import VolumeUnverified
 from helab.utils.io_service import IOService
 
@@ -73,6 +74,8 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[Call]:
 def run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], line: str) -> list[dict[str, Any]]:
     """``main`` with ``line`` on stdin; the events it printed."""
     monkeypatch.setattr(sys, "stdin", io.StringIO(line))
+    # (In pytest's process, faulthandler is pytest's: no crash file, LR-15.)
+    monkeypatch.setattr(crash_file, "start_for_helper", lambda: None)
     capsys.readouterr()
     io_helper.main()
     return [json.loads(out) for out in capsys.readouterr().out.splitlines() if out.startswith("{")]

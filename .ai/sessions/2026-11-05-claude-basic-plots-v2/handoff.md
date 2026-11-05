@@ -33,10 +33,14 @@ Tests and Converter backends logs (read, and confirmed by CoCo). The final suite
   their accessible name ("Plot Counts per shot (v1)"); IDs still come from the analysis id. Under the Windows
   styles, Qt makes a combo's popup as wide as the combo and cut the names in the middle ("Basic…ts v1"): the
   popup now fits its longest entry and never elides (`script_tree.fit_popup`).
-- **LR-12's cause: not found.** The selector can't hold one name twice (it's filled from dict keys after
-  `clear()`), and offscreen, cocoa, Fusion and Windows styles all list each group once. Tony's details (machine,
-  screenshot, folders loaded, menu or tree) were asked through CoCo (Q~1) and hadn't come back when this was
-  written.
+- **LR-12: no duplicate entries existed (Q~1, answered).** Tony's screenshot showed the drop-down reading "Basic
+  plots v1" once, and the tree's one node of that name holding the four scripts: the "four entries" were the
+  scripts. So there was no cause to find; what he wants is what this floor built (the drop-down reads "Basic Plots",
+  the tree has a v2 node above v1, only v2 expanded), which the nodes match as labelled ("v2", "v1"). **The Windows
+  popup-width fix stays:** it is a real defect on the lab's Windows PCs, independent of LR-12. Under the Windows
+  styles the popup is the combo's width (at least 4 characters, Q33.2) and elides in the middle, so with a narrow
+  panel or long user group names entries read alike or cut. It is cheap, tested (`test_the_popup_fits_its_longest_entry_uncut`
+  fails without it) and changes nothing on macOS or Fusion, where Qt already widens the popup.
 - **v2's plots** (`helab/scripts/standard_v2/`, group "Basic plots v2", version 1 each): 3D scatter, Counts per
   shot, T, X, Y histograms, XY histogram, XT histogram, YT histogram, Transfer fractions. v2's 3D scatter and T, X, Y
   histograms are v1's under v2's ids (Tony, Q~2: he'll tweak them later). Transfer fractions reuses v1's compute.
@@ -174,8 +178,9 @@ panel too, and v2's PyQtGraph titles without the input (LR-4, Q~7–Q~9); "New" 
 
 ## Provisional items
 
-- **Q~1 (LR-12):** what Tony saw (machine, screenshot, folders loaded, menu or tree). The popup fix landed whatever
-  the answer; the real cause gets a reproducing test once known.
+- **Q~1 (LR-12): answered** (Tony's screenshot, via CoCo, 2026-11-05): there was no repeated entry; the four lines
+  were the four scripts under the one "Basic plots v1" node. What he asked for is what was built; the Windows
+  popup-width fix stays (above).
 - **Q~11 (Datashader):** add it later, only if Live on very large folders (over about 10 M events per image) makes
   the 2D plots lag after A~1? *Proposed:* not now; ask again with numbers from a real run.
 - **Q~12 (wording):** v2 says "Shot ID" (Tony's word), while the DLD port's Shot trends say "shot number"
@@ -190,7 +195,7 @@ panel too, and v2's PyQtGraph titles without the input (LR-4, Q~7–Q~9); "New" 
 - **M~1:** Tony tries Basic Plots v2 on a real screen and with Live: the tree (v2 open, v1 closed), New, Shot time
   on a real run with gaps (and a folder converted later, for the triangles), the XY/XT/YT options, and Plot info and
   the one-line dock with long folder names. **On the lab's Windows PC**, open the group menu at a narrow panel (the
-  popup fix, and LR-12's cause if it shows).
+  popup fix: every entry in full).
 
 ## Checks
 

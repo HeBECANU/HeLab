@@ -22,6 +22,7 @@ from helab.analysis.identity import AnalysisIdentity
 from helab.analysis.masks import mask_key
 from helab.analysis.physics import ResolvedConstants
 from helab.utils import txy_sources
+from helab.utils.ram_buffers import arrays_in, buffers
 
 State = Literal["completed", "failed", "cancelled"]
 # Where a result is kept (result caching rule 2): in RAM only, or also in the disk cache (R2).
@@ -383,6 +384,12 @@ class RamResults:
 
     def __len__(self) -> int:
         return len(self._results)
+
+    def usage(self) -> tuple[int, int]:
+        """How many results are kept and the bytes of their arrays (each buffer once), for the log."""
+        with self._lock:
+            kept = list(self._results.values())
+        return len(kept), sum(buffers(array for result in kept for array in arrays_in(result.data)).values())
 
 
 def _source_text(source: str) -> str:

@@ -419,6 +419,10 @@ How to use it:
   on macOS, Ground CI 41981742368 (Tests 2/3, job 127093226610, `e638a22`, 2026-11-05). That test now finds the
   Live phrase anywhere in the text (`98a23af`); tests shouldn't match the status bar's start. The carried state
   itself isn't reset yet.
+- [ ] **`test_share_detection` patches `os.path.realpath` process-wide**: a leftover `IOService` request then fails
+  `Path.resolve()` in the helper launch ("Clean up disk cache failed … share_of stat'ed a source path"), a warning
+  only, seen in Mendy's local runs for LR-15 (2026-11-05). Not a RERUN yet; the patch should be scoped to the call it
+  tests.
 
 Tony (2026-10-22): note these, no fixes for now; raise them again only if they keep
 happening. Counted over the last 12 CI runs from `gh api repos/TonyXTYan/HeLab/actions/jobs/<id>/logs`
