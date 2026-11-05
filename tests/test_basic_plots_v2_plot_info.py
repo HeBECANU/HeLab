@@ -20,7 +20,7 @@ from helab.views.plots.instance import AnalysisInstance
 from helab.views.explorer_text import breakable
 from helab.views.plots.plot_info import PlotInfo
 from test_basic_plots_v2_buttons import plot_button
-from test_debug_runner_menu import load, window  # noqa: F401  (``window`` is a fixture)
+from test_debug_runner_menu import load, run_folder, window  # noqa: F401  (``window`` is a fixture)
 
 pytestmark = pytest.mark.no_auto_data_root  # RAM only, as tests/test_debug_runner_menu.py.
 
@@ -113,3 +113,18 @@ def test_a_long_folder_name_fits_the_narrowest_panel(window: HelabMainWindow, qt
             if isinstance(widget, QLabel) and widget.text() and not isinstance(widget, ElidedLabel):
                 fits = widget.fontMetrics().horizontalAdvance(widget.text().split("\n")[0]) <= widget.width() + 2
                 assert widget.wordWrap() or fits, f"{widget.objectName() or widget.text()!r} is cut"
+
+
+def test_plot_info_follows_the_docks_relabel(window: HelabMainWindow, qtbot: QtBot,  # noqa: F811
+                                             tmp_path: Path) -> None:
+    """When the tab moves on to other data, the main window relabels the dock ("Showing previously loaded data");
+    Plot info's first line, the dock's line, follows at once, not at the plot's next run."""
+    instance = opened(window, qtbot, tmp_path)
+    dock = instance.dock_widget
+    assert dock is not None
+    line = dock.findChild(QLabel, "plot_data_source")
+    assert line is not None and line.text().startswith("Data source: ") and instance.plot_info.lines()[0] == line.text()
+    (tmp_path / "other").mkdir()
+    load(window, qtbot, run_folder(tmp_path / "other"))  # Another tab shows another folder.
+    qtbot.waitUntil(lambda: line.text().startswith("Showing previously loaded data: "), timeout=10_000)
+    assert instance.plot_info.lines()[0] == line.text()

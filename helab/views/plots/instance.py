@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHE
 from uuid import uuid4
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QDynamicPropertyChangeEvent, QEvent, QObject, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QDockWidget, QLabel, QPushButton, QTabWidget, QTreeWidgetItemIterator, QVBoxLayout, QWidget
 from pyqtgraph.parametertree import Parameter, ParameterTree
 
@@ -126,6 +126,7 @@ class LinkedAnalysisInstance(QObject):
         dock.closed.connect(self.close)
         # A dock deleted unclosed (its window went) still ends the run and its connections.
         dock.destroyed.connect(self.close)
+        dock.installEventFilter(self)  # Its line relabelled reaches Plot info (``AnalysisInstance.eventFilter``).
         self.dock_widget = dock
         
     def setup_param_tab(self, param_tree: QWidget, title: str = "") -> None:
@@ -1466,6 +1467,14 @@ class AnalysisInstance(LinkedAnalysisInstance):
                  *(record.splitlines()[1:] if record else (f"Input: {self.path}",))]
         self.plot_info.set_lines(lines)
         self.plot_info.set_summary_tip(f"{self.input_label.text()}\n{self.path}")
+
+    def eventFilter(self, a0: Optional[QObject], a1: Optional[QEvent]) -> bool:
+        """The dock's line relabelled: by the plot's own run or Live state, or by the main window when the tab
+        moves on to other data ("Showing previously loaded data"). Plot info's first line, a copy of it, follows."""
+        if (a0 is not None and a0 is self.dock_widget and isinstance(a1, QDynamicPropertyChangeEvent)
+                and a1.propertyName().data() == b"plotSourceText"):
+            self._show_info()
+        return super().eventFilter(a0, a1)
 
     @pyqtSlot(bool)
     def _info_toggled(self, opened: bool) -> None:
