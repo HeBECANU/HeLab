@@ -14,6 +14,9 @@ own runs green on all three OSes and skipped or cancelled required jobs not gree
 | `3be4698` | Update and restart, Restore previous version, the started mark (step 4 ◆, pushed, CI below) |
 | `189790f` | Docs: the manual's how-to page and the settings rows |
 | `1345e07` | CI fixes: `ps -ww` (procps cut a piped listing to 80 columns, hiding a helper on Linux); the window test's repo from its own build |
+| `43d22f4` | The handoff (step 5) |
+| `cbd42bb` | Sentry's review fixes, AU-1 to AU-11 (below) |
+| merge | `dev/v0.0.9` at `8690a2f`, clean |
 
 ## What was built
 
@@ -63,6 +66,36 @@ own runs green on all three OSes and skipped or cancelled required jobs not gree
   Docs, detection); all 12 Tests and Converter backends logs read: **no RERUN**.
 - Full local suite on `1345e07`: **9551 passed, 673 skipped, no rerun** (119 s).
 
+## Review fixes (Sentry, `review.md` at `8090401`)
+
+Each Major and Minor has a test that fails on the code before (the new updater tests ran against the previous
+updater: 9 of 9 failed; the AU-1/AU-2/AU-6 tests against the previous `launch`/window/check code).
+
+| ID | Fix | Test |
+|---|---|---|
+| AU-1 Major | `main` runs `HelabMainWindow.after_start` once the event loop turns: the started mark, then the outcome; a HeLab started by an updater polls (250 ms, up to `UPDATE_OUTCOME_WAIT_S` = 20 s, never waits) for `last.json` carrying its own token. Without a token, as before. | `test_updates_launch.py::test_a_helab_the_updater_started_shows_that_updates_outcome_on_this_start` (the updater's own `wait_started` + `record` in a thread) |
+| AU-2 Major | `trim_compare` keeps parents; `github.branch_line` walks the first-parent line from the tip, keeping commits that contain the running one; "+N" counts it ("+250+" when GitHub's list was cut). The updater refuses a target not in `git rev-list --first-parent <tip> ^HEAD`. | `test_updates_github.py::test_branch_mode_never_moves_onto_a_commit_merged_in_from_another_branch` (old code offered the floor's tip), `…on_a_merged_side_commit…`, `…cut_at_250…`; `test_updates_updater.py::test_branch_mode_refuses_a_commit_merged_in_from_another_branch` (a `--no-ff` merge) |
+| AU-3 | Matched by folder prefix (venv and checkout, raw and resolved), never split at spaces. Also dropped: the global `--helab-io-helper` marker. It only names frozen helpers, so it matched only *other* HeLabs, and it was the likely cause of one local parallel run where 16 updater tests were refused (shown: the old rule lists an unrelated `… --helab-io-helper` process and even the shell that started it; every run since clean). Not covered: a venv made from a Python that re-execs (Homebrew's framework build), since `ps` names the framework; the README's uv Python doesn't. | the waiting test, now a real `<venv python> -m helab.io_helper`, parametrized with `My Projects` |
+| AU-4 | After "exited", `wait_quiet` (locks + processes, up to `others`) before rolling back; still busy, the new version is left in place, recorded "failed" with how to go back, not relaunched. | `test_a_rollback_waits_for_the_new_versions_helpers` (a helper outliving the crashed HeLab sees 0.0.2's code to its end) |
+| AU-5 | `update`'s second `try` and `rollback` catch `Exception`; every child runs through `_run` (UTF-8, `errors="replace"`, no stdin). | `test_an_unexpected_error_after_the_code_moved_rolls_everything_back` (in-process, a `KeyError` after the merge) |
+| AU-6 | `previous.json` and a restore's `last.json` carry `mode` and `tag`; `launch.restored_key` gives the version (releases) or the commit left, stored as Skip this version. | `test_a_restore_skips_what_it_left…`; the releases test now restores too |
+| AU-7 | Windows: the old write-open probe of every `.pyd`/`.dll`/`.exe` is gone. Instead: the image path as before, plus, for each `python*.exe`, its loaded modules by path (Toolhelp `TH32CS_SNAPMODULE`), so a hard link loaded through another venv's path doesn't count. No venv walk every 0.5 s. | `test_windows_counts_a_venv_module_a_python_loaded_not_its_hard_link_loaded_elsewhere` (Windows CI only; whether the old code failed it isn't shown: no Windows here) |
+| AU-8 | `_run` passes `CREATE_NO_WINDOW` on Windows (git, uv, the venv check). The relaunch is unchanged (pythonw, detached). | `test_every_program_the_updater_runs_reads_utf_8_and_opens_no_console_window` (one `subprocess.run` in the file; the flags) |
+| AU-9 | `git diff --no-renames --diff-filter=A`. | `test_a_file_the_update_renames_onto_an_untracked_one_is_named` |
+| AU-10 Info | `check.network_request`: `SameOriginRedirectPolicy`. | `test_a_request_follows_redirects_only_within_api_github_com` |
+| AU-11 Info | `guard` runs in `main` before the log, `ready` or anything else (prints to stderr, exits 2; `--check` prints the refusal); a refusal relaunches only once the old HeLab has exited. | `test_the_test_guard_refuses_before_writing_anything`; the never-quits test asserts no relaunch |
+| AU-12 Info | Not changed: (1) the provisional IDs in comments (`Q~1`, `Q~5`, `Q~6`, `Q~8`) are for the landing to rename with the merged block; (2) the design's base-Python and `git`/`uv --version` checks: presence only is built, since the README's setup gives a base Python outside the checkout; a line for the architecture file below; (3) the `testing.md` line below. | n/a |
+
+Checks after the fixes and the merge of `dev/v0.0.9` (`8690a2f`): full suite (`pytest -n 4 --reruns 5
+--reruns-delay 1 --basetemp=.ai/temp/pytest`) **9565 passed, 674 skipped, 2 warnings in 199 s, no RERUN**; the five
+type checks clean (`mypy helab/ --strict` 223 files, `mypy tests --strict` 220, `--platform win32` 223, `pyright
+helab tests` and `--pythonplatform Windows` 0 errors; the updater also with `--pythonplatform Linux`); `ruff check`,
+`mkdocs build --strict`.
+
+AU-7 and AU-8 can't be shown here as the reviewer read them (a real lab PC). The code is safe both ways: the
+module check finds a venv module however the venv was linked, and `CREATE_NO_WINDOW` only hides windows. Known-issues
+line and M~3 below.
+
 ## Proposed doc changes (for the Coordinator)
 
 **`.ai/architecture/release-and-ci.md`**, a new section "App updates" (or a new area file `updates.md` linked
@@ -75,19 +108,30 @@ from the index and the code map), with:
   the cache alone; the startup check scheduled by `main` only (never by a test's window), 30 s after show, when
   the last success is over 24 h old; requests per mode (releases + tag refs + one compare to `main`; branch:
   compare and up to 5 check-run lookups).
+- Branch mode's candidates (`github.branch_line`): the branch's own first-parent line from its tip down to the
+  running commit, commits that contain it; never one merged in from a side branch; the updater refuses a target
+  not in `git rev-list --first-parent <tip> ^HEAD` (AU-2).
 - The CI rule (`github.ci_state`): GitHub Actions' runs only; per OS `<os> + py3.13 / Tests…` and `/ Build`
   present; every `<os> + py3.13 / …` name's newest non-skipped run completed success; a name only skipped, or
   whose newest run was cancelled, is not green; other jobs don't count; group count not fixed.
 - The modes and defaults (settings rows; Q~1's default repo through `build_info.upstream_repository`).
 - The updater: request fields, `--check`, handshake (`ready-<token>`), the waits (process handle, locks,
-  processes from the venv: `ps`; Windows image paths + in-use `.pyd`/`.dll`/`.exe`), refusals, order of the
+  processes from the venv: `ps` by folder prefix; Windows image paths, plus each Python's loaded modules by
+  path), refusals, order of the
   update, the venv rebuild (`REBUILD_FILES`, `uv venv --relocatable`, the check in its own bytecode folder,
   swaps, `DELETE_OLDER_VENV`), relaunch (`HELAB_UPDATE_TOKEN`, popped by `mark_started`), roll back, Restore
-  via `previous.json`, `last.json` shown once, `tidy`.
+  via `previous.json` (a restore's outcome stored as Skip this version), `last.json` shown once (by the new
+  HeLab on its own start: `after_start` polls for its token's outcome), `tidy`. Every child through `_run`
+  (UTF-8, no console window). The guard first, before any file. What isn't checked: that the base Python is
+  outside the checkout (the README's setup), or `git`/`uv` versions (presence only).
 - The test seams: `HELAB_UPDATER_TEST_ROOT` (required under the guard), `HELAB_UPDATER_TEST_ELEVATED` (only
   under the guard; CI's Windows runners run elevated), `UpdateLauncher.start_detached`, `launch.checkout` /
   `venv_prefix`; `tests/test_updates_updater.py`'s `Lab` (bare remote, `insteadOf`, empty global config,
   `GIT_ALLOW_PROTOCOL=file`, fake uv, fake HeLab).
+
+**`.ai/architecture/testing.md`**: one line: `helab.updates.settings` reads this checkout's `git config`
+(`build_info.upstream_repository`, read only) to choose the default repository, so a test that depends on it
+patches `build_info.upstream_repository` and clears `settings._upstream` (CI's branch tracks `TonyXTYan/HeLab`).
 
 **`.ai/architecture/app-runtime-and-ui.md`**: Help's three new items, the status-bar mark (`update_available`,
 before the resources label), About's three lines, Settings › General's two rows.
@@ -123,12 +167,17 @@ New:
   Download only.
 - **A~3** The update window's commit list shows CI for the commits looked at only (at most 5); the rest show none.
 
-## Proposed known-issues entry
+## Proposed known-issues entries
 
 - [ ] `test_convert_helab.py::test_a_killed_helpers_workers_exit`: `AssertionError: the pool started` /
   `assert []` at line 1099 (no child of the converting helper seen by `psutil` once the first `shot_converted`
   arrived), twice in one local macOS run of `agent/app-updates` (2026-11-05, load average 460–650 from other
   floors); passed on retry. The Ledger floor saw the same RERUN (CoCo to merge the two). Not touched by this branch.
+
+- [ ] Windows updater behaviour not yet seen on a lab PC (from the review, AU-7 and AU-8): whether a DLL uv
+  hard-linked into HeLab's venv and loaded by another venv's Python is told apart (built: each Python's modules by
+  path; a test on Windows CI), and whether git or uv flash console windows during an update (built:
+  `CREATE_NO_WINDOW`). Until M~3.
 
 ## Manual checks
 
@@ -139,3 +188,6 @@ New:
   venv rename and the relaunch without a console. Never over SSH.
 - **M~2** The startup check on a lab PC's network (the plan's DNS/proxy risk): Help › Check for Updates… names
   the reason when it can't reach GitHub, and startup is quiet.
+- **M~3** (the review's AU-7, AU-8) on a lab PC (Windows): update while another uv venv's Python with numpy runs
+  (e.g. a second checkout's `python -c "import numpy, time; time.sleep(600)"`): the update goes ahead and isn't held
+  by that venv's DLLs; and no console window opens during the update (git, uv, the venv check).
