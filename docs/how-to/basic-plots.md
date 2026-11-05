@@ -1,0 +1,89 @@
+# Plot a folder with Basic Plots
+
+**Basic Plots** are HeLab's own quick-look plots of a folder's events. They're in the Scripts panel on the
+right: choose **Basic Plots** in its group menu. The tree lists each version as a node, newest first:
+
+- **v2**, the current set, open in the tree;
+- **v1**, the first set, kept exactly as it was, so the results, presets and plot arrangements saved with it
+  still open.
+
+Each version keeps its own presets: a preset saved for a v1 plot isn't offered to its v2 plot.
+
+## Open a plot
+
+1. Load a folder's data in a tab.
+2. Click **Plot** beside a script, for example "Counts per shot".
+
+The plot opens in the middle, on the data the tab shows; its settings show in the panel above the Scripts
+panel. While a plot of a script is open, its button reads **New**, and its tooltip says how many are open,
+for example "Open another Counts per shot plot (1 open)". **New** opens another plot of the same script,
+with its own settings, so that you can compare settings side by side.
+
+## The v2 plots
+
+| Plot | What it shows |
+|---|---|
+| 3D scatter | The events in T, X and Y, cropped to the region holding most of them |
+| Counts per shot | The events in each shot, against its shot ID or its time |
+| T, X, Y histograms | The distributions of T, X and Y |
+| XY histogram, XT histogram, YT histogram | The events binned in a plane, the third axis summed |
+| Transfer fractions | Each shot's share of atoms in each diffraction order, against its shot ID or its time |
+
+Every Basic plot can be drawn with PyQtGraph (the default for 2D plots), Plotly (the default for the 3D
+scatter, with **Open in browser**) or Matplotlib: **Drawing › Library** in its settings. Switching library
+redraws the plot without running it again. Times are in seconds and lengths in metres, with SI prefixes
+(ms, mm, µm).
+
+## Shot ID or shot time
+
+**Counts per shot** and **Transfer fractions** have an **X axis** setting:
+
+- **Shot ID** (the default): the shot number of each `d<N>.txt`.
+- **Shot time**: when each shot was taken, on your computer's clock. The axis shows the time of day and,
+  zoomed out, the date.
+
+A shot's time is its raw `d<N>.txt` file's modification time. A shot without a raw file takes its TXY file's
+time instead, which is when it was converted, so several shots converted together share one time. Those shots
+are drawn as **amber triangles**, and the plot's title counts them (`⚠ 3 TXY times (no raw file)`). A shot
+with no time at all is left out of a Shot time axis, and the title counts it too. A copied or rewritten file
+has a new modification time.
+
+Between runs, or after a stall, the line breaks instead of joining the gap: it stops where the time to the
+next shot is over ten times the shots' usual interval.
+
+While Live is on, new shots join either axis in place, and a zoom or pan you made stays.
+
+## XY, XT and YT histograms
+
+These bin the chosen shots' events in a plane and sum the third axis over them: XY sums T, XT and YT sum Y or
+X. XY has X across and Y up, at equal scales; XT and YT have T across. Their settings:
+
+- **View range.** With **auto-crop**, each shown axis covers the shortest range holding the share of events
+  you keep (99 % by default), and the summed axis isn't cut. With **manual**, the bounds you set cut the
+  events: a T range on the XY histogram images one cloud. Turn on **Sum the whole summed axis** to leave the
+  summed axis's bounds out, so that they cut only the two shown axes.
+- **Bins across** and **Bins up**: 0 picks each axis's bin count from the data.
+- **Blur σ**: a Gaussian blur, its σ in bins, that keeps the total. At most a quarter of the image's longer
+  side is used, and the plot says so.
+- **Show**: counts per bin, or a rate per shot (counts per shot per bin area: per m² for XY, per m·s for XT and
+  YT).
+- **Colour scale**: linear, sqrt, log (spanning **Decades** below the maximum) or power γ. Only the colours
+  are compressed: the colour bar still reads the real values.
+
+## Plot info
+
+The top of each plot's settings is **Plot info**. Closed, it's one line naming the plot's input, its
+revision and whether it follows Live; its tooltip gives the folder's full path. Click **Plot info** to open
+it. It then lists:
+
+- the source line;
+- the shots used, the analysis and its version, and whether the result came from the disk cache;
+- the settings in short;
+- the data's TXY;
+- the full record: the data root, the signature, the shots covered, and every parameter.
+
+Long folder names wrap, and a long record scrolls.
+
+The line above each plot is kept short: **Data source: <folder> · rev N · following Live**, or **Showing
+previously loaded data: …** when the tab now shows other data than the plot ran on. Hover over it for the
+full record.
