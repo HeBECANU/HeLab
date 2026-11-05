@@ -130,6 +130,22 @@ def build_repository(root: Path) -> str:
     return f"{match['owner']}/{match['name']}" if match else "unknown"
 
 
+def upstream_repository(root: Path, branch: str) -> str:
+    """The GitHub repository ("owner/name") of ``branch``'s upstream remote in the package's own checkout
+    (its raw configured URL, never a remote's name), or "unknown": the update check's default repo for a
+    source run (``helab.updates.settings``). Read-only, two local ``git config`` reads."""
+    root = root.resolve()
+    if branch in ("unknown", "detached") or not (root / ".git").exists():
+        return "unknown"
+    try:
+        remote = _git(root, "config", "--get", f"branch.{branch}.remote")
+        url = _git(root, "config", "--get", f"remote.{remote}.url") if remote and remote != "." else ""
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    match = GITHUB_REMOTE.fullmatch(url)
+    return f"{match['owner']}/{match['name']}" if match else "unknown"
+
+
 def write_build_info(root: Path, destination: Path) -> BuildInfo:
     """Write into build output, leaving the source package untouched."""
     info = replace(checkout_build_info(root), built_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))

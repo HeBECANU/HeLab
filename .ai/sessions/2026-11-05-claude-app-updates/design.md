@@ -78,7 +78,7 @@ GitHub's 60 requests an hour per address. A missing or malformed cache file is "
 
 | Mode | Requests |
 |---|---|
-| Releases (source and frozen) | `GET /repos/{r}/releases?per_page=100` (drafts never appear without a token; any with `draft: true` are dropped anyway); `GET /repos/{r}/git/matching-refs/tags/v` (tag → commit; an annotated tag is resolved once with `GET /repos/{r}/git/tags/{sha}`, cached by SHA); for the offered release, `GET /repos/{r}/compare/{tag commit}...main` (`behind` or `identical`: on `main`; else not offered, logged) |
+| Releases (source and frozen) | `GET /repos/{r}/releases?per_page=100` (drafts never appear without a token; any with `draft: true` are dropped anyway); `GET /repos/{r}/git/matching-refs/tags/v` (tag → commit; an annotated tag is resolved once with `GET /repos/{r}/git/tags/{sha}`, cached by SHA); for the offered release, `GET /repos/{r}/compare/{tag commit}...main` (`ahead` or `identical`: on `main`; else not offered, logged) |
 | Branch (source) | `GET /repos/{r}/compare/{running commit}...{branch}`: `identical` (up to date), `ahead` (candidates: its `commits`, newest first), `behind`/`diverged` (the checkout has commits the repo's branch doesn't: no update, "ahead of <repo>'s <branch>"), 404 (commit or branch not on that repo: no update, said why); then `GET /repos/{r}/commits/{sha}/check-runs?per_page=100` for candidates, newest first, stopping at the first green one, at most 5 |
 
 The releases' two requests also run in branch mode (for the status line, "Release X", and to mention a newer
@@ -89,8 +89,9 @@ release), so a branch-mode check is 3–8 requests, most of them 304s.
 
 - for each of `macos`, `windows`, `ubuntu`: at least one run named `<os> + py3.13 / Tests…` and one named
   `<os> + py3.13 / Build`;
-- every run named `<os> + py3.13 / …` that isn't `skipped` is `completed` with `success` (a name seen twice, a
-  re-run or a push and a PR run of one commit: its newest non-skipped run counts);
+- every job name `<os> + py3.13 / …` has succeeded: of its runs (a re-run, or a push's and a PR's run of one
+  commit) the newest that isn't skipped counts, and a name that was only skipped, or whose newest run was
+  cancelled, is **not green** (CoCo, 2026-11-05: the target commit's own runs, on all three OSes);
 - anything else (`queued`, `in_progress`, `failure`, `cancelled`, `timed_out`, `action_required`, missing) is
   **not green**. Other jobs (Docs, compatibility, the release job) don't count.
 

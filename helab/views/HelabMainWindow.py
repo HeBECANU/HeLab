@@ -64,6 +64,8 @@ from helab.views.QuitSaveDialog import QuitSaveDialog
 from helab.views.RootDuplicatesWindow import RootDuplicatesWindow
 from helab.views.SettingsDialog import SettingsDialog, read_settle_seconds
 from helab.views.DebugIconsWindow import DebugIconsWindow
+from helab.updates.check import UpdateCheck, describe as describe_updates
+from helab.updates.dialog import UpdateWindow
 
 # QtWebEngine must be imported before the QApplication exists; main.py imports this module first.
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
@@ -133,6 +135,10 @@ class HelabMainWindow(QMainWindow):
         self._setup_central_widgets()
         self._start_with_rhi_surface()
 
+        # App updates (roadmaps/app-updates.md): the status from the cached replies now; the startup check is
+        # scheduled by ``main`` (never by a window a test makes), the manual one by Help › Check for Updates….
+        self.update_check = UpdateCheck(APP_BUILD_INFO, app_folder(), self)
+        self.update_window: UpdateWindow | None = None
         self.status_bar = QStatusBar()
         self._create_status_bar()
 
@@ -143,6 +149,8 @@ class HelabMainWindow(QMainWindow):
             sys.exit(1)
         self.menu_bar: QMenuBar = menubar
         self.create_menus()
+        self.update_check.changed.connect(self._update_status_changed)
+        self._update_status_changed()
 
         # The disk cache's questions (Make room, Save update, 80% full), one at a time.
         cache = get_folder_cache(get_io_service())
@@ -246,6 +254,13 @@ class HelabMainWindow(QMainWindow):
         self.io_trace_label = identify(QLabel("● I/O trace"), "status_io_trace")
         self.io_trace_label.hide()
         self.status_bar.addPermanentWidget(self.io_trace_label)
+        # Shown while an update is available and not skipped; opens the update window.
+        self.update_button = identify(QToolButton(), "update_available", "Update available",
+                                      "Show the HeLab update that is available")
+        self.update_button.setAutoRaise(True)
+        self.update_button.hide()
+        self.update_button.clicked.connect(self.show_update_window)
+        self.status_bar.addPermanentWidget(self.update_button)
         self.status_bar.addPermanentWidget(self.status_bar_message_right)
         self.status_bar_message_right.setToolTip("(App resource usage) / (system total resource usage)")
 
@@ -605,6 +620,17 @@ class HelabMainWindow(QMainWindow):
             action_manual.setToolTip("Open HeLab's user manual in your web browser")
             action_manual.triggered.connect(self.open_user_manual)
             menu_help.addAction(action_manual)
+            # Shown only while an update is available (its text names it); both open the update window.
+            self.action_update_available = QAction("An update is available…", self)
+            self.action_update_available.setObjectName("help_update_available")
+            self.action_update_available.setVisible(False)
+            self.action_update_available.triggered.connect(self.show_update_window)
+            menu_help.addAction(self.action_update_available)
+            self.action_check_updates = QAction("Check for Updates…", self)
+            self.action_check_updates.setObjectName("help_check_updates")
+            self.action_check_updates.setToolTip("Ask GitHub whether a newer HeLab is available")
+            self.action_check_updates.triggered.connect(self.check_for_updates)
+            menu_help.addAction(self.action_check_updates)
             action_about = QAction("About HeLab", self)
             action_about.triggered.connect(self.show_about_dialog)
             menu_help.addAction(action_about)
@@ -881,7 +907,37 @@ class HelabMainWindow(QMainWindow):
         return QFileDialog.getSaveFileName(self, caption, suggested, filter)[0]
 
     def show_about_dialog(self) -> None:
-        QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description())
+        """The build's provenance, then the version status, the update mode and the last check (memory only)."""
+        check = getattr(self, "update_check", None)
+        lines = "\n".join(f"{label}: {text}" for label, text in describe_updates(check)) if check else ""
+        QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description() + (f"\n\n{lines}" if lines else ""))
+
+    def show_update_window(self) -> None:
+        """The update window (one, modeless): what the last check found."""
+        if self.update_window is None:
+            self.update_window = UpdateWindow(self.update_check, self)
+        self.update_window.show()
+        self.update_window.raise_()
+        self.update_window.activateWindow()
+
+    def check_for_updates(self) -> None:
+        """Help › Check for Updates…: the window, and a check (one at a time; it never waits)."""
+        self.show_update_window()
+        self.update_check.start(manual=True)
+
+    def _update_status_changed(self) -> None:
+        """The status-bar mark and Help's entry, from memory."""
+        found = self.update_check.status
+        offer = found.offer if found.available else None
+        self.update_button.setVisible(offer is not None)
+        self.action_update_available.setVisible(offer is not None)
+        if offer is None:
+            return
+        self.update_button.setText(f"⬆ {offer.label}")
+        self.update_button.setToolTip(f"{found.text}. Update available: {offer.label}. Click for details.")
+        self.action_update_available.setText(
+            f"HeLab {offer.label} is available…" if offer.release is not None
+            else f"{offer.label.split(' +')[0]} has newer commits ({offer.ahead})…")
 
     # Help › User manual's site check under way: its reply and the targets it chooses between.
     _manual_check: tuple[Any, user_manual.ManualTargets] | None = None
@@ -1064,6 +1120,7 @@ class HelabMainWindow(QMainWindow):
             budget.auto_reload = read_plot_auto_reload(settings)
             budget.check()  # The plots' share of a new budget.
         self.apply_auto_scan_visible(read_setting(settings, AUTO_SCAN_VISIBLE_SETTING, typed=True))
+        self.update_check.settings_changed()
 
     @staticmethod
     def _apply_live_settings(settings: QSettings) -> None:
