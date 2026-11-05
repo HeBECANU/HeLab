@@ -64,11 +64,11 @@ def test_the_sections_come_in_order_with_the_folders_existing_actions() -> None:
         "session", "store", "results", "flags", "choices", "constants", "scan", "converted"]
     assert info.title == f"Folder info — {PATH}"
     actions = {section.id: [action.id for action in section.actions] for section in info.sections}
-    assert actions == {"session": [], "store": ["clear_data", "settings_cache"],
-                       "results": ["settings_roots", "settings_cache"],
+    assert actions == {"session": [], "store": ["clear_data", "clear_raw", "settings_cache"],
+                       "results": ["clear_results", "settings_roots"],
                        "flags": ["flag_no_cache", "flag_no_auto_load", "flag_write_beside"],
                        "choices": ["txy_choose", "policy_choose"], "constants": ["constants_edit"],
-                       "scan": ["scan_refresh"], "converted": ["convert", "settings_cache"]}
+                       "scan": ["scan_refresh"], "converted": ["convert", "clear_converted"]}
     assert [action.id for action in info.header_actions] == ["settings_roots", "refresh", "copy"]
     assert info.header[1].text == "⚓ run · /data/run" and info.header[2].text.startswith("As of ")
 
@@ -135,7 +135,9 @@ def test_ram_only_offers_place_root_and_needs_a_root_for_the_flags() -> None:
     assert texts(info, "store") == [folder_info.RAM_ONLY_ROW] and texts(info, "results") == [folder_info.RAM_ONLY_ROW]
     flags = section(info, "flags")
     assert not any(action.enabled for action in flags.actions)
-    assert not section(info, "store").actions[0].enabled and section(info, "store").actions[1].enabled
+    store = {action.id: action for action in section(info, "store").actions}
+    assert not store["clear_data"].enabled and not store["clear_raw"].enabled and store["settings_cache"].enabled
+    assert store["clear_raw"].tooltip == folder_info.NEEDS_ROOT
 
 
 def test_store_v3_shows_store_v4_only() -> None:
@@ -281,3 +283,84 @@ def test_a_time_that_cant_be_one_is_unknown_never_an_error(monkeypatch: pytest.M
     assert folder_info.when(NOW, NOW) == "unknown" and folder_info.ago(NOW - 5, NOW) == "unknown"
     info = build(answer(), memory(), NOW)  # (Builds whatever the OS says of its times.)
     assert texts(info, "store")[0].endswith(" · saved unknown–unknown") and info.header[2].text == "As of unknown"
+
+
+# The per-folder Clears (Q~6, Q64.6 b; Tony 2026-11-05).
+
+def converted(*tags: tuple[str, int, int, int]) -> list[dict[str, Any]]:
+    """One cache base's index rows: (output, shots, bytes, only copies) per tag."""
+    return [{"base": "cache", "folder": "/c/converted-txy/abc", "status": "found", "error": "", "last_used": NOW - 60,
+             "tags": [{"tag": "m19v1", "profile": "matlab-2019", "version": 1, "output": output, "shots": shots,
+                       "bytes": size, "newest": NOW - 60, "only_copy": only, "only_copy_bytes": only * 100}
+                      for output, shots, size, only in tags]}]
+
+
+def actions(info: folder_info.Info) -> dict[str, folder_info.Action]:
+    return {action.id: action for section in info.sections for action in section.actions}
+
+
+def test_each_clear_is_offered_from_a_current_read_with_something_to_remove() -> None:
+    results = {"count": 2, "bytes": 3000, "rows": [], "more": 0}
+    event = answer(results=results, converted=converted(("cache", 4, 4000, 0)))
+    offered = actions(build(event, memory(), NOW))
+    assert all(offered[ident].enabled for ident in folder_info.CLEARS)
+    assert offered["clear_raw"].label == "Clear raw pulses…" and "18.0 MB" in offered["clear_raw"].tooltip
+    assert offered["clear_results"].label == "Clear this folder's saved results…"
+    assert offered["clear_converted"].label == "Clear this folder's converted TXY…"
+    for why, info in ((folder_info.READ_FIRST, build(None, memory(), NOW)),
+                      (folder_info.READ_FIRST, build(event, memory(), NOW, error="locked")),  # (Never a stale read.)
+                      (folder_info.REMOVING, build(event, memory(), NOW, clearing={"raw", "results", "converted"}))):
+        assert {(action.enabled, action.tooltip) for ident, action in actions(info).items()
+                if ident in folder_info.CLEARS} == {(False, why)}
+    nothing = actions(build(answer(raw={**answer()["raw"], "shots": 0, "bytes": 0},
+                                   converted=converted(("beside", 3, 300, 0))), memory(), NOW))
+    assert [(nothing[ident].enabled, nothing[ident].tooltip) for ident in folder_info.CLEARS] == [
+        (False, "No raw pulses cached for this folder"), (False, "No saved results for this folder"),
+        (False, "No converted TXY of this folder in HeLab's cache or temp folder")]  # (Beside ones are never removed.)
+    parts = {**answer()["parts"], **{name: part("skipped", "store-v3") for name in folder_info_store_v4()}}
+    v3 = actions(build(answer(layout=3, parts=parts), memory(store_v4=False), NOW))
+    assert (v3["clear_raw"].enabled, v3["clear_raw"].tooltip) == (False, folder_info.STORE_V4_ONLY)
+
+
+def folder_info_store_v4() -> tuple[str, ...]:
+    return ("raw", "layers", "views", "seed", "results")
+
+
+def test_each_clear_asks_naming_sizes_counts_and_the_only_copies() -> None:
+    raw = folder_info.clear_question(answer(), "clear_raw", PATH, NOW)
+    assert raw == folder_info.Question("Clear raw pulses of this folder", "Remove HeLab's cached raw pulses of x "
+                                       "(18.0 MB)? Your d files aren't touched.", "Remove cached raw pulses")
+    only = folder_info.clear_question(answer(raw={**answer()["raw"], "only_copy": 7}), "clear_raw", PATH, NOW)
+    assert only is not None and only.warn and only.text.endswith(
+        "\n\n7 of them are the only copy: their raw files are gone from the folder, so they can't be read again.")
+    results = folder_info.clear_question(answer(results={"count": 1, "bytes": 2000, "rows": [], "more": 0}),
+                                         "clear_results", PATH, NOW)
+    assert results is not None and results.reject == "Keep them" and not results.warn
+    assert results.text.startswith("Remove the 1 saved plot result of x (2.0 kB)?")
+    event = answer(raw={**answer()["raw"], "gone_last": NOW - 30},
+                   converted=converted(("beside", 9, 900, 0), ("cache", 4, 4000, 2)))
+    txy = folder_info.clear_question(event, "clear_converted", PATH, NOW)
+    assert txy is not None and txy.warn and txy.accept == "Remove converted TXY"
+    assert txy.text.startswith("Remove HeLab's converted TXY of x: 4 shots (4.0 kB) in HeLab's cache folder? Your d "
+                               "files aren't touched, nor TXY written beside them")
+    assert (f"2 of them (200 B) are the only copy of that TXY: their d files were gone when HeLab last looked "
+            f"({folder_info.when(NOW - 30, NOW)})") in txy.text
+    unknown = folder_info.clear_question(answer(converted=converted(("cache", 4, 4000, 0))), "clear_converted", PATH,
+                                         NOW)
+    assert unknown is not None and not unknown.warn and "None of them is known to be the only copy" in unknown.text
+    assert folder_info.clear_question(None, "clear_raw", PATH, NOW) is None
+    assert folder_info.clear_question(answer(converted=[]), "clear_converted", PATH, NOW) is None
+
+
+def test_a_clear_says_in_the_header_when_it_worked_or_why_not() -> None:
+    done = build(answer(), memory(), NOW, notice=folder_info.cleared("clear_raw", NOW))
+    assert done.header[-1].text == f"Removed this folder's cached raw pulses · {folder_info.when(NOW, NOW)}"
+    failed = build(answer(), memory(), NOW, notice=folder_info.not_cleared("clear_converted", "disk I/O error"))
+    assert failed.header[-1].text == "Couldn't remove this folder's converted TXY: disk I/O error"
+    assert failed.header[-1].warn
+
+
+def test_converted_txy_rows_mark_their_only_copies() -> None:
+    info = build(answer(converted=converted(("cache", 4, 4000, 2))), memory(), NOW)
+    [row] = section(info, "converted").rows
+    assert row.text.endswith(" · ⚠ 2 only copies") and row.warn and "the only copy of that TXY" in row.tooltip

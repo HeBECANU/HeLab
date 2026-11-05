@@ -4010,7 +4010,11 @@ class CacheStore:
                 "FROM raw_layers WHERE path = ?", (key,)).fetchone()
             names = ("shots", "bytes", "first", "last", "saved_first", "saved_last", "last_used", "seen_at",
                      "only_copy", "only_copy_bytes", "gone_first", "gone_last")
-            return dict(zip(names, row))
+            found: dict[str, Any] = dict(zip(names, row))
+            # The shots whose d files a listing found gone (for the converted TXY's only copies; not sent as such).
+            found["gone_shots"] = frozenset(int(shot) for (shot,) in self._conn.execute(
+                "SELECT shot FROM raw_layers WHERE path = ? AND gone_at IS NOT NULL", (key,)))
+            return found
 
         def layers() -> list[dict[str, Any]]:
             found: list[dict[str, Any]] = []

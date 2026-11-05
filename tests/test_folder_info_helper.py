@@ -1,7 +1,10 @@
 """Folder info's helper job (``cache_admin`` "folder_info", ``helab/io_ops/folder_info.py``; Q64.1–Q64.10): one read of
 the store and HeLab's converted-TXY index for a folder, with each part found, missing, an error or skipped, never per-shot
 data, bounded, and never the source folder (it doesn't exist in these tests, and nothing under it is touched). Make
-room's groups (``_txy_groups``) are unchanged by the shared rule (``cache_store.layer_group``). Temp stores only."""
+room's groups (``_txy_groups``) are unchanged by the shared rule (``cache_store.layer_group``). And the per-folder Clears
+(Q~6, Q64.6 b): only that folder's raw pulses, saved results or converted TXY go, other folders' stay, beside TXY are
+never touched, a save or conversion running can't bring them back, only copies are named, and a refused or failed Clear
+removes nothing. Temp stores only."""
 from __future__ import annotations
 
 from dataclasses import fields
@@ -316,5 +319,180 @@ def test_the_app_asks_on_the_local_lane_and_hears_the_answer_by_owner(monkeypatc
                       {"kind": "done"}):
             service.resultReady.emit(request, event)
         assert heard == [(owner, answer)] and ended == [(owner, "folder_info", "")]
+    finally:
+        service.shutdown()
+
+
+# The per-folder Clears (Q~6, Q64.6 b; Tony 2026-11-05): Folder info's Clear raw pulses…, Clear this folder's saved
+# results… and Clear this folder's converted TXY…, through the store's own removals scoped to one folder.
+
+def clear(action: str, **params: Any) -> list[dict[str, Any]]:
+    sent: list[dict[str, Any]] = []
+    cache_admin(store_options(), action, sent.append, **params)  # type: ignore[arg-type]
+    assert sent[-1]["kind"] == "admin_result" and sent[-1]["action"] == action
+    return sent
+
+
+def other_folder(tmp_path: Path) -> Path:
+    """A second folder below the same data root, with raw pulses and a saved result of its own."""
+    y = tmp_path / "data" / "y"
+    with opened(y) as store:
+        store.save_raw_batch(str(y), [raw_entry(store, shot) for shot in (1, 2)], store.start_raw_job(str(y)))
+        store.save_result(str(y), "k1", "f", record({"bins": 5}), store.write_result_file(b"z" * 80),
+                          store.start_result_job(str(y)), analysis_id="tests.corr", action="Plot", computed_at=1000.0)
+    return y
+
+
+def counts(path: Path) -> tuple[int, int, int]:
+    """(raw rows, TXY layers, saved results) the store holds for ``path``."""
+    with opened(path) as store, store.transaction(write=False):
+        key = store._path_key(str(path))
+        return tuple(int(store._conn.execute(f"SELECT COUNT(*) FROM {table} WHERE path = ?", (key,)).fetchone()[0])
+                     for table in ("raw_layers", "txy_layers", "results"))  # type: ignore[return-value]
+
+
+def test_clear_raw_pulses_takes_this_folders_only_and_names_its_only_copies(tmp_path: Path,
+                                                                            untouched: list[str]) -> None:
+    from helab.utils import folder_info as model
+    x, y = seed(tmp_path), other_folder(tmp_path)
+    info, _ = ask(x)
+    question = model.clear_question(info, "clear_raw", str(x), time.time())
+    assert question is not None and question.warn and question.accept == "Remove cached raw pulses"
+    assert question.text.startswith(f"Remove HeLab's cached raw pulses of x ({model.size(info['raw']['bytes'])})? "
+                                    "Your d files aren't touched.")
+    assert "1 of them are the only copy: their raw files are gone from the folder" in question.text
+    with opened(x) as store:
+        running = store.start_raw_job(str(x))  # (A raw_fill that started before the Clear.)
+    sent = clear("clear_raw", paths=[str(x)])
+    [removed] = [event for event in sent if event["kind"] == "removed"]
+    assert removed["kinds"] == ["raw"] and removed["paths"] == [str(x)] and removed["raw"] == 3
+    assert removed["bytes"] == info["raw"]["bytes"]
+    assert counts(x) == (0, 3, 3) and counts(y) == (2, 0, 1)  # (Its layers and results stay; y untouched.)
+    with opened(x) as store, pytest.raises(cache_store.SaveRejected):
+        store.save_raw_batch(str(x), [raw_entry(store, 4)], running)  # (Fenced: it can't bring them back.)
+    assert untouched == []
+
+
+def test_clear_saved_results_takes_this_folders_only(tmp_path: Path) -> None:
+    from helab.utils import folder_info as model
+    x, y = seed(tmp_path), other_folder(tmp_path)
+    info, _ = ask(x)
+    question = model.clear_question(info, "clear_results", str(x), time.time())
+    assert question is not None and not question.warn and question.accept == "Remove saved results"
+    assert question.text.startswith(f"Remove the 3 saved plot results of x ({model.size(250)})?")
+    with opened(x) as store:
+        running = store.start_result_job(str(x))
+    sent = clear("clear_results", paths=[str(x)])
+    [removed] = [event for event in sent if event["kind"] == "removed"]
+    assert (removed["kinds"], removed["paths"], removed["results"], removed["bytes"]) == (["results"], [str(x)], 3, 250)
+    assert counts(x) == (3, 3, 0) and counts(y) == (2, 0, 1)
+    with opened(x) as store, pytest.raises(cache_store.SaveRejected):
+        store.save_result(str(x), "k9", "f", record({"bins": 1}), store.write_result_file(b"q"), running,
+                          analysis_id="tests.corr", action="Plot", computed_at=1.0)
+
+
+def converted_folder(base: str, key: str, source: Path, shots: dict[int, str]) -> str:
+    """HeLab's folder for ``source`` in ``base``: each shot's TXY file (output cache) or a beside row, in its index."""
+    folder = folder_for(base, key)
+    os.makedirs(folder, exist_ok=True)
+    index = open_index(os.path.dirname(folder), write=True)
+    try:
+        for shot, output in shots.items():
+            entry = provenance(shot, "m19v1", output, 1000 + shot)
+            if output != "beside":
+                txy = Path(folder, entry.txy_name)
+                txy.write_bytes(b"t" * entry.txy_size)
+                entry = Provenance(**{**{field.name: getattr(entry, field.name) for field in fields(Provenance)},
+                                      "txy_mtime_ns": txy.stat().st_mtime_ns})
+            index.record(os.path.basename(folder), key, str(source), entry, 500.0)
+    finally:
+        index.close()
+    return folder
+
+
+def test_clear_converted_txy_takes_this_folders_only_never_beside_and_names_only_copies(
+        tmp_path: Path, untouched: list[str]) -> None:
+    from helab.convert.provenance import fence_of
+    from helab.utils import folder_info as model
+    x, y = seed(tmp_path), other_folder(tmp_path)  # (x's shot 3: raw pulses whose d file was gone.)
+    with opened(x) as store:
+        keys = store._path_key(str(x)), store._path_key(str(y))
+    cache_base = os.path.dirname(store_options()["directory"])
+    mine = converted_folder(cache_base, keys[0], x, {1: "cache", 3: "cache", 4: "beside"})
+    theirs = converted_folder(cache_base, keys[1], y, {1: "cache"})
+    root = os.path.dirname(mine)
+    before = fence_of(root)
+    info, _ = ask(x)
+    [base] = [base for base in info["converted"] if base["base"] == "cache"]
+    assert [(tag["output"], tag["shots"], tag["only_copy"]) for tag in base["tags"]] == [("beside", 1, 0),
+                                                                                         ("cache", 2, 1)]
+    question = model.clear_question(info, "clear_converted", str(x), time.time())
+    assert question is not None and question.warn and question.accept == "Remove converted TXY"
+    assert question.text.startswith(f"Remove HeLab's converted TXY of x: 2 shots ({model.size(2004)}) in HeLab's cache "
+                                    "folder? Your d files aren't touched, nor TXY written beside them")
+    assert f"1 of them ({model.size(1003)}) are the only copy of that TXY" in question.text
+    sent = clear("clear_converted_txy", path=str(x))
+    [removed] = [event for event in sent if event["kind"] == "removed"]
+    assert removed["kinds"] == ["converted_txy"] and removed["paths"] == [str(x)] and removed["bytes"] == 2004
+    assert not os.path.exists(mine) or os.listdir(mine) == []
+    assert sorted(os.listdir(theirs)) == ["d_txy_helab_m19v1_1.txt"]
+    index = open_index(root, write=False)
+    assert index is not None
+    try:
+        assert [(record.shot, record.output) for record in index.shots(os.path.basename(mine)).values()] == [
+            (4, "beside")]  # (The beside TXY's row stays: the only account of how it was made.)
+        assert list(index.shots(os.path.basename(theirs))) == [("m19v1", 1)]
+    finally:
+        index.close()
+    assert fence_of(root) != before  # (Fenced: a conversion running into this base writes no TXY after it.)
+    assert untouched == []  # (The source folder, where beside TXY are, is never looked at.)
+
+
+def test_a_refused_or_failed_clear_says_so_and_removes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from helab.utils.data_roots import VolumeUnverified
+    x = seed(tmp_path)
+    original = stores._cache_store
+
+    def unverified(*args: Any, **kwargs: Any) -> CacheStore:
+        store = original(*args, **kwargs)
+
+        def refuse(path: str) -> str:
+            raise VolumeUnverified(path)
+        store._path_key = refuse
+        return store
+    monkeypatch.setattr(stores, "_cache_store", unverified)
+    for action, params in (("clear_raw", {"paths": [str(x)]}), ("clear_results", {"paths": [str(x)]}),
+                           ("clear_converted_txy", {"path": str(x)})):
+        with pytest.raises(VolumeUnverified):
+            cache_admin(store_options(), action, lambda event: None, **params)
+    monkeypatch.setattr(stores, "_cache_store", original)
+    assert counts(x) == (3, 3, 3)
+
+    def failing(self: CacheStore, *args: Any, **kwargs: Any) -> Any:
+        raise cache_store.StoreError("Disk cache could not be written: disk I/O error")
+    monkeypatch.setattr(cache_store.CacheStore, "remove_raw", failing)
+    with pytest.raises(cache_store.StoreError, match="disk I/O error"):
+        cache_admin(store_options(), "clear_raw", lambda event: None, paths=[str(x)])
+    assert counts(x) == (3, 3, 3)
+
+
+def test_the_app_clears_one_folder_on_the_local_lane_with_its_verified_volumes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from helab.utils.folder_cache import FolderCache
+    from helab.utils.io_service import IOService
+    service = IOService()
+    service.timer.stop()
+    monkeypatch.setattr(service, "_dispatch", lambda: None)
+    cache = FolderCache(service)
+    try:
+        owners = {part: cache.clear_folder("/data/x", part) for part in ("raw", "results", "converted")}
+        sent = {part: next(r for r in service.pending if r.owner == owner).payload for part, owner in owners.items()}
+        assert [(payload["action"], {name: value for name, value in payload["params"].items()
+                                     if name in ("path", "paths")}) for payload in sent.values()] == [
+            ("clear_raw", {"paths": ["/data/x"]}), ("clear_results", {"paths": ["/data/x"]}),
+            ("clear_converted_txy", {"path": "/data/x"})]
+        assert all("verified_volumes" in payload["params"] for payload in sent.values())
+        assert sent["converted"]["params"]["temps"]
+        with pytest.raises(ValueError):
+            cache.clear_folder("/data/x", "everything")
     finally:
         service.shutdown()

@@ -63,9 +63,10 @@ def folder_info(store: CacheStore, path: str, cache_directory: str, temps: str =
     if state != "rooted":
         for name in PARTS[:-1]:
             parts[name] = {"status": "skipped", "error": why}
-    else:
-        _store_parts(store, path, event)
-    event["converted"] = converted(path, event["key"], cache_directory, temps)
+    gone: frozenset[int] = frozenset()
+    if state == "rooted":
+        gone = _store_parts(store, path, event)
+    event["converted"] = converted(path, event["key"], cache_directory, temps, gone)
     statuses = {base["status"] for base in event["converted"]}
     parts["converted"] = ({"status": "error", "error": next(base["error"] for base in event["converted"]
                                                              if base["status"] == "error")}
@@ -78,7 +79,8 @@ def _part(read: Read[Any]) -> FolderInfoPart:
     return {"status": read.status, "error": read.error}
 
 
-def _store_parts(store: CacheStore, path: str, event: FolderInfoEvent) -> None:
+def _store_parts(store: CacheStore, path: str, event: FolderInfoEvent) -> frozenset[int]:
+    """Fill ``event`` from the store's parts; the shots whose d files a listing found gone (for ``converted``)."""
     from helab.utils import store_v4
     contents = store.folder_contents(path, max_results=MAX_RESULTS)
     parts = event["parts"]
@@ -87,8 +89,10 @@ def _store_parts(store: CacheStore, path: str, event: FolderInfoEvent) -> None:
         read: Read[Any] = getattr(contents, name)
         parts[name] = ({"status": "skipped", "error": "store-v3"} if name in STORE_V4_PARTS and not v4
                        else _part(read))
+    gone: frozenset[int] = frozenset()
     if contents.raw.found and contents.raw.value is not None:
         raw = contents.raw.value
+        gone = frozenset(raw.get("gone_shots") or ())
         if int(raw["shots"] or 0) == 0:
             parts["raw"] = {"status": "missing", "error": ""}
         event["raw"] = _raw(raw)
@@ -128,6 +132,7 @@ def _store_parts(store: CacheStore, path: str, event: FolderInfoEvent) -> None:
     if contents.listing.found and isinstance(contents.listing.value, dict):
         listed = contents.listing.value.get("listed_at")
         event["listing_at"] = float(listed) if isinstance(listed, (int, float)) else None
+    return gone
 
 
 def _number(value: Any) -> float | None:
@@ -198,9 +203,11 @@ def result_row(row: Mapping[str, Any]) -> FolderResultRow:
         damaged=damaged)
 
 
-def converted(path: str, key: str, cache_directory: str, temps: str) -> list[FolderConvertedBase]:
+def converted(path: str, key: str, cache_directory: str, temps: str,
+              gone: frozenset[int] = frozenset()) -> list[FolderConvertedBase]:
     """HeLab's converted TXY of ``path`` in each base's folder for it (``helab_txy.folders``: the cache folder by
-    key, the temp folder by key and by path), as each base's index records them, read only."""
+    key, the temp folder by key and by path), as each base's index records them, read only. ``gone``: the shots
+    whose d files HeLab last saw gone; their TXY in HeLab's folders (never beside ones) count as only copies."""
     from helab.convert.provenance import INDEX_NAME, open_index
     cache_root = helab_txy.converted_root(cache_directory) if cache_directory else ""
     options = {"cache_base": os.path.dirname(os.path.abspath(cache_directory)) if cache_directory else "",
@@ -223,9 +230,12 @@ def converted(path: str, key: str, cache_directory: str, temps: str) -> list[Fol
             for record in index.shots(name).values():
                 group = groups.setdefault((record.profile_tag, record.output), FolderConvertedTag(
                     tag=record.profile_tag, profile=record.profile_name, version=int(record.profile_version),
-                    output=record.output, shots=0, bytes=0, newest=None))
+                    output=record.output, shots=0, bytes=0, newest=None, only_copy=0, only_copy_bytes=0))
                 group["shots"] += 1
                 group["bytes"] += int(record.txy_size)
+                if record.output != "beside" and int(record.shot) in gone:
+                    group["only_copy"] += 1
+                    group["only_copy_bytes"] += int(record.txy_size)
                 group["newest"] = max(group["newest"] or 0.0, float(record.converted_at))
             used = next((row[4] for row in index.folders() if row[0] == name), None)
         except Exception as exc:  # (sqlite3.Error, or a row of another shape.)

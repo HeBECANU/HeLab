@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import math
 import os
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 from helab.analysis.physics import CONSTANTS
 from helab.utils.number_format import byte_size
@@ -82,6 +82,24 @@ class Info:
     header_actions: tuple[Action, ...]
     sections: tuple[Section, ...]
     live: bool
+
+
+# The per-folder Clears (Q~6 and Q64.6 b, Tony 2026-11-05): an action ID's part, each asked first from the last read.
+CLEARS = {"clear_raw": "raw", "clear_results": "results", "clear_converted": "converted"}
+_CLEARED = {"raw": "this folder's cached raw pulses", "results": "this folder's saved results",
+            "converted": "this folder's converted TXY"}
+READ_FIRST = "Read this folder's disk cache first (Refresh)"
+REMOVING = "Removing…"
+
+
+@dataclass(frozen=True)
+class Question:
+    """A Clear's question: its title, text and buttons; ``warn`` when it names only copies."""
+    title: str
+    text: str
+    accept: str
+    reject: str = "Keep them"
+    warn: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,24 +238,28 @@ def _unread(event: Mapping[str, Any] | None, error: str, reading: bool) -> Row |
 
 
 def build(event: Mapping[str, Any] | None, memory: Memory, now: float, *, error: str = "",
-          reading: bool = False) -> Info:
+          reading: bool = False, clearing: Collection[str] = (), notice: Row | None = None) -> Info:
     """The window's content: ``event`` the last read that worked for this folder (None before one), ``error`` why the
-    latest failed ("" if it didn't), ``reading`` a read in flight."""
+    latest failed ("" if it didn't), ``reading`` a read in flight, ``clearing`` the Clears running (``CLEARS``' parts),
+    ``notice`` the header's line for the last one (``cleared``, ``not_cleared``)."""
     stale = bool(error) and event is not None
+    usable = None if error else event  # (A Clear asks from a read that is current, never a stale one.)
     sections: tuple[Section, ...] = (
         _session(memory, now),
-        _store(event, memory, now, error, reading),
-        _results(event, memory, now, error, reading),
+        _store(event, memory, now, error, reading, _clear_action(usable, "raw", memory, clearing)),
+        _results(event, memory, now, error, reading, _clear_action(usable, "results", memory, clearing)),
         _flags(event, memory),
         _choices(event, memory, now),
         _constants(event, memory, now),
         _scan(event, memory, now, error, reading),
-        _converted(event, memory, now, error, reading),
+        _converted(event, memory, now, error, reading, _clear_action(usable, "converted", memory, clearing)),
     )
     if stale:
         sections = tuple(Section(section.id, section.title, section.rows, section.actions, section.detail, section.more,
                                  stale=section.id not in ("session",)) for section in sections)
     header, actions = _header(event, memory, now, error, reading)
+    if notice is not None:
+        header = (*header, notice)
     return Info(memory.path, f"Folder info — {memory.path}", header, actions, sections, bool(memory.session.live))
 
 
@@ -321,13 +343,15 @@ def _session(memory: Memory, now: float) -> Section:
     return Section("session", "This session", tuple(rows))
 
 
-def _store(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool) -> Section:
+def _store(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool,
+           clear: Action) -> Section:
     rooted = memory.root is not None and not memory.pending_root
     actions = (Action("clear_data", "Clear loaded data cache",
                       "Remove this folder's cached data, TXY layers and raw pulses whose files are there (only copies "
                       "stay), as the right-click's Clear loaded data cache does" if rooted else NEEDS_ROOT, rooted),
-               Action("settings_cache", "Settings › Cache…", "Clear raw pulses and other kinds of cached data, for "
-                                                             "every folder"))
+               clear,
+               Action("settings_cache", "Settings › Cache…", "Clear cached data, analysis and converted TXY of every "
+                                                             "folder, by kind"))
     unread = _unread(event, error, reading)
     if unread is not None:
         return Section("store", "Disk cache", (unread,), actions)
@@ -392,11 +416,12 @@ def _store(event: Mapping[str, Any] | None, memory: Memory, now: float, error: s
     return Section("store", "Disk cache", shown, actions, detail if more else None, more)
 
 
-def _results(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool) -> Section:
+def _results(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool,
+             clear: Action) -> Section:
     rooted = memory.root is not None
-    actions = (Action("settings_roots", "Settings › Data roots…", "Clear cached analysis of this data root"
-                      if rooted else NEEDS_ROOT, rooted),
-               Action("settings_cache", "Settings › Cache…", "Clear cached analysis of every folder"))
+    actions = (clear,
+               Action("settings_roots", "Settings › Data roots…", "Clear cached analysis of this data root"
+                      if rooted else NEEDS_ROOT, rooted))  # (Every folder's: Disk cache's Settings › Cache….)
     unread = _unread(event, error, reading)
     if unread is not None:
         return Section("results", "Saved plot results", (unread,), actions)
@@ -554,11 +579,12 @@ def _scan(event: Mapping[str, Any] | None, memory: Memory, now: float, error: st
     return Section("scan", "Scan history", shown, action, detail if more else None, more)
 
 
-def _converted(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool) -> Section:
+def _converted(event: Mapping[str, Any] | None, memory: Memory, now: float, error: str, reading: bool,
+               clear: Action) -> Section:
     actions = (Action("convert", "Convert this folder…", f"Not now: {memory.convert_unavailable}"
                       if memory.convert_unavailable else "Convert this folder's raw files to HeLab's TXY",
                       not memory.convert_unavailable),
-               Action("settings_cache", "Settings › Cache…", "Clear HeLab's converted TXY of every folder"))
+               clear)  # (Every folder's: Disk cache's Settings › Cache….)
     unread = _unread(event, error, reading)
     if unread is not None:
         return Section("converted", "HeLab's converted TXY", (unread,), actions)
@@ -569,17 +595,128 @@ def _converted(event: Mapping[str, Any] | None, memory: Memory, now: float, erro
             rows.append(Row(f"{_OUTPUTS.get(str(base['base']), base['base'])}: {base['error']}", base["folder"],
                             warn=True))
         for tag in base.get("tags") or ():
+            only = int(tag.get("only_copy") or 0)
             rows.append(Row(f"{_OUTPUTS.get(str(tag['output']), tag['output'])}: {tag['tag']} · "
                             f"{int(tag['shots']):,} shots · {size(tag['bytes'])}"
-                            + (" (as recorded)" if tag["output"] == "beside" else ""),
+                            + (" (as recorded)" if tag["output"] == "beside" else "")
+                            + (f" · ⚠ {only:,} only copies" if only else ""),
                             f"Profile {tag['profile']} v{tag['version']}; newest converted {ago(tag['newest'], now)}; "
                             f"folder last used {ago(base.get('last_used'), now)}.\nAs HeLab's index records them in "
-                            f"{base['folder']}."))
+                            f"{base['folder']}."
+                            + (f"\n{only:,} of them ({size(tag.get('only_copy_bytes') or 0)}) are the only copy of "
+                               "that TXY: their d files were gone when HeLab last looked." if only else ""),
+                            warn=bool(only)))
     if not rows:
         rows.append(Row("None recorded", "HeLab's index has no TXY it converted from this folder."))
     detail = Detail("HeLab's converted TXY", ("Line",), tuple(((row.text,), row.tooltip) for row in rows))
     shown, more = _listed(rows, detail, "lines")
     return Section("converted", "HeLab's converted TXY", shown, actions, detail if more else None, more)
+
+
+def _converted_totals(event: Mapping[str, Any]) -> dict[str, Any]:
+    """What a Clear of the folder's converted TXY removes, as the read's index rows say: HeLab's folders' TXY only
+    (never beside ones): shots, bytes, the bases holding them, and the only copies among them."""
+    totals: dict[str, Any] = {"shots": 0, "bytes": 0, "bases": [], "only_copy": 0, "only_copy_bytes": 0}
+    for base in event.get("converted") or ():
+        tags = [tag for tag in base.get("tags") or () if tag["output"] != "beside"]
+        if tags and str(base["base"]) not in totals["bases"]:
+            totals["bases"].append(str(base["base"]))
+        for tag in tags:
+            totals["shots"] += int(tag["shots"])
+            totals["bytes"] += int(tag["bytes"])
+            totals["only_copy"] += int(tag.get("only_copy") or 0)
+            totals["only_copy_bytes"] += int(tag.get("only_copy_bytes") or 0)
+    return totals
+
+
+def _clear_action(event: Mapping[str, Any] | None, part: str, memory: Memory, clearing: Collection[str]) -> Action:
+    """A per-folder Clear's button: enabled when the current read found something of ``part`` to remove; asks first."""
+    ident = next(ident for ident, name in CLEARS.items() if name == part)
+    label = {"raw": "Clear raw pulses…", "results": "Clear this folder's saved results…",
+             "converted": "Clear this folder's converted TXY…"}[part]
+    rooted = memory.root is not None and not memory.pending_root
+    if part in clearing:
+        return Action(ident, label, REMOVING, False)
+    if part != "converted" and not rooted:
+        return Action(ident, label, NEEDS_ROOT, False)
+    if event is None:
+        return Action(ident, label, READ_FIRST, False)
+    if part == "raw":
+        if _part(event, "raw") == "skipped":
+            return Action(ident, label, STORE_V4_ONLY, False)
+        raw = event.get("raw") or {}
+        if not int(raw.get("shots") or 0):
+            return Action(ident, label, "No raw pulses cached for this folder", False)
+        return Action(ident, label, f"Remove HeLab's cached raw pulses of this folder ({size(raw['bytes'])}), after "
+                                    "asking; your d files aren't touched")
+    if part == "results":
+        results = event.get("results") or {}
+        if not int(results.get("count") or 0):
+            return Action(ident, label, "No saved results for this folder", False)
+        return Action(ident, label, f"Remove this folder's {int(results['count']):,} saved results "
+                                    f"({size(results.get('bytes') or 0)}), after asking")
+    totals = _converted_totals(event)
+    if not totals["shots"]:
+        return Action(ident, label, "No converted TXY of this folder in HeLab's cache or temp folder", False)
+    return Action(ident, label, f"Remove HeLab's converted TXY of this folder ({size(totals['bytes'])}), after asking; "
+                                "never TXY written beside the raw files")
+
+
+def clear_question(event: Mapping[str, Any] | None, ident: str, path: str, now: float) -> Question | None:
+    """The question a per-folder Clear (``ident``, one of ``CLEARS``) asks, naming the sizes and counts the last read
+    (``event``) found and the only copies among them; None when there is nothing to ask about."""
+    part = CLEARS.get(ident)
+    if event is None or part is None:
+        return None
+    name = name_of(path)
+    if part == "raw":
+        raw = event.get("raw") or {}
+        if not int(raw.get("shots") or 0):
+            return None
+        only = int(raw.get("only_copy") or 0)
+        # S4~1's question and only-copy paragraph (Tony's wording, 2026-11-02), for this folder (Q~6 (a)).
+        text = (f"Remove HeLab's cached raw pulses of {name} ({size(raw['bytes'])})? Your d files aren't touched."
+                + (f"\n\n{only:,} of them are the only copy: their raw files are gone from the folder, so they can't "
+                   "be read again." if only else ""))
+        return Question("Clear raw pulses of this folder", text, "Remove cached raw pulses", warn=bool(only))
+    if part == "results":
+        results = event.get("results") or {}
+        count = int(results.get("count") or 0)
+        if not count:
+            return None
+        text = (f"Remove the {count:,} saved plot result{'' if count == 1 else 's'} of {name} "
+                f"({size(results.get('bytes') or 0)})? Plots compute them again when they need them. Plots open on it "
+                "keep what they show; its cached data, flags and other folders' results stay.")
+        return Question("Clear this folder's saved results", text, "Remove saved results")
+    totals = _converted_totals(event)
+    if not totals["shots"]:
+        return None
+    places = {"cache": "HeLab's cache folder", "temp": "HeLab's temp folder"}
+    where = " and ".join(places.get(str(base), str(base)) for base in totals["bases"])
+    only = int(totals["only_copy"])
+    raw = event.get("raw") or {}
+    looked = raw.get("gone_last")
+    known = ("HeLab knows a d file is gone only for shots whose raw pulses it cached, as of its last look at the "
+             "folder.")
+    text = (f"Remove HeLab's converted TXY of {name}: {totals['shots']:,} shots ({size(totals['bytes'])}) in {where}? "
+            "Your d files aren't touched, nor TXY written beside them; shots are converted again when converting is on."
+            + (f"\n\n{only:,} of them ({size(totals['only_copy_bytes'])}) are the only copy of that TXY: their d files "
+               f"were gone when HeLab last looked ({when(looked, now) if looked else 'unknown'}), so they can't be "
+               f"converted from them again. {known}" if only else f"\n\nNone of them is known to be the only copy. "
+                                                                  f"{known}"))
+    return Question("Clear this folder's converted TXY", text, "Remove converted TXY", warn=bool(only))
+
+
+def cleared(ident: str, now: float) -> Row:
+    """The header's line once a per-folder Clear worked."""
+    return Row(f"Removed {_CLEARED.get(CLEARS.get(ident, ''), 'it')} · {when(now, now)}",
+               "Removed after you confirmed; the lines below are read again and show what is left.")
+
+
+def not_cleared(ident: str, message: str) -> Row:
+    """The header's line when a per-folder Clear was refused or failed: why."""
+    return Row(f"Couldn't remove {_CLEARED.get(CLEARS.get(ident, ''), 'it')}: {message}",
+               "The lines below are read again and show what the disk cache holds now.", warn=True)
 
 
 def as_text(info: Info) -> str:

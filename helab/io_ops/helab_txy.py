@@ -833,12 +833,42 @@ def clear_converted(root: str) -> dict[str, int]:
     already running writes no TXY after it: one it renamed before is found and removed here. Without
     an index of this schema to fence (none yet: a conversion making the base's first one may still
     write; damaged, busy, or a newer HeLab's) it removes as before, unfenced; no index is made for it."""
-    import contextlib
-    from helab.convert.provenance import IndexUnavailable, SCHEMA, TXY_PATTERN, TxyIndex, index_schema, open_index
     removed = {"files": 0, "bytes": 0}
     if not os.path.isdir(root):
         return removed
+    _clear_folders(root, None, removed)
+    from helab.convert.provenance import SET_ASIDE_PATTERN
+    for entry in _index_files(root)[0]:
+        if SET_ASIDE_PATTERN.fullmatch(entry.name):  # (Damaged ones; never the live index.)
+            size = _size(entry)
+            try:
+                os.unlink(entry.path)
+            except OSError:
+                continue
+            removed["bytes"] += size
+    return removed
+
+
+def clear_converted_folder(folder: str) -> dict[str, int]:
+    """Remove HeLab's TXY in one of its folders for a source folder (``folder``: ``<base>/converted-txy/<name>``, from
+    ``folders``; the user asked, Folder info's Clear this folder's converted TXY…), by ``clear_converted``'s rules for
+    one folder: fenced first, the rows of the very files removed forgotten, beside TXY's rows and the index kept, and
+    nothing else in the base (other folders, damaged indexes set aside). The fence is the index's one token, so a
+    conversion of another folder into the same base running now waits too, and converts at its next check."""
+    removed = {"files": 0, "bytes": 0}
+    if os.path.isdir(folder) and not os.path.islink(folder):
+        _clear_folders(os.path.dirname(folder), [folder], removed)
+    return removed
+
+
+def _clear_folders(root: str, only: Sequence[str] | None, removed: dict[str, int]) -> None:
+    """``clear_converted``'s removal of HeLab's folders in the base ``root`` (``only`` these, or every one, listed
+    after the fence so a folder a conversion made before it is found), adding to ``removed``: the index fenced first
+    when it is of this schema, each folder's own files by ``_cleared``'s rules, their rows forgotten, a folder left
+    with its ``folder.json`` alone removed, the index vacuumed when rows went."""
+    import contextlib
     import sqlite3
+    from helab.convert.provenance import IndexUnavailable, SCHEMA, TXY_PATTERN, TxyIndex, index_schema, open_index
     now = time.time()
     index: TxyIndex | None = None
     forgot = False
@@ -847,10 +877,13 @@ def clear_converted(root: str) -> dict[str, int]:
         with contextlib.suppress(IndexUnavailable):
             index = open_index(root, write=True, journal=journal_for(os.path.dirname(root)))
             index.set_fence(now)
-    try:
-        folders = [entry.path for entry in os.scandir(root) if entry.is_dir(follow_symlinks=False)]
-    except (FileNotFoundError, NotADirectoryError):
-        folders = []
+    if only is not None:
+        folders = list(only)
+    else:
+        try:
+            folders = [entry.path for entry in os.scandir(root) if entry.is_dir(follow_symlinks=False)]
+        except (FileNotFoundError, NotADirectoryError):
+            folders = []
     try:
         for folder in folders:
             try:
@@ -892,16 +925,6 @@ def clear_converted(root: str) -> dict[str, int]:
     finally:
         if index is not None:
             index.close()
-    from helab.convert.provenance import SET_ASIDE_PATTERN
-    for entry in _index_files(root)[0]:
-        if SET_ASIDE_PATTERN.fullmatch(entry.name):  # (Damaged ones; never the live index.)
-            size = _size(entry)
-            try:
-                os.unlink(entry.path)
-            except OSError:
-                continue
-            removed["bytes"] += size
-    return removed
 
 
 def folder_print(fingerprint: Any, origins: Mapping[int, str],

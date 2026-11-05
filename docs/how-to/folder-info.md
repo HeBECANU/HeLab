@@ -5,8 +5,9 @@ row's tooltip, Folder details, the right-click menu and Settings: what the disk 
 (and which of it is the only copy left), its saved plot results, its flags, TXY list, cache policy and
 constants, its scan history, and HeLab's converted TXY of it.
 
-The window only shows. Its buttons run the folder's usual actions, which ask first just as they do
-from the right-click menu or Settings.
+Most of its buttons run the folder's usual actions, which ask first just as they do from the
+right-click menu or Settings. Three are the window's own: they clear one kind of cached data for this
+folder only, and each asks first ([Clearing one folder](#clearing-one-folder)).
 
 ## Open it
 
@@ -51,8 +52,10 @@ files are gone and can't be rebuilt from raw pulses. HeLab learns that a file is
 lists the folder, so the line says when it **last looked**. If the files are back (a drive that wasn't
 mounted, a folder restored), **Retry / Refresh** lists the folder again and clears the mark.
 
-Clear loaded data cache and Don't cache's "remove cached data" keep only copies. Settings › Cache's
-**Clear raw pulses** and **Clear all** remove them along with everything else.
+Clear loaded data cache and Don't cache's "remove cached data" keep only copies. This window's
+**Clear raw pulses…** removes the folder's only copies too, and its question says how many there are.
+Settings › Cache's **Clear raw pulses** and **Clear all** remove every folder's along with everything
+else.
 
 ### When a read fails
 
@@ -75,19 +78,43 @@ pulses are cached just after a save, so they show at the next read.
 
 Each section's buttons are the folder's usual actions:
 
-- **Disk cache:** **Clear loaded data cache** (as in the right-click menu), and **Settings › Cache…**
-  to clear raw pulses or other kinds of cached data.
-- **Saved plot results:** **Settings › Data roots…** (with the folder's data root selected) to clear
-  that root's cached analysis, or **Settings › Cache…** to clear all of it.
+- **Disk cache:** **Clear loaded data cache** (as in the right-click menu), **Clear raw pulses…**
+  (this folder's), and **Settings › Cache…** to clear any kind of cached data of every folder.
+- **Saved plot results:** **Clear this folder's saved results…**, and **Settings › Data roots…**
+  (with the folder's data root selected) to clear that root's cached analysis.
 - **Flags:** the same toggles as the right-click menu; **Write TXY beside** asks first, as Live's
   Auto-convert menu does.
 - **TXY list and cache policy:** **TXY for this folder…** and **Cache policy for this folder…**.
 - **Constants:** **Folder constants…**.
 - **Scan history:** **Retry / Refresh** lists the folder again.
-- **HeLab's converted TXY:** **Convert this folder…**, and **Settings › Cache…** to clear converted
-  TXY.
+- **HeLab's converted TXY:** **Convert this folder…** and **Clear this folder's converted TXY…**.
 - **Header:** **Place .helab-root here…** for a RAM-only folder, or **Settings › Data roots…** for the
   folder's data root.
 
 Actions that need a data root (the flags, the folder's TXY list and policy, clearing its cache) are
 greyed out for a RAM-only folder, with the reason in their tooltip.
+
+## Clearing one folder
+
+Each of these removes one kind of HeLab's cached data of this folder, and nothing of any other folder.
+Each asks first, naming the size and count from the window's last read, and the only copies among
+them. The buttons are greyed out when there is nothing to remove, when the last read failed, or while
+the Clear runs.
+
+| Button | What it removes | What stays |
+|---|---|---|
+| **Clear raw pulses…** | HeLab's cached raw pulses of the folder, only copies included | your `d<N>.txt` files, the folder's TXY data and loads saved |
+| **Clear this folder's saved results…** | the folder's saved plot results | plots open on it (they keep what they show), its cached data and flags |
+| **Clear this folder's converted TXY…** | the TXY HeLab converted from the folder into its cache or temp folder | your `d<N>.txt` files, and TXY written beside them: never touched |
+
+For converted TXY, the question says how many are the only copy of that TXY: shots whose `d<N>.txt`
+files were gone when HeLab last looked. HeLab knows that only for shots whose raw pulses it cached,
+and it never lists the folder to find out.
+
+A Clear that worked shows **Removed …** under the header, with the time. One that HeLab refused (a
+drive not checked yet this session, a disk cache a newer HeLab wrote) or that failed shows **Couldn't
+remove …** and why. Either way the window reads the folder again, so its lines show what is left.
+
+A conversion running at the time of a converted-TXY Clear (into HeLab's cache or temp folder, of any
+folder) stops writing and converts the rest at its next check, as it does after Settings › Cache's
+Clear.

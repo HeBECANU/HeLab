@@ -2,8 +2,9 @@
 buttons call the tab's existing actions, it reads on open, on Refresh, after an action (at the folder's next change)
 and, while Live watches the folder, after each Live save, with one read in flight; a retargeted window drops the old
 answer; a failed read says so; long lists open beside it, widening it; it is never taller than its screen and keeps
-its size; opening and rendering touch no source folder. And the ways in: right-click › Folder info…, Folder details'
-link, File › Folder info… (⌘I)."""
+its size; opening and rendering touch no source folder; its per-folder Clears ask first, clear that folder only and
+say whether they worked. And the ways in: right-click › Folder info…, Folder details' link, File › Folder info…
+(⌘I)."""
 from __future__ import annotations
 
 import os
@@ -366,3 +367,55 @@ def test_settings_data_roots_selects_the_folders_root(qtbot: QtBot, monkeypatch:
         assert not page.select_root("uuid-none") and (page.selected() or {}).get("location") == "vol://a/x"
     finally:
         service.shutdown()
+
+
+def clears(service: IOService) -> list[IORequest]:
+    return [request for request in service.pending if request.operation == "cache_admin"
+            and request.payload["action"] in ("clear_raw", "clear_results", "clear_converted_txy")]
+
+
+def test_each_clear_asks_first_then_clears_this_folder_and_says_so(setup: Any) -> None:
+    """Q~6, Q64.6 b (Tony, 2026-11-05): Clear raw pulses…, Clear this folder's saved results… and Clear this folder's
+    converted TXY…, each asked first from the current read; a no removes nothing; a yes clears this folder only, and the
+    header says it worked (or why not), the folder read again."""
+    s = setup
+    asked: list[Any] = []
+    answers = [False, True, True, True]
+
+    def ask(question: Any) -> bool:
+        asked.append(question)
+        return answers.pop(0)
+    s.window.ask_clear = ask
+    s.window.show_folder(s.path, s.explorer)
+    converted = [{"base": "cache", "folder": "/c/x", "status": "found", "error": "", "last_used": NOW,
+                  "tags": [{"tag": "m19v1", "profile": "matlab-2019", "version": 1, "output": "cache", "shots": 2,
+                            "bytes": 2000, "newest": NOW, "only_copy": 0, "only_copy_bytes": 0}]}]
+    finish(s.service, reads(s.service)[0], answer(s.path, results={"count": 2, "bytes": 500, "rows": [], "more": 0},
+                                                  converted=converted))
+    button(s.window, "folder_info_store_clear_raw").click()  # (Answered no.)
+    assert asked[0].title == "Clear raw pulses of this folder" and not clears(s.service)
+    button(s.window, "folder_info_store_clear_raw").click()
+    [raw] = clears(s.service)
+    assert (raw.payload["action"], raw.payload["params"]["paths"]) == ("clear_raw", [s.path]) and raw.priority
+    assert not button(s.window, "folder_info_store_clear_raw").isEnabled()  # (While it runs.)
+    finish(s.service, raw, {"kind": "removed", "kinds": ["raw"], "paths": [s.path], "raw": 3, "bytes": 3000})
+    assert any(text.startswith("Removed this folder's cached raw pulses · ") for text in labels(s.window))
+    [again] = reads(s.service)  # (What is left, read again.)
+    finish(s.service, again, answer(s.path, raw={**answer(s.path)["raw"], "shots": 0, "bytes": 0},
+                                    results={"count": 2, "bytes": 500, "rows": [], "more": 0}))
+    assert not button(s.window, "folder_info_store_clear_raw").isEnabled()
+    button(s.window, "folder_info_results_clear_results").click()
+    [results] = clears(s.service)
+    assert (results.payload["action"], results.payload["params"]["paths"]) == ("clear_results", [s.path])
+    finish(s.service, results, error="This disk cache was written by a newer HeLab and is read-only")
+    assert ("Couldn't remove this folder's saved results: This disk cache was written by a newer HeLab and is "
+            "read-only") in labels(s.window)
+    finish(s.service, reads(s.service)[0], answer(s.path, converted=converted))
+    button(s.window, "folder_info_converted_clear_converted").click()
+    [txy] = clears(s.service)
+    assert (txy.payload["action"], txy.payload["params"]["path"]) == ("clear_converted_txy", s.path)
+    assert [question.accept for question in asked] == ["Remove cached raw pulses", "Remove cached raw pulses",
+                                                       "Remove saved results", "Remove converted TXY"]
+    s.window.show_folder(s.path + "-other", s.explorer)  # (Retargeted: that Clear's end says nothing here.)
+    finish(s.service, txy)
+    assert not any(text.startswith(("Removed", "Couldn't remove")) for text in labels(s.window))

@@ -3579,6 +3579,21 @@ class FolderCache(QObject):
         answer comes as ``folderInfoRead``; the job's end as ``cacheAdminDone``."""
         return self.cache_admin("folder_info", path=path, verified_volumes=self.verified_volumes())
 
+    def clear_folder(self, path: str, part: str) -> str:
+        """Folder info's per-folder Clears (Q~6, Q64.6 b; the user confirmed): ``part`` "raw" (the folder's cached raw
+        pulses), "results" (its saved results) or "converted" (HeLab's converted TXY of it, never TXY beside the raw
+        files). Each goes through the store's own removal for those paths (fenced, so a save running can't bring them
+        back), keyed by the volumes verified this session as its read is, sends ``removed`` and ends with
+        ``cacheAdminDone``; its owner, or "" if it couldn't be queued."""
+        volumes = self.verified_volumes()
+        if part == "raw":
+            return self.cache_admin("clear_raw", paths=[path], verified_volumes=volumes)
+        if part == "results":
+            return self.cache_admin("clear_results", paths=[path], verified_volumes=volumes)
+        if part == "converted":
+            return self.cache_admin("clear_converted_txy", path=path, verified_volumes=volumes)
+        raise ValueError(f"Unknown folder Clear: {part}")
+
     # Saved analysis results (result caching R2): reads and saves on the local lane, never of a
     # source folder. The plot that asked gets the helper's events through ``resultReady`` under
     # the owner it gave; the disk usage they report is noted here (results count toward the disk

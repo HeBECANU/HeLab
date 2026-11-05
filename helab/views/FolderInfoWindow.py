@@ -3,7 +3,8 @@
 One window, retargeted on each open (``show_folder``), its folder's path in the title. Its content is
 ``helab.utils.folder_info``'s model, from one helper read (``FolderCache.folder_info``, the local lane: the store and
 HeLab's converted-TXY index, never the folder) and memory (``FolderInfoSources.memory``). Each section's buttons call
-the folder's existing actions through its tab, which ask as they do elsewhere; the window itself changes nothing. It
+the folder's existing actions through its tab, which ask as they do elsewhere; the window's own are the per-folder
+Clears (raw pulses, saved results, converted TXY: ``FolderCache.clear_folder``), each asked first. It
 reads on open, on Refresh and after an action started here; while Live watches the folder, its This session lines
 follow each check that brings shots and it reads again after each Live save, with at most one read in flight
 (``folder_info.Reads``). Long sections open their full list in a detail pane to the right, widening the window; the
@@ -18,15 +19,15 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QFont, QGuiApplication, QHideEvent, QShowEvent
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea, QSplitter, QToolButton,
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QSplitter, QToolButton,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from helab.utils import folder_cache as folder_cache_module
 from helab.utils import folder_info, txy_sources
-from helab.utils.accessible import identify
+from helab.utils.accessible import identify, identify_buttons
 from helab.utils.colours import AMBER
 from helab.utils.folder_cache import FolderCache
-from helab.utils.folder_info import Action, Info, Memory, Reads, Row, Section, Session
+from helab.utils.folder_info import Action, Info, Memory, Question, Reads, Row, Section, Session
 from helab.utils.settings_defaults import FOLDER_INFO_SIZE_SETTING, read_setting
 from helab.utils.settings_store import app_settings
 from helab.views.ActivityWindow import parse_size, session_of, watching
@@ -143,6 +144,9 @@ class FolderInfoWindow(QWidget):
         self._pane_width = 0
         self._connected = False
         self._fitted = False
+        self._clears: dict[str, tuple[str, str]] = {}  # A Clear's owner: (its folder, its action ID).
+        self.notice: Optional[Row] = None  # The header's line for the last Clear of this folder.
+        self.ask_clear: Optional[Callable[[Question], bool]] = None  # (Tests answer the question.)
         identify(self, "folder_info_window", "Folder info")
         self.setWindowTitle("Folder info")
         self.resize(*parse_size(read_setting(app_settings(), FOLDER_INFO_SIZE_SETTING), DEFAULT_SIZE))
@@ -157,7 +161,8 @@ class FolderInfoWindow(QWidget):
         self.sections_area = QScrollArea()
         self.sections_area.setWidgetResizable(True)
         self.sections_area.setFrameShape(QFrame.Shape.NoFrame)
-        self.sections_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # (Narrower than a section's title line and its buttons: it scrolls sideways rather than cut them off.)
+        self.sections_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         identify(self.sections_area, "folder_info_sections", "Folder info sections")
         self.splitter.addWidget(self.sections_area)
         self.pane = QWidget()
@@ -207,7 +212,7 @@ class FolderInfoWindow(QWidget):
     def show_folder(self, path: str, explorer: Optional[FolderExplorer] = None) -> None:
         """Show ``path`` (from its tab ``explorer``, through which its actions go), read it, and raise the window."""
         if path != self.path:
-            self.path, self.answer, self.error = path, None, ""
+            self.path, self.answer, self.error, self.notice = path, None, "", None
             self._armed_until = 0.0
             self.close_detail()
         self._explorer = weakref.ref(explorer) if explorer is not None else None
@@ -254,6 +259,14 @@ class FolderInfoWindow(QWidget):
 
     @pyqtSlot(str, str, str)
     def _on_admin_done(self, owner: str, action: str, message: str) -> None:
+        clear = self._clears.pop(owner, None)
+        if clear is not None:
+            path, ident = clear
+            if path == self.path:
+                self.notice = folder_info.cleared(ident, time.time()) if not message else folder_info.not_cleared(
+                    ident, message)
+                self.request_read()  # (What is left, read again; it rebuilds.)
+            return
         if action != "folder_info":
             self._changed()
             return
@@ -348,6 +361,9 @@ class FolderInfoWindow(QWidget):
             if clipboard is not None and self.info is not None:
                 clipboard.setText(folder_info.as_text(self.info))
             return
+        if ident in folder_info.CLEARS:
+            self.clear(ident)
+            return
         self.arm()
         if ident == "settings_cache":
             self.sources.open_settings("Cache", "")
@@ -379,6 +395,39 @@ class FolderInfoWindow(QWidget):
         if not self.isHidden():
             self.rebuild()  # (A toggle a dialog declined shows its state again.)
 
+    def clear(self, ident: str) -> None:
+        """A per-folder Clear (``folder_info.CLEARS``): ask, naming what the current read found, then remove on a yes;
+        the header says when it worked, or why not, and the folder is read again."""
+        path = self.path
+        part = folder_info.CLEARS[ident]
+        question = folder_info.clear_question(None if self.error else self.answer, ident, path, time.time())
+        if question is None or self._clearing(path, part):
+            return
+        if not (self.ask_clear or self._ask_clear)(question) or path != self.path:
+            return
+        owner = self.cache.clear_folder(path, part)
+        if owner:
+            self._clears[owner] = (path, ident)
+            self.notice = None
+        else:
+            self.notice = folder_info.not_cleared(ident, "the disk cache is off this session" if not
+                                                  folder_cache_module.store_options() else
+                                                  "it couldn't be queued (the I/O queue is full or HeLab is quitting)")
+        self.rebuild()
+
+    def _clearing(self, path: str, part: str) -> bool:
+        return any(folder == path and folder_info.CLEARS[ident] == part for folder, ident in self._clears.values())
+
+    def _ask_clear(self, question: Question) -> bool:
+        box = QMessageBox(QMessageBox.Icon.Warning if question.warn else QMessageBox.Icon.Question, question.title,
+                          question.text, parent=self)
+        accept = box.addButton(question.accept, QMessageBox.ButtonRole.AcceptRole)
+        reject = box.addButton(question.reject, QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(reject)
+        identify_buttons(box, "folder_info_clear_confirm")
+        box.exec()
+        return box.clickedButton() is accept
+
     @pyqtSlot(bool)
     def _clicked(self, checked: bool = False) -> None:
         button = self.sender()
@@ -398,8 +447,9 @@ class FolderInfoWindow(QWidget):
         if not self.path:
             return
         memory = self.sources.memory(self.path, self.explorer())
+        clearing = {folder_info.CLEARS[ident] for folder, ident in self._clears.values() if folder == self.path}
         self.info = folder_info.build(self.answer, memory, time.time(), error=self.error,
-                                      reading=self.reads.in_flight)
+                                      reading=self.reads.in_flight, clearing=clearing, notice=self.notice)
         self._paint(self.info)
 
     def _row(self, row: Row, ident: str, stale: bool = False,

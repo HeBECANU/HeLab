@@ -15,7 +15,9 @@ C~1, C~2, C~3, C~5 yes; Q~2 (c); Q~1, Q~3, Q~4, Q~5 as proposed, with Tony in Ch
 | `88b6656` | Settings › Data roots… selects the folder's root (`DataRootsTab.select_root`, CoCo's go) |
 | `2d708e0` | The manual's page (`docs/how-to/folder-info.md`) |
 | `0f09f06` | Handoff |
-| (next) | Times Windows can't show read "unknown" (CI 41998150471's Windows failures) |
+| `0f95d61` | Times Windows can't show read "unknown" (CI 41998150471's Windows failures) |
+| `9da2bee` | Handoff notes the Windows fix |
+| (next) | Per-folder Clears: raw pulses, saved results, converted TXY (Q~6 and Q64.6 (b), Tony 2026-11-05) |
 
 Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); CoCo pushes from Ground.
 
@@ -45,7 +47,7 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 - **The window** (`helab/views/FolderInfoWindow.py`): one, made at startup hidden (as Activity is: so
   `test_settings_defaults`' real-window test sees its size row read), retargeted by `show_folder(path, tab)`,
   title "Folder info — <path>" (Q~1) and `setWindowFilePath`. Actions go through the tab it was opened from (else
-  the current tab); the window changes nothing itself. Reads on open, Refresh, and after an action at the
+  the current tab); its own are the three per-folder Clears (below). Reads on open, Refresh, and after an action at the
   folder's next change (`folderPrefsChanged`, `constantsChanged`, `dataRootsChanged`, `scanHistoryChanged`,
   `diskCacheChanged`, `cacheRemoved`, `saveEnded`, other admin jobs' `cacheAdminDone`; armed 10 min). While Live
   watches the folder (any tab): `datasetChanged` → This session only (500 ms coalesced), `saveEnded` saved or
@@ -58,12 +60,53 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
   Folder details' "Folder info…" link (`details_folder_info`) in a third grid column of the Disk cache row, the
   other rows spanning it, shown with the row (Q~4); File › Folder info… with `Ctrl+I` (⌘I), enabled on
   `aboutToShow`, tab changes and selection changes.
-- **Q~2 (c):** no per-folder Clear raw pulses; the Disk cache and results sections link to Settings › Cache and
-  Settings › Data roots (the folder's root selected: `DataRootsTab.select_root(uuid)`, now or once its list is
-  read; `show_settings_dialog(root=)`).
+- **Per-folder Clears** (Q~6 (a) and Q64.6 (b), Tony 2026-11-05: "implement now"): **Clear raw pulses…** (Disk
+  cache), **Clear this folder's saved results…** (Saved plot results), **Clear this folder's converted TXY…**
+  (HeLab's converted TXY). Each asks first from the current read (`folder_info.clear_question`: sizes, counts and
+  the only copies; buttons "Remove …" / "Keep them", Keep the default, a warning icon when it names only copies),
+  is offered only when that read found something to remove (never from a failed, stale read; greyed while it
+  runs), and goes through `FolderCache.clear_folder(path, part)` → the existing admin actions scoped to the folder:
+  - `clear_raw paths=[path]` → `CacheStore.remove_raw(paths)` (existing): the folder's `raw:` epoch bumped, so a
+    `raw_fill` already running can't bring them back; only copies included, named in S4~1's paragraph.
+  - `clear_results paths=[path]` (new parameter) → `remove_results(paths)` (existing scope): the folder's results
+    epoch bumped; results waiting for an answer go with them, as before.
+  - `clear_converted_txy path=path` (new parameter) → `helab_txy.clear_converted_folder` for each of
+    `helab_txy.folders(path)` (cache folder by key, temp by key and by path): `clear_converted`'s rules for one
+    folder (now shared: `_clear_folders`), fenced first, only the rows of the very files removed forgotten,
+    beside TXY's rows and files never touched (the global Clear never touches them either: it only looks under
+    `converted-txy/`), nothing else of the base. **The fence is the index's one token** (A19.2), so a conversion
+    of another folder into the same base running at that moment stops writing and converts the rest at its next
+    check, as after Settings' Clear (A~5).
+  Each sends `removed` (Q3.3) with `paths: [path]`. The three trust only volume hints verified this session, as
+  the read does (`admin.py`'s `verified_volumes` list; callers that send none, every global Clear and the
+  S4~1 offer, trust every hint as before). An unverified drive refuses (`VolumeUnverified`, also for the converted
+  Clear: it is a `NoDataRoot`, so it is re-raised before the RAM-only fallback to by-path folders). The header
+  then says "Removed <this folder's …> · <time>" or "Couldn't remove <…>: <why>" (refused, failed or not queued),
+  and the folder is read again. **Only copies of converted TXY:** the read now counts, per tag, HeLab's TXY of shots
+  whose raw rows are marked gone (`folder_contents`' raw part has `gone_shots`, not sent; the event's
+  `FolderConvertedTag` gains `only_copy`, `only_copy_bytes`); the question says how many, and that HeLab knows a d
+  file is gone only for shots whose raw pulses it cached (no listing of the folder). The rows say "⚠ N only
+  copies" in amber.
+- **Links:** Disk cache's Settings › Cache… (every folder, by kind) and Saved plot results' Settings › Data
+  roots… (the folder's root selected: `DataRootsTab.select_root(uuid)`, now or once its list is read;
+  `show_settings_dialog(root=)`). Saved plot results' and converted TXY's own Settings › Cache… links went: they
+  repeated Disk cache's, and with them those title lines needed 592 px (the window's default is 620). The sections
+  now scroll sideways when the window is narrower than a title line (min 420; the widest line needs 475 px),
+  instead of cutting buttons off.
 - `LiveController.set_write_beside` (C~3): a public name over the existing asked path, for the Flags toggle.
 
 ## Checks
+
+- **After the per-folder Clears:** full suite (`pytest -n 4 --reruns 5 --reruns-delay 1
+  --basetemp=.ai/temp/pytest`) **9500 passed, 673 skipped, no reruns**; the five type checks, `ruff check` and
+  `mkdocs build --strict` clean. (A first run had 3 failures with 15 reruns, all `tests/test_typing.py`'s three
+  checks on type errors in the new code and tests, fixed before this run.) New tests: helper 5
+  (`test_folder_info_helper.py`: raw pulses, saved results and converted TXY of one folder on a seeded store with
+  a second folder untouched, beside TXY's row and the source folder untouched, the running save's or conversion's
+  fence, only copies named; a refused (unverified drive) and a failed (`StoreError`) Clear removing nothing; the
+  app's three requests with verified volumes), model 4, window 1 (asks, no removes nothing, yes clears this folder
+  and says "Removed …", a failure says "Couldn't remove …: why", read again, retargeted window ignores the end).
+  Rendered at 620 and 420 px: fits at 620; at 420 the sections scroll sideways.
 
 - **After the Windows fix:** full suite 9490 passed, 673 skipped, **no reruns**; five type checks clean. CI
   41998150471 (`4dd31db`) was red on Windows Tests (1/3) and (2/3) from `when()`'s `OSError: [Errno 22]` on the
@@ -98,8 +141,11 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 > change (armed 10 min); while Live watches the folder, `datasetChanged` re-renders This session and `saveEnded`
 > (saved, superseded) reads again. Memory parts (`FolderInfoSources.memory`): the data root, flags, the TXY list
 > and policy in effect, inherited constants, the session's scan history, the subfolders' derived status, This
-> session (RAM, Live, plots on it, newest shot). Its buttons call the tab's existing actions (no Clear of its own:
-> Settings › Cache and Data roots, the latter with the root selected, `DataRootsTab.select_root`). Long sections
+> session (RAM, Live, plots on it, newest shot). Its buttons call the tab's existing actions, and links to Settings
+> › Cache and Data roots (the latter with the root selected, `DataRootsTab.select_root`); its own are the
+> per-folder Clears (Q~6, Q64.6 b: raw pulses, saved results, converted TXY; `FolderCache.clear_folder`), each
+> asked first from the current read (`folder_info.clear_question`, only copies named), the header saying
+> "Removed …" or "Couldn't remove …: why", then a read. Long sections
 > open a detail pane to the right, widening the window; the sections scroll; the window is clamped to its screen;
 > size `folder_info_window_size`. "Nothing cached" only from a part the read found empty; a failed read keeps the
 > last good lines greyed and names the error.
@@ -111,18 +157,27 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 >   store-v4's own results, flags, choices, constants, history, summary, listing) and the converted-TXY indexes
 >   read only; event `folder_info` (bounded: no per-shot data, 200 results, 32 layers and views). Make room's
 >   per-layer rule is `cache_store.layer_group`, shared by `_txy_groups`: [app-runtime-and-ui](app-runtime-and-ui.md).
+> - **One folder's Clears** (Folder info, Q~6 and Q64.6 b): `clear_raw paths=[path]` (`remove_raw(paths)`, the
+>   folder's `raw:` epoch), `clear_results paths=[path]` (`remove_results(paths)`, its results epoch) and
+>   `clear_converted_txy path=path` (`helab_txy.clear_converted_folder`: `clear_converted`'s rules for one of
+>   HeLab's folders, `_clear_folders`; the index's one fence token, so other folders' conversions into that base
+>   wait for their next check). Each sends `removed` with the folder's path and trusts only verified volume hints.
+>   A converted TXY is counted as an only copy when its shot's raw row has `gone_at` (`folder_contents`' raw
+>   `gone_shots`).
 
 **`.ai/architecture/settings.md`**: the row `folder_info_window_size` (str, "620,560"; as Activity's).
 
 **`.ai/architecture/io-and-browsing.md`**, where `ADMIN_ACTIONS` is named: add `folder_info` (read only; trusts
-only verified volume hints, as `constants`).
+only verified volume hints, as `constants`), and that `clear_raw`, `clear_results` (new `paths`) and
+`clear_converted_txy` (new `path`) do too when the app sends them (Folder info's per-folder Clears).
 
 **`AGENTS.md`** (one line, the code map's `helab/views/` row): after `ActivityWindow.py (…)`, add
 "`FolderInfoWindow.py` (File › Folder info…: one folder's cache, results, flags and choices; model
 `helab/utils/folder_info.py`)". No new invariant.
 
 **`roadmaps/folder-info.md`**: status → built on `agent/folder-info` (commits above); the Decided sections stand;
-CoCo's Q~ answers (below) under them; Q~2 (c) means "Clear raw pulses…" per folder joins Later with Q64.6 (b).
+CoCo's Q~ answers (below) under them; Q64.6 → (b), built (Tony, 2026-11-05: "implement now"), with Q~6 (a); the
+"Later" item "Per-folder Clear of saved results and converted TXY" is done; A~5 goes to Later.
 
 **`roadmaps/known-issues.md`**, a new entry:
 
@@ -135,13 +190,19 @@ CoCo's Q~ answers (below) under them; Q~2 (c) means "Clear raw pulses…" per fo
 ## Questions and follow-ups (provisional IDs)
 
 Decided by CoCo with Tony in Chat (record them): **Q~1** title "Folder info — <path>"; **Q~2** (c) no per-folder
-Clear raw pulses in v1, links to Settings; **Q~3** the data root in the header; **Q~4** Folder details' link
-hidden with the Disk cache row; **Q~5** section order as built.
+Clear raw pulses in v1, links to Settings (superseded by Q~6); **Q~3** the data root in the header; **Q~4** Folder
+details' link hidden with the Disk cache row; **Q~5** section order as built.
 
-- **Q~6 Per-folder "Clear raw pulses…"** (from Q~2). `remove_raw(paths)` removes the folder's only copies too.
-  Options: (a) a question naming the size and the only copies (S4~1's paragraph); (b) keep only copies (a new
-  `remove_raw` option: a store write path); (c) leave it to Settings. **Proposed:** (a), with Q64.6 (b)'s
-  per-folder Clears, in one follow-up.
+- **Q~6 Per-folder "Clear raw pulses…"** (from Q~2). **Decided by Tony, 2026-11-05 ("implement now"): (a)**, a
+  question naming the size and S4~1's only-copy paragraph, buttons "Remove cached raw pulses" / "Keep them",
+  with Q64.6 (b)'s two per-folder Clears, on this floor before review. Built as above.
+- **A~5 A per-folder fence for HeLab's converted TXY.** A per-folder Clear of converted TXY sets the index's one
+  fence token (A19.2), so a conversion of *another* folder into the same base, running at that moment, stops
+  writing (its shots wait, "HeLab's converted TXY were cleared while this conversion ran: converted again at the
+  next check") and converts them at its next check. Safe (nothing comes back, nothing is lost), but that folder's
+  wait message is misleading. Fix: a per-folder token (a `folder_fences` table, additive within schema 1, as
+  `fence` was), read by `fence_of(root, folder)` and checked beside the base's; it touches
+  `helab/convert/provenance.py` and `helab/io_ops/convert.py`, so not on this floor.
 - **A~1 Activity's name for the read.** A Folder info read shows in Activity's Cache upkeep under the admin
   action's name; give it a label ("Folder info read") and leave successful ones out of History
   (`activity.NOT_KEPT_WHEN_OK`: Live's saves make one each while the window is open).
@@ -157,6 +218,9 @@ hidden with the Disk cache row; **Q~5** section order as built.
   and constants; a folder with only copies (a raw file moved away, then Retry / Refresh: the mark and "last looked",
   then moved back); a RAM-only folder (Place .helab-root here…); the detail pane on a long results list; the
   window's height on the laptop screen; ⌘I with the folder panel hidden; and with Live on the folder: This session
-  following each shot and a read after each save (every N shots and on stop).
+  following each shot and a read after each save (every N shots and on stop). The three Clears on a copy of a
+  real folder: each question's sizes against Settings › Cache's, the only-copy paragraph (a raw file moved away,
+  Retry / Refresh, then Clear raw pulses…), "Removed …" and the lines read again, and another folder's cache
+  untouched.
 - **M~2 Windows:** Ctrl+I, the fonts (the title lines' buttons on Windows' wider fonts), and the detail pane at
   1366-pixel-wide screens.

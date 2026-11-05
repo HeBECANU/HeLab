@@ -781,6 +781,10 @@ class FolderConvertedTag(TypedDict):
     shots: int
     bytes: int
     newest: float | None
+    # Of those shots, the ones whose d files HeLab last saw gone (its raw layer rows' ``gone_at``): this TXY is their only
+    # copy outside HeLab's cached raw pulses.
+    only_copy: int
+    only_copy_bytes: int
 
 
 class FolderConvertedBase(TypedDict):
