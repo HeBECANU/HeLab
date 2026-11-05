@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from helab.utils.accessible import identify
@@ -21,9 +21,7 @@ BODY_LINES = 12  # The open section's most height, in lines: more scrolls (the s
 
 class PlotInfo(QWidget):
     """The section: a toggle ("▸ Plot info"), the plot's input line beside it (``summary``, the plot's own
-    ``input_label``: one line, elided), and the wrapped lines below it while open. ``toggled(open)``."""
-
-    toggled = pyqtSignal(bool)
+    ``input_label``: one line, elided), and the wrapped lines below it while open (its state is the toggle's)."""
 
     def __init__(self, summary: ElidedLabel, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -39,7 +37,7 @@ class PlotInfo(QWidget):
         self.toggle.setAutoRaise(True)
         self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setText("Plot info")
-        self.toggle.toggled.connect(self._toggled)
+        self.toggle.toggled.connect(self._show_state)
         header.addWidget(self.toggle)
         self.summary = summary
         summary.setParent(self)
@@ -85,10 +83,6 @@ class PlotInfo(QWidget):
         self.summary.setToolTip(text)
 
     @pyqtSlot(bool)
-    def _toggled(self, opened: bool) -> None:
-        self._show_state(opened)
-        self.toggled.emit(opened)
-
     def _show_state(self, opened: bool) -> None:
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
         self.body.setVisible(opened)

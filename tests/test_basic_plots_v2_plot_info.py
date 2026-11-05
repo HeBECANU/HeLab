@@ -52,7 +52,7 @@ def test_plot_info_holds_the_plots_input_and_record(window: HelabMainWindow, qtb
                                                     tmp_path: Path) -> None:
     instance = opened(window, qtbot, tmp_path)
     info = instance.plot_info
-    assert isinstance(info, PlotInfo) and not info.is_open() and not instance.info_open  # Closed (Q~7).
+    assert isinstance(info, PlotInfo) and not info.is_open()  # Closed by default: the settings keep their room.
     assert info.summary is instance.input_label and instance.input_label.text().startswith(f"Input: {LONG} · rev 1")
     assert instance.path in instance.input_label.toolTip()  # (Plain: the app wraps it.)
     assert info.toggle.accessibleName() == "Plot info" and info.toggle.objectName() == "plot_info"
@@ -70,7 +70,7 @@ def test_plot_info_holds_the_plots_input_and_record(window: HelabMainWindow, qtb
     assert "Covers: " in line.toolTip()  # The record.
     assert info.body.isHidden()
     info.set_open(True)
-    assert info.is_open() and instance.info_open and not info.body.isHidden()
+    assert info.is_open() and not info.body.isHidden()
     assert info.body.maximumHeight() <= info.text.fontMetrics().lineSpacing() * 12  # Scrolls beyond.
     assert info.text.wordWrap() and instance.path in info.text.text().replace("\u200b", "")
     assert breakable(LONG) in info.text.text()  # A long name has break opportunities (explorer_text).

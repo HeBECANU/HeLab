@@ -210,9 +210,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
         # One line each, elided, the full text in the tooltip (ElidedLabel, LR-3); the input line heads Plot info.
         self.status_label = identify(ElidedLabel(), "plot_status")
         self.input_label = identify(ElidedLabel(), "plot_input")
-        self.plot_info = PlotInfo(self.input_label)
-        self.plot_info.toggled.connect(self._info_toggled)
-        self.info_open = False  # Plot info starts closed (Q~7).
+        self.plot_info = PlotInfo(self.input_label)  # Closed; open or closed lasts as long as the plot (memory only).
         self.feed: Optional[LiveFeed] = workspace.live_feed if workspace is not None else None
         self._follow_timer = QTimer(self)
         self._follow_timer.setSingleShot(True)
@@ -1486,10 +1484,6 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 and a1.propertyName().data() == b"plotSourceText"):
             self._show_info()
         return super().eventFilter(a0, a1)
-
-    @pyqtSlot(bool)
-    def _info_toggled(self, opened: bool) -> None:
-        self.info_open = opened  # (The page and its section last as long as the plot: memory only.)
 
     def _shown_key(self) -> ViewKey:
         """The data the plot shows (before its first result: what it runs on)."""
