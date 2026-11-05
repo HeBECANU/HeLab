@@ -457,6 +457,7 @@ class FolderExplorer(QWidget):
         summary_layout.addWidget(self.convert_row)
         self.convert_row.hide()
         self.live_row.installEventFilter(self)  # (Its resizes re-fit Auto-convert: ``_fit_live_row``.)
+        self.live_fit = ""  # ``_fit_live_row``'s last measure
         self._summary_line = line_height
         self.summary_widget.setFixedHeight(3 * line_height)
         self.summary_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -2082,9 +2083,15 @@ class FolderExplorer(QWidget):
             margins = QMargins(margins.left() + inner.left(), 0, margins.right() + inner.right(), 0)
         room = self.width() - margins.left() - margins.right()
         need = button.width() + 4 + self.folder_freshness_label.fontMetrics().horizontalAdvance(LIVE_LINE_LEAST)
-        tight = not button.isHidden() and room < need
+        # A line of its own only while it is shown on a shown Live line that can't hold it.
+        tight = not button.isHidden() and not self.live_row.isHidden() and room < need
+        # What it measured, for a test's message (fonts differ by OS) and the log.
+        self.live_fit = (f"tab {self.width()} px, Live line {self.live_row.width()} px, room {room}, need {need} "
+                         f"(Auto-convert {button.width()} px, hint {button.sizeHint().width()}, "
+                         f"{'hidden' if button.isHidden() else 'shown'}), own line {'shown' if tight else 'hidden'}")
         if tight == (not self.convert_row.isHidden()):
             return
+        logging.debug(f"Summary: Auto-convert {'on a line of its own' if tight else 'on the Live line'}: {self.live_fit}")
         hidden = button.isHidden()
         live_layout, convert_layout = self.live_row.layout(), self.convert_row.layout()
         assert isinstance(live_layout, QHBoxLayout) and isinstance(convert_layout, QHBoxLayout)

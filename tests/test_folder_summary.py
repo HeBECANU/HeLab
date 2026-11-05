@@ -513,26 +513,34 @@ def test_summary_height_is_fixed_so_tree_rows_never_move(
 
     top, height = tree_top(), browser.summary_widget.height()
     line = browser.folder_counts_row.height()
-    assert height == 3 * line
+
+    def why() -> str:
+        """The widths behind the summary's lines (Auto-convert's line, LR-3: fonts differ by OS)."""
+        rows = [name for name, row in (("counts", browser.folder_counts_row), ("cache", browser.folder_cache_label),
+                                       ("Live", browser.live_row), ("Auto-convert", browser.convert_row))
+                if not row.isHidden()]
+        return f"lines shown: {rows}; {browser.live_fit}; summary {browser.summary_widget.width()} px"
+
+    assert height == 3 * line, why()
     complete_scan(browser, qtbot, str(tmp_path))  # No TXY files: the cache line still holds its place.
     assert browser.folder_cache_label.text() in ("Cache not checked", "No data to cache")
-    assert tree_top() == top
+    assert tree_top() == top, why()
     browser.tree.setCurrentIndex(browser.model.path_index(str(child)))
     complete_scan(browser, qtbot, str(child))
     assert not browser.selected_folder_label.isHidden() and not browser.deselect_button.isHidden()
-    assert tree_top() == top
+    assert tree_top() == top, why()
     browser.load_to_ram_cache(str(child), dwell=False)
     browser.load_error = "A long message that used to wrap the counts line onto several lines " * 3
     browser._update_activity()
     assert not browser.cancel_load_button.isHidden()
-    assert tree_top() == top
+    assert tree_top() == top, why()
     # Long text is elided, never wrapped; the full text stays in text() and tooltips.
     assert browser.folder_summary_label.height() == line
     assert QLabel.text(browser.folder_summary_label) != browser.folder_summary_label.text()
     assert browser.selected_folder_label.width() < browser.folder_counts_row.width() // 2
     browser.deselect_button.click()
     assert browser.selected_folder_label.isHidden()
-    assert tree_top() == top and browser.summary_widget.height() == height
+    assert tree_top() == top and browser.summary_widget.height() == height, why()
 
 
 def test_detected_disk_cache_is_available_before_loading(
