@@ -46,6 +46,8 @@ _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
 os.environ["HELAB_DIR_TEMPS_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_temps_{_worker_id}_")
 os.environ["HELAB_DIR_CACHES_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_caches_{_worker_id}_")
 os.environ["HELAB_APP_DIR_OVERRIDE"] = tempfile.mkdtemp(prefix=f"helab_test_app_{_worker_id}_")
+# No console file (``helab.utils.console_tee``, LR-15): test runs print as they did, apps they start too.
+os.environ["HELAB_NO_CONSOLE_FILE"] = "1"
 os.environ["HELAB_TEST_VOLUME_ID"] = "test-volume"
 os.environ["HELAB_TEST_LOCAL_MOUNT"] = Path(tempfile.gettempdir()).anchor
 

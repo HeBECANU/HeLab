@@ -30,6 +30,7 @@ from helab.io_ops.save_held import save_held
 from helab.io_ops.scanning import save_scan_history, save_subtrees, scan
 from helab.io_ops.stores import _deadline, _removal_events, _usage
 from helab.io_ops.trace_check import trace_check
+from helab.utils import crash_file
 
 
 # Operations that need the disk cache on: the app's ``IOService.CACHE_OPERATIONS`` and the two marker
@@ -51,6 +52,8 @@ OFFLINE_REFUSED = SOURCE_OPERATIONS | {"resolve", "roots_verify"}
 
 def main() -> None:
     started = time.monotonic()
+    # A hard crash leaves every thread's Python stack in the app's logs folder; removed at a clean exit (LR-15).
+    crash_file.start_for_helper()
     try:
         request = json.loads(sys.stdin.readline())
         operation = request["operation"]

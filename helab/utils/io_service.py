@@ -21,8 +21,8 @@ from typing import Any, Callable, Iterator, Mapping, TYPE_CHECKING
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
 
-from helab.utils import activity
-from helab.utils.constants import MAX_SIMULTANEOUS_IO
+from helab.utils import activity, app_log, crash_file
+from helab.utils.constants import MAX_SIMULTANEOUS_IO, app_folder
 from helab.utils.time_format import duration
 
 if TYPE_CHECKING:
@@ -893,6 +893,8 @@ class IOService(QObject):
             env = os.environ.copy()
             package_root = str(Path(__file__).resolve().parents[2])
             env["PYTHONPATH"] = os.pathsep.join(filter(None, (package_root, env.get("PYTHONPATH", ""))))
+            # Its crash file (a hard crash's stacks: LR-15) goes in the app's logs folder.
+            env[crash_file.HELPER_DIR_ENV] = app_log.log_folder(app_folder())
             # What a helper that dies says (a traceback, a failed import): logged if it never ends.
             errors_file = os.path.join(request.output, "stderr.txt")
             with open(errors_file, "wb") as errors:

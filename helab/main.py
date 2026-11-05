@@ -56,6 +56,7 @@ if "--version" in sys.argv:
     raise SystemExit(0)
 
 # This Python file uses the following encoding: utf-8
+import atexit
 import logging
 import tempfile
 
@@ -77,7 +78,7 @@ from PyQt6.QtGui import QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from helab.resources.icons import IconsInitUtil
-from helab.utils import app_log
+from helab.utils import app_log, console_tee
 from helab.utils.constants import (
     APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, record_cache_folder, start_cache_dir)
 from helab.utils.settings_store import app_settings
@@ -204,6 +205,16 @@ def main() -> None:
     # The packaged app has no console: errors leave their trace in the app folder's log file, and
     # an unhandled exception is logged there and HeLab carries on (PyQt6 would end it).
     app_log.start_log_file(app_folder())
+    # After a crash (LR-15): every thread's stack in logs/crash-<pid>.txt, the console's output in
+    # console-<pid>.txt (C-level writes too), Qt's messages and Python's warnings in the log, and the last
+    # run's crash named.
+    app_log.start_crash_file(app_folder())
+    console = console_tee.start(app_log.log_folder(app_folder()))
+    if console is not None:
+        atexit.register(console.stop)
+    app_log.install_qt_messages()
+    logging.captureWarnings(True)
+    app_log.note_previous_crash(app_folder())
     app_log.catch_unhandled()
     _raise_fd_limit()
     logging.info(f"Platform: {sys.platform}, {platform.system()}, {platform.release()}, {platform.version()}, {platform.machine()}, {platform.processor()}")

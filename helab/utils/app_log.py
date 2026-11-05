@@ -1,8 +1,13 @@
-"""HeLab's log file, and its catch for unhandled exceptions (``main`` starts both).
+"""HeLab's log file, its crash file and its catch for unhandled exceptions (``main`` starts them).
 
 Without an excepthook, PyQt6 ends the app on an exception in a slot or a model's ``data()``; with
 ``catch_unhandled`` it is logged with its traceback and HeLab carries on. The packaged app has no
 console, so the log file in the app folder is where such an error leaves its trace.
+
+A hard crash (a segfault in Qt or NumPy, an abort) ends Python before any of that runs: the crash
+file, ``logs/crash-<pid>.txt`` beside the log (``helper-crash-<pid>.txt`` for an I/O helper), gets
+every thread's Python stack from ``faulthandler`` (LR-15, Tony 2026-11-05). It is opened at start
+and kept open; a clean exit removes it while empty.
 """
 from __future__ import annotations
 
@@ -17,10 +22,11 @@ import sys
 import threading
 import time
 from types import TracebackType
-from typing import Callable
+from typing import Any, Callable
 
+from helab.utils import crash_file
 from helab.utils.cache_locks import other_instances
-from helab.utils.number_format import byte_unit
+from helab.utils.number_format import byte_size, byte_unit
 
 
 # Each HeLab writes its own file, helab-<process ID>.log (Tony, 2026-10-22): two at once never share
@@ -30,7 +36,13 @@ from helab.utils.number_format import byte_unit
 # (``helab.views.OldLogs``; Tony, 2026-10-22).
 MB, MB_UNIT = byte_unit(2, "disk")  # 1 MB, or 1 MiB on Windows: disk units follow the OS (Q26.1)
 LOG_NAME = "helab-{pid}.log"
-LOG_FILE = re.compile(r"helab-(\d+)\.log(\.\d+)?")  # Rotated copies too; the group is the pid.
+# A process's crash file (LR-15, ``crash_file``): the app's, and each I/O helper's. Tidied with the logs.
+CRASH_NAME = crash_file.CRASH_NAME
+HELPER_CRASH_NAME = crash_file.HELPER_CRASH_NAME
+# Log files, rotated copies too, crash files and console files (``console_tee``); a group is the pid.
+LOG_FILE = re.compile(r"helab-(\d+)\.log(?:\.\d+)?|(?:(?:helper-)?crash|console)-(\d+)\.txt(?:\.1)?")
+# Those a killed process leaves empty: the tidy removes them whatever the count.
+CRASH_FILE = re.compile(r"(?:(?:helper-)?crash|console)-\d+\.txt")
 LOG_BYTES = 1 * MB
 LOG_BACKUPS = 10
 # Past ASK_BYTES of logs (after the count rule) the user is asked, and Delete goes below TRIM_BYTES.
@@ -90,6 +102,98 @@ def start_log_file(folder: str, level: int = logging.INFO) -> RotatingFileHandle
     logging.getLogger().addHandler(handler)
     logging.info(f"Logging to {path}")
     return handler
+
+
+def start_crash_file(folder: str, name: str = CRASH_NAME) -> str | None:
+    """Every thread's Python stack to ``<folder>/logs/<name>`` if this process crashes hard
+    (``crash_file.start``). Its path, or None if it can't be written (logged)."""
+    try:
+        return crash_file.start(log_folder(folder), name)
+    except OSError as exc:
+        logging.warning(f"No crash file in {log_folder(folder)}: {exc}")
+        return None
+
+
+def previous_crashes(folder: str) -> list[str]:
+    """The crash files of HeLab's last run (before this one) that hold a crash: its own, and its
+    helpers' written while it ran (after the run before it ended). The last run is the other process
+    whose log file was written most recently."""
+    files = [file for file in scan_logs(folder) if file.pid != os.getpid()]
+    ends: dict[int, float] = {}
+    for file in files:
+        if LOG_NAME.format(pid=file.pid) in os.path.basename(file.path):
+            ends[file.pid] = max(ends.get(file.pid, 0.0), file.mtime)
+    if not ends:
+        return []
+    runs = sorted(ends, key=lambda pid: ends[pid], reverse=True)
+    last, before = runs[0], (ends[runs[1]] if len(runs) > 1 else 0.0)
+    found = []
+    for file in files:
+        name = os.path.basename(file.path)
+        if not file.size:
+            continue
+        if name == CRASH_NAME.format(pid=last) or (
+                name.startswith("helper-crash-") and file.mtime > before):
+            found.append(name)
+    return sorted(found)
+
+
+def note_previous_crash(folder: str) -> list[str]:
+    """At start: name the last run's crash files in the log (``previous_crashes``); those named."""
+    found = previous_crashes(folder)
+    for name in found:
+        logging.warning(f"The previous run crashed: see {os.path.join(log_folder(folder), name)}")
+    return found
+
+
+# Qt's own messages (warnings and worse) in the log, with their category (LR-15): the same one is logged
+# once in REPEAT_SECONDS, its repeats counted in the next. Lesser ones go to the console as Qt's did.
+_QT_LEVELS = {"QtDebugMsg": logging.DEBUG, "QtInfoMsg": logging.INFO, "QtWarningMsg": logging.WARNING,
+              "QtCriticalMsg": logging.ERROR, "QtFatalMsg": logging.CRITICAL}
+_qt_seen: dict[tuple[str, str], tuple[float, int]] = {}
+
+
+def qt_message(kind: str, category: str, message: str) -> None:
+    """One message from Qt (``kind`` the ``QtMsgType`` name): from a warning up logged as ``qt: [category]
+    message`` (the console's log handler shows it too); below that printed to stderr, as Qt prints it. A
+    fatal is flushed to the log at once: Qt aborts after it."""
+    level = _QT_LEVELS.get(kind, logging.WARNING)
+    if level < logging.WARNING:
+        print(message, file=sys.stderr, flush=True)
+        return
+    key, now = (category, message), time.monotonic()
+    with _lock:
+        last, repeats = _qt_seen.get(key, (-math.inf, 0))
+        if level < logging.CRITICAL and now - last < REPEAT_SECONDS:
+            _qt_seen[key] = (last, repeats + 1)
+            return
+        _qt_seen[key] = (now, 0)
+    again = f" (and {repeats:,} more like it since)" if repeats else ""
+    logging.getLogger("qt").log(level, f"[{category or 'default'}] {message}{again}")
+    if level >= logging.CRITICAL:
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+
+def install_qt_messages() -> Any:
+    """Send Qt's messages through ``qt_message`` (``main``; a fatal otherwise reached stderr only). The
+    handler it replaced."""
+    from PyQt6.QtCore import QMessageLogContext, QtMsgType, qInstallMessageHandler
+
+    def handler(mode: QtMsgType, context: QMessageLogContext, message: str | None) -> None:
+        qt_message(mode.name, context.category or "", message or "")
+
+    return qInstallMessageHandler(handler)
+
+
+def memory_line(rss: int, datasets: int, plots: int, budget: int, results: tuple[int, int], open_plots: int,
+                lives: list[tuple[str, int, int]]) -> str:
+    """The once-a-minute line while Live is on (LR-15): whether memory grows before a crash. ``lives``
+    is each watched folder's (name, shots, revision of its newest view; 0: none yet)."""
+    watched = "; ".join(f"{name}: {shots:,} shots, revision {revision}" for name, shots, revision in lives)
+    return (f"Memory while Live: RSS {byte_size(rss, 'ram')} · RAM budget {byte_size(datasets + plots, 'ram')} of "
+            f"{byte_size(budget, 'ram')} (datasets {byte_size(datasets, 'ram')}, plots {byte_size(plots, 'ram')}) · "
+            f"results {results[0]:,} ({byte_size(results[1], 'ram')}) · open plots {open_plots:,} · Live {watched}")
 
 
 def milestone(event: str, **fields: MilestoneValue) -> str:
@@ -161,7 +265,7 @@ def scan_logs(folder: str) -> list[LogFile]:
             stat = entry.stat(follow_symlinks=False)
         except OSError:  # (Gone meanwhile.)
             continue
-        files.append(LogFile(entry.path, int(match.group(1)), stat.st_size, stat.st_mtime))
+        files.append(LogFile(entry.path, int(match.group(1) or match.group(2)), stat.st_size, stat.st_mtime))
     return files
 
 
@@ -194,9 +298,13 @@ def delete_logs(files: list[LogFile]) -> list[LogFile]:
 
 def tidy_logs(folder: str, keep: int) -> int:
     """At startup: delete the oldest log files beyond ``keep`` of them (Settings → General → Log
-    files to keep, which counts every session's files), not a running HeLab's. The bytes of logs
-    left."""
+    files to keep, which counts every session's files, crash and console files too), not a running
+    HeLab's. Empty crash and console files go first, whatever the count: a process killed (a helper
+    cancelled) leaves its own, with nothing in it. The bytes of logs left."""
     files = scan_logs(folder)
+    empty = delete_logs([file for file in deletable(folder, files)
+                         if file.size == 0 and CRASH_FILE.fullmatch(os.path.basename(file.path))])
+    files = [file for file in files if file not in empty]
     gone = delete_logs(deletable(folder, files)[:max(0, len(files) - keep)])
     return sum(file.size for file in files) - sum(file.size for file in gone)
 

@@ -98,6 +98,7 @@ class HelabMainWindow(QMainWindow):
 
     INTERVAL_UPDATE_STATUS_BAR_LEFT = 100
     INTERVAL_UPDATE_STATUS_BAR_RIGHT = 1000
+    MEMORY_LOG_SECONDS = 60  # While Live is on (``log_memory``).
     INTERVAL_UPDATE_CENTRAL_LOADING_INDICATOR = 100
 
 
@@ -259,6 +260,10 @@ class HelabMainWindow(QMainWindow):
         self.status_timer_cpu_ram = QTimer(self)
         self.status_timer_cpu_ram.timeout.connect(self.update_status_bar_right)
         self.status_timer_cpu_ram.start(self.INTERVAL_UPDATE_STATUS_BAR_RIGHT)
+        # While Live is on, one memory line a minute in the log: whether memory grows before a crash (LR-15).
+        self.memory_log_timer = QTimer(self)
+        self.memory_log_timer.timeout.connect(self.log_memory)
+        self.memory_log_timer.start(self.MEMORY_LOG_SECONDS * 1000)
         # Deletes the old diskcache folders and expired cache files in a helper.
         get_folder_cache(get_io_service()).clean_up_cache()
         if cache_dir_refused():
@@ -1090,6 +1095,31 @@ class HelabMainWindow(QMainWindow):
         from helab.analysis.runner import get_analysis_runner
         return list(dict.fromkeys([get_analysis_runner(), *(instance.runner for instance in
                                                             self.panel_right_bottom_script_selector.instances())]))
+
+    def log_memory(self) -> str:
+        """While Live is on: one log line of the process's RSS, the RAM budget's use, the results kept, the
+        open plots and each watched folder's shots and newest revision (LR-15); "" (nothing logged) else."""
+        lives = [explorer.live for _, explorer in self._explorers() if explorer.live is not None]
+        if not lives or self._closing:
+            return ""
+        from helab.analysis.budget_core import Usage
+        budget = self.plots.ram_budget
+        cache = self.plots.folder_cache()
+        usage = budget.measure() if budget is not None else Usage(cache.memory_usage()[1], cache.plot_bytes(),
+                                                                   cache.max_data_bytes)
+        kept = {id(runner.results): runner.results for runner in self._activity_runners()}
+        counts = [results.usage() for results in kept.values()]
+        watched = []
+        for session in lives:
+            view = self.plots.live_feed.latest(session.path)
+            watched.append((os.path.basename(session.path.rstrip(os.sep)) or session.path, len(session.shots),
+                            view.revision if view is not None else 0))
+        line = app_log.memory_line(
+            self.process.memory_info().rss, usage.datasets, usage.plots, usage.budget,
+            (sum(count for count, _ in counts), sum(size for _, size in counts)),
+            len(self.panel_right_bottom_script_selector.instances()), watched)
+        logging.info(line)
+        return line
 
     def _activity_plots(self) -> dict[str, str]:
         return {instance.instance_id: (instance.dock_widget.windowTitle() if instance.dock_widget is not None
