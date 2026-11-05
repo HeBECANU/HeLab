@@ -61,6 +61,10 @@ that branch.
   TXY, data root), read only, beside the folder's existing actions; right-click, Folder details, File menu.
   Q64.1–Q64.10 open.
 
+- [ ] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
+  all four plots in a v2 with a Shot ID / Shot time x axis (fallback times marked), new XY, XT and YT 2D histograms,
+  and one "Basic Plots" group with its versions as tree nodes (the menu's repeated "Basic plots v1" fixed); v1 kept.
+
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
 **Carried over from v0.0.8:**
