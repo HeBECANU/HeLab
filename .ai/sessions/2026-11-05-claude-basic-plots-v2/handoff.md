@@ -94,6 +94,7 @@ Tests and Converter backends logs (read, and confirmed by CoCo). The final suite
 | BP-7 | `2d31d3b` | No Q~/A~/BP- ID in the branch's code, docstrings or tests: the reason is said instead | `git diff 127b1e8` grep: none |
 | BP-8 | `2788f4c` | `AnalysisInstance.info_open`, its slot and `PlotInfo.toggled` removed; the toggle is the state (`is_open`) | A removal: the Plot info tests read `is_open()` |
 | BP-9 | `ffb8ea4` | — | `_threads.py`: each of the 7 v2 plots opened from the panel and rerun; `compute` off the GUI thread, `render`/`draw`/`update` on it, each plot updated in place (a flipped copy fails) |
+| BP-10 (re-check 1) | `a5fc321` | The warnings that come as lists (parameter warnings, constants' notes) are counted as they come; their text is removed from the run's descriptions before each other "⚠ " mark is read as one warning, running to the next mark or the end, so a warning holding " · " counts once and shows in full | `test_analysis_gui.py::test_warnings_holding_the_separator_are_counted_once_each` ("⚠ 3" before, "⚠ 2" now) |
 
 The BP-6 marks show on every plot's dock (the DLD port and user scripts too), like the rest of the one-line dock.
 While an outdated saved result shows, the amber line below also says so, at more length.
@@ -257,3 +258,6 @@ At `9c8fcb4` (the handoff's own commit adds only this file), the full output is 
   checks clean (225 and 224 files: the three plane stubs are gone, three test files are new;
   `.ai/temp/review-fix-types.txt`). `mkdocs build --strict` and `ruff check` clean. The CI run for the pushed head
   goes to CoCo with its ID.
+- CI run 42017707256 (`e837ead`): success on every job, 0 RERUN in all 12 Tests and Converter backends logs.
+- **After BP-10** (`a5fc321`, Lens's re-check 1 at `615b09d`): full suite **9,552 passed, 673 skipped, 0 RERUN**
+  (`.ai/temp/bp10-suite.txt`); all five type checks clean (225 and 224 files, `.ai/temp/bp10-types.txt`).
