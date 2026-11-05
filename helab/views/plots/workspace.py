@@ -316,8 +316,10 @@ class PlotWorkspace:
         settings = dock.property("plotSourceSettings")
         record = dock.property("plotSourceRecord")
         name = os.path.basename(path.rstrip(os.sep)) or path
-        label.setText(" · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
-                      + (f"\n{settings}" if isinstance(settings, str) and settings else ""))
+        text = (" · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
+                + (f"\n{settings}" if isinstance(settings, str) and settings else ""))
+        label.setText(text)
+        dock.setProperty("plotSourceText", text)  # (Its plot's Plot info lists it: instance.py.)
         label.setToolTip(record if isinstance(record, str) and record else path)
         error_label = dock.findChild(QLabel, "plot_error")
         error = dock.property("plotError")

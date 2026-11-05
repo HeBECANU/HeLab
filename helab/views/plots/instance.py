@@ -43,6 +43,7 @@ from helab.utils.ram_buffers import Buffers, arrays_in, buffers
 from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRuns
 from helab.views.plots.dock import AnalysisDock, release_figures
 from helab.views.plots.pictures import ReleasedPlot, snapshot
+from helab.views.plots.plot_info import PlotInfo, TipLabel
 from helab.views.plots.txy_source import TxySourceRow, known_profiles, profile_by_tag
 from helab.views.txy_list import known_names
 if TYPE_CHECKING:
@@ -199,8 +200,12 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.policy = policy
         self.follow = Follow(view, self.policy)
         self.parameter_root: Optional[Parameter] = None
-        self.status_label = identify(QLabel(), "plot_status")
-        self.input_label = identify(QLabel(), "plot_input")
+        # One line each, the whole text in a wrapped tooltip (LR-3); the input line heads the Plot info section.
+        self.status_label = identify(TipLabel(), "plot_status")
+        self.input_label = identify(TipLabel(), "plot_input")
+        self.plot_info = PlotInfo(self.input_label)
+        self.plot_info.toggled.connect(self._info_toggled)
+        self.info_open = False  # Plot info starts closed (Q~7).
         self.feed: Optional[LiveFeed] = workspace.live_feed if workspace is not None else None
         self._follow_timer = QTimer(self)
         self._follow_timer.setSingleShot(True)
@@ -339,7 +344,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
         layout = tab.layout()
         assert isinstance(layout, QVBoxLayout)
         self.input_label.setToolTip(self.path)
-        layout.addWidget(self.input_label)
+        layout.addWidget(self.plot_info)
         self.txy_row = TxySourceRow(self.txy_list, self.set_txy_list, self._txy_context,
                                     keep=self.txy_keep, kept=self._keep_changed)
         layout.addWidget(self.txy_row)
@@ -357,12 +362,13 @@ class AnalysisInstance(LinkedAnalysisInstance):
             layout.insertWidget(1, self.presets)
 
     def _empty_page(self) -> None:
-        """Take the page's contents out (its input and status lines stay, to be placed again)."""
+        """Take the page's contents out (its Plot info, with the input line, and its status line stay, to be
+        placed again)."""
         tab = self._page
         layout = tab.layout() if tab is not None and not sip.isdeleted(tab) else None
         while layout is not None and (item := layout.takeAt(0)) is not None:
             widget = item.widget()
-            if widget is not None and widget not in (self.input_label, self.status_label):
+            if widget is not None and widget not in (self.plot_info, self.status_label):
                 widget.hide()
                 widget.deleteLater()
         self.parameter_root, self.txy_row, self.presets = None, None, None
@@ -1422,9 +1428,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
         else:
             self.input_label.setText(f"Input: {self._shown_key().short()}"
                                      + (" · following Live" if following else " (stays with this plot)"))
+        self.input_label.setToolTip(f"{self.input_label.text()}\n{self.path}")
         self._show_txy()
         dock, plots = self.dock_widget, self.workspace
         if dock is None or plots is None or sip.isdeleted(dock):
+            self._show_info()
             return
         dock.setProperty("plotFollow", self.follow_text())
         dock.setProperty("plotFollowing", following)
@@ -1434,6 +1442,27 @@ class AnalysisInstance(LinkedAnalysisInstance):
         plots.update_plot_source(dock)
         if self.param_tab is not None:
             plots.panel_right_top_plot_settings.set_title(dock, self._title())
+        self._show_info()
+
+    # Plot info (LR-4)
+
+    def _show_info(self) -> None:
+        """The Plot info section's lines: the input in full, the dock's source lines as shown (``plotSourceText``,
+        ``PlotWorkspace``), the data's TXY and the record (memory only)."""
+        dock = self.dock_widget
+        source = dock.property("plotSourceText") if dock is not None and not sip.isdeleted(dock) else None
+        record = dock.property("plotSourceRecord") if dock is not None and not sip.isdeleted(dock) else None
+        view = self._shown_view or self.view
+        lines = [f"{self.input_label.text()} · {self.path}",
+                 *(source.splitlines() if isinstance(source, str) else ()),
+                 f"TXY: {view.txy_text()}" if not self.waiting() else "",
+                 *(record.splitlines()[1:] if isinstance(record, str) else ())]  # (Its first: the analysis, above.)
+        self.plot_info.set_lines(lines)
+        self.plot_info.set_summary_tip(f"{self.input_label.text()}\n{self.path}")
+
+    @pyqtSlot(bool)
+    def _info_toggled(self, opened: bool) -> None:
+        self.info_open = opened  # (The page and its section last as long as the plot: memory only.)
 
     def _shown_key(self) -> ViewKey:
         """The data the plot shows (before its first result: what it runs on)."""
