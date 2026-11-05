@@ -64,6 +64,30 @@ All four decided as proposed (Tony in Chat, 2026-11-04: "Q~1 ok / Q~2 ok / Q~3 o
 - **Q63.4** Retry of a failed load whose folder is no longer selected is disabled, with "Select the folder in its
   tab to load it again (Show in tab)", in v1.
 
+## Folder info window (block 64; [plan](../roadmaps/folder-info.md))
+
+From Tony's live run (LR-5, 2026-11-05). The window, its three ways in, read only, one helper job and its eight
+sections are decided; the plan has each question's options and reasons.
+
+- **Q64.1** Folder details' way in: a "Folder info…" link at the end of the Disk cache row (proposed), or an ⓘ
+  button by the folder's name, or a row of its own.
+- **Q64.2** File › Folder info… acts on the current tab's selected folder, also with the explorer hidden, disabled
+  with none; ⌘I / Ctrl+I (proposed).
+- **Q64.3** One window, showing the folder it was last opened for, not following the selection (proposed); or one
+  per folder; or one that follows the selection.
+- **Q64.4** It reads on open, on Refresh and after an action started from it finishes, "As of HH:MM:SS"; no
+  automatic refresh during Live (proposed).
+- **Q64.5** Its buttons call the folder's existing actions, which ask as today (proposed; the plan lists them); or
+  no buttons in v1.
+- **Q64.6** No per-folder Clear of saved results or converted TXY in v1, links to Settings instead (proposed); or
+  add both.
+- **Q64.7** Saved results grouped by script, one line each (action, settings in short, dates, size); store-v4
+  only (proposed).
+- **Q64.8** "Only copy": raw pulses whose `d*.txt` is gone, and TXY layers whose source is gone and that no raw
+  layer can rebuild, with when HeLab last looked (proposed).
+- **Q64.9** This folder only, a line for its subfolders, and a "This session" section from memory (proposed).
+- **Q64.10** v0.0.9, a floor on this Mac, now (proposed).
+
 ## v0.0.8 follow-ups (block 58)
 
 From the Follow-ups floor's [handoff](sessions/2026-11-03-claude-followups/handoff.md) (landed `72ab47a`). Both

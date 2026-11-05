@@ -56,6 +56,11 @@ that branch.
   details and status, Cancel / Retry / Pause, and this session's history; Window › Activity or a click on the
   status bar. Landed `5af4a89` (the Activity Window floor; Q63.1–Q63.4 decided; M63.1, M63.2 for Tony).
 
+- [ ] The Folder info window (LR-5; Tony, 2026-11-05; [plan](folder-info.md)): everything HeLab holds about one
+  folder (store contents with the only copies, saved results, flags, TXY list, constants, scan history, converted
+  TXY, data root), read only, beside the folder's existing actions; right-click, Folder details, File menu.
+  Q64.1–Q64.10 open.
+
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
 **Carried over from v0.0.8:**
