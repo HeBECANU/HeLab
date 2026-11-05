@@ -64,15 +64,14 @@ def test_script_loading(script_folder: Path) -> None:
 
 
 def test_tree_panel_lists_only_working_scripts(qtbot: QtBot) -> None:
-    """HeLab's bundled analyses in two groups, the first shown: Basic plots v1, and the DLD front
-    panel port's plots; each with its Plot button (Density images also Find hot spots); no
-    placeholder groups."""
+    """HeLab's bundled analyses in two entries, the first shown: Basic Plots (v1 here: its versions
+    as nodes, tests/test_basic_plots_v2_groups.py), and the DLD front panel port's plots; each with
+    its Plot button (Density images also Find hot spots); no placeholder groups."""
     widget = TreePanelWidget(plot_area())
     qtbot.addWidget(widget)
     assert [widget.group_selector.itemText(i) for i in range(widget.group_selector.count())] == [
-        "Basic plots v1", "DLD Front Panel Port"]
-    assert group_items(widget) == {"Basic plots v1": ["3D scatter", "Counts per shot", "T, X, Y histograms",
-                                                     "Transfer fractions"]}
+        "Basic Plots", "DLD Front Panel Port"]
+    assert group_items(widget)["v1"] == ["3D scatter", "Counts per shot", "T, X, Y histograms", "Transfer fractions"]
     widget.group_selector.setCurrentText("DLD Front Panel Port")
     assert group_items(widget) == {"DLD Front Panel Port": [
         "3D scatter", "Counts per shot", "T, X, Y histograms", "Mean X, Y against T", "T spectrum", "Density images",
@@ -100,7 +99,7 @@ def test_load_scripts_adds_a_working_group(qtbot: QtBot, script_folder: Path,
     # (Test-imported in a separate process first, then loaded: Q49.3 (b).)
     qtbot.waitUntil(lambda: widget.group_selector.count() == 3, timeout=60_000)
     assert sorted(widget.group_selector.itemText(i) for i in range(widget.group_selector.count())) == [
-        "Basic plots v1", "DLD Front Panel Port", "Lab"]
+        "Basic Plots", "DLD Front Panel Port", "Lab"]
     widget.group_selector.setCurrentText("Lab")
     assert group_items(widget) == {"Lab": ["Logged"]}
     lab = widget.tree_widget.topLevelItem(0)

@@ -354,11 +354,13 @@ def test_every_script_and_each_library(qtbot: QtBot, tmp_path: Path) -> None:
         for group in range(scripts.group_selector.count()):
             scripts.group_selector.setCurrentIndex(group)
             tree = scripts.tree_widget
-            top = tree.topLevelItem(0)
-            assert top is not None
-            for index in range(top.childCount()):
+            assert tree.topLevelItemCount()
+            # Every top-level node: a family's versions too (Basic Plots' v2 and v1), the collapsed ones included.
+            children = [top.child(index) for node in range(tree.topLevelItemCount())
+                        if (top := tree.topLevelItem(node)) is not None for index in range(top.childCount())]
+            for child in children:
                 for column in (1, 2):  # Each script's run buttons (its first two actions).
-                    button = tree.itemWidget(top.child(index), column)
+                    button = tree.itemWidget(child, column)
                     if isinstance(button, QPushButton):
                         button.click()
                         opened += 1
