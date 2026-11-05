@@ -536,8 +536,29 @@ def activity_window(cache: FolderCache, path: Path) -> QWidget:
     return window
 
 
+def folder_info_window(cache: FolderCache, path: Path) -> QWidget:
+    """Folder info with a read of every part, its saved results' list open beside it (its detail pane)."""
+    from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
+    window = FolderInfoWindow(FolderInfoSources(cache, lambda: [], lambda: None))
+    folder = str(path / "run1")
+    window.show_folder(folder)
+    rows = [{"result_id": f"r{index}", "analysis_id": "a", "version": "1", "file_name": "a.py", "action": "Plot",
+             "settings": "", "settings_full": "", "bytes": 1, "computed_at": 1.0, "saved_at": 1.0, "last_used": 1.0,
+             "damaged": False} for index in range(6)]
+    window.answer = {"kind": "folder_info", "path": folder, "key": "", "root_state": "rooted", "layout": 4,
+                     "read_at": time.time(), "store": "", "parts": {}, "raw": None, "layers": [], "layers_more": 0,
+                     "views": [], "views_more": 0, "seed_bytes": 0, "results": {"count": 6, "bytes": 6, "rows": rows,
+                                                                                "more": 0},
+                     "prefs": None, "convert_prefs": None, "choices": None, "constants": None, "history": None,
+                     "summary": None, "listing_at": None, "converted": []}
+    window.rebuild()
+    window.open_detail("results")
+    return window
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
     "activity": (activity_window, ("ActivityWindow",)),
+    "folder info": (folder_info_window, ("FolderInfoWindow",)),
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
     "missing shots": (missing_shots, ("MissingShotsWindow",)),

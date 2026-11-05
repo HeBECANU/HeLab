@@ -48,10 +48,11 @@ from helab.views.ClockSkewWarning import ClockSkewWarning
 from helab.views.OldLogs import OldLogs
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
+from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
 from helab.views.HoverMenuToolButton import HoverMenuToolButton
 from helab.views.FolderExplorer import (
-    AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, LARGE_TOOLTIP, REFUSED_TOOLTIP,
-    IO_SPINNER, FolderExplorer, paint_spinner,
+    AUTO_LOAD_OFF_TOOLTIP, AUTO_LOAD_PAUSED, AUTO_LOAD_PAUSED_TOOLTIP, FOLDER_INFO_SHORTCUT, LARGE_TOOLTIP,
+    REFUSED_TOOLTIP, IO_SPINNER, FolderExplorer, paint_spinner,
 )
 from helab.views.explorer_live import ARM_AUTO_CONVERT
 from helab.views.explorer_text import large_text
@@ -177,6 +178,10 @@ class HelabMainWindow(QMainWindow):
             sources, self._activity_show_tab, self._activity_show_plot, self._activity_open_log,
             self._activity_run_plot, self.panel_right_bottom_script_selector.reload_scripts), self)
         self._activity_click = ClickOpens(self.show_activity_window, self)
+        # Folder info (Q64.3): one window, hidden until asked for; it reads nothing while hidden.
+        self.folder_info_window = FolderInfoWindow(FolderInfoSources(
+            cache, self._activity_tabs, self.current_explorer, self._folder_info_plots, self._folder_info_scripts,
+            self._folder_info_settings, self.review_root), self)
         self.status_bar_message_left.installEventFilter(self._activity_click)
         # The plots open last time reopen at start (Settings → General), after the first tab
         # opens; recorded as plots open and close, and at quit. Presets of a folder and its plots.
@@ -332,6 +337,52 @@ class HelabMainWindow(QMainWindow):
         self.action_convert_folder.setToolTip(f"{path}\n" + (f"Not now: {why}" if why else
                                               "Its raw files to HeLab's TXY, with a profile you pick (this folder only)"))
 
+    def update_folder_info_action(self) -> None:
+        """File › Folder info…: for the current tab's selected folder, disabled with none (memory only). Also on
+        tab and selection changes, since its shortcut works without the menu showing."""
+        if not hasattr(self, "action_folder_info"):
+            return
+        target = self._place_root_target()
+        self.action_folder_info.setEnabled(target is not None)
+        self.action_folder_info.setToolTip(f"{target[1]}\nEverything HeLab holds and knows about this folder"
+                                           if target is not None else "Open a folder tab first")
+
+    def folder_info_in_current_tab(self) -> bool:
+        """File › Folder info… and ⌘I: the window for the current tab's selected folder."""
+        target = self._place_root_target()
+        if target is None:
+            return False
+        self.show_folder_info(target[1], target[0])
+        return True
+
+    def show_folder_info(self, path: str, explorer: FolderExplorer | None = None) -> None:
+        """The Folder info window (one), retargeted on ``path`` (Q64.3)."""
+        if self._closing or not path:
+            return
+        self.folder_info_window.show_folder(path, explorer)
+
+    def _folder_info_plots(self, path: str) -> tuple[str, ...]:
+        """The titles of the plots open on ``path`` (memory only)."""
+        from helab.utils.folder_cache import FolderCache
+        key, titles = FolderCache.key(path), []
+        for instance in self.panel_right_bottom_script_selector.instances():
+            try:
+                same = FolderCache.key(instance.path) == key
+            except Exception:  # (A plot that hasn't run yet has no folder.)
+                continue
+            if same:
+                titles.append(instance.dock_widget.windowTitle() if instance.dock_widget is not None else instance.name)
+        return tuple(titles)
+
+    def _folder_info_scripts(self) -> dict[str, str]:
+        """The loaded scripts' names by analysis ID, for saved results."""
+        manager = self.panel_right_bottom_script_selector.script_manager
+        return {metadata.identity().analysis_id: metadata.name for group in manager.get_groups()
+                for metadata in manager.get_scripts_in_group(group)}
+
+    def _folder_info_settings(self, tab: str) -> None:
+        self.show_settings_dialog(tab=tab)
+
     def convert_folder_in_current_tab(self) -> bool:
         """As the tree's Convert this folder… does, for the current tab's selected folder."""
         target = self._place_root_target()
@@ -449,9 +500,16 @@ class HelabMainWindow(QMainWindow):
             self.action_convert_folder.setEnabled(False)  # Until the menu shows (aboutToShow).
             self.action_convert_folder.triggered.connect(self.convert_folder_in_current_tab)
             menu_file.addAction(self.action_convert_folder)
+            # Q64.2: Folder info… for the tab's selected folder, also with the explorer hidden; ⌘I / Ctrl+I.
+            self.action_folder_info = QAction(" Folder info…", self)
+            self.action_folder_info.setShortcut(QKeySequence(FOLDER_INFO_SHORTCUT))
+            self.action_folder_info.setEnabled(False)  # Until a tab shows (``update_folder_info_action``).
+            self.action_folder_info.triggered.connect(self.folder_info_in_current_tab)
+            menu_file.addAction(self.action_folder_info)
             menu_file.setToolTipsVisible(True)
             menu_file.aboutToShow.connect(self.update_place_root_action)
             menu_file.aboutToShow.connect(self.update_convert_folder_action)
+            menu_file.aboutToShow.connect(self.update_folder_info_action)
 
             # Cache-only browsing (D2): no source folder or server is read while it is on.
             self.action_work_offline = QAction(" Work Offline", self)
@@ -1431,6 +1489,7 @@ class HelabMainWindow(QMainWindow):
         self.folder_details = FolderDetailsPanel()
         self.folder_details.revealRequested.connect(self.reveal_load)
         self.folder_details.reviewRootRequested.connect(self.review_root)
+        self.folder_details.folderInfoRequested.connect(self.folder_info_in_current_tab)
         get_io_service().request_note = self._request_note
         self.folder_details.setVisible(True)
         self.left_splitter.addWidget(self.folder_details)
@@ -1752,6 +1811,7 @@ class HelabMainWindow(QMainWindow):
         logging.debug(f"helabMainWindow.on_current_tab_changed: to index {index}")
         # self.action_tab_folder_up.setEnabled(self.tab_widget.tab_back_button_enabled)
         self.update_tool_enabled_state()
+        self.update_folder_info_action()
         current_folder_explorer = self.tab_widget.currentWidget()
         for _, explorer in self._explorers():
             if explorer is not current_folder_explorer and explorer.live is not None:
@@ -1994,6 +2054,9 @@ class HelabMainWindow(QMainWindow):
             current_folder_explorer.reviewMismatchRequested.connect(
                 lambda path: self.missing_shots.show_list(activate=True, select=path))
             current_folder_explorer.reviewRootRequested.connect(self.review_root)
+            current_folder_explorer.folderInfoRequested.connect(
+                lambda path, fe=current_folder_explorer: self.show_folder_info(path, fe))
+            current_folder_explorer.selectionPathChanged.connect(self.update_folder_info_action)
             current_folder_explorer.loadStateChanged.connect(self._update_folder_details)
             current_folder_explorer.loadStateChanged.connect(self._update_cancel_loading_action)
             current_folder_explorer.liveChanged.connect(self._update_live_action)
@@ -2237,6 +2300,7 @@ class HelabMainWindow(QMainWindow):
             timer.stop()
         self.tab_widget.closeEvent(None)
         self.activity_window.close()
+        self.folder_info_window.close()
         activity.remove_log_lines()
         get_io_service().shutdown()
         if a0 is not None:
