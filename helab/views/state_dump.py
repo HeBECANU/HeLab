@@ -32,7 +32,8 @@ def text_of(widget: Optional[QWidget]) -> dict[str, Any]:
     """A label's text and tooltip as shown (hidden: ``shown`` false, its text as last set)."""
     if not isinstance(widget, QLabel) or sip.isdeleted(widget):
         return {"text": "", "tooltip": "", "shown": False}
-    return {"text": widget.text(), "tooltip": widget.toolTip(), "shown": widget.isVisible()}
+    # (Without the break opportunities ``explorer_text.breakable`` puts in long words.)
+    return {"text": widget.text().replace("\u200b", ""), "tooltip": widget.toolTip(), "shown": widget.isVisible()}
 
 
 def folder_tab(window: HelabMainWindow, index: int, explorer: FolderExplorer) -> dict[str, Any]:

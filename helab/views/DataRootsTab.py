@@ -12,11 +12,12 @@ from typing import Any, Callable
 
 from PyQt6.QtCore import QPoint, QProcess, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QLabel, QLineEdit, QMenu, QMessageBox,
                              QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from helab.utils import folder_cache
 from helab.utils.accessible import identify, identify_buttons
+from helab.views.wrap_row import WrapRow
 from helab.views.gaps import CELL_PADDING_STYLE
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, FolderCache, marker_path
 from helab.utils.number_format import byte_size
@@ -119,32 +120,31 @@ class DataRootsTab(QWidget):
         # The count on a line of its own: beside six buttons it pushed the last ones off a narrow window.
         self.status_label = QLabel("Checking…")
         layout.addWidget(self.status_label)
-        footer = QHBoxLayout()
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
-        footer.addWidget(self.refresh_button)
         self.forget_button = QPushButton(FORGET)
         self.forget_button.setToolTip(FORGET_TOOLTIP)
         self.forget_button.clicked.connect(self.forget_selected)
-        footer.addWidget(self.forget_button)
         self.delete_button = QPushButton(DELETE)
         self.delete_button.setToolTip(DELETE_TOOLTIP)
         self.delete_button.clicked.connect(self.delete_selected)
-        footer.addWidget(self.delete_button)
         self.clear_button = QPushButton(CLEAR)
         self.clear_button.setToolTip(CLEAR_TOOLTIP)
         self.clear_button.clicked.connect(self.clear_selected)
-        footer.addWidget(self.clear_button)
         self.clear_results_button = QPushButton(CLEAR_RESULTS)
         self.clear_results_button.setToolTip(CLEAR_RESULTS_TOOLTIP)
         self.clear_results_button.clicked.connect(self.clear_results_selected)
-        footer.addWidget(self.clear_results_button)
         self.review_button = QPushButton(REVIEW)
         self.review_button.setToolTip(REVIEW_TOOLTIP)
         self.review_button.clicked.connect(self.review_selected)
-        footer.addWidget(self.review_button)
-        footer.addStretch(1)
-        layout.addLayout(footer)
+        # One row while it fits; at a tight width, the location's buttons and its cached data's on two rows
+        # (the last ones' text was cut at the dialog's least width: LR-3, Tony 2026-11-05).
+        self.button_rows = WrapRow(
+            (self.refresh_button, self.forget_button, self.delete_button, self.clear_button,
+             self.clear_results_button, self.review_button),
+            ((self.refresh_button, self.forget_button, self.review_button),
+             (self.delete_button, self.clear_button, self.clear_results_button)))
+        layout.addWidget(self.button_rows)
         # IDs and names (helab/utils/accessible.py).
         for widget, ident, name in (
                 (self.list, "data_roots_list", "Data roots"), (self.path_line, "data_root_path", "Data root path"),

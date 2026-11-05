@@ -9,6 +9,7 @@ from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from helab.utils.accessible import identify
+from helab.views.explorer_text import breakable
 
 TIPS = (
     "Data already cached shows at once when you select its folder, then is checked for changes.",
@@ -48,7 +49,8 @@ class CentralHint(QWidget):
         super().__init__(parent)
         self._layout = QVBoxLayout(self)
         self._layout.addStretch(1)
-        self.hint = identify(QLabel(hint), "central_hint")
+        self._hint = hint
+        self.hint = identify(QLabel(breakable(hint)), "central_hint")
         self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hint.setWordWrap(True)
         self._layout.addWidget(self.hint)
@@ -72,7 +74,10 @@ class CentralHint(QWidget):
         self.next_tip()
 
     def set_hint(self, text: str, tooltip: str = "") -> None:
-        self.hint.setText(text)
+        """Show ``text``; a long folder name in it breaks across lines (``breakable``), so it never holds
+        the plots area wider than the window has room for (LR-3)."""
+        self._hint = text
+        self.hint.setText(breakable(text))
         self.hint.setToolTip(tooltip)
 
     def next_tip(self) -> None:
@@ -87,4 +92,5 @@ class CentralHint(QWidget):
         self.tip_timer.start()  # A full interval to read it.
 
     def text(self) -> str:
-        return self.hint.text()
+        """The hint as set (without ``breakable``'s break opportunities)."""
+        return self._hint

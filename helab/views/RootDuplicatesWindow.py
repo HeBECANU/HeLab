@@ -71,6 +71,10 @@ def duplicate_hints(entry: dict[str, Any]) -> str:
     return " · ".join(hints)
 
 
+# The widest a location's text is in It's a copy… (px); a longer one is shortened in the middle.
+COPY_PATH_WIDTH = 640
+
+
 class CopyRootDialog(QDialog):
     """It's a copy…: which location keeps the cached data (the known one by default)."""
 
@@ -86,11 +90,17 @@ class CopyRootDialog(QDialog):
         for ident, (location, path, enabled) in zip(("keep_known", "keep_new"), (
                 (str(known.get("location", "")), str(known.get("path", "")), True),
                 (str(entry["location"]), str(entry["path"]), mounted))):
-            button = identify(QRadioButton(_where(path, location)), f"copy_{ident}")
+            where = _where(path, location)
+            button = identify(QRadioButton(where), f"copy_{ident}")
+            # A long path is shortened in the middle (it opened the dialog wider than the screen: LR-3),
+            # whole in the tooltip.
+            shown = button.fontMetrics().elidedText(where, Qt.TextElideMode.ElideMiddle, COPY_PATH_WIDTH)
+            button.setText(shown)
             button.setEnabled(enabled and bool(location))
-            if not enabled:
-                button.setToolTip("Keeping it here gives the known folder a new .helab-root, but it isn't "
-                                  "mounted now.")
+            tips = ([where] if shown != where else []) + ([] if enabled else [
+                "Keeping it here gives the known folder a new .helab-root, but it isn't mounted now."])
+            if tips:
+                button.setToolTip("\n\n".join(tips))
             self.group.addButton(button)
             self.choices[button] = location
             layout.addWidget(button)
