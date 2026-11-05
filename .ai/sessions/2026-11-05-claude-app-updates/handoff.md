@@ -28,13 +28,20 @@ own runs green on all three OSes and skipped or cancelled required jobs not gree
   `test_accessible_names.py` (a DIALOGS case for the update window, since `helab/updates` isn't a guarded
   package).
 - Not changed: `io_helper`, the quit window, `running.lock`, the release job.
+- **Why About and the Settings refresh use `getattr(self, "update_check", None)`** (CoCo: fine): two existing tests
+  build a `HelabMainWindow` subclass that skips `__init__` (`test_helabMainWindow.py::test_about_displays_build_provenance`,
+  which pins About's text to `APP_BUILD_INFO.description()`, and `test_load_queue.py::test_folder_io_menu_and_settings_apply_to_existing_and_new_tabs`,
+  which reaches `show_settings_dialog`). With the guard, a window without a check shows exactly the provenance
+  (the pinned text) and the refresh skips it, so neither pinned test had to change; a real window always has the
+  check (made in `__init__`), and `test_updates_check.py::test_about_shows_the_status_the_mode_and_the_last_check`
+  covers About's three lines.
 
 ## Checks (step 4)
 
 - Full suite (`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`), final run on `3be4698`'s
   code: **9551 passed, 673 skipped, 2 reruns**, both `tests/test_convert_helab.py::test_a_killed_helpers_workers_exit`
   (`AssertionError: the pool started`, `assert []`, line 1099), with the machine's load average at 460–650 from
-  other floors. Not in known-issues; it touches nothing this branch changed (A~1).
+  other floors. Not in known-issues; it touches nothing this branch changed (proposed known-issues entry below).
 - An earlier full run: 2 reruns, `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[1]`
   (known issue, same `waitUntil` timeout, here locally on macOS) and **my** `test_updates_updater.py::test_a_second_update_deletes_only_the_venv_before_the_previous_one`:
   cause found and fixed in `3be4698` (the venv check read a stale `.pyc`: two updates in one second with a
@@ -112,11 +119,16 @@ New:
 
 ## Follow-ups (provisional)
 
-- **A~1** `test_convert_helab.py::test_a_killed_helpers_workers_exit` reran twice under heavy load ("the pool
-  started": no child process seen after the first `shot_converted`): to known-issues.
 - **A~2** The frozen self-update (Q65.1 (b) later): `updater` has no frozen path; `UpdateWindow` shows
   Download only.
 - **A~3** The update window's commit list shows CI for the commits looked at only (at most 5); the rest show none.
+
+## Proposed known-issues entry
+
+- [ ] `test_convert_helab.py::test_a_killed_helpers_workers_exit`: `AssertionError: the pool started` /
+  `assert []` at line 1099 (no child of the converting helper seen by `psutil` once the first `shot_converted`
+  arrived), twice in one local macOS run of `agent/app-updates` (2026-11-05, load average 460–650 from other
+  floors); passed on retry. The Ledger floor saw the same RERUN (CoCo to merge the two). Not touched by this branch.
 
 ## Manual checks
 
