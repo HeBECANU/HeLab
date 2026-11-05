@@ -60,7 +60,8 @@ X. XY has X across and Y up, at equal scales; XT and YT have T across. Their set
 
 - **View range.** With **auto-crop**, each shown axis covers the shortest range holding the share of events
   you keep (99 % by default), and the summed axis isn't cut. With **manual**, the bounds you set cut the
-  events: a T range on the XY histogram images one cloud. Turn on **Sum the whole summed axis** to leave the
+  events: a T range on the XY histogram images one cloud. An axis left unset (min = max), or with its min
+  above its max, covers all its events. Turn on **Sum the whole summed axis** to leave the
   summed axis's bounds out, so that they cut only the two shown axes.
 - **Bins across** and **Bins up**: 0 picks each axis's bin count from the data.
 - **Blur σ**: a Gaussian blur, its σ in bins, that keeps the total. At most a quarter of the image's longer
@@ -84,6 +85,8 @@ it. It then lists:
 
 Long folder names wrap, and a long record scrolls.
 
-The line above each plot is kept short: **Data source: <folder> · rev N · following Live**, or **Showing
-previously loaded data: …** when the tab now shows other data than the plot ran on. Hover over it for the
-full record.
+The line above each plot is kept short: `Data source: <folder> · rev N · following Live`, or
+`Showing previously loaded data: …` when the tab now shows other data than the plot ran on. It ends with
+**outdated** while a saved result that no longer matches its data or script shows, and with **⚠ N** when the
+run has N warnings (for example a manual range with its min above its max). Hover over it for the warnings in
+full and the full record; Plot info lists them too.
