@@ -16,7 +16,9 @@ own runs green on all three OSes and skipped or cancelled required jobs not gree
 | `1345e07` | CI fixes: `ps -ww` (procps cut a piped listing to 80 columns, hiding a helper on Linux); the window test's repo from its own build |
 | `43d22f4` | The handoff (step 5) |
 | `cbd42bb` | Sentry's review fixes, AU-1 to AU-11 (below) |
-| merge | `dev/v0.0.9` at `8690a2f`, clean |
+| `9ca5acf` | Merge of `dev/v0.0.9` at `8690a2f`, clean |
+| `fc2906d` | The handoff, with the review fixes |
+| `f951fc0` | macOS: a framework Python's venv processes (`ps -E`); a test's teardown (CI 42018998611's failure) |
 
 ## What was built
 
@@ -103,6 +105,10 @@ teardown (`AttributeError: 'object' object has no attribute 'on'` in `explorer_l
 test set a tab's `live` to a stand-in with `monkeypatch`, which the window fixture's close reached before the undo
 (only when the window had a tab). Fixed: the test puts it back itself. Then the full suite: **9566 passed, 674
 skipped, 2 warnings in 239 s, no RERUN**; the five type checks clean.
+
+CI run **42022523164** on `f951fc0` (pushed): **success, every job** (3 × Tests 1–3, 3 × Converter backends,
+3 × Build, Docs, detection); all 12 Tests and Converter backends logs read: **no RERUN**. The Windows-only AU-7
+test ran and passed on Windows Tests (and was skipped elsewhere); the `framework` case ran and passed on macOS.
 
 AU-7 and AU-8 can't be shown here as the reviewer read them (a real lab PC). The code is safe both ways: the
 module check finds a venv module however the venv was linked, and `CREATE_NO_WINDOW` only hides windows. Known-issues
