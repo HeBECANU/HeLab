@@ -25,7 +25,7 @@ ADMIN_ACTIONS = ("inventory", "clear", "purge", "trim", "adopt", "discard", "swe
                  "convert_prefs", "clear_prefs", "clear_converted_txy", "mark_used",
                  "constants", "presets", "forget_root", "root_same", "clear_root", "clear_results",
                  "clear_root_results", "adopt_result", "discard_result", "identity", "clear_raw", "legacy_choice",
-                 "clear_legacy", "clear_txy", "folder_choice")
+                 "clear_legacy", "clear_txy", "folder_choice", "folder_info")
 # What ``purge`` takes by age (A47.4): one kind of cached data, folder records, cached analysis, or all of them.
 PURGES = ("datasets", "txy", "raw", "records", "results", "all")
 
@@ -60,7 +60,9 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
     # writes keyed by a source folder (scan history, subfolder status). ``prefs`` (the folder flags)
     # names a source folder too but trusts every hint, by design (cache-store.md: "flags still trust
     # every hint"); the other actions name no source folder.
-    verified_volumes = params.get("verified_volumes") if action in ("constants", "convert_prefs") else None
+    # (Folder info reads by the same rule, so a disk swapped in at a mount path never shows another disk's cache.)
+    verified_volumes = (params.get("verified_volumes") if action in ("constants", "convert_prefs", "folder_info")
+                        else None)
     with stores._cache_store(root, local_lane=True, verified_volumes=verified_volumes,
                              offline=bool(cache_options.get("offline"))) as store:
         if (budget is not None and budget_set_at is not None and not store.read_only
@@ -289,6 +291,11 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             if params.get("policy") == "txy":
                 # S4~1: nothing is removed; the app offers to remove the folder's raw pulses, with their size.
                 result["folder_raw"] = store.folder_raw(path)
+        elif action == "folder_info":
+            # Folder info (Q64.1–Q64.10): what the store and HeLab's converted-TXY index hold for one folder, read
+            # only; never the source folder. Answered as ``folder_info``, then ``admin_result`` as every action.
+            from helab.io_ops.folder_info import folder_info
+            send(folder_info(store, str(params["path"]), root, str(params.get("temps") or "")))
         elif action == "legacy_choice":
             # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
             result["legacy"] = store.set_legacy_choice(str(params["choice"]))
