@@ -126,6 +126,15 @@ line and M~3 below.
 Checks: the touched tests; full suite **9568 passed, 674 skipped, 2 warnings in 191 s, no RERUN**; the five type
 checks clean (and the updater with `--pythonplatform Linux`).
 
+CI run **42026547431** on `235859d` (pushed with `c099caf`): **success, every job**; all 12 Tests and Converter
+backends logs read. **2 RERUNs**, both on macOS Tests (1/3) (job 127242189697):
+`test_root_discovery.py::test_volume_check_alone_refreshes_hints_without_visiting_markers` at setup and at teardown
+("Failed: visited a source folder" → `RuntimeError: Failed to process unraisable exception` / `… thread exception`),
+then passed. **Already in known-issues** (line 215, the same mechanism: the test patches `os.lstat` process-wide
+and a pytest hook reaches it); at 63–64 % of worker gw1, long before the update tests (~98 %), nothing this branch
+changed. The other 11 logs: no RERUN. The new tests ran: AU-13's on all three OSes, AU-14's and `[framework]` on
+macOS, AU-7's on Windows, all passed.
+
 ## Proposed doc changes (for the Coordinator)
 
 **`.ai/architecture/release-and-ci.md`**, a new section "App updates" (or a new area file `updates.md` linked
