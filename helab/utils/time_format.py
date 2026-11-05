@@ -1,4 +1,6 @@
 """Time labels shared by folder summaries and memory-only tooltips."""
+import time
+
 from helab.utils import number_format
 
 
@@ -27,6 +29,16 @@ def span(seconds: float) -> str:
     if hours:
         return f"{hours} h {minutes} min"
     return f"{minutes} min {secs} s" if minutes else f"{secs} s"
+
+
+def shot_age(taken: float, fallback: bool = False, now: float | None = None) -> str:
+    """How long ago a shot was taken (``taken``, s since the epoch) as of ``now`` (default: the
+    clock), in ``span``'s units: ``12 s ago``, ``2 min 5 s ago``; ``12 s ago, TXY file time`` when the
+    time is its TXY file's (no raw file: when it was converted). A time ahead of the clock reads
+    ``0 s ago``."""
+    seconds = (time.time() if now is None else now) - taken
+    age = f"{span(max(0.0, seconds))} ago"
+    return f"{age}, TXY file time" if fallback else age
 
 
 def clock(seconds: float) -> str:

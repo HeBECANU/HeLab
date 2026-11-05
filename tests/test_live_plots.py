@@ -727,11 +727,38 @@ def test_the_scatter_highlights_the_newest_shot(qtbot: QtBot) -> None:
     assert data.newest_shot == 3 and (data.newest[:, 0] == 3.0).all() and len(data.newest) == 2
     assert not (data.points[:, 0] == 3.0).any() and data.shown == 6 == data.analysed
     traces = cast(Any, scatter_3d.figure(lit, data)).data
-    assert len(traces) == 2 and traces[1].marker.color == "rgb(200, 30, 180)" and traces[1].name == "shot 3 (newest)"
+    assert len(traces) == 2 and traces[1].marker.color == "rgb(200, 30, 180)" and traces[1].name.startswith("shot 3 (newest, ")
     assert "shot 3 highlighted (2 events)" in scatter_3d.note_text(data)
     assert script.describe_run("Plot", lit.parameters, view)[1].endswith("newest shot in magenta")
     assert script.get_metadata().version == "3" and basic_plots.TxyHistograms().get_metadata().version == "3"
     assert (dld_scatter.Scatter3D().get_metadata().version, dld_plots.TxyHistograms().get_metadata().version) == ("1", "1")
+
+
+def test_the_newest_shots_legend_says_how_long_ago_it_was_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LR-11 (Tony 2026-11-05): "shot 3 (newest, 12 s ago)" by its raw file's time, as of the drawing (each
+    Live update draws it again); its TXY file's time says so; without a time, no age."""
+    from helab.utils import time_format
+    now = [1_700_000_100.0]
+    monkeypatch.setattr(time_format, "time", SimpleNamespace(time=lambda: now[0]))
+    dataset = revision([1, 2, 3])
+    dataset.metadata["raw_times"] = [[shot, int((1_700_000_088 - 60 * (3 - shot)) * 1e9)] for shot in (1, 2, 3)]
+    view = view_of(dataset)
+    values = {"highlight_newest": True, "keep_percent": 100.0}
+    lit = run_now(scatter_3d.Scatter3D(), view, values)
+    assert (lit.data.newest_time, lit.data.newest_fallback) == (1_700_000_088.0, False)
+    assert cast(Any, scatter_3d.figure(lit, lit.data)).data[1].name == "shot 3 (newest, 12 s ago)"
+    figure = scatter_3d.matplotlib_figure(lit, lit.data)
+    assert [text.get_text() for text in figure.axes[0].get_legend().get_texts()][1] == "shot 3 (newest, 12 s ago)"
+    dld = run_now(dld_scatter.Scatter3D(), view, values)
+    assert cast(Any, dld_scatter.figure(dld, dld.data)).data[1].name == "shot 3 (newest, 12 s ago)"
+    now[0] += 125  # The next drawing (Live's update) has the age then.
+    assert cast(Any, scatter_3d.figure(lit, lit.data)).data[1].name == "shot 3 (newest, 2 min 17 s ago)"
+    gone = replace(dataset, metadata={**dataset.metadata, "raw_times": dataset.metadata["raw_times"][:2]})
+    txy = run_now(scatter_3d.Scatter3D(), view_of(gone), values)  # Shot 3's raw file is gone: its TXY's time.
+    assert txy.data.newest_fallback and txy.data.newest_time == 1_003 / 1e9
+    assert cast(Any, scatter_3d.figure(txy, txy.data)).data[1].name.endswith(" ago, TXY file time)")
+    untimed = replace(lit.data, newest_time=None)
+    assert cast(Any, scatter_3d.figure(lit, untimed)).data[1].name == "shot 3 (newest)"
 
 
 def test_the_display_cap_keeps_the_newest_shot_whole() -> None:

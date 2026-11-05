@@ -4,6 +4,8 @@ a 560 px dock (titles wrap; no axis pushed out), warnings and notes are amber wi
 thresholded in, and Counts per shot and Shot times mark the newest shot."""
 from __future__ import annotations
 
+import re
+from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
@@ -20,7 +22,7 @@ from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.scripts.base import DatasetAnalysis
 from helab.scripts.dld import (basic_plots, correlations_plot, density_images, mean_position, release_time,
                                     shot_times, t_spectrum, transfer_fractions, velocity_distributions)
-from helab.utils import colours
+from helab.utils import colours, time_format
 from helab.utils.folder_cache import Dataset
 
 WIDTH = 560
@@ -209,7 +211,7 @@ def test_counts_per_shot_marks_the_newest_shot(qtbot: QtBot) -> None:
     assert script.get_metadata().version == "1"
 
 
-def test_shot_times_marks_the_newest_shot_in_both_plots(qtbot: QtBot) -> None:
+def test_shot_times_marks_the_newest_shot_in_both_plots(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
     script = shot_times.ShotTimesPlot()
     view = halo_view()
     plain = shown(qtbot, script.render(run(script, view)))
@@ -223,7 +225,14 @@ def test_shot_times_marks_the_newest_shot_in_both_plots(qtbot: QtBot) -> None:
     assert list(counts.xData) == [when] and list(counts.yData) == [1500]
     assert list(gaps.xData) == [when] and list(gaps.yData) == [12.0]
     assert counts.opts["symbolBrush"].color().getRgb()[:3] == (214, 39, 40)
-    assert "shot 40 (newest)" in lit.key_label.text and "TXY file time" in lit.key_label.text
+    # LR-11: its age (its raw file's time, as of the drawing), these test times are in 2023.
+    assert re.search(r"shot 40 \(newest, \d+ d \d+ h ago\)", lit.key_label.text)
+    assert "TXY file time (no raw file)" in lit.key_label.text
+    monkeypatch.setattr(time_format, "time", SimpleNamespace(time=lambda: 1_700_000_000 + 12 * 40 + 7.0))
+    assert "shot 40 (newest, 7 s ago)" in shot_times.key_html(result.data, True)
+    untimed = run(script, view, {"highlight_newest": True, "last_shot": 8, "shots": "range"})
+    assert "shot 8 (newest, " in shot_times.key_html(untimed.data, True)
+    assert ", TXY file time)" in shot_times.key_html(untimed.data, True)
     assert script.get_metadata().version == "3"
 
 

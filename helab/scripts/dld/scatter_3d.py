@@ -17,8 +17,8 @@ from helab.analysis.parameters import ParameterSpec
 from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.analysis.dataset_view import DatasetView, txy
 from helab.analysis.selection import (SHOT_SPECS, keep_fraction, manual, manual_box, newest_brief, newest_colour,
-                                      newest_shot, newest_specs, range_brief, range_specs, range_warnings,
-                                      select_shots, selection_text, shots_brief, shots_text)
+                                      newest_label, newest_shot, newest_specs, newest_time, range_brief, range_specs,
+                                      range_warnings, select_shots, selection_text, shots_brief, shots_text)
 from helab.analysis.display_units import axis_label, axis_scale, range_text
 from helab.analysis.masks import MASK_SPECS, all_masked_text, mask_brief, mask_from, mask_warnings, masked_text
 from helab.analysis.stats import AXES, DISPLAY_CAP, CropBox, crop_box, display_sample
@@ -57,6 +57,9 @@ class ScatterData:
     newest: npt.NDArray[np.float64] = field(default_factory=lambda: np.empty((0, 3)))
     colour: tuple[int, int, int] = (214, 39, 40)
     masked: int = 0  # events the mask took out of the chosen shots (before the crop)
+    # When the newest shot was taken (``newest_time``; None: unknown) and whether that is its TXY file's time.
+    newest_time: float | None = None
+    newest_fallback: bool = False
 
     @property
     def analysed(self) -> int:
@@ -161,7 +164,8 @@ class Scatter3D(DatasetAnalysis):
         fresh = fresh[display_sample(len(fresh), cap)]
         points = rest[display_sample(len(rest), cap - len(fresh))]
         return ScatterData(crop, points, shots, len(context.view.shots), cap, range_warnings(values), newest,
-                           fresh, newest_colour(values), masked)
+                           fresh, newest_colour(values), masked,
+                           *newest_time(context.view, newest))
 
     def render(self, result: AnalysisResult, parent: Optional[QWidget] = None) -> QWidget:
         data: ScatterData = result.data
@@ -204,7 +208,8 @@ def figure(result: AnalysisResult, data: ScatterData) -> go.Figure:
         fx, fy, fz = displayed(data.newest)
         traces.append(go.Scatter3d(x=fx, y=fy, z=fz, mode="markers",
                                    marker=dict(size=size, opacity=max(opacity, 0.8), color=f"rgb{data.colour}"),
-                                   hovertemplate=HOVER, name=f"shot {data.newest_shot} (newest)"))
+                                   hovertemplate=HOVER,
+                                   name=newest_label(data.newest_shot, data.newest_time, data.newest_fallback)))
 
     def axis(index: int) -> dict[str, Any]:
         settings: dict[str, Any] = {"title": axis_label(index), "tickformat": TICK_FORMAT}

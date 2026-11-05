@@ -19,8 +19,8 @@ from helab.analysis.parameters import ParameterSpec
 from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.analysis.dataset_view import DatasetView, txy
 from helab.analysis.selection import (SHOT_SPECS, keep_fraction, manual, manual_box, newest_brief, newest_colour,
-                                      newest_shot, newest_specs, range_brief, range_specs, range_warnings,
-                                      select_shots, selection_text, shots_brief, shots_text)
+                                      newest_label, newest_shot, newest_specs, newest_time, range_brief, range_specs,
+                                      range_warnings, select_shots, selection_text, shots_brief, shots_text)
 from helab.analysis.stats import AXES, DISPLAY_CAP, UNITS, CropBox, axis_text, crop_box, display_sample
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.standard import group
@@ -56,6 +56,9 @@ class ScatterData:
     newest_shot: int | None = None
     newest: npt.NDArray[np.float64] = field(default_factory=lambda: np.empty((0, 3)))
     colour: tuple[int, int, int] = (214, 39, 40)
+    # When the newest shot was taken (``newest_time``; None: unknown) and whether that is its TXY file's time.
+    newest_time: float | None = None
+    newest_fallback: bool = False
 
     @property
     def analysed(self) -> int:
@@ -151,7 +154,7 @@ class Scatter3D(DatasetAnalysis):
         fresh = fresh[display_sample(len(fresh), cap)]
         points = rest[display_sample(len(rest), cap - len(fresh))]
         return ScatterData(crop, points, shots, len(context.view.shots), cap, range_warnings(values), newest,
-                           fresh, newest_colour(values))
+                           fresh, newest_colour(values), *newest_time(context.view, newest))
 
     def backends(self, action_name: str) -> Sequence[str]:
         return (PLOTLY, PYQTGRAPH, MATPLOTLIB)
@@ -208,7 +211,8 @@ def figure(result: AnalysisResult, data: ScatterData) -> go.Figure:
         fresh = data.newest
         traces.append(go.Scatter3d(x=fresh[:, 1], y=fresh[:, 2], z=fresh[:, 0], mode="markers",
                                    marker=dict(size=size, opacity=max(opacity, 0.8), color=f"rgb{data.colour}"),
-                                   hoverinfo="x+y+z", name=f"shot {data.newest_shot} (newest)"))
+                                   hoverinfo="x+y+z",
+                                   name=newest_label(data.newest_shot, data.newest_time, data.newest_fallback)))
 
     def axis(index: int) -> dict[str, Any]:
         settings: dict[str, Any] = {"title": f"{AXES[index]} ({UNITS[index]})"}
@@ -256,7 +260,8 @@ def matplotlib_figure(result: AnalysisResult, data: ScatterData, drawn: Any = No
     if data.newest_shot is not None:
         fresh = data.newest
         axes.scatter(fresh[:, 1], fresh[:, 2], fresh[:, 0], s=size ** 2, alpha=max(opacity, 0.8), linewidths=0,
-                     depthshade=False, color=mpl_colour(data.colour), label=f"shot {data.newest_shot} (newest)")
+                     depthshade=False, color=mpl_colour(data.colour),
+                     label=newest_label(data.newest_shot, data.newest_time, data.newest_fallback))
         axes.legend(loc="upper right", fontsize=8)
     for index, (label, limits) in enumerate(((axes.set_xlabel, axes.set_xlim), (axes.set_ylabel, axes.set_ylim),
                                              (axes.set_zlabel, axes.set_zlim))):

@@ -22,8 +22,8 @@ from helab.analysis.masks import MASK_SPECS, Mask, mask_brief, mask_from, mask_w
 from helab.analysis.parameters import ParameterSpec
 from helab.analysis.plot_text import add_label, line_html
 from helab.analysis.results import AnalysisContext, AnalysisResult
-from helab.analysis.selection import (SHOT_SPECS, newest_brief, newest_colour, newest_shot, newest_specs, select_shots,
-                                      selection_text, shots_brief, shots_text)
+from helab.analysis.selection import (SHOT_SPECS, newest_brief, newest_colour, newest_label, newest_shot, newest_specs,
+                                      select_shots, selection_text, shots_brief, shots_text)
 from helab.analysis.stats import counts_per_shot
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.dld import group
@@ -146,7 +146,10 @@ def key_html(data: ShotTimes, shown: bool) -> str:
     if shown:
         parts.append(f'<span style="color: {pg.mkColor(FALLBACK_COLOUR).name()}">▼</span> TXY file time (no raw file)')
     if data.newest_shot is not None:
-        parts.append(f'<span style="color: {pg.mkColor(data.colour).name()}">●</span> shot {data.newest_shot} (newest)')
+        at = np.flatnonzero(data.shots == data.newest_shot)  # (A shot without a time isn't listed.)
+        taken, fallback = (float(data.times[at[0]]), bool(data.fallback[at[0]])) if len(at) else (None, False)
+        label = newest_label(data.newest_shot, taken, fallback)
+        parts.append(f'<span style="color: {pg.mkColor(data.colour).name()}">●</span> {label}')
     return " · ".join(parts)
 
 

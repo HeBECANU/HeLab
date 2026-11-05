@@ -25,7 +25,7 @@ from helab.utils.folder_cache import Dataset, FolderCache
 from helab.utils.io_service import IORequest
 from helab.utils.settings_defaults import CONVERT_LOW_HITS_SETTING, read_setting, setting_default
 from helab.utils.settings_store import app_settings
-from helab.utils.time_format import relative_age
+from helab.utils.time_format import relative_age, shot_age
 from helab.views import explorer_convert, live_launch
 from helab.views.explorer_text import large_text, plural
 
@@ -184,19 +184,53 @@ class LiveSession:
     convert: AutoConvert | None = None
     # A conversion wrote a shot while a check ran: the next check starts at once.
     check_soon: bool = False
+    # ``latest_shot``'s answer and the data it is of, so the status bar's refresh doesn't search the
+    # metadata each time.
+    latest: tuple[Dataset, tuple[int, float | None, bool] | None] | None = None
 
-def live_brief(session: LiveSession, name: str) -> str:
+
+def latest_shot(session: LiveSession) -> tuple[int, float | None, bool] | None:
+    """The highest shot number Live holds, when it was taken and whether that is its TXY file's time (no
+    raw file), as ``DatasetView.shot_time`` has it, from the data in memory; None before the first shot."""
+    if session.latest is not None and session.latest[0] is session.dataset:
+        return session.latest[1]
+    found: tuple[int, float | None, bool] | None = None
+    if session.shots:
+        shot = max(session.shots)
+        metadata = session.dataset.metadata
+        # Both lists go up by shot, mostly: the latest is found near the end.
+        raw = next((entry[1] for entry in reversed(metadata.get("raw_times") or ())
+                    if isinstance(entry, (list, tuple)) and len(entry) == 2 and entry[0] == shot
+                    and type(entry[1]) is int), None)
+        txy = None if raw is not None else next(
+            (entry[2] for entry in reversed(metadata.get("fingerprint") or ())
+             if isinstance(entry, (list, tuple)) and len(entry) >= 3 and entry[0] == shot), None)
+        found = (shot, raw / 1e9, False) if raw is not None else (shot, int(txy) / 1e9, True) if txy is not None \
+            else (shot, None, False)
+    session.latest = (session.dataset, found)
+    return found
+
+
+def live_brief(session: LiveSession, name: str, now: float | None = None) -> str:
     """The status bar's phrase for a Live session that is on (LR-9, Tony 2026-11-05): steady while it only
-    checks ("Live checking run_1 · 12 new shots"), changed while it reads, converts or saves new shots."""
+    checks ("Live checking run_1 · 12 new shots"), changed while it reads, converts or saves new shots. It
+    ends with the latest shot and its age as of ``now`` (LR-11: "· latest shot 1235 · 12 s ago"), the one
+    part that ticks (the status bar's refresh)."""
     convert = session.convert
     if session.request == "check" and session.reading:
-        return f"Live updating {name} · reading new shots"
-    if convert is not None and convert.request and convert.todo:
-        return f"Live auto-converting {name} · {convert.done:,} of {convert.todo:,}"
-    if session.request == "save":
-        return f"Live saving {name} · {plural(session.new, 'new shot')}"
-    verb = "Live + auto-convert checking" if convert is not None else "Live checking"
-    return f"{verb} {name} · {plural(session.new, 'new shot')}"
+        text = f"Live updating {name} · reading new shots"
+    elif convert is not None and convert.request and convert.todo:
+        text = f"Live auto-converting {name} · {convert.done:,} of {convert.todo:,}"
+    elif session.request == "save":
+        text = f"Live saving {name} · {plural(session.new, 'new shot')}"
+    else:
+        verb = "Live + auto-convert checking" if convert is not None else "Live checking"
+        text = f"{verb} {name} · {plural(session.new, 'new shot')}"
+    latest = latest_shot(session)
+    if latest is None:
+        return text
+    shot, taken, fallback = latest
+    return f"{text} · latest shot {shot}" + ("" if taken is None else f" · {shot_age(taken, fallback, now)}")
 
 
 # Work Offline: Live reads the folder, so it is off (cache-only browsing).

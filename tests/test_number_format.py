@@ -78,6 +78,15 @@ def test_duration_has_an_hour_unit(seconds: float, expected: str) -> None:
     assert duration(seconds) == expected
 
 
+@pytest.mark.parametrize("ago,fallback,expected", [
+    (12.4, False, "12 s ago"), (125, False, "2 min 5 s ago"), (3 * 3600 + 60, False, "3 h 1 min ago"),
+    (12, True, "12 s ago, TXY file time"), (-30, False, "0 s ago")])
+def test_a_shots_age_reads_as_spans_do(ago: float, fallback: bool, expected: str) -> None:
+    """LR-11: legends and the status bar's Live phrase say how long ago the latest shot was taken."""
+    from helab.utils.time_format import shot_age
+    assert shot_age(1_700_000_000 - ago, fallback, 1_700_000_000) == expected
+
+
 # Run in a fresh interpreter: the disk budget's default and minimum, and the log sizes, are set when
 # helab is imported, so patching ``number_format.PLATFORM`` can't reach them.
 IMPORT_TIME_UNITS = """

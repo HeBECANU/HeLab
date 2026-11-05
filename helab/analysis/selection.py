@@ -11,6 +11,7 @@ from helab.analysis.dataset_view import DatasetView, Events, txy
 from helab.analysis.display_units import range_text as fixed_range_text
 from helab.analysis.parameters import ParameterSpec
 from helab.analysis.stats import AXES, DEFAULT_KEEP, UNITS, CropBox
+from helab.utils.time_format import shot_age
 
 # Shots
 
@@ -122,6 +123,22 @@ def newest_events(view: DatasetView, shot: int | None) -> Events:
 def newest_colour(values: Mapping[str, Any]) -> tuple[int, int, int]:
     """The newest shot's colour (RGB, 0–255) chosen in ``values``; red when unset or unknown."""
     return NEWEST_COLOURS.get(str(values.get(NEWEST_COLOUR, "red")), NEWEST_COLOURS["red"])
+
+
+def newest_time(view: DatasetView, shot: int | None) -> tuple[float | None, bool]:
+    """When the highlighted ``shot`` was taken (``DatasetView.shot_time``) and whether that is its
+    TXY file's time (no raw file: when it was converted); ``(None, False)`` without one."""
+    taken = view.shot_time(shot) if shot is not None else None
+    return taken, taken is not None and shot is not None and bool(view.fallback_times((shot,)))
+
+
+def newest_label(shot: int, taken: float | None, fallback: bool = False, now: float | None = None) -> str:
+    """A legend's name for the highlighted newest shot with its age (``shot_age``):
+    ``shot 1235 (newest, 12 s ago)``, or ``shot 1235 (newest)`` without a time. The age is as of
+    the drawing: a plot following Live draws it again with each update."""
+    if taken is None:
+        return f"shot {shot} (newest)"
+    return f"shot {shot} (newest, {shot_age(taken, fallback, now)})"
 
 
 def newest_brief(values: Mapping[str, Any]) -> str:

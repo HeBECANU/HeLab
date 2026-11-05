@@ -509,3 +509,31 @@ def test_the_status_bars_live_phrase_changes_only_when_shots_come_in() -> None:
     assert live_brief(session, "run_1") == "Live updating run_1 · reading new shots"
     session.reading, session.request, session.convert = False, "save", None
     assert live_brief(session, "run_1") == "Live saving run_1 · 12 new shots"
+
+
+def test_the_status_bars_live_phrase_names_the_latest_shot_and_its_age() -> None:
+    """LR-11 (Tony 2026-11-05): "· latest shot 1235 · 12 s ago" from the data in memory, the one part
+    that ticks; a TXY file's time says so; none before the first shot, no age without a time."""
+    from helab.views.explorer_live import latest_shot, live_brief
+    taken = 1_700_000_000.0
+    data = Dataset("/live", "sig", {1234: np.zeros((1, 3)), 1235: np.zeros((1, 3))},
+                   {"fingerprint": [[1234, 10, 5], [1235, 10, 6]],
+                    "raw_times": [[1234, int((taken - 30) * 1e9)], [1235, int(taken * 1e9)]]}, 0)
+    session = LiveSession("/live", taken, set(data.data), data, new=12)
+    steady = "Live checking run_1 · 12 new shots · latest shot 1235"
+    assert live_brief(session, "run_1", taken + 12) == f"{steady} · 12 s ago"
+    assert live_brief(session, "run_1", taken + 75) == f"{steady} · 1 min 15 s ago"
+    session.request, session.reading = "check", True
+    assert live_brief(session, "run_1", taken + 13) == "Live updating run_1 · reading new shots · latest shot 1235 · 13 s ago"
+    # A new shot (new data) is found again; one without a raw file has its TXY file's time.
+    session.dataset = Dataset("/live", "sig", {**data.data, 1236: np.zeros((1, 3))},
+                              {**data.metadata, "fingerprint": [*data.metadata["fingerprint"],
+                                                                [1236, 10, int((taken + 20) * 1e9)]]}, 0)
+    session.shots, session.reading = set(session.dataset.data), False
+    assert latest_shot(session) == (1236, taken + 20, True)
+    assert live_brief(session, "run_1", taken + 25).endswith(" · latest shot 1236 · 5 s ago, TXY file time")
+    session.dataset = Dataset("/live", "sig", {1237: np.zeros((1, 3))}, {"fingerprint": []}, 0)
+    session.shots = {1237}
+    assert live_brief(session, "run_1", taken) == "Live checking run_1 · 12 new shots · latest shot 1237"
+    session.dataset, session.shots = Dataset("/live", "sig", {}, {"fingerprint": []}, 0), set()
+    assert live_brief(session, "run_1", taken) == "Live checking run_1 · 12 new shots"
