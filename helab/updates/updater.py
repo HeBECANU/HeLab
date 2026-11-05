@@ -329,7 +329,9 @@ def running_from(job: Job) -> list[str]:
         found += _windows_locked_files(job)
         return found
     try:
-        listing = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True, timeout=20)
+        # -ww: procps (Linux) cuts a piped listing to 80 columns, which would hide a helper's venv path.
+        listing = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,command="], capture_output=True, text=True,
+                                 timeout=20)
     except (OSError, subprocess.SubprocessError):
         return ["the process list couldn't be read (ps)"]
     for line in listing.stdout.splitlines():

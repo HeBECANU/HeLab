@@ -272,7 +272,9 @@ def test_the_upstream_repository_comes_from_the_raw_remote_url(tmp_path: Path) -
     assert build_info.upstream_repository(repo, "detached") == "unknown"
 
 
-def test_settings_rows_save_and_load(qtbot: QtBot) -> None:
+def test_settings_rows_save_and_load(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(build_info, "upstream_repository", lambda root, branch: "unknown")
+    update_settings._upstream.cache_clear()
     host = QWidget()
     qtbot.addWidget(host)
     form = QFormLayout(host)
@@ -300,19 +302,24 @@ def test_settings_rows_save_and_load(qtbot: QtBot) -> None:
 # -- The main window ---------------------------------------------------------------------------------
 
 @pytest.fixture
-def window(qtbot: QtBot, tmp_path: Path) -> Iterator[Any]:
+def window(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """The main window, its check on a release build of the default repo (never this checkout's own git)."""
     from helab.views.HelabMainWindow import HelabMainWindow
+    monkeypatch.setattr(build_info, "upstream_repository", lambda root, branch: "unknown")
+    update_settings._upstream.cache_clear()
     main = HelabMainWindow()
     qtbot.addWidget(main)
+    monkeypatch.setattr(main.update_check, "build", RELEASE_BUILD)
     main.update_check.transport = FakeGitHub(replies(main.update_check.settings().repository))
     yield main
     main.close()
+    update_settings._upstream.cache_clear()
 
 
 def test_the_status_bar_mark_and_help_entry_show_an_available_update(qtbot: QtBot, window: Any,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     check = window.update_check
-    monkeypatch.setattr(check, "build", RELEASE_BUILD)
+    assert check.settings().repository == REPO
     assert window.update_button.isHidden() and not window.action_update_available.isVisible()
     help_menu = next(item.menu() for item in window.menu_bar.actions() if item.text() == "Help")
     assert "Check for Updates…" in [a.text() for a in help_menu.actions()]
