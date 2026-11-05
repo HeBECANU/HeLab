@@ -281,7 +281,8 @@ def test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_
     assert reason in label(second, "plot_error") and "outdated" in label(second, "plot_error")
     assert "saved result of" in label(second, "plot_data_source")
     line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")
-    assert line is not None and line.text().endswith(" · outdated")  # A short mark on the line itself (BP-6).
+    # A short mark on the line itself, seen with Plot info closed.
+    assert line is not None and line.text().endswith(" · outdated")
     script.go.set()
     qtbot.waitUntil(lambda: saved(second), timeout=WAIT)
     line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")  # (Drawn anew: a new line.)

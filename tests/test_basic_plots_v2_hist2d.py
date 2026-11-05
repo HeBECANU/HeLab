@@ -1,7 +1,7 @@
 """Basic plots v2's XY, XT and YT histograms (LR-13): the chosen shots' events binned in a plane, the third axis
 summed over the selection; ranges from auto-crop (the summed axis whole) or manual bounds (the summed axis's
 bounds limiting the events summed, unless "Sum the whole summed axis"); automatic or set bins; the DLD port's
-image options (Q~3): blur (total kept), counts or a rate per shot, colour compression in the colour map only;
+image options (Tony's choice): blur (total kept), counts or a rate per shot, colour compression in the colour map only;
 every library, in place."""
 from __future__ import annotations
 

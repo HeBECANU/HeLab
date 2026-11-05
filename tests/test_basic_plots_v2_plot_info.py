@@ -87,7 +87,7 @@ def test_v1_plots_get_the_section_too(window: HelabMainWindow, qtbot: QtBot, tmp
 def page_widgets(instance: AnalysisInstance) -> list[QWidget]:
     """The plot's settings page, its parameter tree (its rows' tooltips are the parameters' tips) and its Presets
     row left out: at 250 px "Preset:" is cut with Windows' fonts, known since the 2026-11-04 layout audit and not
-    one of the lines LR-3 is about (the handoff's A~3)."""
+    one of the lines LR-3 is about (a follow-up for the Presets row, listed in the handoff)."""
     page = instance.param_tab
     assert page is not None
     from helab.analysis.parameter_tree import SettingsTree

@@ -1,6 +1,6 @@
 """XY, XT and YT histograms (Basic plots v2, LR-13): the chosen shots' events binned in a plane, the third
 axis summed over the selection (``helab.analysis.histogram2d``), with the DLD port's Density images' options
-(Tony, Q~3): a Gaussian blur (σ in bins, the total kept), counts per bin or a rate per shot, and the colour
+(Tony's choice): a Gaussian blur (σ in bins, the total kept), counts per bin or a rate per shot, and the colour
 range compressed (sqrt, log, power γ) in the colour map only, so the colour bar reads real values. In s and m
 with SI prefixes (Basic plots' units). Drawn with PyQtGraph (``ImageItem``) by default, or Plotly or
 Matplotlib; updated in place as Live adds shots. XY keeps equal scales (both lengths); T runs across XT and YT.
