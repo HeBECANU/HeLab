@@ -292,3 +292,42 @@ At HEAD `e837ead`, after `source .ai/local/floor-env.sh`; output in `.ai/temp/` 
   - **Suggest.** Nothing now, or have `describe_run` and `describe_result` warnings come as a list later.
 
 **Open findings: none blocking. BP-10 (Info) is the only one open.**
+
+## Re-check 2
+
+Reviewer (Lens), 2026-11-05. Scope: the BP-10 fix, `git diff ffb8ea4 8b3e385` (the code is in `a5fc321`; `8b3e385`
+updates the handoff). The `dev/v0.0.9` merge is left out.
+
+### Checks rerun
+
+At HEAD `8b3e385`; output in `.ai/temp/` (not committed):
+
+- **Touched and dock-related tests** (`.ai/temp/review-tests-3.txt`): `test_analysis_gui.py`,
+  `test_result_cache_plots.py`, `test_constant_layers.py` (constants' notes), `test_live_plots.py` and every
+  `test_basic_plots_v2_*.py`, with `-n 4 --reruns 5 --reruns-delay 1`: **292 passed, 0 RERUN**.
+- **Type checks** (`.ai/temp/review-types-3.txt`): all five are **clean**.
+- **CI** 42021456513 is as relayed; I didn't refetch its logs.
+
+### Findings
+
+- **BP-10 (Info): fixed** (`a5fc321`).
+  - Warnings that come as lists are counted as they come: `parameter_warnings` and the constants' notes.
+  - Their `⚠ <warning>` text is taken out of `describe_run`'s and `describe_result`'s text first. Each remaining
+    `⚠ ` mark then counts once and runs to the next ` · ⚠ ` or the end (`WARNING_MARK`).
+  - `dict.fromkeys` still dedupes. The new GUI test (one listed warning holding " · ", repeated in the settings, and
+    one in `describe_result`) reads "⚠ 2" with both warnings in full in the tooltip.
+  - A probe confirms the cases: `'a · ⚠ one · ⚠ two'` gives 2, and a listed warning holding " · " repeated in text
+    gives none extra.
+
+### New
+
+- **BP-11 (Info), `helab/views/plots/instance.py:91`.**
+  - **What's wrong.** A warning that isn't listed and isn't last in its description takes the ordinary parts after
+    it into its text. The count stays right, but the tooltip line reads more than the warning. For example,
+    `'manual range · ⚠ X: min > max · bins auto'` gives the warning `'X: min > max · bins auto'`.
+  - **Where it matters.** Every HeLab script puts its `⚠` parts last (checked by grep over `helab/scripts`), so
+    only a user's script could show this.
+  - **Suggest.** Nothing needed for landing. It is the trade-off for letting a warning hold " · "; a later contract
+    could give descriptions their warnings as a list.
+
+**Open findings: none blocking. BP-11 (Info) is the only one open.**
