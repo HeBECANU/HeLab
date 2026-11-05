@@ -87,6 +87,11 @@ def identify_parameters(settings: QWidget) -> QWidget:
     return settings
 
 
+def flags(text: str) -> List[str]:
+    """The warnings in a " · "-joined line (its parts that start with "⚠ "), without the mark."""
+    return [part[2:] for part in text.split(" · ") if part.startswith("⚠ ")]
+
+
 class LinkedAnalysisInstance(QObject):
     """Manages a linked pair of dock widget and its page in the Settings panel.
     
@@ -723,7 +728,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
         if self.workspace is not None:
             chosen, settings = self._hook("describe_run", ("", ""), result.parameters, self.view)
             record = describe(without_constants(specs), result.parameters, every=True)
+            # What the run warns of, each in full (the dock's line counts them, "⚠ N", and its tooltip lists them).
+            flagged = [*flags(chosen), *flags(settings),
+                       *(self._hook("parameter_warnings", [], result.parameters) if warnings else ())]
             if (constants := result.resolved_constants) is not None:
+                flagged.extend(constants.notes)
                 # The constants not at their defaults (all of them, with origins, are in the record).
                 used = describe_constants(constants, result.constant_keys)
                 settings = " · ".join(filter(None, (settings, used and f"constants: {used}",
@@ -734,12 +743,14 @@ class AnalysisInstance(LinkedAnalysisInstance):
             if self._drawn_with:
                 record = f"{record}\nDrawn with {self._drawn_with}"
             if result.state == "completed":
-                settings = " · ".join(filter(None, (settings, self._hook("describe_result", "", result))))
+                described = self._hook("describe_result", "", result)
+                flagged.extend(flags(described))
+                settings = " · ".join(filter(None, (settings, described)))
             if warnings:
                 settings = " · ".join(filter(None, (settings, f"⚠ {warnings}")))
                 record = f"{record}\nWarning: {warnings}"
             self.workspace.set_plot_result(self.dock_widget, content, result, settings, record, chosen, view,
-                                           not self.on_tab_choice())
+                                           not self.on_tab_choice(), list(dict.fromkeys(flagged)))  # (Once each.)
         elif self.dock_widget.widget() is not content:
             old = self.dock_widget.widget()
             self.dock_widget.setWidget(content)

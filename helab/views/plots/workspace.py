@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtWidgets import QDockWidget, QLabel, QMainWindow, QMessageBox, QSizePolicy, QToolButton, QVBoxLayout, QWidget
@@ -215,9 +215,11 @@ class PlotWorkspace:
 
     def set_plot_result(self, dock: QDockWidget, content: QWidget, result: AnalysisResult,
                         parameters_text: str = "", record_text: str = "", selection_text: str = "",
-                        view: DatasetView | None = None, own_choice: bool = False) -> None:
+                        view: DatasetView | None = None, own_choice: bool = False,
+                        warnings: Sequence[str] = ()) -> None:
         """Show an analysis result in its dock, under its source line (the input folder, revision
-        and Live state); which shots (``selection_text``), the analysis with its version and the
+        and Live state, then short marks: ``outdated`` for an outdated saved result, ``⚠ N`` for the
+        run's ``warnings``, in full first in the line's tooltip); which shots (``selection_text``), the analysis with its version and the
         settings in short form (``parameters_text``) go to the plot's Plot info (LR-4). The full
         record (every parameter, ``record_text``) is in the line's tooltip. ``view``: the data the result ran on (None: not the
         folder's data as any tab shows it, e.g. an outdated saved result's); ``own_choice``: of the
@@ -230,6 +232,9 @@ class PlotWorkspace:
             selection_text, result.analysis.short(), PlotWorkspace._cached_text(result, bool(dock.property("plotReuse")))))))
         dock.setProperty("plotSourceSettings", parameters_text)
         dock.setProperty("plotSourceRecord", result.describe(record_text or parameters_text))
+        dock.setProperty("plotSourceMarks", " · ".join(filter(None, (
+            "outdated" if result.outdated else "", f"⚠ {len(warnings)}" if warnings else ""))))
+        dock.setProperty("plotSourceWarnings", "\n".join(f"⚠ {warning}" for warning in warnings))
         old = dock.widget()
         if old is None or content.parentWidget() is not old:  # Else updated in place: kept as it is.
             PlotWorkspace._wrap_plot(dock, content)
@@ -309,15 +314,17 @@ class PlotWorkspace:
             explorer is not None and path == explorer.selected_path_globally and explorer.folder_opened_path == path
             and shown is not None and shown.path == path and isinstance(held, Held) and held.shown_in(shown))
         prefix = "Data source" if current else "Showing previously loaded data"
-        # LR-4: one line, the folder, its revision and Live; the shots, analysis, saved-result mark and settings
-        # are in the plot's Plot info (instance.py, from these properties), and the record in the tooltip.
-        parts = [dock.property(name) for name in ("plotSourceRevision", "plotFollow")]
-        record = dock.property("plotSourceRecord")
+        # One line: the folder, its revision, Live, and short marks a user must see without opening Plot info
+        # (outdated, ⚠ N). The shots, analysis, saved-result detail and settings are in the plot's Plot info
+        # (instance.py, from these properties); the warnings in full and the record are in the tooltip.
+        parts = [dock.property(name) for name in ("plotSourceRevision", "plotFollow", "plotSourceMarks")]
+        record, warned = dock.property("plotSourceRecord"), dock.property("plotSourceWarnings")
         name = os.path.basename(path.rstrip(os.sep)) or path
         text = " · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
         label.setText(text)
         dock.setProperty("plotSourceText", text)
-        label.setToolTip(record if isinstance(record, str) and record else path)  # (Plain: the app wraps it.)
+        tip = record if isinstance(record, str) and record else path
+        label.setToolTip(f"{warned}\n{tip}" if isinstance(warned, str) and warned else tip)  # (Plain: the app wraps it.)
         error_label = dock.findChild(QLabel, "plot_error")
         error = dock.property("plotError")
         if error_label is not None:

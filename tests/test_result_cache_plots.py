@@ -280,8 +280,12 @@ def test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_
     reason = "script version 1 → 2" if change == "script" else "data changed (1 shot changed)"
     assert reason in label(second, "plot_error") and "outdated" in label(second, "plot_error")
     assert "saved result of" in label(second, "plot_data_source")
+    line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")
+    assert line is not None and line.text().endswith(" · outdated")  # A short mark on the line itself (BP-6).
     script.go.set()
     qtbot.waitUntil(lambda: saved(second), timeout=WAIT)
+    line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")  # (Drawn anew: a new line.)
+    assert line is not None and "outdated" not in line.text()
     assert cast(AnalysisResult, second.shown).source != FROM_DISK and label(second, "plot_error").strip() == ""
     assert script.computed == 1
     close(window)
