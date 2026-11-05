@@ -5,8 +5,9 @@ range compressed (sqrt, log, power γ) in the colour map only, so the colour bar
 with SI prefixes (Basic plots' units). Drawn with PyQtGraph (``ImageItem``) by default, or Plotly or
 Matplotlib; updated in place as Live adds shots. XY keeps equal scales (both lengths); T runs across XT and YT.
 
-The plots are ``xy_histogram``, ``xt_histogram`` and ``yt_histogram`` (a module each, so the Scripts panel lists
-them in that order); this module is their shared code, not registered itself."""
+The three plots are this module's ``Histogram1XY``, ``Histogram2XT`` and ``Histogram3YT``, so that their identity
+names this file and carries its hash (an edit here is new code). They are numbered because the Scripts panel lists a
+module's scripts in the order of their class names."""
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -291,6 +292,30 @@ class Histogram2DPlot(DatasetAnalysis):
             return True
         return (plotly_update(widget, plane_plotly(result))
                 or matplotlib_update(widget, lambda figure: plane_matplotlib(result, figure)))
+
+
+class Histogram1XY(Histogram2DPlot):
+    """The XY histogram: X across, Y up (equal scales), T summed."""
+
+    @property
+    def plane(self) -> str:
+        return "XY"
+
+
+class Histogram2XT(Histogram2DPlot):
+    """The XT histogram: T across, X up, Y summed."""
+
+    @property
+    def plane(self) -> str:
+        return "XT"
+
+
+class Histogram3YT(Histogram2DPlot):
+    """The YT histogram: T across, Y up, X summed."""
+
+    @property
+    def plane(self) -> str:
+        return "YT"
 
 
 def fill(widget: Any, result: AnalysisResult) -> None:

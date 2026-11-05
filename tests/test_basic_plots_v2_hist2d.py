@@ -15,6 +15,7 @@ from pytestqt.qtbot import QtBot
 
 from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane
 from helab.analysis.dataset_view import DatasetView, build_view
+from helab.analysis.identity import file_hash
 from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, SQRT, bin_area, blur_limit,
                                         blurred, compress, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
@@ -22,11 +23,13 @@ from helab.analysis.parameters import effective
 from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.analysis.stats import shortest_range
 from helab.scripts import standard_v2
-from helab.scripts.standard_v2 import histograms_2d, xt_histogram, xy_histogram, yt_histogram
+from helab.scripts.standard_v2 import histograms_2d
+from helab.scripts.scripts_manager import ScriptsManager
 from helab.scripts.standard_v2.histograms_2d import Histogram2DPlot
 from helab.utils.folder_cache import Dataset
 
-PLOTS: dict[str, Callable[[], Histogram2DPlot]] = {"XY": xy_histogram.XYHistogram, "XT": xt_histogram.XTHistogram, "YT": yt_histogram.YTHistogram}
+PLOTS: dict[str, Callable[[], Histogram2DPlot]] = {
+    "XY": histograms_2d.Histogram1XY, "XT": histograms_2d.Histogram2XT, "YT": histograms_2d.Histogram3YT}
 
 
 def events(seed: int = 3, count: int = 4_000) -> Any:
@@ -126,8 +129,7 @@ def test_bins_are_capped() -> None:
 
 
 def test_three_plots_in_the_package_in_order() -> None:
-    names = [module.__name__.rsplit(".", 1)[1] for module in standard_v2.MODULES]
-    assert names.index("xy_histogram") < names.index("xt_histogram") < names.index("yt_histogram")
+    assert histograms_2d in standard_v2.MODULES  # Its three plots, in order: test_the_identity_hashes_the_shared_code.
     for plane, cls in PLOTS.items():
         metadata = cls().get_metadata()
         assert (metadata.name, metadata.analysis_id, metadata.version, metadata.group) == (
@@ -135,6 +137,21 @@ def test_three_plots_in_the_package_in_order() -> None:
     names = [spec.name for spec in PLOTS["XY"]().parameters("Plot")]
     assert names[-8:] == ["include_outside", "bins_across", "bins_up", "blur", "quantity", "colour_scale", "gamma",
                           "log_decades"] and "range_mode" in names
+
+
+def test_the_identity_hashes_the_shared_code() -> None:
+    """XY, XT and YT's compute and drawing are histograms_2d.py's, so their identity names that file and carries its
+    hash: an edit there is new code for result reuse and the presets' "script changed" note."""
+    manager = ScriptsManager()
+    for module in standard_v2.MODULES:
+        manager.load_module(module)
+    wanted = {f"helab.v2.{plane.lower()}_histogram" for plane in PLANES}
+    planes = [metadata for metadata in manager.get_scripts_in_group("Basic plots v2")
+              if metadata.analysis_id in wanted]
+    assert [metadata.name for metadata in planes] == ["XY histogram", "XT histogram", "YT histogram"]  # In order.
+    for metadata in planes:
+        assert metadata.file_hash == file_hash(histograms_2d.__file__) and metadata.file_hash
+        assert metadata.identity().file_name == "histograms_2d.py"
 
 
 @pytest.mark.parametrize("plane", list(PLOTS))
