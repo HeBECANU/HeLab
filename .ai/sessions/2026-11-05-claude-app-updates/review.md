@@ -187,3 +187,102 @@ is running. Suggest: check the guard before writing `ready`, and don't relaunch 
 The proposed architecture section, the AGENTS.md invariant line and the housekeeping bullet match what was built.
 With AU-2 fixed, the CI rule's text should add "the branch's own (first-parent) commits"; with AU-7, the Windows wait
 should name the rename probe.
+
+## Re-check 1
+
+Reviewer (Sentry), 2026-11-05. The fix diff only, without the merge of dev/v0.0.9: `git diff 8090401 cbd42bb`
+(AU-1 to AU-11) and `git diff 9ca5acf c099caf` (the handoff, and `f951fc0`'s macOS framework-Python follow-up).
+
+### Checks rerun
+
+- Full suite on `c099caf`, same command (`--basetemp=.ai/temp/pytest-sentry`): **9566 passed, 674 skipped,
+  2 warnings in 183.77 s, no RERUN** (whole in `.ai/temp/recheck1-suite.txt`).
+- The five type checks, all clean (`.ai/temp/recheck1-types.txt`): `mypy helab/ --strict` 223 files, `mypy tests
+  --strict` 220, `pyright helab tests` 0 errors, `--platform win32` 223, `--pythonplatform Windows` 0 errors.
+- CI run 42022523164 on `f951fc0`, read-only (`gh api`): every job success; the 12 Tests and Converter backends
+  logs have no RERUN. The logs don't print per-test outcomes or skip reasons, so they don't show by themselves that
+  the Windows-only AU-7 test or the `framework` case ran. The `[lab]` and `[My Projects]` cases failed on macOS in
+  42018998611 and pass in this run, which shows the `ps -E` match works on the runners' framework Python.
+- Tests that fail before their fix, rerun in a scratch copy of the tree (`git archive`, with the old modules swapped
+  in; nothing run against this checkout):
+  - `test_the_updater_waits_…[framework]` fails on `cbd42bb`'s updater, and `[lab]` and `[My Projects]` pass there.
+    All three pass on `c099caf`.
+  - `test_branch_mode_never_moves_onto_a_commit_merged_in_from_another_branch` fails on `8090401`'s
+    `github`/`versions`, because the floor's tip is offered as `dev/v0.0.9 +2`.
+- AU-2 on the real history: one read-only GET of the compare `c0860ec...5af4a89`, run through `trim_compare` and
+  `branch_line` at HEAD. The branch line is `[5af4a89]`, `more` is False, and `de54fee` is no longer a candidate.
+- f951fc0's `__PYVENV_LAUNCHER__` match, tested with Homebrew's framework Python 3.13 (scratchpad):
+  - The venv stub sets the variable to the venv's resolved path. Through a `venv → venv.nosync` symlink, and when
+    called by a relative path, it is `<…>/venv.nosync/bin/python`, which `job.venv.resolve()` covers. A path with
+    a space matches too, since the whole line is searched.
+  - `uv venv` and `uv venv --relocatable` from that Python behave the same way.
+  - Python 3.13 removes the variable from its own environment at start: `os.environ` lacks it, and a child
+    `sh` sees it unset. So children of HeLab or of a helper that aren't Pythons from this venv never match.
+  - `updater.running_from` against live processes:
+    - a helper run through the symlinked framework venv is matched;
+    - a sibling uv venv's Python, its command naming helab, isn't matched;
+    - a plain `python -c …` from the same venv is matched (AU-14);
+    - the output shows the plain command only. Nothing from the environment appears (a test variable, `PATH=` and
+      `PYVENV` were checked), and the `Refused` text and log lines are built from that output.
+- Cost of `discard_older`: `shutil.rmtree` of a copy of this floor's venv (1.4 GB, 51,579 files) took 4.4 s on this
+  Mac's SSD (AU-13).
+
+### Status of AU-1 to AU-12
+
+| ID | Status |
+|---|---|
+| AU-1 | Fixed: `after_start` writes the mark, then polls for its own token's `last.json`. One residual case: AU-13. |
+| AU-2 | Fixed: `branch_line` follows the first-parent line, with commits that contain the running one, and the updater refuses a target not on `rev-list --first-parent <tip> ^HEAD`. Checked on real history (above). The "+250+" floor is fine. |
+| AU-3 | Fixed: folders matched as prefixes, so a path with a space works; on macOS also `ps -E`'s launcher. The global `--helab-io-helper` match is gone, as it only ever matched other HeLabs. |
+| AU-4 | Fixed: `wait_quiet` runs before the rollback. If helpers are still busy, the new version is left in place and recorded "failed" with how to go back. Documented in `docs/how-to/update.md`. |
+| AU-5 | Fixed: `except Exception` after the move and in `rollback`; the in-process test proves it. |
+| AU-6 | Fixed: a restore records `mode` and `tag`; `restored_key` stores the version (releases) or commit as Skip this version. |
+| AU-7 | Closed for now: module paths per Python, the write-open probe removed. Windows CI test, a known-issues line and M~3 for the lab PC. |
+| AU-8 | Closed for now: `CREATE_NO_WINDOW` on every `_run`; the test checks the flags. Known-issues line and M~3. |
+| AU-9 | Fixed: `--no-renames`; the test fails without it. |
+| AU-10 | Fixed: `SameOriginRedirectPolicy`. |
+| AU-11 | Fixed: the guard runs in `main` before anything is written, and a refusal relaunches only once the old HeLab has exited. |
+| AU-12 | Closed: provisional IDs are for the landing to rename; the design §6 gap and the `testing.md` line are proposed in the handoff. |
+
+### New findings
+
+No blocker, no Major.
+
+#### AU-13 · Minor · `helab/updates/updater.py:949-953`, `helab/views/HelabMainWindow.py:91`
+
+**What's wrong.** On "started", the updater runs `discard_older(older)` before `record(...)`. `discard_older` is a
+blocking `shutil.rmtree` of the venv from before the previous one. The new HeLab polls for its own outcome for only
+`UPDATE_OUTCOME_WAIT_S` = 20 s.
+
+**Failure scenario.** This applies to a second update that rebuilds the venv while an older one exists. HeLab
+updates `requirements.lock` twice, and the lab PC is a Sandy Bridge Windows machine with Defender scanning every
+deleted file. Deleting a ~1.4 GB, ~50k-file venv takes 4.4 s on this Mac's SSD, and likely several times longer
+there. Once it passes 20 s, the window has stopped polling, so "updated" is shown one start late: AU-1's symptom
+again, in the update that most needs a visible outcome.
+
+**Fix.**
+- Call `record(...)` before `discard_older` (the deletion's outcome never changes "updated", since it uses
+  `ignore_errors=True`; its log line can follow).
+- Or poll for longer.
+- A test: a slow `discard_older` stand-in, with `after_start` still showing "updated".
+
+#### AU-14 · Info · `helab/updates/updater.py:354-360`, `:1006`
+
+1. The two matches differ.
+   - The plain `ps` match needs "helab" in the command after the venv or checkout prefix.
+   - The `__PYVENV_LAUNCHER__` match counts any process from the venv: a REPL, a Jupyter kernel, a
+     `pytest` run from it.
+
+   On a framework-Python venv, such a process holds the update for `others` and then refuses it, naming that
+   process. Safe, since nothing is changed, and arguably closer to "every process still running from the venv",
+   but the two paths disagree. Either also require `"helab" in command` for the launcher match (a helper's command
+   after the re-exec still has `-m helab.io_helper`), or say in the docstring and architecture line that any
+   Python from the venv counts on macOS framework builds.
+2. `os.environ.pop(LAUNCHER_ENV)` in `main` does nothing on 3.13: the interpreter already removes the variable at
+   start (shown above), so the updater never inherits it. It's harmless as a guard, but the comment says the
+   variable is "inherited from a HeLab run by a framework Python"; reword it as a safeguard.
+
+Neither AU-13 nor AU-14 affects the f951fc0 questions. The launcher match doesn't miss a helper started the way
+`IOService` starts one (`sys.executable`, the venv's own `bin/python`, which sets the variable afresh). It doesn't
+match another HeLab: another checkout's venv is a different prefix, and the trailing separator stops
+`venv` from matching `venv2`. The environment is never logged or shown.
