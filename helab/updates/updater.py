@@ -629,8 +629,15 @@ def build_venv(job: Job, commit: str, log: Log) -> Path:
     check = ("import helab._version, helab.build_info, helab.utils.settings_defaults, PyQt6.QtCore; "
              "print(helab._version.__version__)")
     env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
-    done = subprocess.run([str(venv_python(new)), "-c", check], capture_output=True, text=True, timeout=300,
-                          cwd=job.checkout, env=env, stdin=subprocess.DEVNULL)
+    # Bytecode in an empty folder of its own: a ``.pyc`` written in the same second for a source of the same size
+    # (two updates in a row) would otherwise pass for the new source.
+    cache = job.updates / f"pycache-{job.token}"
+    env["PYTHONPYCACHEPREFIX"] = str(cache)
+    try:
+        done = subprocess.run([str(venv_python(new)), "-c", check], capture_output=True, text=True, timeout=300,
+                              cwd=job.checkout, env=env, stdin=subprocess.DEVNULL)
+    finally:
+        shutil.rmtree(cache, ignore_errors=True)  # (This check's own bytecode.)
     wanted = target_version(job, commit)
     if done.returncode != 0 or (wanted and done.stdout.strip() != wanted):
         raise Failed(f"The new venv doesn't import HeLab {wanted}: {(done.stderr or done.stdout).strip()[-800:]}")

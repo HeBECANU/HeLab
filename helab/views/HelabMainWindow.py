@@ -64,8 +64,10 @@ from helab.views.QuitSaveDialog import QuitSaveDialog
 from helab.views.RootDuplicatesWindow import RootDuplicatesWindow
 from helab.views.SettingsDialog import SettingsDialog, read_settle_seconds
 from helab.views.DebugIconsWindow import DebugIconsWindow
+from helab.updates import launch as update_launch, settings as update_settings
 from helab.updates.check import UpdateCheck, describe as describe_updates
 from helab.updates.dialog import UpdateWindow
+from helab.updates.versions import Offer
 
 # QtWebEngine must be imported before the QApplication exists; main.py imports this module first.
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
@@ -139,6 +141,12 @@ class HelabMainWindow(QMainWindow):
         # scheduled by ``main`` (never by a window a test makes), the manual one by Help › Check for Updates….
         self.update_check = UpdateCheck(APP_BUILD_INFO, app_folder(), self)
         self.update_window: UpdateWindow | None = None
+        # Update and restart, Restore previous version (a source checkout): the updater's dry run, then its start.
+        self.update_launcher = update_launch.UpdateLauncher(APP_BUILD_INFO, app_folder(), self)
+        self.update_launcher.planned.connect(self._update_planned)
+        self.update_launcher.ready.connect(self._quit_for_update)
+        self.update_launcher.failed.connect(self._update_failed)
+        self._update_asked: update_launch.Asked | None = None
         self.status_bar = QStatusBar()
         self._create_status_bar()
 
@@ -631,6 +639,14 @@ class HelabMainWindow(QMainWindow):
             self.action_check_updates.setToolTip("Ask GitHub whether a newer HeLab is available")
             self.action_check_updates.triggered.connect(self.check_for_updates)
             menu_help.addAction(self.action_check_updates)
+            self.action_restore_previous = QAction("Restore previous version…", self)
+            self.action_restore_previous.setObjectName("help_restore_previous")
+            self.action_restore_previous.setToolTip("Go back to the version HeLab had before its last update, "
+                                                    "and its venv; HeLab quits and starts again")
+            self.action_restore_previous.triggered.connect(self.restore_previous_version)
+            menu_help.addAction(self.action_restore_previous)
+            menu_help.aboutToShow.connect(self._update_restore_action)
+            self._update_restore_action()
             action_about = QAction("About HeLab", self)
             action_about.triggered.connect(self.show_about_dialog)
             menu_help.addAction(action_about)
@@ -915,7 +931,9 @@ class HelabMainWindow(QMainWindow):
     def show_update_window(self) -> None:
         """The update window (one, modeless): what the last check found."""
         if self.update_window is None:
-            self.update_window = UpdateWindow(self.update_check, self)
+            source = update_settings.is_source(APP_BUILD_INFO)
+            self.update_window = UpdateWindow(self.update_check, self,
+                                              update=self._update_from_window if source else None)
         self.update_window.show()
         self.update_window.raise_()
         self.update_window.activateWindow()
@@ -924,6 +942,84 @@ class HelabMainWindow(QMainWindow):
         """Help › Check for Updates…: the window, and a check (one at a time; it never waits)."""
         self.show_update_window()
         self.update_check.start(manual=True)
+
+    def _asked(self, offer: Offer | None, stash: bool, mode: str = "") -> update_launch.Asked:
+        chosen = self.update_check.settings()
+        return update_launch.Asked(offer, mode or chosen.mode, chosen.repository, APP_BUILD_INFO.branch, stash)
+
+    def _update_from_window(self, offer: Offer, stash: bool, confirmed: bool) -> None:
+        """Update and restart: the dry run first (the window shows it), then, confirmed, the updater itself."""
+        asked = self._asked(offer, stash)
+        self._update_asked = asked
+        if confirmed:
+            self.update_launcher.start(asked)
+        elif not self.update_launcher.dry_run(asked) and self.update_window is not None:
+            self.update_window.plan_ready({"ok": False, "refusals": ["The updater is already running."]})
+
+    def _quit_note(self) -> str:
+        """What quitting for an update does first (the normal quit path: Live off, saves finished)."""
+        live = sum(1 for _, explorer in self._explorers() if explorer.live is not None)
+        note = "Unsaved work is saved first, as when quitting"
+        if live:
+            note += f"; Live is on in {live} tab{'' if live == 1 else 's'}: it stops and its new shots are saved"
+        return note + "."
+
+    def _update_planned(self, result: dict[str, Any]) -> None:
+        asked = self._update_asked
+        if asked is None:
+            return
+        if asked.offer is not None:
+            if self.update_window is not None:
+                self.update_window.plan_ready(result, self._quit_note())
+            return
+        refusals = [str(r) for r in result.get("refusals") or []]
+        if refusals:
+            QMessageBox.warning(self, "Restore previous version", "Can't restore: " + " ".join(refusals))
+            return
+        steps = "; ".join(str(step) for step in result.get("steps") or [])
+        box = QMessageBox(QMessageBox.Icon.Question, "Restore previous version",
+                          f"{steps}. HeLab quits and starts again. {self._quit_note()}",
+                          QMessageBox.StandardButton.Cancel, self)
+        restore = box.addButton("Quit and restore", QMessageBox.ButtonRole.AcceptRole)
+        identify_buttons(box, "restore_previous")
+        box.exec()
+        if box.clickedButton() is restore:
+            self.update_launcher.start(asked)
+
+    def restore_previous_version(self) -> None:
+        """Help › Restore previous version…: the dry run, a question, then the updater."""
+        kept = update_launch.previous_kept(app_folder())
+        if not kept or not update_settings.is_source(APP_BUILD_INFO):
+            QMessageBox.information(self, "Restore previous version", "No previous version of HeLab is kept.")
+            return
+        self._update_asked = self._asked(None, False, str(kept.get("mode", "")))
+        if not self.update_launcher.dry_run(self._update_asked):
+            QMessageBox.information(self, "Restore previous version", "The updater is already running.")
+
+    def _update_restore_action(self) -> None:
+        self.action_restore_previous.setEnabled(
+            update_settings.is_source(APP_BUILD_INFO) and bool(update_launch.previous_kept(app_folder())))
+
+    def _quit_for_update(self) -> None:
+        """The updater holds HeLab's process: quit as File › Quit does (Live off, saves finished first)."""
+        logging.info("Quitting for the update")
+        self.close()
+
+    def _update_failed(self, reason: str) -> None:
+        QMessageBox.warning(self, "HeLab update", reason)
+
+    def show_last_update(self) -> None:
+        """At start (``main``): the last update's outcome, once, and the updater's leftovers tidied."""
+        update_launch.tidy(app_folder())
+        found = update_launch.take_last_outcome(app_folder())
+        if not found:
+            return
+        fine, text = update_launch.outcome_words(found)
+        logging.info("Last update: %s", text)
+        if fine:
+            self.show_status_notice(text, 30.0)
+        else:
+            QTimer.singleShot(0, lambda: QMessageBox.warning(self, "HeLab update", text))
 
     def _update_status_changed(self) -> None:
         """The status-bar mark and Help's entry, from memory."""
@@ -1120,7 +1216,8 @@ class HelabMainWindow(QMainWindow):
             budget.auto_reload = read_plot_auto_reload(settings)
             budget.check()  # The plots' share of a new budget.
         self.apply_auto_scan_visible(read_setting(settings, AUTO_SCAN_VISIBLE_SETTING, typed=True))
-        self.update_check.settings_changed()
+        if (check := getattr(self, "update_check", None)) is not None:  # (A test's window may have none.)
+            check.settings_changed()
 
     @staticmethod
     def _apply_live_settings(settings: QSettings) -> None:

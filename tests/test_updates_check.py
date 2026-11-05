@@ -183,7 +183,7 @@ def test_a_compiled_build_downloads_and_a_source_checkout_updates(qtbot: QtBot, 
     with qtbot.waitSignal(source.finished, timeout=5000):
         source.start(manual=True)
     asked: list[str] = []
-    window = UpdateWindow(source, update=lambda offer: asked.append(offer.key))
+    window = UpdateWindow(source, update=lambda offer, stash, confirmed: asked.append(offer.key))
     qtbot.addWidget(window)
     window.show()
     assert window.update_button.isVisible() and window.download_button.isHidden()

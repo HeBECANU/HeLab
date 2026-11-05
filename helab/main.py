@@ -257,6 +257,11 @@ def main() -> None:
     main_window.show()
     # At most once a day, 30 s from now (Settings › General); only the app schedules it, never a test's window.
     main_window.update_check.schedule_startup()
+    # Started by the updater: tell it this version runs, once the event loop turns (helab/updates/launch.py); and
+    # the last update's outcome, once.
+    from helab.updates import launch as update_launch
+    QTimer.singleShot(0, lambda: update_launch.mark_started(app_folder()))
+    main_window.show_last_update()
     # Registered as a running instance by now, so other HeLabs keep its log file.
     main_window.old_logs.start(read_log_keep(app_settings()))
     if moved:

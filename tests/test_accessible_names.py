@@ -546,7 +546,7 @@ def update_window(cache: FolderCache, path: Path) -> QWidget:
         def get(self, url: str, headers: dict[str, str], done: Callable[..., None]) -> None:
             pass
     check = UpdateCheck(BuildInfo(commit="a" * 40, branch="detached"), str(path), None, transport=Silent())
-    window = UpdateWindow(check, update=lambda offer: None)
+    window = UpdateWindow(check, update=lambda offer, stash, confirmed: None)
     setattr(window, "_check", check)  # (Kept alive with the window.)
     for button in (window.download_button, window.update_button, window.skip_button):
         button.show()

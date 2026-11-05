@@ -220,6 +220,11 @@ class Lab:
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
+def why(last: dict[str, Any]) -> str:
+    """An assertion's message: the outcome and reason first (pytest keeps only a message's first lines)."""
+    return f"{last.get('outcome')}: {last.get('reason')}\n{last.get('_log', '')}"
+
+
 @pytest.fixture
 def lab(tmp_path: Path) -> Iterator[Lab]:
     if shutil.which("git") is None:
@@ -240,7 +245,7 @@ def test_releases_mode_checks_out_the_tag_and_restarts_into_it(lab: Lab) -> None
     assert plan["ok"] and plan["target"] == target and not plan["rebuild"]
     assert lab.head() != target  # (The dry run changes nothing but the fetch.)
     last = lab.run(tag="v0.0.2", target=target)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert lab.head() == target and lab.version() == "0.0.2"
     assert (lab.venv / "marker.txt").read_text() == "old"  # (The lock didn't change: the venv is reused.)
     assert lab.uv_calls() == []
@@ -284,7 +289,7 @@ def test_branch_mode_fast_forwards_to_the_checked_commit_not_past_it(lab: Lab) -
     green = lab.publish("0.0.2")
     lab.publish("0.0.3")  # (Newer, not green: not the target.)
     last = lab.run(mode="branch", branch="main", target=green)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert lab.head() == green and lab.git(lab.checkout, "symbolic-ref", "--short", "HEAD") == "main"
 
 
@@ -314,7 +319,7 @@ def test_local_changes_are_refused_unless_stashed_and_the_stash_is_kept(lab: Lab
     plan = lab.dry_run(mode="branch", branch="main", target=target)
     assert not plan["ok"] and plan["stashable"] and "has changes (helab/build_info.py)" in plan["refusals"][0]
     last = lab.run(mode="branch", branch="main", target=target, stash=True)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert lab.head() == target
     stashes = lab.git(lab.checkout, "stash", "list")
     assert "HeLab update" in stashes and last["stash"].startswith("HeLab update")
@@ -445,7 +450,7 @@ def test_the_venv_is_rebuilt_beside_the_old_one_only_when_the_lock_changed(lab: 
     target = lab.publish("0.0.2", lock="b")
     assert lab.dry_run(mode="branch", branch="main", target=target)["rebuild"]
     last = lab.run(mode="branch", branch="main", target=target)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert "b" in (lab.venv / "marker.txt").read_text()  # (Built from the new lock.)
     assert (lab.base / "checkout" / "venv.previous" / "marker.txt").read_text() == "old"
     calls = lab.uv_calls()
@@ -460,7 +465,7 @@ def test_a_venv_symlink_stays_a_symlink(lab: Lab) -> None:
     lab.venv.symlink_to("venv.nosync")
     target = lab.publish("0.0.2", lock="b")
     last = lab.run(mode="branch", branch="main", target=target)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert lab.venv.is_symlink() and os.readlink(lab.venv) == "venv.nosync"
     assert "b" in (real / "marker.txt").read_text()
     assert (lab.checkout / "venv.nosync.previous" / "marker.txt").read_text() == "old"
@@ -485,7 +490,7 @@ def test_a_new_version_that_exits_before_starting_is_rolled_back(lab: Lab) -> No
     target = lab.publish("0.0.2", lock="b")
     (lab.base / "behaviour").write_text("crash-new")
     last = lab.run(mode="branch", branch="main", target=target)
-    assert last["outcome"] == "rolled back", last["_log"]
+    assert last["outcome"] == "rolled back", why(last)
     assert lab.head() == before and (lab.venv / "marker.txt").read_text() == "old"
     assert [(bool(launch["token"]), launch["version"]) for launch in lab.launches(2)] == [(True, "0.0.2"),
                                                                                          (False, "0.0.1")]
@@ -505,7 +510,7 @@ def test_restore_brings_back_the_previous_commit_and_venv(lab: Lab) -> None:
     plan = lab.dry_run(action="restore", mode="branch", branch="main")
     assert plan["ok"] and plan["target"] == before and plan["rebuild"]
     last = lab.run(action="restore", mode="branch", branch="main")
-    assert last["outcome"] == "restored", last["_log"]
+    assert last["outcome"] == "restored", why(last)
     assert lab.head() == before and lab.git(lab.checkout, "symbolic-ref", "--short", "HEAD") == "main"
     assert (lab.venv / "marker.txt").read_text() == "old"
     assert "b" in (lab.checkout / "venv.previous" / "marker.txt").read_text()
@@ -523,10 +528,11 @@ def test_restore_refuses_when_the_checkout_moved_since(lab: Lab) -> None:
 
 def test_a_second_update_deletes_only_the_venv_before_the_previous_one(lab: Lab) -> None:
     first = lab.publish("0.0.2", lock="b")
-    assert lab.run(mode="branch", branch="main", target=first)["outcome"] == "updated"
+    earlier = lab.run(mode="branch", branch="main", target=first)
+    assert earlier["outcome"] == "updated", why(earlier)
     second = lab.publish("0.0.3", lock="c")
     last = lab.run(mode="branch", branch="main", target=second)
-    assert last["outcome"] == "updated", last["_log"]
+    assert last["outcome"] == "updated", why(last)
     assert "c" in (lab.venv / "marker.txt").read_text()
     assert "b" in (lab.checkout / "venv.previous" / "marker.txt").read_text()
     assert not list(lab.checkout.glob("venv.previous-*"))  # (Q~8 (a): the one before that is gone.)

@@ -12,7 +12,9 @@ import sys
 
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
+from typing import Any
+
+from PyQt6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
 
 from helab.updates import settings as update_settings
 from helab.updates.check import UpdateCheck
@@ -44,14 +46,22 @@ def offer_html(offer: Offer, branch: BranchFacts | None) -> str:
     return text + "<ul>" + "".join(items) + "</ul>"
 
 
-class UpdateWindow(QDialog):
-    """``update`` is called by Update and restart (a source checkout; None: not offered)."""
+# Update and restart's call: (the offer, stash local changes first, confirmed after the dry run).
+UpdateCall = Callable[[Offer, bool, bool], None]
 
-    def __init__(self, check: UpdateCheck, parent: QWidget | None = None, *,
-                 update: Callable[[Offer], None] | None = None) -> None:
+
+class UpdateWindow(QDialog):
+    """``update`` is called by Update and restart (a source checkout; None: not offered): first unconfirmed, for
+    the updater's dry run, whose result ``show_plan`` shows; then, if nothing refused, confirmed ("Quit and
+    update")."""
+
+    def __init__(self, check: UpdateCheck, parent: QWidget | None = None, *, update: UpdateCall | None = None) -> None:
         super().__init__(parent)
         self.check = check
         self.update_action = update
+        self.planned: dict[str, Any] | None = None  # The dry run's result for ``planned_for``
+        self.planned_for = ""
+        self.planning = False
         self.setWindowTitle("HeLab updates")
         self.setModal(False)
         self.resize(640, 420)
@@ -66,6 +76,11 @@ class UpdateWindow(QDialog):
         self.plan_label.setWordWrap(True)
         self.plan_label.hide()
         layout.addWidget(self.plan_label)
+        self.stash_box = identify(QCheckBox("Stash my changes first (git stash; never deleted)"), "update_stash", "",
+                                  "Put this checkout's changes in a git stash before updating")
+        self.stash_box.hide()
+        self.stash_box.toggled.connect(self._stash_toggled)
+        layout.addWidget(self.stash_box)
         buttons = QHBoxLayout()
         self.check_button = identify(QPushButton("Check again"), "update_check_again",
                                      description="Ask GitHub again now")
@@ -117,7 +132,12 @@ class UpdateWindow(QDialog):
         self.download_button.setVisible(not source and offer is not None)
         self.download_button.setEnabled(release is not None)
         self.update_button.setVisible(source and offer is not None)
-        self.update_button.setEnabled(self.update_action is not None and not check.running)
+        if offer is None or offer.key != self.planned_for:
+            self._forget_plan()
+        ready = self.planned is not None and bool(self.planned.get("ok"))
+        self.update_button.setText("Quit and update" if ready else "Update and restart…")
+        self.update_button.setEnabled(self.update_action is not None and not check.running and not self.planning
+                                      and (self.planned is None or ready))
         self.skip_button.setVisible(offer is not None)
         self.skip_button.setText("Don't skip" if found.skipped else "Skip this version")
 
@@ -134,8 +154,44 @@ class UpdateWindow(QDialog):
 
     def _update(self) -> None:
         offer = self.check.status.offer
-        if offer is not None and self.update_action is not None:
-            self.update_action(offer)
+        if offer is None or self.update_action is None:
+            return
+        confirmed = self.planned is not None and bool(self.planned.get("ok")) and self.planned_for == offer.key
+        if not confirmed:
+            self.planning, self.planned_for = True, offer.key
+            self.show_plan("Checking this checkout and fetching the update…")
+            self.refresh()
+        self.update_action(offer, self.stash_box.isChecked(), confirmed)
+
+    def _stash_toggled(self) -> None:
+        """A new choice needs a new dry run."""
+        self._forget_plan(keep_stash=True)
+        self.refresh()
+
+    def _forget_plan(self, keep_stash: bool = False) -> None:
+        if self.planned is None and not self.planning:
+            return
+        self.planned, self.planning = None, False
+        self.show_plan("")
+        if not keep_stash:
+            self.stash_box.setChecked(False)
+            self.stash_box.hide()
+
+    def plan_ready(self, result: dict[str, Any], note: str = "") -> None:
+        """The dry run's result: what will happen (and ``note``: what quitting does), or why it can't."""
+        self.planning = False
+        self.planned = result
+        refusals = [str(r) for r in result.get("refusals") or []]
+        steps = [str(s) for s in result.get("steps") or []]
+        if refusals:
+            text = "Can't update: " + " ".join(refusals)
+            self.stash_box.setVisible(bool(result.get("stashable")) or self.stash_box.isChecked())
+        else:
+            text = "Update and restart will: " + "; ".join([*steps, "quit HeLab and start it again"]) + "."
+            if note:
+                text += " " + note
+        self.show_plan(text)
+        self.refresh()
 
     def _skip(self) -> None:
         found = self.check.status
