@@ -19,7 +19,9 @@ C~1, C~2, C~3, C~5 yes; Q~2 (c); Q~1, Q~3, Q~4, Q~5 as proposed, with Tony in Ch
 | `9da2bee` | Handoff notes the Windows fix |
 | `8620de5` | Per-folder Clears: raw pulses, saved results, converted TXY (Q~6 and Q64.6 (b), Tony 2026-11-05) |
 | `25bdbda` | Review (Tally): [review.md](review.md), 2 Major, 3 Minor, 3 Info |
-| (next) | Review fixes FI-1, FI-2, FI-3, FI-4, FI-5, FI-7, FI-8 (FI-6 stays A~5) |
+| `f57629c` | Review fixes FI-1, FI-2, FI-3, FI-4, FI-5, FI-7, FI-8 (FI-6 stays A~5) |
+| `71f3d91` | Review re-check 1 (Tally): FI-1 to FI-8 fixed; new FI-9 (Minor), FI-10 (Info) |
+| (next) | FI-9, FI-10 |
 
 Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); CoCo pushes from Ground.
 
@@ -128,8 +130,19 @@ Each with a test that fails on `8620de5` (checked by running the new tests again
 - **FI-8:** `fit_screen` on every show (and so every retarget that shows it), not only the first. Test: resized
   past its screen while hidden, reopened → fits.
 - **FI-6:** stays A~5.
+- **FI-9 (re-check 1) its own screen:** `fit_screen` measures the main window's screen for the first show only (Qt
+  places it there), then the window's own (`_shown_once`), so a window moved to a taller monitor keeps its height
+  on reopen and restore. Test with two fake screens (laptop 700 px, monitor 1400 px).
+- **FI-10 (re-check 1) a close isn't a minimise:** only `isMinimized()` keeps the window hooked up; any other hide,
+  a spontaneous one too (a title-bar close a platform reports so), unhooks it and saves its size. For a platform
+  that sends the minimise's hide before its state changes, `changeEvent` (`WindowStateChange` to minimised) hooks
+  it up again as minimised. Tests: a spontaneous non-minimise hide unhooks and saves; the late state change
+  re-hooks and the restore reads once.
 
 ## Checks
+
+- **After FI-9 and FI-10:** full suite **9510 passed, 673 skipped, no reruns**; the five type checks and `ruff check`
+  clean. Three new window tests; the two for FI-9 and FI-10's close fail on `f57629c`'s window (checked).
 
 - **After the review fixes:** full suite **9507 passed, 673 skipped, no reruns**; the five type checks, `ruff
   check` and `mkdocs build --strict` clean. (The first run had 4 failures with 20 reruns, all `tests/test_typing.py`'s
@@ -266,6 +279,8 @@ details' link hidden with the Disk cache row; **Q~5** section order as built.
   Retry / Refresh, then Clear raw pulses…), "Removed …" and the lines read again, and another folder's cache
   untouched. On macOS and Windows: open and close the detail pane several times (the window stays put: FI-3);
   move the main window to the laptop screen and reopen Folder info (it fits: FI-8); minimise it during Live and
-  restore it after a save (FI-5).
+  restore it after a save (FI-5). With an external monitor: move Folder info there, make it taller than the
+  laptop's screen, minimise and restore it and reopen it with ⌘I (it keeps its height: FI-9). Close it with the
+  title bar's button and reopen it (its size kept, and minimising still follows Live: FI-10).
 - **M~2 Windows:** Ctrl+I, the fonts (the title lines' buttons on Windows' wider fonts), and the detail pane at
   1366-pixel-wide screens.

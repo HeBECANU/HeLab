@@ -482,3 +482,71 @@ def test_the_detail_pane_never_moves_the_window_down(setup: Any, qtbot: QtBot) -
         qtbot.waitUntil(lambda: s.window.pane.isVisible())
         button(s.window, "folder_info_detail_close").click()
     assert s.window.frameGeometry().y() == top.y()
+
+
+class FakeScreen:
+    """A screen of ``height`` px available (``fit_screen`` reads only that)."""
+
+    def __init__(self, height: int) -> None:
+        self.height = height
+
+    def availableGeometry(self) -> Any:
+        from PyQt6.QtCore import QRect
+        return QRect(0, 0, 1600, self.height)
+
+
+def test_once_shown_it_fits_its_own_screen_not_the_main_windows(setup: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FI-9: the main window on the laptop (700 px), Folder info moved to a taller monitor (1400 px) and made 1200 px
+    tall: a reopen or a restore keeps its height there. Its first show fits the main window's screen."""
+    s = setup
+    laptop, monitor = FakeScreen(700), FakeScreen(1400)
+    parent = SimpleNamespace(screen=lambda: laptop)
+    monkeypatch.setattr(s.window, "parentWidget", lambda: parent)
+    monkeypatch.setattr(s.window, "screen", lambda: laptop)
+    s.window.resize(600, 1000)
+    s.window.show_folder(s.path, s.explorer)  # (First show: over the main window, on the laptop.)
+    assert s.window.height() <= 700
+    monkeypatch.setattr(s.window, "screen", lambda: monitor)  # (Moved to the monitor.)
+    s.window.resize(600, 1200)
+    s.window.hide()
+    s.window.show_folder(s.path, s.explorer)
+    assert s.window.height() == 1200
+
+
+def test_a_spontaneous_hide_that_isnt_a_minimise_is_a_close(setup: Any) -> None:
+    """FI-10: a title-bar close the platform reports as spontaneous unhooks the window and saves its size; only a
+    minimise keeps it hooked up."""
+    from PyQt6.QtGui import QHideEvent
+
+    class Spontaneous(QHideEvent):
+        def spontaneous(self) -> bool:
+            return True
+    s = setup
+    s.window.show_folder(s.path, s.explorer)
+    finish(s.service, reads(s.service)[0], answer(s.path))
+    s.window.resize(640, 500)
+    app_settings().setValue(FOLDER_INFO_SIZE_SETTING, "1,1")
+    s.window.hideEvent(Spontaneous())
+    assert not s.window._connected and not s.window._away
+    assert str(app_settings().value(FOLDER_INFO_SIZE_SETTING)) == f"{s.window.width()},{s.window.height()}"
+
+
+def test_a_minimise_reported_after_its_hide_still_keeps_it_hooked_up(setup: Any) -> None:
+    """FI-10's other order: a platform that sends the spontaneous hide before the state says minimised; the state
+    change hooks it up again, as minimised, and the restore reads what fell due."""
+    from PyQt6.QtGui import QHideEvent, QShowEvent
+
+    class Spontaneous(QHideEvent):
+        def spontaneous(self) -> bool:
+            return True
+    s = setup
+    s.window.show_folder(s.path, s.explorer)
+    finish(s.service, reads(s.service)[0], answer(s.path))
+    s.window.hideEvent(Spontaneous())  # (Not minimised yet: a close, so far.)
+    s.window.setWindowState(Qt.WindowState.WindowMinimized)
+    assert s.window._connected and s.window._away
+    s.cache.saveEnded.emit(s.path, "saved")
+    assert not reads(s.service)
+    s.window.setWindowState(Qt.WindowState.WindowNoState)
+    s.window.showEvent(QShowEvent())
+    assert len(reads(s.service)) == 1

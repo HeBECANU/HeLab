@@ -17,7 +17,7 @@ import time
 import weakref
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QFont, QGuiApplication, QHideEvent, QShowEvent
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QSplitter, QToolButton,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -148,6 +148,7 @@ class FolderInfoWindow(QWidget):
         self.ask_clear: Optional[Callable[[Question], bool]] = None  # (Tests answer the question.)
         self._away = False  # Minimised (or hidden by the system): still hooked up, reads wait for the restore.
         self._missed = False  # A read was due while away.
+        self._shown_once = False  # (Its own screen from then on, FI-9.)
         identify(self, "folder_info_window", "Folder info")
         self.setWindowTitle("Folder info")
         self.resize(*parse_size(read_setting(app_settings(), FOLDER_INFO_SIZE_SETTING), DEFAULT_SIZE))
@@ -618,8 +619,10 @@ class FolderInfoWindow(QWidget):
     # The window
 
     def fit_screen(self) -> None:
-        """At most the screen's available size (a size saved on a larger monitor), at least ``MIN_SIZE``."""
-        screen = (self.parentWidget() or self).screen()
+        """At most its screen's available size (a size saved on a larger monitor), at least ``MIN_SIZE``. Its screen is
+        the main window's for the first show (Qt places it there), then its own (FI-9: moved to a taller monitor, it
+        keeps its height there)."""
+        screen = self.screen() if self._shown_once else (self.parentWidget() or self).screen()
         if screen is None:
             return
         room = screen.availableGeometry()
@@ -630,6 +633,7 @@ class FolderInfoWindow(QWidget):
     def showEvent(self, a0: Optional[QShowEvent]) -> None:
         super().showEvent(a0)
         self.fit_screen()  # (Every show: its screen may be another, smaller one since, FI-8.)
+        self._shown_once = True
         self._connect()
         if self._away:
             self._away = False
@@ -638,15 +642,24 @@ class FolderInfoWindow(QWidget):
                 self._missed = False
                 self.request_read()
 
+    def changeEvent(self, a0: Optional[QEvent]) -> None:
+        super().changeEvent(a0)
+        if a0 is not None and a0.type() == QEvent.Type.WindowStateChange and self.isMinimized() and self.path:
+            # (A platform that sends the hide before the state says minimised: hooked up again, as minimised.)
+            self._away = True
+            self._connect()
+
     def _minimised(self, a0: Optional[QHideEvent]) -> bool:
-        """A hide by the system (minimised, the app hidden), not by closing: the window comes back as it was."""
-        return self.isMinimized() or (a0 is not None and a0.spontaneous())
+        """Minimised: the window comes back as it was. Any other hide, a spontaneous one too (a close from the title
+        bar, FI-10), is a close: unhooked, its size saved."""
+        return self.isMinimized()
 
     def hideEvent(self, a0: Optional[QHideEvent]) -> None:
         super().hideEvent(a0)
         if self._minimised(a0):
             # Minimised: still hooked up to Live and the cache (FI-5); a read that falls due waits for the restore.
             self._away = True
+            self._connect()  # (Already, unless a hide before the minimise unhooked it.)
             if self._read_timer.isActive():
                 self._read_timer.stop()
                 self._missed = True
