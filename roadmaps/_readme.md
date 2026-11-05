@@ -67,7 +67,8 @@ that branch.
 
 - [ ] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
   for source checkouts and frozen builds alike; then stage 2's self-update for source checkouts (git + uv,
-  [plan](app-updates.md#stage-2-self-update-button)). How HeLab is distributed decides the rest: Q65.1.
+  [plan](app-updates.md#stage-2-self-update-button)): an Update and restart button that quits HeLab, updates
+  the checkout and starts it again. Source first (Q65.1 (b)); what it updates to: Q65.3.
 
 **Focus beyond these: Tony to choose** (candidates under Near term).
 

@@ -68,15 +68,16 @@ All four decided as proposed (Tony in Chat, 2026-11-04: "Q~1 ok / Q~2 ok / Q~3 o
 
 From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
 
-- **Q65.1** How HeLab is distributed, now that v0.0.9 builds the update check and self-update ([plan](../roadmaps/app-updates.md)):
-  (a) source only (the lab PCs' uv venv; the release zips stop); (b) both, source first: lab PCs run from source
-  and update with git + uv (stage 2's source path, in v0.0.9), the frozen zips stay for computers without a
-  setup, with the update check linking their download, and their self-update later (it needs signing: an Apple
-  Developer ID for notarisation, a Windows code-signing certificate against SmartScreen, and IT's say on the lab
-  PCs); (c) both, with frozen self-update in v0.0.9 too. Proposed: (b).
-- **Q65.2** The Scripts panel's Plot button once a plot of that script is open (LR-2): it opens another window either
-  way, and "Add" is kept free for comparing folders (adding a folder's data to an open plot). Proposed: "New",
-  tooltip "Open another Counts per shot plot (1 open)"; or "Another", "+".
+- **Q65.1** How HeLab is distributed: **(b) decided** (Tony in Chat, 2026-11-05: "let's build the run from source
+  version first"): lab PCs run from source and update with git + uv; the frozen zips stay, with the update check
+  linking their download; their self-update later, once signing is settled.
+- **Q65.2** The Plot button's second name while a plot of that script is open (LR-2): **"New" with its tooltip,
+  decided** (Tony, 2026-11-05: "ok new with tooltip"); "Add" kept for comparing folders.
+- **Q65.3** What a source checkout updates to (LR-14; Tony: "keep track to latest with v0.0.9 and I can press a
+  button in helab to close app, pull, and start helab up again"); the plan has tags only. Proposed: a setting,
+  Update from: (a) releases (tag to tag; the lab PCs' default) or (b) a branch (`dev/v0.0.9` now: fast-forward
+  only, never past a commit whose CI isn't green on all three OSes, read from GitHub's check runs); the venv is
+  rebuilt only when `requirements.lock` changed, else reused.
 
 ## Folder info window (block 64; [plan](../roadmaps/folder-info.md))
 
