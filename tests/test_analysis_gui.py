@@ -400,6 +400,54 @@ def test_reversed_manual_bounds_are_reported_in_the_dock_and_settings_tab(
     assert instance.status_label.text() == "⚠ X: min > max, using full extent"
 
 
+class Warned(DatasetAnalysis):
+    """A user-like script whose warnings hold " · " in their own text: one from ``parameter_warnings`` that its
+    ``describe_run`` repeats in its settings, and one in ``describe_result`` only."""
+
+    def get_metadata(self) -> ScriptMetadata:
+        return self.create_metadata("Warned", "test", "Tests", __file__, "tests.warned", "1")
+
+    def get_actions(self) -> List[str]:
+        return ["Plot"]
+
+    def parameters(self, action_name: str) -> List[ParameterSpec]:
+        return [ParameterSpec("scale", "Scale", "int", 1, (1, 10))]
+
+    def parameter_warnings(self, action_name: str, values: Any) -> List[str]:
+        return ["X · Y swapped, using X"]
+
+    def describe_run(self, action_name: str, values: Any, view: Any) -> tuple[str, str]:
+        return "all shots", "scale 1 · ⚠ X · Y swapped, using X"
+
+    def describe_result(self, action_name: str, result: AnalysisResult) -> str:
+        return "fit done · ⚠ T · far events left out"
+
+    def compute(self, action_name: str, context: AnalysisContext) -> Any:
+        return context.view.event_count
+
+    def render(self, result: AnalysisResult, parent: Optional[QWidget] = None) -> QWidget:
+        return QLabel(f"events {result.data}", parent)
+
+
+def test_warnings_holding_the_separator_are_counted_once_each(
+        window: Window, browser: FolderExplorer, qtbot: QtBot, tmp_path: Path) -> None:
+    """The dock's "⚠ N" counts the run's warnings as listed (parameter warnings, constants' notes), and each other
+    "⚠" its descriptions hold once, even when a warning's own text holds " · "; the tooltip has each in full."""
+    run = folder(tmp_path, "run_W", 1)
+    browse(browser, qtbot, str(tmp_path))
+    load(browser, qtbot, run, {1: 3})
+    panel = TreePanelWidget(window.plots)
+    qtbot.addWidget(panel)
+    script = Warned()
+    instance = panel.run_analysis(script.get_metadata(), script, "Plot")
+    assert instance is not None and instance.dock_widget is not None
+    qtbot.waitUntil(lambda: instance.result is not None and instance.result.state == "completed", timeout=10_000)
+    label = source_label(instance.dock_widget)
+    qtbot.waitUntil(lambda: label.text().endswith(" · ⚠ 2"), timeout=10_000)
+    assert label.text() == "Data source: run_W · rev 1 · ⚠ 2"
+    assert label.toolTip().startswith("⚠ X · Y swapped, using X\n⚠ T · far events left out\n")
+
+
 def test_a_mask_from_the_settings_tab_and_its_errors(window: Window, browser: FolderExplorer, qtbot: QtBot,
                                                     tmp_path: Path) -> None:
     """D9: custom circles typed in a plot's settings cut events (the dock says so); circles that

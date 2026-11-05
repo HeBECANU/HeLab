@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 from dataclasses import replace
 from datetime import datetime
@@ -87,9 +88,16 @@ def identify_parameters(settings: QWidget) -> QWidget:
     return settings
 
 
-def flags(text: str) -> List[str]:
-    """The warnings in a " · "-joined line (its parts that start with "⚠ "), without the mark."""
-    return [part[2:] for part in text.split(" · ") if part.startswith("⚠ ")]
+WARNING_MARK = re.compile(r"(?:^| · )⚠ (.+?)(?= · ⚠ |$)")
+
+
+def flags(text: str, listed: Sequence[str] = ()) -> List[str]:
+    """The warnings a run's description (``describe_run``, ``describe_result``: text) holds beyond ``listed``, the
+    run's warnings that come as lists (parameter warnings, constants' notes), which are taken out first: each other
+    "⚠ " mark is one warning, its text running to the next mark or the end, so a warning may hold " · "."""
+    for warning in listed:
+        text = text.replace(f"⚠ {warning}", "")
+    return WARNING_MARK.findall(text)
 
 
 class LinkedAnalysisInstance(QObject):
@@ -726,11 +734,13 @@ class AnalysisInstance(LinkedAnalysisInstance):
         if self.workspace is not None:
             chosen, settings = self._hook("describe_run", ("", ""), result.parameters, self.view)
             record = describe(without_constants(specs), result.parameters, every=True)
-            # What the run warns of, each in full (the dock's line counts them, "⚠ N", and its tooltip lists them).
-            flagged = [*flags(chosen), *flags(settings),
-                       *(self._hook("parameter_warnings", [], result.parameters) if warnings else ())]
-            if (constants := result.resolved_constants) is not None:
-                flagged.extend(constants.notes)
+            # What the run warns of, each in full (the dock's line counts them, "⚠ N", and its tooltip lists them):
+            # the lists as they come, then each other warning its descriptions hold (``flags``).
+            constants = result.resolved_constants
+            listed = [*(self._hook("parameter_warnings", [], result.parameters) if warnings else ()),
+                      *(constants.notes if constants is not None else ())]
+            flagged = [*listed, *flags(chosen, listed), *flags(settings, listed)]
+            if constants is not None:
                 # The constants not at their defaults (all of them, with origins, are in the record).
                 used = describe_constants(constants, result.constant_keys)
                 settings = " · ".join(filter(None, (settings, used and f"constants: {used}",
@@ -742,7 +752,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
                 record = f"{record}\nDrawn with {self._drawn_with}"
             if result.state == "completed":
                 described = self._hook("describe_result", "", result)
-                flagged.extend(flags(described))
+                flagged.extend(flags(described, listed))
                 settings = " · ".join(filter(None, (settings, described)))
             if warnings:
                 settings = " · ".join(filter(None, (settings, f"⚠ {warnings}")))
