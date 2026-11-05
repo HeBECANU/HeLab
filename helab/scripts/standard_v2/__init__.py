@@ -2,6 +2,7 @@
 folder) so that packaged builds include them; the Scripts panel registers ``MODULES`` before the
 first set's (``helab.scripts.standard``), which stays exactly as it was. Their analysis ids are
 ``helab.v2.*``, so no result or preset of the first set is taken for theirs."""
-from helab.scripts.standard_v2 import counts_per_shot, scatter_3d, transfer_fractions, txy_histograms
+from helab.scripts.standard_v2 import (counts_per_shot, scatter_3d, transfer_fractions, txy_histograms, xt_histogram,
+                                       xy_histogram, yt_histogram)
 
-MODULES = (scatter_3d, counts_per_shot, txy_histograms, transfer_fractions)
+MODULES = (scatter_3d, counts_per_shot, txy_histograms, xy_histogram, xt_histogram, yt_histogram, transfer_fractions)

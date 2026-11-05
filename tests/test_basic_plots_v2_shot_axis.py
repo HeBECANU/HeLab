@@ -199,7 +199,7 @@ def test_counts_per_shot_plotly_and_matplotlib_by_time() -> None:
     assert "run_long_named_folder" in figure.layout.title.text  # It leaves HeLab: the input stays.
     line, triangles = figure.data
     assert None in line.x and str(line.x[0]).startswith("20")  # Local times, broken at the stall.
-    assert len(triangles.x) == 1 and triangles.marker.symbol == "triangle-up"
+    assert len(triangles.x) == 1 and triangles.marker.symbol == "triangle-down"
     drawn = counts_per_shot.counts_matplotlib(result)
     axes = drawn.axes[0]
     assert axes.get_xlabel() == "Shot time" and len(axes.lines) == 2

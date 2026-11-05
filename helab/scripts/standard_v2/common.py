@@ -47,8 +47,8 @@ class ShotSeries:
                  fallback_brush: Optional[tuple[int, int, int]] = None) -> None:
         self.line = pg.PlotDataItem(name=name, connect="finite", pen=pg.mkPen(colour, width=1.5 if name else 1),
                                     symbol="o", symbolSize=4, symbolBrush=colour, symbolPen=None)
-        # Triangles: in the series' colour outlined in amber for one of several (the order stays readable), else
-        # amber, as the DLD port's Shot times draws them.
+        # Triangles, pointing down (PyQtGraph's "t", Shot times' ▼; Plotly and Matplotlib the same): in the
+        # series' colour outlined in amber for one of several (the order stays readable), else amber.
         brush = fallback_brush or FALLBACK_COLOUR
         pen = pg.mkPen(FALLBACK_COLOUR, width=1.5) if fallback_brush is not None else None
         self.fallback = pg.PlotDataItem(pen=None, symbol="t", symbolSize=FALLBACK_SIZE, symbolBrush=brush,
@@ -92,7 +92,7 @@ def plotly_series(axis: ShotAxis, values: npt.NDArray[Any], **trace: Any) -> lis
     if flagged.any():
         traces.append(dict(x=plotly_x(axis, axis.x[flagged]), y=y[flagged], mode="markers", showlegend=False,
                            text=[texts[index] for index in np.flatnonzero(flagged)],
-                           marker=dict(symbol="triangle-up", size=10, color=colour,
+                           marker=dict(symbol="triangle-down", size=10, color=colour,
                                        line=dict(color=f"rgb{FALLBACK_COLOUR}", width=2)),
                            hovertemplate=f"%{{text}}<br>{label}<extra></extra>"))
     return traces
@@ -123,7 +123,7 @@ def matplotlib_series(axes: Any, axis: ShotAxis, values: npt.NDArray[Any], colou
     axes.plot(matplotlib_x(axis, x), y_broken, "-o", color=colour, markersize=3, **line)
     flagged = axis.fallback & np.isfinite(y)
     if flagged.any():
-        axes.plot(matplotlib_x(axis, axis.x[flagged]), y[flagged], "^", color=colour, markersize=7,
+        axes.plot(matplotlib_x(axis, axis.x[flagged]), y[flagged], "v", color=colour, markersize=7,
                   markeredgecolor=tuple(value / 255 for value in FALLBACK_COLOUR), markeredgewidth=1.5)
 
 

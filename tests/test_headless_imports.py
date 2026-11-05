@@ -32,7 +32,7 @@ PURE = (
     "helab.utils.ram_buffers",
     *(f"helab.analysis.{name}" for name in (
         "bec", "bec_readout", "bootstrap", "budget_core", "constant_layers", "correlations",
-        "dataset_view", "display_units", "estimates", "fits", "follow", "hotspots", "identity",
+        "dataset_view", "display_units", "estimates", "fits", "follow", "histogram2d", "hotspots", "identity",
         "masks", "orders", "parameters", "peaks", "physics", "presets", "profiles", "release", "result_cache",
         "result_codec", "result_types", "results", "runner_core", "selection", "shot_axis", "spectrum", "stats",
         "trends", "velocity")),
