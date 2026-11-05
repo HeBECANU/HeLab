@@ -189,6 +189,10 @@ def label(instance: AnalysisInstance, name: str) -> str:
     dock = cast(QDockWidget, instance.dock_widget)
     found = dock.findChild(QLabel, name)
     assert found is not None
+    if name == "plot_data_source":  # Its run's detail and settings, moved into Plot info (LR-4), and the record.
+        parts = (found.text(), dock.property("plotSourceDetail"), dock.property("plotSourceSettings"),
+                 dock.property("plotSourceRecord"))
+        return "\n".join(part for part in parts if isinstance(part, str) and part)
     return found.text() + "\n" + found.toolTip()
 
 
@@ -460,7 +464,8 @@ def source_line(instance: AnalysisInstance) -> str:
     dock = cast(QDockWidget, instance.dock_widget)
     found = dock.findChild(QLabel, "plot_data_source")
     assert found is not None
-    return found.text()
+    detail = dock.property("plotSourceDetail")  # (Moved from the line into Plot info: LR-4.)
+    return " · ".join(part for part in (found.text(), detail) if isinstance(part, str) and part)
 
 
 class Quick(Costly):

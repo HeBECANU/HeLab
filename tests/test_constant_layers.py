@@ -253,9 +253,14 @@ def shown(instance: AnalysisInstance) -> ResolvedConstants:
 
 
 def label(instance: AnalysisInstance, name: str) -> str:
-    found = cast(QDockWidget, instance.dock_widget).findChild(QLabel, name)
+    dock = cast(QDockWidget, instance.dock_widget)
+    found = dock.findChild(QLabel, name)
     assert found is not None
-    return found.text() if found.isVisibleTo(instance.dock_widget) else ""
+    text = found.text() if found.isVisibleTo(instance.dock_widget) else ""
+    if name == "plot_data_source":  # Its run's detail and settings line, which LR-4 moved into Plot info.
+        detail, settings = dock.property("plotSourceDetail"), dock.property("plotSourceSettings")
+        text = " · ".join(filter(None, (text, detail or ""))) + (f"\n{settings}" if settings else "")
+    return text
 
 
 def title(instance: AnalysisInstance, key: str) -> str:
@@ -444,7 +449,7 @@ def test_the_histograms_fits_are_keyed_on_constants_and_marked_when_one_changes(
     assert fitted.reuse_key()["constants"]["layers"]["lab"] == {"g": 9.79}
     assert fitted.resolved_constants.origins["g"] == "lab"
     record = cast(QDockWidget, instance.dock_widget).findChild(QLabel, "plot_data_source")
-    assert record is not None and record.toolTip().count("Constants: ") == 1
+    assert record is not None and record.toolTip().count("Constants: ") == 1  # (Wrapped, the same text.)
     assert fitted.constant_keys == ("fall_distance", "fall_time", "g", "mass", "k_B")  # No bimodal fit: no trap
     assert "QE = " not in record.toolTip()
     assert "constants: t_f 416.2187 ms (derived, unconfirmed) · g 9.79 m/s² (lab)" in label(instance, "plot_data_source")

@@ -1447,16 +1447,21 @@ class AnalysisInstance(LinkedAnalysisInstance):
     # Plot info (LR-4)
 
     def _show_info(self) -> None:
-        """The Plot info section's lines: the input in full, the dock's source lines as shown (``plotSourceText``,
-        ``PlotWorkspace``), the data's TXY and the record (memory only)."""
+        """The Plot info section's lines (LR-4): the input in full, the dock's source line as shown
+        (``plotSourceText``, ``PlotWorkspace``), the shots, analysis and saved-result mark (``plotSourceDetail``),
+        the settings in short (``plotSourceSettings``), the data's TXY and the record (memory only)."""
         dock = self.dock_widget
-        source = dock.property("plotSourceText") if dock is not None and not sip.isdeleted(dock) else None
-        record = dock.property("plotSourceRecord") if dock is not None and not sip.isdeleted(dock) else None
+        alive = dock is not None and not sip.isdeleted(dock)
+
+        def text(name: str) -> str:
+            value = dock.property(name) if dock is not None and alive else None
+            return value if isinstance(value, str) else ""
         view = self._shown_view or self.view
-        lines = [f"{self.input_label.text()} · {self.path}",
-                 *(source.splitlines() if isinstance(source, str) else ()),
+        record = text("plotSourceRecord")
+        lines = [f"{self.input_label.text()} · {self.path}", text("plotSourceText"),
+                 text("plotSourceDetail"), text("plotSourceSettings"),
                  f"TXY: {view.txy_text()}" if not self.waiting() else "",
-                 *(record.splitlines()[1:] if isinstance(record, str) else ())]  # (Its first: the analysis, above.)
+                 *record.splitlines()[1:]]  # (The record's first line, the analysis, is in the detail.)
         self.plot_info.set_lines(lines)
         self.plot_info.set_summary_tip(f"{self.input_label.text()}\n{self.path}")
 

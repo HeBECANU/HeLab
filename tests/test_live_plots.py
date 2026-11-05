@@ -179,6 +179,13 @@ def source(instance: AnalysisInstance) -> QLabel:
     return label
 
 
+def source_text(instance: AnalysisInstance) -> str:
+    """The dock's source line with its run's detail and settings line, moved into Plot info by LR-4."""
+    dock = cast(QDockWidget, instance.dock_widget)
+    detail, settings = dock.property("plotSourceDetail"), dock.property("plotSourceSettings")
+    return " · ".join(filter(None, (source(instance).text(), detail or ""))) + (f"\n{settings}" if settings else "")
+
+
 def error_line(instance: AnalysisInstance) -> QLabel:
     label = cast(QDockWidget, instance.dock_widget).findChild(QLabel, "plot_error")
     assert label is not None
@@ -1056,7 +1063,7 @@ def test_shots_arriving_faster_than_a_run_give_one_rerun_on_the_newest(
     script = Gated()
     instance = plot(window, qtbot, script)
     qtbot.waitUntil(lambda: shown_revision(instance) == 1, timeout=10_000)
-    assert "rev 1 · following Live · tests.gated v1" in source(instance).text()
+    assert "rev 1 · following Live · tests.gated v1" in source_text(instance)
     script.go.clear()
     window.plots.live_feed.publish(revision([1, 2]))
     qtbot.waitUntil(lambda: script.started == [1, 2], timeout=10_000)
@@ -1065,14 +1072,14 @@ def test_shots_arriving_faster_than_a_run_give_one_rerun_on_the_newest(
         assert runner.running() == 1  # The run in flight only: nothing queued behind it.
     pending = instance.follow.pending
     assert pending is not None and pending.revision == 5 and instance.follow.waiting() == 3
-    assert source(instance).text().startswith(
+    assert source_text(instance).startswith(
         "Data source: run_L · rev 1 · following Live · updating to rev 2 · 3 new shots waiting · tests.gated v1")
     script.go.set()
     qtbot.waitUntil(lambda: shown_revision(instance) == 5, timeout=10_000)
     assert script.started == [1, 2, 5]  # One coalesced rerun, on the newest revision.
     assert [result.state for result in ended] == ["completed"] * 3  # Nothing cancelled.
     assert instance.follow.pending is None and runner.running() == 0
-    assert source(instance).text().startswith("Data source: run_L · rev 5 · following Live · tests.gated v1")
+    assert source_text(instance).startswith("Data source: run_L · rev 5 · following Live · tests.gated v1")
     assert instance.input_label.text() == "Input: run_L · rev 5 · following Live"
     assert window.plots.panel_right_top_plot_settings.chooser.itemText(0) == "Gated (1) · run_L · rev 5"
     assert cast(AnalysisResult, instance.shown).coverage.shots == (1, 2, 3, 4, 5)
@@ -1431,7 +1438,7 @@ def test_a_plot_follows_live_from_an_empty_folder_to_its_first_shots(
     dock = cast(QDockWidget, instance.dock_widget)
     empty = dock.findChild(QLabel, "plot_empty")
     assert empty is not None and empty.text() == "No shots yet"
-    assert source(instance).text().startswith("Data source: run_E · rev 1 · following Live · 0 shots")
+    assert source_text(instance).startswith("Data source: run_E · rev 1 · following Live · 0 shots")
     live_checks(qtbot, explorer, path, tmp_path, 1)  # Nothing yet.
     write_shot(folder, 1)
     age(folder, 60)
@@ -1441,7 +1448,7 @@ def test_a_plot_follows_live_from_an_empty_folder_to_its_first_shots(
     assert result.data.shots.tolist() == [1] and result.data.counts.tolist() == [2]
     assert result.coverage.shots == (1,) and result.input_signature == cast(Dataset, explorer.displayed_dataset).signature
     assert dock.findChild(QLabel, "plot_empty") is None
-    assert source(instance).text().startswith("Data source: run_E · rev 2 · following Live · 1 shot")
+    assert source_text(instance).startswith("Data source: run_E · rev 2 · following Live · 1 shot")
     write_shot(folder, 2)
     age(folder, 50)
     live_checks(qtbot, explorer, path, tmp_path, 2)
@@ -1673,7 +1680,7 @@ def test_transfer_fractions_highlight_follows_lives_newest_shot(
         qtbot.waitUntil(lambda: instance.shown is not None and instance.shown.data.newest_shot == shot,
                         timeout=10_000)
         assert instance._content is content  # In place.
-    assert "newest shot in red" in source(instance).text()
+    assert "newest shot in red" in source_text(instance)
 
 
 

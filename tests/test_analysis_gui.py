@@ -162,6 +162,13 @@ def source_label(dock: QDockWidget) -> QLabel:
     return label
 
 
+def source_text(dock: QDockWidget) -> str:
+    """The dock's source line with the run's detail and its settings line, as the line read before LR-4 moved
+    those two into the plot's Plot info (``plotSourceDetail``, ``plotSourceSettings``)."""
+    detail, settings = dock.property("plotSourceDetail"), dock.property("plotSourceSettings")
+    return (" · ".join(filter(None, (source_label(dock).text(), detail or ""))) + (f"\n{settings}" if settings else ""))
+
+
 def test_selection_change_mid_run_keeps_the_input(
         window: Window, browser: FolderExplorer, qtbot: QtBot, tmp_path: Path) -> None:
     first, second = folder(tmp_path, "run_A", 2), folder(tmp_path, "run_B", 1)
@@ -186,7 +193,8 @@ def test_selection_change_mid_run_keeps_the_input(
     assert result.data == 7  # run_A's events, not run_B's
     label = source_label(instance.dock_widget)
     window.plots._update_plot_source_label(instance.dock_widget, browser)
-    assert label.text() == "Showing previously loaded data: run_A · rev 1 · tests.blocking v3\nScale 1"
+    assert label.text() == "Showing previously loaded data: run_A · rev 1"  # (One line: LR-4.)
+    assert source_text(instance.dock_widget) == "Showing previously loaded data: run_A · rev 1 · tests.blocking v3\nScale 1"
     assert "Input: " + str(first) in label.toolTip() and "kept in RAM only" in label.toolTip()
     # A new run takes the data shown now.
     view = window.plots.current_dataset_view()
@@ -209,13 +217,13 @@ def test_rerun_uses_the_same_input_and_close_cleans_up(
     assert first is not None and first.data == 2
     assert window.plots.panel_right_top_plot_settings.page(instance.dock_widget) is instance.param_tab
     label = source_label(instance.dock_widget)
-    assert label.text() == "Data source: run_C · rev 1 · tests.blocking v3\nScale 1"
+    assert source_text(instance.dock_widget) == "Data source: run_C · rev 1 · tests.blocking v3\nScale 1"
     instance.parameter_root.child("scale").setValue(4)
     instance.rerun_button.click()
     qtbot.waitUntil(lambda: instance.result is not first, timeout=10_000)
     assert instance.result is not None and instance.result.data == 8
     assert instance.result.input == first.input
-    assert source_label(instance.dock_widget).text().endswith("Scale 4")
+    assert source_text(instance.dock_widget).endswith("Scale 4")
     runner = instance.runner
     assert runner.results.get(instance.result.job_id) is not None
     instance.dock_widget.close()
@@ -382,9 +390,10 @@ def test_reversed_manual_bounds_are_reported_in_the_dock_and_settings_tab(
     instance.rerun_button.click()
     qtbot.waitUntil(lambda: instance.result is not first, timeout=10_000)
     label = source_label(instance.dock_widget)
-    assert label.text() == ("Data source: run_R · rev 1 · 2 shots · helab.txy_histograms v3\n"
-                            "manual range: full extent · bins auto · ⚠ X: min > max, using full extent")
-    assert "Warning: X: min > max, using full extent" in label.toolTip()
+    assert source_text(instance.dock_widget) == ("Data source: run_R · rev 1 · 2 shots · helab.txy_histograms v3\n"
+                                                 "manual range: full extent · bins auto · ⚠ X: min > max, using full extent")
+    assert "Warning: X: min > max, using full extent" in instance.dock_widget.property("plotSourceRecord")
+    assert "Warning: X: min &gt; max, using full extent" in label.toolTip()  # (Wrapped: rich text, LR-3.)
     assert instance.status_label.text() == "⚠ X: min > max, using full extent"
 
 
@@ -409,7 +418,7 @@ def test_a_mask_from_the_settings_tab_and_its_errors(window: Window, browser: Fo
     qtbot.waitUntil(lambda: instance.result is not first, timeout=10_000)
     assert instance.result is not None and instance.result.data.total == 4 and instance.result.data.masked == 3
     label = source_label(instance.dock_widget)
-    assert label.text().endswith("helab.dld.counts_per_shot v1\nmask: 1 cut circle")
+    assert source_text(instance.dock_widget).endswith("helab.dld.counts_per_shot v1\nmask: 1 cut circle")
     assert "Circles (mm) 1000, 1000, 1, cut" in label.toolTip()
     parameter_of(instance.parameter_root, specs["mask_circles"]).setValue("1000, 1000")
     shown = instance.result
@@ -434,7 +443,7 @@ def test_find_hot_spots_from_the_panel(window: Window, browser: FolderExplorer, 
     assert instance.result is not None and instance.result.state == "completed", instance.status_label.text()
     assert isinstance(instance.result.data, density_images.HotSpots)
     assert "bins 0.5 mm · background σ 1 mm · 0.01 false spots per image · 0 hot spots found" in \
-        source_label(instance.dock_widget).text()
+        source_text(instance.dock_widget)
 
 
 def test_histogram_fits_go_in_the_docks_record(window: Window, browser: FolderExplorer, qtbot: QtBot,
@@ -457,15 +466,15 @@ def test_histogram_fits_go_in_the_docks_record(window: Window, browser: FolderEx
     instance.rerun_button.click()
     qtbot.waitUntil(lambda: instance.result is not first, timeout=10_000)
     label = source_label(instance.dock_widget)
-    assert label.text().endswith("bins auto · fit T Gaussian")
-    record = label.toolTip()
+    assert source_text(instance.dock_widget).endswith("bins auto · fit T Gaussian")
+    record = instance.dock_widget.property("plotSourceRecord")  # (The tooltip's text, before it is wrapped.)
     assert "\nFit T: Gaussian" in record  # 7 events: a fit or why there is none
     # The constants appear once, from the run (F0b's Constants line), with the fits' keys only;
     # all at their defaults, so the settings line names none.
     assert record.count("Constants: ") == 1 and "ħ =" not in record
     assert ("\nConstants: h = 848 mm (default, unconfirmed), t_f = 416.0908 ms (derived, unconfirmed), "
             "g = 9.79602 m/s² (default), m = ") in record
-    assert "constants:" not in label.text()
+    assert "constants:" not in source_text(instance.dock_widget)
     # The DLD port's plots draw with PyQtGraph only: no Drawing › Library choice, no "Drawn with".
     assert instance.backend() == "" and "Drawn with" not in record
     assert DRAWING_GROUP not in [child.name() for child in instance.parameter_root.children()]
@@ -546,9 +555,9 @@ def test_scatter_from_the_panel(window: Window, browser: FolderExplorer, qtbot: 
     assert pane.note.text().startswith("All 70 events in range shown · crop keeps")
     assert pane.note.toolTip().startswith("Showing all 70 events in the range")
     label = source_label(instance.dock_widget)
-    # Two lines: source (folder, revision, shots, analysis), then the settings in short form.
-    assert label.text() == ("Data source: run_D · rev 1 · 2 shots · helab.scatter_3d v3\n"
-                            "auto-crop 99 % · points 1.5 px, opacity 0.5")
+    # The source (folder, revision) on the dock's line; shots, analysis and settings in Plot info (LR-4).
+    assert source_text(instance.dock_widget) == ("Data source: run_D · rev 1 · 2 shots · helab.scatter_3d v3\n"
+                                                 "auto-crop 99 % · points 1.5 px, opacity 0.5")
     assert not label.wordWrap() and label.contentsMargins().top() == 0
     assert metadata.file_hash[:12] in label.toolTip()
     # The record lists every parameter, those not in use included.

@@ -12,7 +12,7 @@ from pytestqt.qtbot import QtBot
 
 from helab.views.HelabMainWindow import HelabMainWindow
 from helab.views.plots import script_tree
-from tests.test_debug_runner_menu import load, run_folder, window  # noqa: F401  (``window`` is a fixture)
+from test_debug_runner_menu import load, run_folder, window  # noqa: F401  (``window`` is a fixture)
 
 # RAM only (no data root): nothing is left for a quit to wait for (as tests/test_debug_runner_menu.py).
 pytestmark = pytest.mark.no_auto_data_root

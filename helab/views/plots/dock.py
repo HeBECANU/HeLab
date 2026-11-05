@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSlider
                              QVBoxLayout, QWidget)
 
 from helab.utils.accessible import identify
+from helab.views.plots.plot_info import wrapped_tip
 
 
 # A wrapped object's C++ address (PyQt6's stub types it as returning None).
@@ -76,7 +77,7 @@ class SettingsToggle(QAbstractButton):
         else:
             self.setSizePolicy(policy.Fixed, policy.Ignored)
             action = "Show this plot's settings"
-        self.setToolTip("\n".join(filter(None, (action, self.name, self.summary))))
+        self.setToolTip(wrapped_tip("\n".join(filter(None, (action, self.name, self.summary)))))  # (Wrapped: LR-3.)
         self.updateGeometry()
         self.update()
 

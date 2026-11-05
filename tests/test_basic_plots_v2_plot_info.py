@@ -17,8 +17,8 @@ from helab.views.ElidedLabel import ElidedLabel
 from helab.views.HelabMainWindow import HelabMainWindow
 from helab.views.plots.instance import AnalysisInstance
 from helab.views.plots.plot_info import PlotInfo, TipLabel, rich, wrapped_tip
-from tests.test_basic_plots_v2_buttons import plot_button
-from tests.test_debug_runner_menu import load, window  # noqa: F401  (``window`` is a fixture)
+from test_basic_plots_v2_buttons import plot_button
+from test_debug_runner_menu import load, window  # noqa: F401  (``window`` is a fixture)
 
 pytestmark = pytest.mark.no_auto_data_root  # RAM only, as tests/test_debug_runner_menu.py.
 
@@ -72,6 +72,14 @@ def test_plot_info_holds_the_plots_input_and_record(window: HelabMainWindow, qtb
     assert lines[0] == f"{instance.input_label.text()} · {instance.path}"
     assert any(line.startswith(("Data source: ", "Showing previously loaded data: ")) for line in lines)
     assert any(line.startswith("TXY: ") for line in lines) and any(line.startswith("Covers: ") for line in lines)
+    # LR-4: the dock keeps one line (folder, revision, Live); the run's detail and settings are here.
+    dock = instance.dock_widget
+    assert dock is not None
+    detail = dock.property("plotSourceDetail")
+    assert isinstance(detail, str) and "helab.v2.counts_per_shot v1" in detail and detail in lines
+    line = dock.findChild(QLabel, "plot_data_source")
+    assert line is not None and "helab.v2.counts_per_shot" not in line.text() and "\n" not in line.text()
+    assert rich(line.toolTip()) and "Covers: " in line.toolTip()
     assert info.text.isHidden()
     info.set_open(True)
     assert info.is_open() and instance.info_open and not info.text.isHidden()

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QDockWidget, QLabel, QLineEdit, QMainW
 import pyqtgraph as pg
 
 from helab.views.plots.dock import AnalysisDock, DockTabCloser, FloatingSettings
+from helab.views.plots.plot_info import wrapped_tip
 from helab.views.plots.script_tree import TreePanelWidget
 from helab.views.plots.settings_panel import PlotSettingsPanel
 
@@ -505,9 +506,9 @@ def test_the_header_names_the_plot_and_its_settings(plots: Plots, qtbot: QtBot) 
     plots.panel.set_title(one, "Plot (1) · run_L · rev 2")
     toggle.set_text(summary="last 10 shots · bins auto")
     assert toggle.text_shown() == "Plot (1) · run_L · rev 2 · last 10 shots · bins auto"
-    assert toggle.toolTip() == "Show this plot's settings\nPlot (1) · run_L · rev 2\nlast 10 shots · bins auto"
+    assert toggle.toolTip() == wrapped_tip("Show this plot's settings\nPlot (1) · run_L · rev 2\nlast 10 shots · bins auto")
     toggle.setChecked(True)
-    assert toggle.toolTip().startswith("Hide this plot's settings")
+    assert toggle.toolTip().startswith("<qt>Hide this plot's settings")
     # Space opens and closes it too (it is a button).
     plots.show(qtbot)
     dock = floated(one, qtbot)
