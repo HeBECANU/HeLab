@@ -397,6 +397,9 @@ How to use it:
 - [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
   `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
   retry and 5 of 5 alone. Cause not looked into.
+  The sibling `test_lookup_x_eviction_of_another_result_shows_it_from_disk` timed out the same way (30 s at line 71, the
+  `saved_plot` helper) in Tally's review run on `agent/folder-info` (`f57629c`, 2026-11-05, a slow run: 4m13s against
+  2m38s), and passed on rerun.
 - [ ] `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
   ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
