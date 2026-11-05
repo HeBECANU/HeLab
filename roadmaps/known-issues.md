@@ -225,6 +225,8 @@ How to use it:
   hook. Fix: patch the name the code under test calls (`data_roots`' or `infra`'s), or `gc.collect()`
   before patching. The collected object may have been one of the tests' leaked connections (fixed,
   `46f481f`, below); the patch-the-name fix still stands.
+  Again on macOS: `agent/app-updates` CI 42026547431 (Tests 1/3, job 127242189697, `235859d`, 2026-11-05), setup and
+  teardown, "visited a source folder" from its process-wide `os.lstat` patch; passed on rerun.
 - [ ] `test_folder_cache.py::test_scan_reports_cached_children_without_loading_or_probing_them`: reran
   once on Windows CI 40894080358 (job 123518429856, `agent/txy-index` `1b71c37`): `assert scanned ==
   [str(root)]` at line 1155, with a `helab_io_…` temp folder first. Its process-wide `os.scandir` patch
@@ -431,6 +433,10 @@ How to use it:
   in Ledger's local run on `agent/folder-info` (`4dd31db`, 2026-11-05), 1 in its final run, and 2 under load ~500 in
   Relay's on `agent/app-updates`; passed on rerun, unrelated to both branches. Likely fix: wait briefly (bounded) for
   the children before asserting, or have the helper report its pool's pids.
+- [ ] **The updater on Windows, not yet seen on a lab PC** (Sentry's AU-7, AU-8; `ba22460`): whether a DLL uv
+  hard-linked into HeLab's venv and loaded by another venv's Python is told apart (built: each Python's modules by
+  path, a test on Windows CI), and whether git or uv flash console windows during an update (built:
+  `CREATE_NO_WINDOW`). Until M68.3.
 
 Tony (2026-10-22): note these, no fixes for now; raise them again only if they keep
 happening. Counted over the last 12 CI runs from `gh api repos/TonyXTYan/HeLab/actions/jobs/<id>/logs`

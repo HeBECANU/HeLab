@@ -1,7 +1,9 @@
 # App updates
 
-Added: 2026-10-13. Draft; nothing implemented. Decisions below are Tony's
-(2026-10-13) unless marked open.
+Added: 2026-10-13. **Status:** stage 1 and stage 2's source path done (v0.0.9): the App Updates floor, landed
+`ba22460` on `dev/v0.0.9` (Q65.1 (b), Q65.3, Q68.1–Q68.12; `.ai/sessions/2026-11-05-claude-app-updates/`, the
+mechanics in [release-and-ci](../.ai/architecture/release-and-ci.md#app-updates)). The frozen self-update, its signing and
+the lab self-check stay open below (A68.1). Decisions below are Tony's (2026-10-13) unless marked open.
 Priority and completion: [overview](_readme.md). Builds on
 [app versioning](app-versioning.md).
 

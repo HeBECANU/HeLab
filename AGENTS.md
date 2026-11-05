@@ -191,6 +191,10 @@ Each rule names the area file with the detail.
   - pending saves and results expire after `PENDING_MAX_AGE` (1 h);
   - startup deletes the old diskcache folders and log files beyond the kept count;
   - session-only lists drop their oldest entries;
+  - an update that rebuilt the venv deletes the venv kept before the previous one
+    (`<venv>.previous-<UTC>`) once the new version has started (`updater.DELETE_OLDER_VENV`, Q68.8); the
+    updater's own `venv.new`/`venv.failed`/`pycache-<token>`, and at start its copies, requests and marks
+    over an hour old and update logs beyond 20 (`launch.tidy`);
   - the RAM budget evicts datasets and releases plots (never closes them);
   - a beside conversion deletes its own leftover temporary TXY in that source folder, names
     matching exactly `io_ops.convert.partial()` (`.d_txy_helab_<tag>_<N>.txt.<16 hex>.partial`),
@@ -263,6 +267,9 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 - Never generate `_build_info.json` in the source package.
 - The version bump goes on the PR branch.
 - Never modify a published release or move a tag.
+- HeLab never changes its own code while it or a helper runs: only the updater
+  (`helab/updates/updater.py`, a standard-library copy run by the base Python) changes a checkout, after
+  HeLab, its helpers and its locks are gone; never from an SSH or elevated session.
 
 ## Code map
 

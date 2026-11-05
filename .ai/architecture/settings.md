@@ -36,3 +36,5 @@ is a file, not a setting. Before each folder load the folder is test-imported in
 try-import's time limit is a constant, `PROBE_SECONDS`, not a setting (Q58.2, open).
 
 Window sizes (`str` "W,H" rows, read through `read_setting`): `activity_window_size` ("1080,440", the Activity window) and `folder_info_window_size` ("620,560", Folder info, `03f801e`).
+
+**Update rows** (`ba22460`): `updates_check_at_start`, `updates_repository`, `updates_mode`, `updates_prereleases`, `updates_skipped`, `updates_last_check` ([release-and-ci](release-and-ci.md#app-updates)).

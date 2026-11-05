@@ -359,6 +359,19 @@ and M42.1 on a lab PC with the switch on (one Live session).
   minimising still follows Live); and Cmd+H then back (A67.6).
 - [ ] **M67.2 Folder info on Windows** (the lab PC): Ctrl+I, the title lines' buttons with Windows' wider fonts, and the
   detail pane on a 1366-pixel-wide screen.
+
+## App updates (added 2026-11-06, block 68)
+
+- [ ] **M68.1 A real update from source** (`ba22460`) on this Mac **and** a lab PC (Windows), each in both modes: a
+  branch with a newer green commit (Update and restart → back on the new commit, the status bar's "updated"), then
+  Help › Restore previous version (the old commit, and the old venv if the lock changed); and a release-to-release
+  update on a checkout at a tag. On Windows watch the updater wait for helpers, the venv rename and the relaunch with no
+  console. Never over SSH.
+- [ ] **M68.2 The startup check on a lab PC's network**: Help › Check for Updates… names the reason when it can't
+  reach GitHub, and startup stays quiet.
+- [ ] **M68.3 Windows' locks and consoles** (Sentry's AU-7, AU-8): update while another uv venv's Python with numpy runs
+  (e.g. a second checkout's `python -c "import numpy, time; time.sleep(600)"`): the update goes ahead and isn't held by
+  that venv's DLLs; and no console window opens during the update (git, uv, the venv check).
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

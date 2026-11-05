@@ -151,6 +151,48 @@ releases. Then it builds the offline copy (`HELAB_DOCS_OFFLINE=true`) and runs `
 on it, which fails on any page loading a script from elsewhere (static `<script src>` only). It publishes
 nothing.
 
+## App updates
+
+Landed `ba22460` (the App Updates floor; Q65.1 (b), Q65.3, Q68.1–Q68.12; [plan](../../roadmaps/app-updates.md),
+`sessions/2026-11-05-claude-app-updates/`). Source checkouts first; a frozen build only checks and links its download.
+
+- **`helab/updates/`:** `versions`, `github` (pure: status, channels, replies, the CI rule, ETag cache, the check as a
+  generator) and `updater` (standard library only) are in `PURE`; HeLab's side is `settings`, `settings_rows`,
+  `check`, `launch`, `dialog`.
+- **The check:** `QNetworkAccessManager` on the event loop, 10 s transfer timeout, GETs to `api.github.com` only
+  (`User-Agent: HeLab/<version>`), refused under tests (`HELAB_TEST_SOURCE_GUARD`: give `UpdateCheck` a transport); ETags
+  with trimmed replies in `<app folder>/updates/github-cache.json`; the status at start from the cache alone; the
+  startup check scheduled by `main` only (never by a test's window), 30 s after show, when the last success is over
+  24 h old (`updates_check_at_start`; off, it also serves as "don't offer updates", Q68.10). Requests per mode:
+  releases + tag refs + one compare to `main`; branch: a compare and up to 5 check-run lookups.
+- **Modes and defaults** (Q65.3, Q68.1): a checkout on a branch updates from that branch, fast-forward only; on a
+  tag, from releases; the repository is the one the branch tracks when it is a known one
+  (`build_info.upstream_repository`), else `HeBECANU/HeLab`; no free-text repo.
+- **Branch mode's candidates** (`github.branch_line`, AU-2): the branch's own first-parent line from its tip down to
+  the running commit; never a commit merged in from a side branch; the updater refuses a target not in
+  `git rev-list --first-parent <tip> ^HEAD`. The target is the newest commit whose own CI is green (Q68.2).
+- **The CI rule** (`github.ci_state`): GitHub Actions' runs only; per OS `<os> + py3.13 / Tests…` and `/ Build`
+  present; every `<os> + py3.13 / …` name's newest non-skipped run completed success; a name only skipped, or whose
+  newest run was cancelled, is not green; other jobs don't count; the group count isn't fixed.
+- **The updater** (`helab/updates/updater.py`, copied to `<app folder>/updates/` and run by the base Python): the
+  request fields, `--check`, the handshake (`ready-<token>`); it waits for HeLab's process handle, the locks and any
+  process from the checkout or venv (`ps` by folder prefix, and on macOS `ps -E`'s `__PYVENV_LAUNCHER__` for a framework
+  Python's venv, both only when the command names `helab`; on Windows image paths plus each Python's loaded modules by
+  path); refusals (local changes, untracked files a checkout would overwrite, renames included, SSH or elevated,
+  another HeLab, `git` missing, `uv` missing only when the venv must be rebuilt, Q68.11); the venv rebuilt beside the
+  old one only when `REBUILD_FILES` (`requirements.lock`, `setup.py`, Q68.5) changed (`uv venv --relocatable`, the
+  check in its own bytecode folder, swapped, a `venv` symlink kept), `DELETE_OLDER_VENV` (Q68.8); relaunch with the
+  venv's Python, no console (`HELAB_UPDATE_TOKEN`, popped by `mark_started`, Q68.7); roll back if the new version
+  exits before confirming, never killing a running HeLab (Q68.3); Restore via `previous.json` (branch mode by
+  `git reset --keep`, Q68.4; a restored commit stored as Skip this version); `last.json` written before the older
+  venv is deleted and shown once by the new HeLab on its own start (`after_start` polls for its token's outcome,
+  AU-1, AU-13); `tidy`. Every child through `_run` (UTF-8, no console window). Not checked: that the base Python is
+  outside the checkout (the README's setup), or `git`/`uv` versions.
+- **Test seams:** `HELAB_UPDATER_TEST_ROOT` (required under the guard), `HELAB_UPDATER_TEST_ELEVATED` (only under the
+  guard; CI's Windows runners run elevated), `UpdateLauncher.start_detached`, `launch.checkout` / `venv_prefix`;
+  `tests/test_updates_updater.py`'s `Lab` (bare remote, `insteadOf`, empty global config, `GIT_ALLOW_PROTOCOL=file`,
+  fake uv, fake HeLab).
+
 ## The manual's site
 
 `.github/workflows/docs-site.yml` (Q54.2; DM-1 (a), Tony 2026-11-03) is the only workflow that runs mike or

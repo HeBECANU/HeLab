@@ -67,11 +67,12 @@ that branch.
   (LR-3) and Plot info (LR-4); v1 pinned. Landed `559baa5` (the Basic Plots v2 floor, Vista + Reviewer Lens; Q66.1–Q66.10
   decided, Q66.11–Q66.12 open; M66.1 for Tony).
 
-- [ ] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
+- [x] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
   for source checkouts and frozen builds alike; then stage 2's self-update for source checkouts (git + uv,
   [plan](app-updates.md#stage-2-self-update-button)): an Update and restart button that quits HeLab, updates
   the checkout and starts it again. Source first (Q65.1 (b)); "Update from" defaults to the branch it runs
-  from, releases to choose; a compiled build checks and shows releases only (Q65.3).
+  from, releases to choose; a compiled build checks and shows releases only (Q65.3). Landed `ba22460` (the App Updates floor, Relay + Reviewer
+  Sentry; Q68.1–Q68.12; M68.1–M68.3 for Tony); the frozen self-update stays below (A68.1).
 
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
@@ -205,9 +206,9 @@ Bugs, gaps and flaky tests, open and recently fixed: [known issues](known-issues
   ([plan](analysis-workflow.md#export)) (2026-10-08).
 - [ ] Headless analysis runner sharing GUI jobs/results; add its CLI afterward
   for batch and agent use ([plan](headless-analysis.md)) (2026-10-13).
-- [ ] Update check (notify only): compare the running version with published
+- [x] Update check (notify only): compare the running version with published
   GitHub releases, from source checkouts and frozen builds alike
-  ([plan](app-updates.md#stage-1-notify-only)) (2026-10-13).
+  ([plan](app-updates.md#stage-1-notify-only)) (2026-10-13). Done in `ba22460` (above).
 
 ## Medium term: repeated lab work
 
@@ -231,7 +232,7 @@ Bugs, gaps and flaky tests, open and recently fixed: [known issues](known-issues
 - [ ] Version drift across lab PCs: show which HeLab version and PC converted a folder or saved a
   result, and note when the acquisition PC runs an older release than this one (Tony,
   2026-10-29; with caching v2's [versioning](caching-v2.md#versioning) and the self-update below).
-- [ ] Self-update button for source checkouts (git + uv) and frozen builds
+- [ ] Self-update button for source checkouts (git + uv; done in `ba22460`) and frozen builds
   (verified download, separate updater, rollback), then a lab self-check
   ([plan](app-updates.md#stage-2-self-update-button)) (2026-10-13).
 

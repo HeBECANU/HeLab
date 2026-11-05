@@ -81,6 +81,28 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
   checks and shows the releases (notify, with the download link). The venv is rebuilt only when
   `requirements.lock` changed.
 
+## App updates (block 68; [handoff](sessions/2026-11-05-claude-app-updates/handoff.md))
+
+Built in `ba22460`. Q68.1–Q68.6 and Q68.8 decided by Tony (Chat, 2026-11-05: "yes", "ok"); the rest built as proposed
+(Tony was told they were small and built so; say if one should change: each is one switch).
+
+- **Q68.1** a checkout updates from the repo its branch tracks when that's a known repo, else `HeBECANU/HeLab`.
+- **Q68.2** branch mode moves to the newest commit whose own CI is green on all three OSes (pushes are grouped, so
+  most commits have no run of their own).
+- **Q68.3** a new version that hasn't confirmed its start in 3 min is rolled back only if it exited; a running HeLab
+  is never killed.
+- **Q68.4** Restore in branch mode moves the branch back (`git reset --keep`; refused with local changes).
+- **Q68.5** the venv is rebuilt when `requirements.lock` or `setup.py` changed (`REBUILD_FILES`).
+- **Q68.6** with no matching remote, fetch from the repo's URL without adding one.
+- **Q68.7** relaunch with the venv's Python, no console (as built).
+- **Q68.8** keep one previous commit and venv; the older venv is deleted once the new version has started
+  (`DELETE_OLDER_VENV`; AGENTS.md's housekeeping list).
+- **Q68.9** rebuild the compiled converter after an update if one was built before; a failure warns and uses NumPy
+  (as built).
+- **Q68.10** the startup-check switch doubles as "Don't offer updates"; Help › Check for Updates… stays (as built).
+- **Q68.11** `uv` is needed only when the venv must be rebuilt (as built).
+- **Q68.12** About keeps the provenance text plus three lines (as built).
+
 ## Folder info follow-ups (block 67; [handoff](sessions/2026-11-05-claude-folder-info/handoff.md))
 
 All decided; built in `03f801e`. Tony left the looks to CoCo ("you can decide looks, I'll let you know if I see anything

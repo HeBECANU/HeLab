@@ -551,6 +551,13 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   the window, so it misses Live's saves and doesn't read on reshow ("As of" stays honest); read once on a reshow after a
   spontaneous hide.
 
+## App updates (block 68)
+
+- [ ] **A68.1 The frozen self-update** (A~2; Q65.1 (b)'s later part): `updater` has no frozen path and the update
+  window shows Download only; needs the signing / attestation decision in `roadmaps/app-updates.md`'s Open decisions.
+- [ ] **A68.2 CI marks for every commit in the update window** (A~3): the commit list shows CI only for the (at most
+  5) commits looked at; the rest show none.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

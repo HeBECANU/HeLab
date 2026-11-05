@@ -29,6 +29,8 @@ For the full suite, prefer the parallel form: `-n 12` runs 12 pytest-xdist worke
 harmless with no listeners); a test that shows an `ActivityWindow` hides or closes it (pytest-qt's
 `addWidget` does), so its listener leaves `HISTORY.listeners`.
 
+**App updates' default repository** (`ba22460`): `helab.updates.settings` reads this checkout's `git config` (`build_info.upstream_repository`, read only) to choose the default repository, so a test that depends on it patches `build_info.upstream_repository` and clears `settings._upstream` (CI's branch tracks `TonyXTYan/HeLab`). No test runs the updater against this checkout, its remotes or the network (`HELAB_UPDATER_TEST_ROOT`).
+
 ## Windows
 
 Windows: if pytest crashes during cleanup with `WinError 5` for
