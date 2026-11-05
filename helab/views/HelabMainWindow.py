@@ -194,6 +194,7 @@ class HelabMainWindow(QMainWindow):
 
         # Create Left Panel (File Tree View)
         self.tab_widget.currentChanged.connect(self.on_current_tab_changed)
+        self.tab_widget.currentChanged.connect(self.update_folder_info_action)  # (Its shortcut needs it current.)
 
         # Delay the execution of add_new_folder_explorer_tab until the GUI is loaded
         QTimer.singleShot(10, self._open_first_tab)
@@ -337,7 +338,7 @@ class HelabMainWindow(QMainWindow):
         self.action_convert_folder.setToolTip(f"{path}\n" + (f"Not now: {why}" if why else
                                               "Its raw files to HeLab's TXY, with a profile you pick (this folder only)"))
 
-    def update_folder_info_action(self) -> None:
+    def update_folder_info_action(self, *_: object) -> None:
         """File › Folder info…: for the current tab's selected folder, disabled with none (memory only). Also on
         tab and selection changes, since its shortcut works without the menu showing."""
         if not hasattr(self, "action_folder_info"):
@@ -379,6 +380,12 @@ class HelabMainWindow(QMainWindow):
         manager = self.panel_right_bottom_script_selector.script_manager
         return {metadata.identity().analysis_id: metadata.name for group in manager.get_groups()
                 for metadata in manager.get_scripts_in_group(group)}
+
+    def _folder_info_live_changed(self) -> None:
+        """A tab's Live started or stopped: Folder info's header and This session follow."""
+        window = getattr(self, "folder_info_window", None)  # (Not made yet while the window is built.)
+        if window is not None:
+            window.live_changed()
 
     def _folder_info_settings(self, tab: str) -> None:
         self.show_settings_dialog(tab=tab)
@@ -1811,7 +1818,6 @@ class HelabMainWindow(QMainWindow):
         logging.debug(f"helabMainWindow.on_current_tab_changed: to index {index}")
         # self.action_tab_folder_up.setEnabled(self.tab_widget.tab_back_button_enabled)
         self.update_tool_enabled_state()
-        self.update_folder_info_action()
         current_folder_explorer = self.tab_widget.currentWidget()
         for _, explorer in self._explorers():
             if explorer is not current_folder_explorer and explorer.live is not None:
@@ -2060,6 +2066,7 @@ class HelabMainWindow(QMainWindow):
             current_folder_explorer.loadStateChanged.connect(self._update_folder_details)
             current_folder_explorer.loadStateChanged.connect(self._update_cancel_loading_action)
             current_folder_explorer.liveChanged.connect(self._update_live_action)
+            current_folder_explorer.liveChanged.connect(self._folder_info_live_changed)
             current_folder_explorer.liveChanged.connect(lambda fe=current_folder_explorer: self.plots.follow_live(fe))
             current_folder_explorer.dataLoaded.connect(lambda _, fe=current_folder_explorer: self.plots.follow_live(fe))
             current_folder_explorer.dataLoaded.connect(

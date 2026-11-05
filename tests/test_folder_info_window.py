@@ -215,8 +215,11 @@ def test_while_live_watches_it_reads_after_each_save_and_follows_checks(setup: A
     s.cache.saveEnded.emit(s.path, "saved")  # (Live off: a save alone doesn't read.)
     assert not reads(s.service)
     s.explorer.live_path = s.path
-    s.cache.datasetChanged.emit(s.path)  # (A Live check that brought shots: memory only.)
+    s.window.live_changed()  # (Live on: the header and This session say so.)
     qtbot.waitUntil(lambda: any("Live: on in Tab 1" in text for text in labels(s.window)))
+    s.explorer.calls.clear()
+    s.cache.datasetChanged.emit(s.path)  # (A Live check that brought shots: memory only.)
+    qtbot.wait(600)
     assert not reads(s.service) and any("Live: refreshes by itself" in text for text in labels(s.window))
     s.cache.saveEnded.emit(s.path, "saved")
     s.cache.saveEnded.emit(s.path, "superseded")  # (A second while the first reads: queued, once.)

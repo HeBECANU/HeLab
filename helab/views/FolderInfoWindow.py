@@ -299,6 +299,13 @@ class FolderInfoWindow(QWidget):
         if path == self.path and self.live():
             self._memory_timer.start()
 
+    @pyqtSlot()
+    def live_changed(self) -> None:
+        """A tab's Live started or stopped (``FolderExplorer.liveChanged``): the header and This session say so. Its
+        last save, on stop, reads again through ``saveEnded``."""
+        if self.isVisible() and self.path:
+            self._memory_timer.start()
+
     @pyqtSlot(str, str)
     def _save_ended(self, path: str, outcome: str) -> None:
         """A save of the folder ended: while Live watches it, read (Live saves every N shots and on stop)."""
