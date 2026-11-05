@@ -26,6 +26,8 @@ The buttons at the bottom:
 | Automatically check folder status in view | Check the status of folders in view that have no saved results yet. Also in View › Automatically Check Folder Status in View. | Off | |
 | Reopen plots at start | When HeLab starts, reopen the plots that were open when it last quit, with their settings and places. Each runs again on its folder's data in RAM or the disk cache, never reading the folder itself; without cached data it waits until a tab loads the folder. | On | |
 | Log files to keep | HeLab writes a log file per session, started again every 1 MB (1 MiB on Windows). At startup it deletes the oldest log files beyond this number. Help › Show log folder shows them. | 300 | 1 to 100,000 |
+| Check for updates at start (once a day) | At most once a day, 30 s after HeLab starts, ask GitHub whether a newer HeLab is available ([updating](../how-to/update.md)). Off, only Help › Check for Updates… asks. | On | |
+| Updates from | The repository (`HeBECANU/HeLab` or `TonyXTYan/HeLab`; **Default**: the one the checkout's branch comes from, else `HeBECANU/HeLab`), what a checkout follows (**The branch HeLab runs from**, to commits whose tests passed on macOS, Windows and Ubuntu, or **Releases**; a compiled HeLab always follows releases), and **Include pre-releases**. | Default, the branch (releases when not on a branch), off | |
 
 Under **Directory Settings**:
 
