@@ -14,7 +14,8 @@ C~1, C~2, C~3, C~5 yes; Q~2 (c); Q~1, Q~3, Q~4, Q~5 as proposed, with Tony in Ch
 | `4dd31db` | Live on/off reach the window; HelabMainWindow's partial-fake tests keep working (step 4) |
 | `88b6656` | Settings › Data roots… selects the folder's root (`DataRootsTab.select_root`, CoCo's go) |
 | `2d708e0` | The manual's page (`docs/how-to/folder-info.md`) |
-| (this) | Handoff |
+| `0f09f06` | Handoff |
+| (next) | Times Windows can't show read "unknown" (CI 41998150471's Windows failures) |
 
 Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); CoCo pushes from Ground.
 
@@ -63,6 +64,11 @@ Not pushed by me: `github.com` doesn't resolve from this Mac (nor from Ground); 
 - `LiveController.set_write_beside` (C~3): a public name over the existing asked path, for the Flags toggle.
 
 ## Checks
+
+- **After the Windows fix:** full suite 9490 passed, 673 skipped, **no reruns**; five type checks clean. CI
+  41998150471 (`4dd31db`) was red on Windows Tests (1/3) and (2/3) from `when()`'s `OSError: [Errno 22]` on the
+  tests' small timestamps (fixed in the commit after `0f09f06`); its "RuntimeError: bad rev 1" is
+  `test_live_plots`' deliberate fake failure (that test passed).
 
 - Full suite (`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`) at `2d708e0`: **9489 passed,
   673 skipped, 1 rerun**: `tests/test_convert_helab.py::test_a_killed_helpers_workers_exit` ("AssertionError: the
