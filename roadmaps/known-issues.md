@@ -365,6 +365,8 @@ How to use it:
   before `e8a28a1`); passed on retry and 5 of 5 alone. Cause not looked into. Again on Windows CI, same line:
   `agent/docs-a54-1` 41587185042 (Tests 2/3, job 125755380835, `9631294`) and Ground 41595342227 (`dc86412`),
   both passed on rerun (2026-11-03).
+  Again on Windows CI, `agent/folder-info` 42001112700 (Tests 2/3, job 127156351562, `9da2bee`, 2026-11-05),
+  line 125.
 - [ ] `test_live_convert.py::test_a_conversion_refused_offline_stops_auto_convert_and_says_so` (both cases): macOS CI
   on `agent/quick-fixes-10`, 41758844145 (`be2f0e5`, Tests 1/3, job 126341476955, `[as it comes]`) and 41770471113 (`1ab4864`, Tests 2/3,
   job 126378820117, `[a Live check comes due while offline]`), one RERUN each, passed on rerun. The `waitUntil` (5 s)
@@ -418,7 +420,9 @@ How to use it:
   Seen as a RERUN of `test_text_length.py::test_a_long_folder_name_doesnt_widen_the_main_window_or_hide_the_live_phrases_end`
   on macOS, Ground CI 41981742368 (Tests 2/3, job 127093226610, `e638a22`, 2026-11-05). That test now finds the
   Live phrase anywhere in the text (`98a23af`); tests shouldn't match the status bar's start. The carried state
-  itself isn't reset yet.
+  itself isn't reset yet. Again on Windows CI, `agent/folder-info` 42001112700 (Tests 2/3, job 127156351562, `9da2bee`): the
+  notice in front shortened the Live phrase so its end ("latest shot 3 · 1 min") was elided, so `98a23af` isn't
+  enough; the state has to be reset between tests (sent to Mendy, 2026-11-05).
 - [ ] **`test_share_detection` patches `os.path.realpath` process-wide**: a leftover `IOService` request then fails
   `Path.resolve()` in the helper launch ("Clean up disk cache failed … share_of stat'ed a source path"), a warning
   only, seen in Mendy's local runs for LR-15 (2026-11-05). Not a RERUN yet; the patch should be scoped to the call it
