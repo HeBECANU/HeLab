@@ -1458,10 +1458,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
             return value if isinstance(value, str) else ""
         view = self._shown_view or self.view
         record = text("plotSourceRecord")
-        lines = [f"{self.input_label.text()} · {self.path}", text("plotSourceText"),
-                 text("plotSourceDetail"), text("plotSourceSettings"),
-                 f"TXY: {view.txy_text()}" if not self.waiting() else "",
-                 *record.splitlines()[1:]]  # (The record's first line, the analysis, is in the detail.)
+        # The record's first line, the analysis, is in the detail; its next, "Input: <path> · revision N", names
+        # the folder in full (before a result, the path is given here).
+        lines = [text("plotSourceText"), text("plotSourceDetail"), text("plotSourceSettings"),
+                 view.txy_text() if not self.waiting() else "",  # ("TXY: External", "TXY: 3 HeLab (m19v1)…")
+                 *(record.splitlines()[1:] if record else (f"Input: {self.path}",))]
         self.plot_info.set_lines(lines)
         self.plot_info.set_summary_tip(f"{self.input_label.text()}\n{self.path}")
 

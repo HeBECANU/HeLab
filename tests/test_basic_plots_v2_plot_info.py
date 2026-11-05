@@ -69,8 +69,8 @@ def test_plot_info_holds_the_plots_input_and_record(window: HelabMainWindow, qtb
     assert instance.path in instance.input_label.toolTip() and rich(instance.input_label.toolTip())
     assert info.toggle.accessibleName() == "Plot info" and info.toggle.objectName() == "plot_info"
     lines = info.lines()
-    assert lines[0] == f"{instance.input_label.text()} · {instance.path}"
-    assert any(line.startswith(("Data source: ", "Showing previously loaded data: ")) for line in lines)
+    assert lines[0].startswith(("Data source: ", "Showing previously loaded data: "))  # The dock's line.
+    assert any(line.startswith(f"Input: {instance.path} · revision 1") for line in lines)  # The folder in full.
     assert any(line.startswith("TXY: ") for line in lines) and any(line.startswith("Covers: ") for line in lines)
     # LR-4: the dock keeps one line (folder, revision, Live); the run's detail and settings are here.
     dock = instance.dock_widget
@@ -80,12 +80,14 @@ def test_plot_info_holds_the_plots_input_and_record(window: HelabMainWindow, qtb
     line = dock.findChild(QLabel, "plot_data_source")
     assert line is not None and "helab.v2.counts_per_shot" not in line.text() and "\n" not in line.text()
     assert rich(line.toolTip()) and "Covers: " in line.toolTip()
-    assert info.text.isHidden()
+    assert info.body.isHidden()
     info.set_open(True)
-    assert info.is_open() and instance.info_open and not info.text.isHidden()
-    assert info.text.wordWrap() and instance.path in info.text.text()
+    assert info.is_open() and instance.info_open and not info.body.isHidden()
+    assert info.body.maximumHeight() <= info.text.fontMetrics().lineSpacing() * 12  # Scrolls beyond.
+    assert info.text.wordWrap() and instance.path in info.text.text().replace("\u200b", "")
+    assert f"run_\u200b0042_\u200bbragg" in info.text.text()  # A long name wraps after its underscores.
     info.toggle.click()
-    assert not info.is_open() and info.text.isHidden()
+    assert not info.is_open() and info.body.isHidden()
 
 
 def test_v1_plots_get_the_section_too(window: HelabMainWindow, qtbot: QtBot, tmp_path: Path) -> None:  # noqa: F811

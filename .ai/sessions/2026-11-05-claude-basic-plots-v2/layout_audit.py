@@ -72,7 +72,9 @@ def audit(top: QWidget, case: str) -> None:
     top_rect = top.rect()
     widgets = [w for w in top.findChildren(QWidget) if w.isVisibleTo(top) and w.width() > 0 and w.height() > 0]
     for w in widgets:
-        if type(w).__name__ in ("ElidedLabel",) or isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)):
+        # (An ElidedLabel, or a subclass such as plot settings' TipLabel, elides by design: never "cut".)
+        if (any(cls.__name__ == "ElidedLabel" for cls in type(w).__mro__)
+                or isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox))):
             continue
         hint, minimum = w.sizeHint(), w.minimumSizeHint()
         if isinstance(w, (QAbstractButton, QComboBox, QAbstractSpinBox, QLineEdit)) and hint.isValid():

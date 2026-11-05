@@ -12,11 +12,22 @@ import html
 from typing import Iterable, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from helab.utils.accessible import identify
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.gaps import LABEL_GAP
+
+# Qt wraps a label's words after "/" and "-" but not "_", so a folder name like run_0042_bragg_scan_… was cut at
+# the panel's edge: the shown text gets a zero-width break after each "_" (``lines()`` keeps the plain text).
+BREAK = "\u200b"
+BODY_LINES = 12  # The open section's most height, in lines: more scrolls (the settings below keep their room).
+
+
+def breakable(text: str) -> str:
+    """``text`` as shown in a wrapped label: a place to wrap after each underscore."""
+    return text.replace("_", "_" + BREAK)
+
 
 def rich(text: str) -> bool:
     """Whether Qt shows ``text`` as rich text (and so wraps it as a tooltip): it opens with a tag, as Qt's own
@@ -82,9 +93,19 @@ class PlotInfo(QWidget):
         self.text.setTextFormat(Qt.TextFormat.PlainText)
         self.text.setWordWrap(True)
         self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)  # (Its wrapped lines' height at its width.)
+        self.text.setSizePolicy(policy)
         self.text.setContentsMargins(LABEL_GAP, 0, 0, 0)
-        layout.addWidget(self.text)
+        # Open, at most BODY_LINES high and scrolling beyond, never cut at the bottom nor squeezing the page.
+        self.body = QScrollArea(self)
+        self.body.setFrameShape(QFrame.Shape.NoFrame)
+        self.body.setWidgetResizable(True)
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body.setWidget(self.text)
+        self.body.setMaximumHeight(self.text.fontMetrics().lineSpacing() * BODY_LINES)
+        self.body.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        layout.addWidget(self.body)
         self._lines: tuple[str, ...] = ()
         self._show_state(False)
 
@@ -101,7 +122,7 @@ class PlotInfo(QWidget):
     def set_lines(self, lines: Iterable[str]) -> None:
         """The lines shown while open (each wraps; empty lines are left out)."""
         self._lines = tuple(line for line in lines if line)
-        self.text.setText("\n".join(self._lines))  # (A word-wrapped label wraps a long name anywhere.)
+        self.text.setText("\n".join(breakable(line) for line in self._lines))
 
     def set_summary_tip(self, text: str) -> None:
         """The closed line's tooltip: its whole text, wrapped."""
@@ -114,4 +135,4 @@ class PlotInfo(QWidget):
 
     def _show_state(self, opened: bool) -> None:
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
-        self.text.setVisible(opened)
+        self.body.setVisible(opened)

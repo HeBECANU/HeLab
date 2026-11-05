@@ -1,0 +1,14 @@
+Plot settings audit (layout_audit.py -k plot_settings, real display, Fusion, SF Mono 12): 45 cases
+(3 windows x 3 panel widths x 5 plots: v2 Counts per shot, T X Y histograms, XY histogram, Transfer
+fractions; v1 Counts per shot), a long folder name. Findings before 4b / after, Plot info closed / open:
+total 1408 -> 828 / 828
+  225 ->     0 /     0  tooltip too wide: QLabel[plot_data_source]
+  175 ->     0 /     0  label cut: QLabel[plot_data_source]
+   46 ->    46 /    45  touching: QLabel[]
+   45 ->     0 /     0  tooltip too wide: ElidedButton[txy_source]
+   45 ->     0 /     0  tooltip too wide: QCheckBox[txy_keep]
+   45 ->     0 /     0  label cut: QLabel[plot_input]
+   45 ->     0 /     0  tooltip too wide: QLabel[plot_input]
+   17 ->    17 /    18  label cut: QLabel[]
+Unchanged (out of this floor: compact by design or Ground's): the parameter tree's reset buttons (squeezed),
+its checkbox tips (plain, long), the toolbar's Live/auto-convert buttons, 'Preset:' at 250 px (touching/cut).
