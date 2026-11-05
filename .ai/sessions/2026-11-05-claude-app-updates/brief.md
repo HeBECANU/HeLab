@@ -4,8 +4,10 @@ Coordinator: CoCo, 2026-11-05. **Draft: the floor opens when a slot is free and 
 floors). Tony, in the live run (LR-14, relayed by Side): "keep track to latest with v0.0.9 and I can press a button
 in helab to close app, pull, and start helab up again". Decided: **Q65.1 (b)**, source first: stage 1 (notify) plus
 stage 2's source path in v0.0.9; frozen builds keep the stage-1 notice and link their download, and their
-self-update comes later. **Open: Q65.3**, what a source checkout updates to (releases or a branch); the floor builds
-what Tony picks and, if he hasn't picked by the design's go, designs both. One Worker; one Reviewer at landing.
+self-update comes later. **Q65.3 (decided):** a source checkout's "Update from" setting defaults to **the branch
+HeLab runs from** (fast-forward only, to commits whose CI is green on all three OSes), with **releases** (tag to
+tag) to choose; a checkout on a tag defaults to releases; a compiled build only checks and shows releases. Both
+modes are built. One Worker; one Reviewer at landing.
 
 ## Read first
 
@@ -38,7 +40,7 @@ Base: `dev/v0.0.9` at the commit CoCo names when the floor opens. Branch: `agent
      version, the repo list (`HeBECANU/HeLab`, `TonyXTYan/HeLab`; found among the checkout's remotes **by URL**,
      never by remote name), "Include pre-releases", and how it shows (Help menu and a small status-bar mark, no
      banner, no vertical space).
-   - **Q65.3's two modes for a source checkout:** (a) releases: fetch, check the tag's commit is on that repo's
+   - **Q65.3's two modes for a source checkout** (both built; the default from what the checkout is on): (a) releases: fetch, check the tag's commit is on that repo's
      `main`, check out the tag (detached); (b) a branch: fast-forward only, to the newest commit whose CI is green
      on all three OSes (GitHub's check runs, read without a token), never past a red or unfinished one; how the
      setting reads and what each mode shows in About.
@@ -64,7 +66,7 @@ Base: `dev/v0.0.9` at the commit CoCo names when the floor opens. Branch: `agent
    Send CoCo the design with `maestri ask "CoCo" …` and wait for the go.
 2. **Stage 1:** the version status, the check, the Help menu and status-bar notice, Settings › General's rows,
    About; with tests.
-3. **The updater** and its refusals, for the mode(s) decided; with tests on temporary repos.
+3. **The updater** and its refusals, in both modes; with tests on temporary repos.
 4. **Update and restart** from HeLab, Restore previous version, the started mark. ◆ Report after this step, with
    the suite, the type checks and a pushed branch with its CI run (Windows matters most here).
 5. **Docs proposals** in your handoff (`handoff.md`): the architecture section (`release-and-ci.md` or a new
@@ -78,7 +80,7 @@ Base: `dev/v0.0.9` at the commit CoCo names when the floor opens. Branch: `agent
 - Stage 2's acceptance in the plan, for the source path: every refusal with its reason; the updater waits for HeLab
   and all its helpers before changing a file; a failed update leaves the previous version working; Update and
   restart comes back on the new commit; Restore previous version brings back the old commit and venv.
-- Branch mode (if built) never moves to a commit without green CI on all three OSes, and never rewrites history
+- Branch mode never moves to a commit without green CI on all three OSes, and never rewrites history
   (fast-forward only).
 - **The invariants hold:** the GUI never waits on the network, a helper or the updater; nothing is sent but GETs to
   `api.github.com` with `User-Agent: HeLab/<version>` (no telemetry); no free-text repo; HeLab never changes code it
