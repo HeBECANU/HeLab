@@ -187,3 +187,82 @@ only) would keep "never taller than its screen" on every open. Worth adding to M
   how: through `store._unverified_mounts`, as `constants` (once FI-2 is fixed).
 - FI-4 as a provisional `Q~` for Tony (the raw pulses question's wording); FI-3 and FI-8 into M~1 (open and close
   the detail pane several times on macOS and on Windows; reopen after moving to the laptop screen).
+
+## Re-check 1 (fix diff `25bdbda..f57629c`)
+
+Reviewer, 2026-11-05. Read the fix diff only (`git diff 25bdbda f57629c`: one commit, `f57629c`), against the
+findings above.
+
+### Checks rerun
+
+- **Full suite** (run because the fixes reach the shared `clear_raw` / `clear_results` branches of `admin.py`):
+  `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-tally` at `f57629c`: **9507 passed,
+  673 skipped, 2 warnings, 1 rerun** (`.ai/temp/review-suite-recheck1.txt`). The rerun:
+  `tests/test_result_lifecycle.py::test_lookup_x_eviction_of_another_result_shows_it_from_disk`, rerun reason
+  "pytestqt.exceptions.TimeoutError: waitUntil timed out in 30000 milliseconds" at `tests/test_result_lifecycle.py:71`
+  (the `saved_plot` helper waiting for a result's save); passed on rerun. Not this branch: neither the range nor the
+  fix touches the result-cache code or that test. It is the same failure as known-issues' entry for
+  `test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy` ("`waitUntil` timed out (30 s) at
+  line 71 … under load"), here on a sibling test. The machine was loaded: this run took 4 min 13 s against 2 min 38 s
+  for the first one, with the other floors' work running beside it. Proposed: widen that known-issues entry to "any
+  test through `Lab.saved_plot` (line 71)" and add this one, `agent/folder-info` at `f57629c`, 2026-11-05.
+- **Type checks**: the five and `ruff check` clean (`.ai/temp/review-types-recheck1.txt`).
+- **My two repros** (scratchpad) now pass: after Live's stop, its save submits one read; and with the real opener on
+  an unverified hinted mount the read answers `root_state "unverified"` ("The volume of … is not yet verified"),
+  `"rooted"` once it is verified.
+- CI: CoCo's run 42019616921, green on every job and 0 RERUN by CoCo's reading. I didn't reread its logs.
+
+### Findings
+
+- **FI-1 fixed.** `_save_ended` reads on `saved` / `superseded` for the window's folder whether or not Live is on, so
+  the stop's save reads; a rejected save or another folder's doesn't. Loads' saves now read too; this is still
+  bounded by `Reads` and happens only while the window is visible or minimised. New test
+  `test_it_reads_after_lives_save_on_stop`; the manual now says so.
+- **FI-2 fixed.** `io_ops.folder_info.folder_key` turns a `NoDataRoot` on a mount in `store._unverified_mounts` into
+  `VolumeUnverified`, as `constants` and the offline listing do. The read says "unverified". `clear_raw` and
+  `clear_results` with `paths` refuse via `_refuse_unverified`, and the converted Clear raises with no by-path
+  fallback. The model greys all three Clears (`UNVERIFIED`). Other callers send no `verified_volumes`, so their
+  `_unverified_mounts` is empty (`stores.py:114`) and Settings' Clears and Clear loaded data cache behave as before.
+  The tests use the real opener on a hinted mount (the `usb` fixture) and check that nothing was removed (raw rows,
+  results and the by-path temp TXY). The `_path_key` fakes are gone.
+- **FI-3 fixed in the code; the screen check stays with M~1.** `open_detail` takes the position from
+  `frameGeometry()` and calls `move` only when the screen clamp shifts it, while `resize` sets the size. The clamp
+  accounts for the frame's width. `test_the_detail_pane_never_moves_the_window_down` can't show the title bar's creep
+  offscreen (no frames), as its docstring says. The handoff's statement that it "fails on the old code offscreen"
+  is about the clamp's x: I didn't verify that.
+- **FI-4 fixed** (CoCo's wording): "They're cached again the next time this folder loads.", or "They aren't cached
+  again: …" for Don't cache or a TXY only policy (`policy_id` from the folder's choice, else Settings'). Tested
+  for all three cases.
+- **FI-5 fixed.** A hide while minimised, or a spontaneous one, keeps the window hooked up and holds due reads (one
+  read on the restore, plus This session). A non-spontaneous hide (a close) unhooks as before and saves the size.
+  The test drives `hideEvent`/`showEvent` directly, since offscreen sends neither on minimise.
+- **FI-6 open as A~5** (agreed; no change expected here).
+- **FI-7 fixed.** Amber "Couldn't read the saved …" lines head Flags (prefs, Write TXY beside), TXY list and policy,
+  and Constants when that part answered `error`; none appear on a clean read. Tested.
+- **FI-8 fixed, but see FI-9.** `fit_screen` now runs on every show.
+
+### FI-9 Minor (new): every show now clamps to the *main window's* screen
+
+`helab/views/FolderInfoWindow.py:622` (`fit_screen`), with `showEvent` calling it on every show since FI-8's fix.
+
+**What is wrong.** `fit_screen` measures `(self.parentWidget() or self).screen()`, the main window's screen. That was
+right for the first show, which Qt places over the parent. Now it also runs on every reopen and on every restore
+from minimise (FI-5's restore is a show).
+
+**Failure scenario.** The main window is on the laptop's screen (800 px available) and the user has moved Folder info
+to a 1440 px external monitor and made it 1200 px tall. Each time they minimise and restore it, or reopen it with ⌘I,
+the window shrinks to 800 px, though its own screen has room. Nothing is lost; the size is just not kept.
+
+**Fix.** Once the window has been shown, measure its own screen: `screen = self.screen() if self._shown_once else
+(self.parentWidget() or self).screen()`. A new window, or one never shown, uses the parent's. Add the two-monitor
+case to M~1.
+
+### FI-10 Info (new): check a title-bar close on a real screen
+
+`helab/views/FolderInfoWindow.py` (`_minimised`): a hide counts as "minimised" when `isMinimized()` or the event is
+spontaneous. A close from the title bar should give a non-spontaneous hide (Qt's `close()` hides through
+`setVisible(false)`), so the window unhooks and saves its size. If a platform delivered it as spontaneous, the window
+would stay hooked up while closed and skip saving its size: harmless, but worth one look in M~1 (close it with the
+title bar's button, reopen it, check the size was kept).
+
+**Open findings after Re-check 1:** FI-9 (Minor), FI-10 (Info, M~1), FI-6 (Info, A~5). No Blocker or Major.
