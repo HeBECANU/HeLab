@@ -208,3 +208,87 @@ the v2 classes run through the runner, or drop the claim from the handoff.
 - **`plots-and-scripts.md`'s v2 section:** XY, XT and YT's identity and hash cover only the plane stubs, so a change
   to `histograms_2d.py` or `common.py` bumps the plots' `version` (BP-3).
 - **`known-issues.md`:** nothing. No RERUN was seen in the suite or in CI.
+
+## Re-check 1
+
+Reviewer (Lens), 2026-11-05. Scope:
+
+- the fix diff `git diff cb6a5bf ffb8ea4`, a commit per finding (`259e50a` … `ffb8ea4`);
+- the handoff update `e837ead`.
+
+`8bae2b1`, the `dev/v0.0.9` merge, is left out.
+
+### Checks rerun
+
+At HEAD `e837ead`, after `source .ai/local/floor-env.sh`; output in `.ai/temp/` (not committed):
+
+- **Full suite.** The fixes reach shared code: every plot's dock line and its tooltip in `workspace.py`, and the
+  dock's event filter and the warnings in `instance.py`. So I ran the whole suite (`pytest -n 4 --reruns 5
+  --reruns-delay 1 --basetemp=.ai/temp/pytest-lens`, `.ai/temp/review-suite-2.txt`): **9,551 passed, 673 skipped,
+  0 RERUN**. The 2 warnings are the same pyqtgraph deprecation as before.
+- **Type checks** (`.ai/temp/review-types-2.txt`): `mypy helab/ --strict` (225 files), `mypy tests --strict` (224),
+  `pyright helab tests`, `mypy helab/ --strict --platform win32` and `pyright --pythonplatform Windows helab
+  tests`: **all clean**.
+- **Reproductions.** I reran my scratch scripts for BP-1, BP-2 and BP-3 against the fixed code; results under each
+  finding below.
+- **CI** 42017707256 is as relayed (green, 0 RERUN in its 12 logs). I didn't refetch its logs.
+
+### Findings
+
+- **BP-1 (Major): fixed** (`259e50a`).
+  - In manual mode, `compute` passes keep = 1.0, so an unset or reversed shown axis covers the full extent of the
+    events summed.
+  - My repro now matches v1: X −0.0147…1.0099 with 0 outside, for both the unset and the reversed axis, and the
+    note is true.
+  - The new test sets keep to 50 % per plane, which would have failed before. The manual's View range text says
+    the same.
+- **BP-2 (Minor): fixed** (`aebb27f`).
+  - Every drawing, in each library, is marked with its axis (`common.drawn_on`), and `update` refuses another axis
+    (`same_axis`) before any library branch.
+  - The instance passes `update` the same widget `draw` returned (`_content`, `instance.py:687-698`), so the mark is
+    read where it was set. Live updates stay in place.
+  - My repro: `update` now returns False on the switch, so the plot is drawn anew. The every-library test asserts
+    the refusal and an in-place update of the new drawing.
+- **BP-3 (Minor): fixed** (`bb85a67`).
+  - `histograms_2d.py` is registered itself, with `Histogram1XY`, `Histogram2XT` and `Histogram3YT`; the three stubs
+    are removed.
+  - My repro: `helab.v2.xy_histogram v1 · histograms_2d.py (sha256 68073806a168)`, which is that file's own hash.
+  - Unchanged: the analysis ids, names, versions, run-button IDs (from the analysis id) and the tree order (XY, XT,
+    YT, asserted). The abstract base is skipped, with a log line.
+  - The class names change the script ids, but presets and arrangements find plots by analysis id, and v2 hasn't
+    shipped.
+  - The handoff now proposes the doc note on `common.py` and the hash.
+- **BP-4 (Minor): fixed** (`5f9ca07`).
+  - `AnalysisInstance.eventFilter` refreshes Plot info on the dock's `plotSourceText` `DynamicPropertyChange`, so the
+    main window's relabel reaches it. The new test, where another tab loads another folder, covers it.
+  - On close, the dock leaves `dock_widgets` before the page and dock are deleted, so nothing relabels it while
+    Plot info is going.
+  - A refresh can run twice when the instance relabels its own dock (`_show_follow`); this is harmless.
+- **BP-5 (Minor): fixed** (`4bef5dc`). The dock line is in backticks, and the paragraph names the new marks. A test
+  rejects bare `<tag>` placeholders outside code on this page.
+- **BP-6 (Info): addressed** (`f92b103`).
+  - The line ends ` · outdated` for an outdated saved result and ` · ⚠ N` for the run's warnings, and its tooltip
+    lists the warnings in full before the record.
+  - Each warning is counted once (`dict.fromkeys`). The warnings come from `describe_run`'s two strings,
+    `parameter_warnings`, the constants' notes and `describe_result`; for example, v1's reversed-bounds warning
+    shows as "⚠ 1".
+  - The two extended asserts add checks and weaken none. `outdated` clears after the rerun (asserted).
+  - It applies to every plot's dock, which fits the one-line dock.
+- **BP-7 (Info): fixed** (`2d31d3b`). There is no `Q~`/`A~` ID left in the branch's own code, docstrings or tests.
+  The remaining `git grep` hits are in files outside this branch (`dataset_view.py`, `helab_txy.py`, …).
+- **BP-8 (Info): fixed** (`2788f4c`). `info_open`, its slot and `PlotInfo.toggled` are gone; the toggle's checked
+  state is the section's state.
+- **BP-9 (Info): fixed** (`ffb8ea4`). `test_basic_plots_v2_threads.py` opens and reruns each of the 7 v2 plots from
+  the Scripts panel. It asserts `compute` runs off the GUI thread, and `render`, `draw` and `update` on it, with
+  each plot updated in place.
+
+### New
+
+- **BP-10 (Info), `helab/views/plots/instance.py:90-92`.**
+  - **What's wrong.** `flags()` finds warnings by splitting a description on " · " and keeping the parts that start
+    with "⚠ ". A warning whose own text holds " · " is counted as two, the second without its mark, so the dock's
+    "⚠ N" could be one low.
+  - **Where it matters.** No warning in HeLab's scripts has " · " today; a user's script could.
+  - **Suggest.** Nothing now, or have `describe_run` and `describe_result` warnings come as a list later.
+
+**Open findings: none blocking. BP-10 (Info) is the only one open.**
