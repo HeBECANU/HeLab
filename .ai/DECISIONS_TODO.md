@@ -86,7 +86,7 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
 From Tony's live run (LR-5, 2026-11-05). The window, its three ways in, read only, one helper job and its eight
 sections are decided; the plan has each question's options and reasons.
 
-All ten decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decided" section has them in full.
+All eleven decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decided" section has them in full.
 
 - **Q64.1** (a) a "Folder info…" link at the end of the Disk cache row.
 - **Q64.2** "ok": File › Folder info… on the current tab's selected folder, also with the explorer hidden,
@@ -107,7 +107,7 @@ All ten decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decide
   macOS summary info": this folder only in v1; a summary over the folder and N levels of subfolders (like
   Finder's Show Summary Info) later.
 - **Q64.10** "yes in v0.0.9": a floor on this Mac.
-- **Q64.11** (open) Export a copy of a folder's cached data so the user can restore it by hand (from Q64.8). The
+- **Q64.11** (a) decided (Tony, 2026-11-05: "64.11 a"). Export a copy of a folder's cached data so the user can restore it by hand (from Q64.8). The
   raw layer keeps pulses in time order, not file order, so a rebuilt `d<N>.txt` isn't byte for byte the original,
   though every converter gives the same TXY from it. Proposed: a follow-up after v1, "Export a copy…" in the
   Only copy section, writing `d<N>.txt` from raw pulses and TXY text from TXY layers into a new folder the user

@@ -1,7 +1,7 @@
 # Folder info window
 
 Horizon: v0.0.9 (Q64.10). Added: 2026-11-05, from Tony in Chat during a live run (LR-5,
-`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** planned; Q64.1–Q64.10 decided (Tony, 2026-11-05), Q64.11 open.
+`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** planned; Q64.1–Q64.11 decided (Tony, 2026-11-05).
 Priority and completion: [overview](_readme.md). Related: [cache-store](../.ai/architecture/cache-store.md),
 [data-roots](../.ai/architecture/data-roots.md), [converter](../.ai/architecture/converter.md),
 [app-runtime-and-ui](../.ai/architecture/app-runtime-and-ui.md), the [Activity window](activity-window.md) (the
@@ -49,13 +49,13 @@ single folder.
   open their full list in a detail pane to the right, widening the window, rather than stretching it down.
   The window never opens taller than its screen.
 - **Q64.8** "yes": as proposed; with "perhaps we need a export cached data copy button and user can manually
-  restore a folder?" (Q64.11, open).
+  restore a folder?" (Q64.11).
 - **Q64.9** "this folder only, maybe later we can build this folder + N depth subfolders info panel? similar to
   macOS summary info": this folder only in v1 (with the subfolders line and This session); a summary over the
   folder and N levels of subfolders, like Finder's Show Summary Info, is a later item.
 - **Q64.10** "yes in v0.0.9": a floor on this Mac.
 
-**Q64.11 (open) Export a copy for restoring.** The raw layer keeps a shot's pulses in time order, not the file's
+**Q64.11 Export a copy for restoring: (a), decided** (Tony, 2026-11-05: "64.11 a"). The raw layer keeps a shot's pulses in time order, not the file's
 order, so a `d<N>.txt` rebuilt from it isn't byte for byte the original, though every converter backend gives the
 same TXY from it. Proposed: a follow-up after v1, "Export a copy…" in the Only copy section: `d<N>.txt` from raw
 pulses and TXY text from TXY layers, into a new folder the user picks (never a source folder), with `helab cache
@@ -64,7 +64,7 @@ export`'s npz, mat and csv as other formats. Or: (b) in v1, npz/mat/csv only; (c
 ## Later (after v1)
 
 - Per-folder Clear of saved results and converted TXY (Q64.6 b).
-- Export a copy for restoring (Q64.11).
+- Export a copy for restoring (Q64.11 a): `d<N>.txt` and TXY text into a new folder the user picks; npz, mat, csv too.
 - A summary over the folder and N levels of subfolders (Q64.9).
 
 ## The questions as asked (block 64; kept for the record)
