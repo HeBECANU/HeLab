@@ -77,6 +77,14 @@ FOLDER_INFO_SIZE_SETTING = "folder_info_window_size"
 # Caching v2's store (Q28.3): developers only, off until stage 2 and Tony's go; no Settings control.
 STORE_V4_SETTING = "store_v4"
 CACHE_POLICY_SETTING = "cache_policy"
+# App updates (roadmaps/app-updates.md; helab/updates/settings.py): Settings › General's rows, and what the
+# check keeps (never shown as a control).
+UPDATES_CHECK_AT_START_SETTING = "updates_check_at_start"
+UPDATES_REPOSITORY_SETTING = "updates_repository"
+UPDATES_MODE_SETTING = "updates_mode"
+UPDATES_PRERELEASES_SETTING = "updates_prereleases"
+UPDATES_SKIPPED_SETTING = "updates_skipped"
+UPDATES_LAST_CHECK_SETTING = "updates_last_check"
 
 def default_disk_budget(platform: str | None = None) -> int:
     """8 GB on macOS and Linux, 8 GiB on Windows (Q22.7, Q26.1): disk units follow the OS
@@ -193,6 +201,22 @@ SETTINGS: tuple[Setting, ...] = (
             "Caching v2 (store-v4 only): what new saves write unless a folder chooses otherwise (Q45.1): "
             "raw+used (raw pulses and every TXY a load uses, the default), raw (raw pulses; TXY converted on "
             "load), txy (TXY only, no raw pulses)."),
+    Setting(UPDATES_CHECK_AT_START_SETTING, bool, True,
+            "Check for a newer HeLab at start, at most once a day (Settings › General); off, only Help › Check "
+            "for Updates… checks."),
+    Setting(UPDATES_REPOSITORY_SETTING, str, "",
+            "The GitHub repository updates come from: HeBECANU/HeLab or TonyXTYan/HeLab; empty (or anything "
+            "else): the default, the repository of the branch's upstream remote when it is one of them, else "
+            "HeBECANU/HeLab."),
+    Setting(UPDATES_MODE_SETTING, str, "",
+            "What a source checkout updates to (Q65.3): branch (fast-forward only, to commits whose CI passed on "
+            "all three OSes) or releases (tag to tag); empty: branch when on one, releases when detached. A "
+            "compiled HeLab always checks releases."),
+    Setting(UPDATES_PRERELEASES_SETTING, bool, False, "Include pre-releases in the update check."),
+    Setting(UPDATES_SKIPPED_SETTING, str, "",
+            "The version (releases) or commit (branch) Skip this version stored: not offered at start."),
+    Setting(UPDATES_LAST_CHECK_SETTING, str, "",
+            "When the last update check succeeded (ISO 8601, UTC): the startup check waits a day after it."),
 )
 
 # Keys under a prefix: Settings → Lab parameters saves only the lab constants the user set,

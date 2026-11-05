@@ -539,6 +539,23 @@ def activity_window(cache: FolderCache, path: Path) -> QWidget:
     return window
 
 
+def update_window(cache: FolderCache, path: Path) -> QWidget:
+    """The update window, its buttons for an offered release shown (a transport that never answers)."""
+    from helab.build_info import BuildInfo
+    from helab.updates.check import UpdateCheck
+    from helab.updates.dialog import UpdateWindow
+
+    class Silent:
+        def get(self, url: str, headers: dict[str, str], done: Callable[..., None]) -> None:
+            pass
+    check = UpdateCheck(BuildInfo(commit="a" * 40, branch="detached"), str(path), None, transport=Silent())
+    window = UpdateWindow(check, update=lambda offer, stash, confirmed: None)
+    setattr(window, "_check", check)  # (Kept alive with the window.)
+    for button in (window.download_button, window.update_button, window.skip_button):
+        button.show()
+    return window
+
+
 def folder_info_window(cache: FolderCache, path: Path) -> QWidget:
     """Folder info with a read of every part, its saved results' list open beside it (its detail pane)."""
     from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
@@ -576,6 +593,7 @@ DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]
     "correlation plot": (correlation_plot, ("CorrelationPlot",)),
     "txy list": (txy_list, ("TxyListDialog", "TxyListEditor")),
     "convert folder": (convert_folder, ("ConvertFolderDialog",)),
+    "update window": (update_window, ()),  # (helab/updates, outside the guarded packages: walked anyway.)
 }
 COVERED.update({name: f"test_dialog[{case}]" for case, (_, names) in DIALOGS.items() for name in names})
 

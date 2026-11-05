@@ -65,6 +65,10 @@ from helab.views.QuitSaveDialog import QuitSaveDialog
 from helab.views.RootDuplicatesWindow import RootDuplicatesWindow
 from helab.views.SettingsDialog import SettingsDialog, read_settle_seconds
 from helab.views.DebugIconsWindow import DebugIconsWindow
+from helab.updates import launch as update_launch, settings as update_settings
+from helab.updates.check import UpdateCheck, describe as describe_updates
+from helab.updates.dialog import UpdateWindow
+from helab.updates.versions import Offer
 
 # QtWebEngine must be imported before the QApplication exists; main.py imports this module first.
 from PyQt6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
@@ -84,6 +88,8 @@ REFRESH_TOOLTIP = ("Refresh folder list\nUpdate folder names and expanded folder
 
 # The status bar message's tooltip ends with this: a click opens Activity (Q62.1).
 ACTIVITY_HINT = "Click for Activity"
+# Started by the updater: how long to look for its run's outcome (it records it right after seeing the started mark).
+UPDATE_OUTCOME_WAIT_S = 20.0
 
 
 class HelabMainWindow(QMainWindow):
@@ -134,6 +140,16 @@ class HelabMainWindow(QMainWindow):
         self._setup_central_widgets()
         self._start_with_rhi_surface()
 
+        # App updates (roadmaps/app-updates.md): the status from the cached replies now; the startup check is
+        # scheduled by ``main`` (never by a window a test makes), the manual one by Help › Check for Updates….
+        self.update_check = UpdateCheck(APP_BUILD_INFO, app_folder(), self)
+        self.update_window: UpdateWindow | None = None
+        # Update and restart, Restore previous version (a source checkout): the updater's dry run, then its start.
+        self.update_launcher = update_launch.UpdateLauncher(APP_BUILD_INFO, app_folder(), self)
+        self.update_launcher.planned.connect(self._update_planned)
+        self.update_launcher.ready.connect(self._quit_for_update)
+        self.update_launcher.failed.connect(self._update_failed)
+        self._update_asked: update_launch.Asked | None = None
         self.status_bar = QStatusBar()
         self._create_status_bar()
 
@@ -144,6 +160,8 @@ class HelabMainWindow(QMainWindow):
             sys.exit(1)
         self.menu_bar: QMenuBar = menubar
         self.create_menus()
+        self.update_check.changed.connect(self._update_status_changed)
+        self._update_status_changed()
 
         # The disk cache's questions (Make room, Save update, 80% full), one at a time.
         cache = get_folder_cache(get_io_service())
@@ -252,6 +270,13 @@ class HelabMainWindow(QMainWindow):
         self.io_trace_label = identify(QLabel("● I/O trace"), "status_io_trace")
         self.io_trace_label.hide()
         self.status_bar.addPermanentWidget(self.io_trace_label)
+        # Shown while an update is available and not skipped; opens the update window.
+        self.update_button = identify(QToolButton(), "update_available", "Update available",
+                                      "Show the HeLab update that is available")
+        self.update_button.setAutoRaise(True)
+        self.update_button.hide()
+        self.update_button.clicked.connect(self.show_update_window)
+        self.status_bar.addPermanentWidget(self.update_button)
         self.status_bar.addPermanentWidget(self.status_bar_message_right)
         self.status_bar_message_right.setToolTip("(App resource usage) / (system total resource usage)")
 
@@ -670,6 +695,25 @@ class HelabMainWindow(QMainWindow):
             action_manual.setToolTip("Open HeLab's user manual in your web browser")
             action_manual.triggered.connect(self.open_user_manual)
             menu_help.addAction(action_manual)
+            # Shown only while an update is available (its text names it); both open the update window.
+            self.action_update_available = QAction("An update is available…", self)
+            self.action_update_available.setObjectName("help_update_available")
+            self.action_update_available.setVisible(False)
+            self.action_update_available.triggered.connect(self.show_update_window)
+            menu_help.addAction(self.action_update_available)
+            self.action_check_updates = QAction("Check for Updates…", self)
+            self.action_check_updates.setObjectName("help_check_updates")
+            self.action_check_updates.setToolTip("Ask GitHub whether a newer HeLab is available")
+            self.action_check_updates.triggered.connect(self.check_for_updates)
+            menu_help.addAction(self.action_check_updates)
+            self.action_restore_previous = QAction("Restore previous version…", self)
+            self.action_restore_previous.setObjectName("help_restore_previous")
+            self.action_restore_previous.setToolTip("Go back to the version HeLab had before its last update, "
+                                                    "and its venv; HeLab quits and starts again")
+            self.action_restore_previous.triggered.connect(self.restore_previous_version)
+            menu_help.addAction(self.action_restore_previous)
+            menu_help.aboutToShow.connect(self._update_restore_action)
+            self._update_restore_action()
             action_about = QAction("About HeLab", self)
             action_about.triggered.connect(self.show_about_dialog)
             menu_help.addAction(action_about)
@@ -946,7 +990,146 @@ class HelabMainWindow(QMainWindow):
         return QFileDialog.getSaveFileName(self, caption, suggested, filter)[0]
 
     def show_about_dialog(self) -> None:
-        QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description())
+        """The build's provenance, then the version status, the update mode and the last check (memory only)."""
+        check = getattr(self, "update_check", None)
+        lines = "\n".join(f"{label}: {text}" for label, text in describe_updates(check)) if check else ""
+        QMessageBox.about(self, "About HeLab", APP_BUILD_INFO.description() + (f"\n\n{lines}" if lines else ""))
+
+    def show_update_window(self) -> None:
+        """The update window (one, modeless): what the last check found."""
+        if self.update_window is None:
+            source = update_settings.is_source(APP_BUILD_INFO)
+            self.update_window = UpdateWindow(self.update_check, self,
+                                              update=self._update_from_window if source else None)
+        self.update_window.show()
+        self.update_window.raise_()
+        self.update_window.activateWindow()
+
+    def check_for_updates(self) -> None:
+        """Help › Check for Updates…: the window, and a check (one at a time; it never waits)."""
+        self.show_update_window()
+        self.update_check.start(manual=True)
+
+    def _asked(self, offer: Offer | None, stash: bool, mode: str = "") -> update_launch.Asked:
+        chosen = self.update_check.settings()
+        return update_launch.Asked(offer, mode or chosen.mode, chosen.repository, APP_BUILD_INFO.branch, stash)
+
+    def _update_from_window(self, offer: Offer, stash: bool, confirmed: bool) -> None:
+        """Update and restart: the dry run first (the window shows it), then, confirmed, the updater itself."""
+        asked = self._asked(offer, stash)
+        self._update_asked = asked
+        if confirmed:
+            self.update_launcher.start(asked)
+        elif not self.update_launcher.dry_run(asked) and self.update_window is not None:
+            self.update_window.plan_ready({"ok": False, "refusals": ["The updater is already running."]})
+
+    def _quit_note(self) -> str:
+        """What quitting for an update does first (the normal quit path: Live off, saves finished)."""
+        live = sum(1 for _, explorer in self._explorers() if explorer.live is not None)
+        note = "Unsaved work is saved first, as when quitting"
+        if live:
+            note += f"; Live is on in {live} tab{'' if live == 1 else 's'}: it stops and its new shots are saved"
+        return note + "."
+
+    def _update_planned(self, result: dict[str, Any]) -> None:
+        asked = self._update_asked
+        if asked is None:
+            return
+        if asked.offer is not None:
+            if self.update_window is not None:
+                self.update_window.plan_ready(result, self._quit_note())
+            return
+        refusals = [str(r) for r in result.get("refusals") or []]
+        if refusals:
+            QMessageBox.warning(self, "Restore previous version", "Can't restore: " + " ".join(refusals))
+            return
+        steps = "; ".join(str(step) for step in result.get("steps") or [])
+        box = QMessageBox(QMessageBox.Icon.Question, "Restore previous version",
+                          f"{steps}. HeLab quits and starts again. {self._quit_note()}",
+                          QMessageBox.StandardButton.Cancel, self)
+        restore = box.addButton("Quit and restore", QMessageBox.ButtonRole.AcceptRole)
+        identify_buttons(box, "restore_previous")
+        box.exec()
+        if box.clickedButton() is restore:
+            self.update_launcher.start(asked)
+
+    def restore_previous_version(self) -> None:
+        """Help › Restore previous version…: the dry run, a question, then the updater."""
+        kept = update_launch.previous_kept(app_folder())
+        if not kept or not update_settings.is_source(APP_BUILD_INFO):
+            QMessageBox.information(self, "Restore previous version", "No previous version of HeLab is kept.")
+            return
+        self._update_asked = self._asked(None, False, str(kept.get("mode", "")))
+        if not self.update_launcher.dry_run(self._update_asked):
+            QMessageBox.information(self, "Restore previous version", "The updater is already running.")
+
+    def _update_restore_action(self) -> None:
+        self.action_restore_previous.setEnabled(
+            update_settings.is_source(APP_BUILD_INFO) and bool(update_launch.previous_kept(app_folder())))
+
+    def _quit_for_update(self) -> None:
+        """The updater holds HeLab's process: quit as File › Quit does (Live off, saves finished first)."""
+        logging.info("Quitting for the update")
+        self.close()
+
+    def _update_failed(self, reason: str) -> None:
+        QMessageBox.warning(self, "HeLab update", reason)
+
+    def after_start(self) -> None:
+        """At start (``main``, once the event loop turns): the started mark, when an updater started this HeLab,
+        then the last update's outcome, once. The updater records an update's outcome only after it sees the mark,
+        so a HeLab it started polls for its own run's outcome (never waits)."""
+        self.show_last_update(update_launch.mark_started(app_folder()))
+
+    def show_last_update(self, token: str = "") -> None:
+        """The last update's outcome, once (with ``token``: that updater's, polled for up to
+        ``UPDATE_OUTCOME_WAIT_S``), and the updater's leftovers tidied."""
+        update_launch.tidy(app_folder())
+        self._outcome_token = token
+        self._outcome_deadline = time.monotonic() + UPDATE_OUTCOME_WAIT_S
+        if self._take_last_update() or not token:
+            return
+        self._outcome_timer = QTimer(self)
+        self._outcome_timer.setInterval(250)
+        self._outcome_timer.timeout.connect(self._poll_last_update)
+        self._outcome_timer.start()
+
+    def _poll_last_update(self) -> None:
+        if (self._take_last_update() or time.monotonic() > self._outcome_deadline) and self._outcome_timer:
+            self._outcome_timer.stop()
+
+    def _take_last_update(self) -> bool:
+        found = update_launch.take_last_outcome(app_folder(), self._outcome_token)
+        if not found:
+            return False
+        if key := update_launch.restored_key(found):
+            self.update_check.skip(key)  # (What Restore left isn't offered straight back.)
+        fine, text = update_launch.outcome_words(found)
+        logging.info("Last update: %s", text)
+        if fine:
+            self.show_status_notice(text, 30.0)
+        else:
+            QTimer.singleShot(0, lambda: QMessageBox.warning(self, "HeLab update", text))
+        return True
+
+    def _update_status_changed(self) -> None:
+        """The status-bar mark and Help's entry, from memory."""
+        found = self.update_check.status
+        offer = found.offer if found.available else None
+        self.update_button.setVisible(offer is not None)
+        self.action_update_available.setVisible(offer is not None)
+        if offer is None:
+            return
+        self.update_button.setText(f"⬆ {offer.label}")
+        self.update_button.setToolTip(f"{found.text}. Update available: {offer.label}. Click for details.")
+        self.action_update_available.setText(
+            f"HeLab {offer.label} is available…" if offer.release is not None
+            else f"{offer.label.split(' +')[0]} has newer commits ({offer.ahead})…")
+
+    # The last update's outcome at start: the updater's token that started this HeLab, and the poll for it.
+    _outcome_token = ""
+    _outcome_deadline = 0.0
+    _outcome_timer: QTimer | None = None
 
     # Help › User manual's site check under way: its reply and the targets it chooses between.
     _manual_check: tuple[Any, user_manual.ManualTargets] | None = None
@@ -1131,6 +1314,8 @@ class HelabMainWindow(QMainWindow):
             budget.auto_reload = read_plot_auto_reload(settings)
             budget.check()  # The plots' share of a new budget.
         self.apply_auto_scan_visible(read_setting(settings, AUTO_SCAN_VISIBLE_SETTING, typed=True))
+        if (check := getattr(self, "update_check", None)) is not None:  # (A test's window may have none.)
+            check.settings_changed()
 
     @staticmethod
     def _apply_live_settings(settings: QSettings) -> None:

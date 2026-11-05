@@ -255,6 +255,11 @@ def main() -> None:
         main_window.apply_geometry(geometry)
     app_log.catch_unhandled(main_window.show_status_notice)
     main_window.show()
+    # At most once a day, 30 s from now (Settings › General); only the app schedules it, never a test's window.
+    main_window.update_check.schedule_startup()
+    # Once the event loop turns: when the updater started this HeLab, tell it this version runs; then the last
+    # update's outcome, once (the updater records it only after that mark, so the window polls for it).
+    QTimer.singleShot(0, main_window.after_start)
     # Registered as a running instance by now, so other HeLabs keep its log file.
     main_window.old_logs.start(read_log_keep(app_settings()))
     if moved:

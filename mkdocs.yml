@@ -112,6 +112,7 @@ nav:
       - how-to/folder-info.md
       - how-to/convert-txy.md
       - how-to/write-a-script.md
+      - how-to/update.md
   - Reference:
       - reference/command-line.md
       - reference/settings.md

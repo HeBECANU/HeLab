@@ -13,7 +13,7 @@ from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import fnum
 from helab.utils.constants import (
-    CHECK_LEVEL_LABELS, DIR_TEMPS, LOAD_MODE_LABELS, MAX_LIVE_INTERVAL, MAX_LOG_KEEP, MAX_SIMULTANEOUS_IO,
+    APP_BUILD_INFO, CHECK_LEVEL_LABELS, DIR_TEMPS, LOAD_MODE_LABELS, MAX_LIVE_INTERVAL, MAX_LOG_KEEP, MAX_SIMULTANEOUS_IO,
     MIN_LIVE_INTERVAL, cache_dir, default_app_dir, read_check_level, read_disk_budget, read_io_concurrency,
     read_live_autosave, read_live_interval, read_load_mode, read_log_keep, read_plot_auto_reload,
     read_ram_budget_steps,
@@ -27,6 +27,7 @@ from helab.views.DataRootsTab import DataRootsTab
 from helab.views.CacheTab import CacheTab, read_result_reuse
 from helab.views.ConverterTab import ConverterTab
 from helab.views.LabParametersTab import LabParametersTab
+from helab.updates.settings_rows import UpdateSettingsRows
 
 
 def read_settle_seconds(settings: QSettings) -> float:
@@ -133,6 +134,10 @@ class SettingsDialog(QDialog):
             "HeLab's. Help › Show log folder shows them.")
         log_form.addRow("Log files to keep:", self.log_keep_spin)
         self.general_layout.addLayout(log_form)
+        # App updates (roadmaps/app-updates.md): two one-line rows.
+        updates_form = QFormLayout()
+        self.update_rows = UpdateSettingsRows(APP_BUILD_INFO, updates_form, self.general_tab)
+        self.general_layout.addLayout(updates_form)
 
 
         # DIR_TEMPS and DIR_CACHES
@@ -355,6 +360,7 @@ class SettingsDialog(QDialog):
         self.log_keep_spin.setValue(read_log_keep(settings))
         self.auto_scan_visible_checkbox.setChecked(read_setting(settings, AUTO_SCAN_VISIBLE_SETTING, typed=True))
         self.reopen_plots_checkbox.setChecked(read_setting(settings, REOPEN_PLOTS_SETTING, typed=True))
+        self.update_rows.load(settings)
         logging.debug("Settings loaded")
 
     def save_settings(self) -> None:
@@ -390,6 +396,7 @@ class SettingsDialog(QDialog):
             settings.remove(key)
         settings.setValue(AUTO_SCAN_VISIBLE_SETTING, self.auto_scan_visible_checkbox.isChecked())
         settings.setValue(REOPEN_PLOTS_SETTING, self.reopen_plots_checkbox.isChecked())
+        self.update_rows.save(settings)
         self.cache_tab.save(settings)
         self.lab_tab.save(settings)
         self.converter_tab.save(settings)
