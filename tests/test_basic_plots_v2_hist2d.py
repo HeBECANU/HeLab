@@ -1,6 +1,8 @@
 """Basic plots v2's XY, XT and YT histograms (LR-13): the chosen shots' events binned in a plane, the third axis
 summed over the selection; ranges from auto-crop (the summed axis whole) or manual bounds (the summed axis's
-bounds limiting the events summed); automatic or set bins; linear or log colour; every library, in place."""
+bounds limiting the events summed, unless "Sum the whole summed axis"); automatic or set bins; the DLD port's
+image options (Q~3): blur (total kept), counts or a rate per shot, colour compression in the colour map only;
+every library, in place."""
 from __future__ import annotations
 
 from typing import Any, Callable, cast
@@ -13,7 +15,8 @@ from pytestqt.qtbot import QtBot
 
 from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane
 from helab.analysis.dataset_view import DatasetView, build_view
-from helab.analysis.histogram2d import MAX_AUTO_BINS, PLANES, histogram2d, log_image
+from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, SQRT, bin_area, blur_limit,
+                                        blurred, compress, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import effective
 from helab.analysis.results import AnalysisContext, AnalysisResult
@@ -89,9 +92,27 @@ def test_empty_and_single_valued_input() -> None:
     assert same.inside == 5 and same.h_edges[-1] > same.h_edges[0]
 
 
-def test_log_image_leaves_empty_bins_blank() -> None:
-    image = log_image(np.array([[0, 1], [10, 100]], dtype=np.int64))
-    assert np.isnan(image[0, 0]) and image[0, 1] == 0.0 and image[1, 0] == 1.0 and image[1, 1] == 2.0
+def test_colour_compression_is_monotonic_from_0_to_1() -> None:
+    x = np.linspace(0.0, 1.0, 101)
+    for scale in SCALES:
+        y = compress(x, scale, 0.4, 2)
+        assert y[0] == pytest.approx(0.0, abs=1e-12) and y[-1] == pytest.approx(1.0) and (np.diff(y) >= 0).all()
+    assert compress(np.array([0.25]), SQRT)[0] == pytest.approx(0.5)
+    assert compress(np.array([0.01]), LOG, decades=2)[0] == pytest.approx(0.0)  # Two decades below: darkest.
+    assert compress(np.array([0.1]), LOG, decades=2)[0] == pytest.approx(0.5)
+    assert compress(np.array([0.25]), POWER, gamma=2.0)[0] == pytest.approx(0.0625)
+    assert np.array_equal(compress(x, LINEAR), x)
+    assert scale_text(LINEAR) == "" and scale_text(LOG, decades=3) == "log, 3 decades"
+    assert scale_text(POWER, gamma=0.5) == "power γ 0.5" and scale_text(SQRT) == "sqrt"
+
+
+def test_blur_keeps_the_total_and_is_capped() -> None:
+    counts = np.zeros((20, 10))
+    counts[10, 5] = 100.0
+    smooth = blurred(counts, 2.0)
+    assert smooth.sum() == pytest.approx(100.0) and smooth.max() < 100.0 and smooth[10, 5] == smooth.max()
+    assert np.array_equal(blurred(counts, 0.0), counts) and blurred(counts, 0.0) is not counts
+    assert blur_limit((20, 10)) == 5.0 and blur_limit((2, 2)) == 1.0
 
 
 def test_bins_are_capped() -> None:
@@ -112,7 +133,8 @@ def test_three_plots_in_the_package_in_order() -> None:
         assert (metadata.name, metadata.analysis_id, metadata.version, metadata.group) == (
             f"{plane} histogram", f"helab.v2.{plane.lower()}_histogram", "1", "Basic plots v2")
     names = [spec.name for spec in PLOTS["XY"]().parameters("Plot")]
-    assert names[-3:] == ["bins_across", "bins_up", "colour_scale"] and "range_mode" in names
+    assert names[-8:] == ["include_outside", "bins_across", "bins_up", "blur", "quantity", "colour_scale", "gamma",
+                          "log_decades"] and "range_mode" in names
 
 
 @pytest.mark.parametrize("plane", list(PLOTS))
@@ -123,12 +145,12 @@ def test_the_run_sums_the_chosen_shots(plane: str) -> None:
     item = result.data.histogram
     assert result.data.shots == (3, 4) and item.total == len(data.shots[3]) + len(data.shots[4])
     used, settings = script.describe_run("Plot", effective(script.parameters("Plot"), {"colour_scale": "log"}), data)
-    assert "bins auto" in settings and "log colour" in settings and "auto-crop 99 %" in settings
+    assert "bins auto" in settings and "colours log, 3 decades" in settings and "auto-crop 99 %" in settings
     title = histograms_2d.plane_title(result.data)
     assert f"{PLANES[plane][2]} summed" in title and "bins (automatic)" in title and "run_2d" not in title
 
 
-@pytest.mark.parametrize("scale", ["linear", "log"])
+@pytest.mark.parametrize("scale", list(SCALES))
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("plane", list(PLOTS))
 def test_every_library_draws_and_updates_in_place(plane: str, backend: str, scale: str, qtbot: QtBot) -> None:
@@ -141,7 +163,7 @@ def test_every_library_draws_and_updates_in_place(plane: str, backend: str, scal
         widget.canvas.draw()  # type: ignore[no-untyped-call]
     assert script.update(widget, result_of(script, view(range(1, 4)), {"colour_scale": scale}))
     if backend == PYQTGRAPH:
-        other = "log" if scale == "linear" else "linear"
+        other = LOG if scale == LINEAR else LINEAR
         assert not script.update(widget, result_of(script, view(range(1, 4)), {"colour_scale": other}))
 
 
@@ -165,13 +187,44 @@ def test_pyqtgraph_image_orientation_aspect_and_update(qtbot: QtBot) -> None:
         assert widget.plane_image is image  # The same items, the new image.
 
 
-def test_log_scale_blank_bins_in_pyqtgraph(qtbot: QtBot) -> None:
+def test_compressed_colours_with_real_values_on_the_bar(qtbot: QtBot) -> None:
     script = PLOTS["XY"]()
-    widget: Any = script.draw(result_of(script, view(), {"colour_scale": "log"}), PYQTGRAPH)
+    result = result_of(script, view(), {"colour_scale": SQRT})
+    widget: Any = script.draw(result, PYQTGRAPH)
     qtbot.addWidget(widget)
-    assert np.isnan(widget.plane_image.image).any()
-    low, high = widget.plane_bar.levels()
-    assert low >= 0 and high > low
+    shown = widget.plane_image.image
+    peak = float(result.data.image.max())
+    assert shown.max() == pytest.approx(1.0) and shown.min() >= 0.0  # Colour positions over plain viridis.
+    assert np.allclose(shown, np.sqrt(result.data.image / peak))
+    assert widget.plane_bar.levels() == pytest.approx((0.0, peak))  # The bar reads real values.
+    assert "colours sqrt, values linear" in widget.plane_bar.getAxis("left").labelText
+
+
+def test_blur_rate_per_shot_and_the_whole_summed_axis() -> None:
+    script = PLOTS["XY"]()
+    data = view()
+    plain = result_of(script, data, {"bins_across": 30, "bins_up": 30}).data
+    smooth = result_of(script, data, {"bins_across": 30, "bins_up": 30, "blur": 2.0}).data
+    assert smooth.blur == 2.0 and smooth.image.sum() == pytest.approx(float(plain.histogram.counts.sum()))
+    assert smooth.image.max() < plain.image.max() and "blur σ 2 bins" in histograms_2d.plane_title(smooth)
+    capped = result_of(script, data, {"bins_across": 8, "bins_up": 8, "blur": 50.0}).data
+    assert capped.blur == 2.0 and any("over a quarter" in note for note in capped.notes)
+    rate = result_of(script, data, {"bins_across": 30, "bins_up": 30, "quantity": "rate per shot"}).data
+    assert rate.per_shot and np.allclose(rate.image, plain.image / len(data.shots) / bin_area(rate.histogram))
+    assert histograms_2d.quantity_text(rate) == "Events / m² / shot"
+    xt = result_of(PLOTS["XT"](), data, {"quantity": "rate per shot"}).data
+    assert histograms_2d.quantity_text(xt) == "Events / (m·s) / shot"
+    # Manual bounds on T limit the XY sum, unless the whole summed axis is asked for.
+    window = {"range_mode": "manual", "t_min": 2.09, "t_max": 2.11, "x_min": -0.01, "x_max": 0.01,
+              "y_min": -0.01, "y_max": 0.01}
+    cut = result_of(script, data, window).data.histogram
+    whole = result_of(script, data, {**window, "include_outside": True}).data.histogram
+    assert cut.flattened == (2.09, 2.11) and whole.flattened is None
+    assert whole.summed == whole.total > cut.summed
+    assert (whole.h_edges[0], whole.h_edges[-1]) == (-0.01, 0.01)  # The shown axes are still cut.
+    settings = script.describe_run("Plot", effective(script.parameters("Plot"), {**window, "include_outside": True}),
+                                   data)[1]
+    assert "whole T" in settings
 
 
 def test_plotly_and_matplotlib_keep_the_input_in_their_titles() -> None:

@@ -4,15 +4,15 @@ Each shown axis covers the exact shortest range holding the auto-crop share of i
 (``stats.shortest_range``, as the 1D histograms), or the manual bounds set for it. The flattened axis isn't
 cut by auto-crop, so every event of the chosen shots counts; manual bounds set for it limit the events summed
 (a T window on the XY histogram images one cloud). Bins are automatic per axis (Freedman–Diaconis, at most
-``MAX_AUTO_BINS``) or set.
+``MAX_AUTO_BINS``) or set. The image shown may be blurred (σ in bins, the total kept) and its colour range
+compressed (``compress``), as the DLD port's Density images.
 
 Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -107,8 +107,49 @@ def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] =
                        len(events), limit)
 
 
-def log_image(counts: npt.NDArray[np.int64]) -> npt.NDArray[np.float64]:
-    """``log10`` of the counts, empty bins NaN (drawn as the background). A new array."""
-    values = counts.astype(np.float64)
-    with np.errstate(divide="ignore"):
-        return np.where(values > 0, np.log10(np.where(values > 0, values, 1.0)), math.nan)
+# The image shown (as the DLD port's Density images): counts, optionally blurred and per shot, its colour range
+# compressed in the colour map only (the values stay linear, and the colour bar reads them).
+LINEAR, SQRT, LOG, POWER = "linear", "sqrt", "log", "power γ"
+SCALES = (LINEAR, SQRT, LOG, POWER)
+
+
+def blur_limit(shape: tuple[int, ...]) -> float:
+    """The largest blur σ used, in bins: a quarter of the image's longer side (at least 1). Beyond it the image
+    is nearly flat, and the cost keeps a Live rerun bounded."""
+    return max(1.0, max(shape) / 4)
+
+
+def blurred(counts: npt.NDArray[np.float64], sigma: float) -> npt.NDArray[np.float64]:
+    """``counts`` with a Gaussian blur of ``sigma`` bins (0: as they are, a copy). Edges reflect, so the total
+    is kept."""
+    if sigma <= 0:
+        return counts.astype(np.float64)
+    from scipy.ndimage import gaussian_filter
+
+    return cast(npt.NDArray[np.float64], gaussian_filter(counts.astype(np.float64), sigma=sigma, mode="reflect"))
+
+
+def bin_area(item: Histogram2D) -> float:
+    """One bin's area in the plane's units (m², or m·s)."""
+    return float(item.h_edges[1] - item.h_edges[0]) * float(item.v_edges[1] - item.v_edges[0])
+
+
+def compress(position: npt.NDArray[np.float64], scale: str, gamma: float = 0.5, decades: int = 3
+             ) -> npt.NDArray[np.float64]:
+    """Where in the colour map a value sits, from its linear position in the colour bar's range (0…1): the
+    colour range compression. Monotonic, 0 → 0 and 1 → 1. sqrt and power γ < 1 bring out faint regions; log
+    spans ``decades`` below the maximum (lower values share the darkest colour)."""
+    x = np.clip(position, 0.0, 1.0)
+    if scale == SQRT:
+        return np.sqrt(x)
+    if scale == POWER:
+        return np.asarray(x ** gamma, dtype=np.float64)
+    if scale == LOG:
+        floor = 10.0 ** -decades
+        return np.clip(np.log10(np.maximum(x, floor)) / decades + 1.0, 0.0, 1.0)
+    return x
+
+
+def scale_text(scale: str, gamma: float = 0.5, decades: int = 3) -> str:
+    """A compressed colour scale in a few words ("" for linear): ``log, 3 decades``, ``power γ 0.5``."""
+    return {SQRT: "sqrt", LOG: f"log, {decades} decades", POWER: f"power γ {gamma:g}"}.get(scale, "")
