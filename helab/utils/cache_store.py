@@ -572,6 +572,40 @@ TXY_KINDS = ("raw", "txy")
 COMPACT_SEGMENTS = 8
 TXY_ROW_BYTES = 24
 _MATLAB_LAYER, _HELAB_LAYER = "matlab", "helab:"
+LayerGroup = Literal["rebuildable", "seen", "only"]
+
+
+def layer_group(layer: str, entries: Iterable[TxyEntry], gone_at: float | None,
+                held: Collection[tuple[int, int, int]]) -> LayerGroup:
+    """Make room's group of one TXY layer (Q45.6), the one rule for its planner and Folder info: ``only`` once a
+    listing found some of its sources gone (``gone_at``: an only copy), ``rebuildable`` for a HeLab layer whose every
+    entry is raw-keyed with its raw row ``held`` (shot, size, mtime_ns), else ``seen``."""
+    if gone_at is not None:
+        return "only"
+    rebuildable = layer.startswith(_HELAB_LAYER) and all(
+        entry.kind == "raw" and (entry.shot, entry.size, entry.mtime_ns) in held for entry in entries)
+    return "rebuildable" if rebuildable else "seen"
+
+
+@dataclass(frozen=True)
+class FolderContents:
+    """What the store holds for one folder (Folder info, Q64.1–Q64.10), read in one transaction; each part found,
+    missing (none saved) or an error of its own. store-v4's parts (``raw``, ``layers``, ``views``, ``seed``,
+    ``results``) are missing in store-v3. No per-shot data: counts, ranges and dates."""
+    raw: Read[dict[str, Any]]
+    layers: Read[list[dict[str, Any]]]
+    views: Read[list[dict[str, Any]]]
+    seed: Read[int]
+    results: Read[dict[str, Any]]
+    prefs: Read[dict[str, Any]]
+    convert_prefs: Read[dict[str, Any]]
+    choices: Read[dict[str, Any]]
+    constants: Read[dict[str, Any]]
+    history: Read[dict[str, Any]]
+    summary: Read[dict[str, Any]]
+    listing: Read[dict[str, Any]]
+
+
 _TXY_LAYER_COLUMNS = ("path, layer, tags, entries, rows, ram_bytes, bytes, precision, gone_at, job_seq, saved_at, "
                       "last_used")  # (A shot's fingerprint: its raw file's, or its TXY file's: Q45.3.)
 
@@ -3841,13 +3875,16 @@ class CacheStore:
                 groups["only"].append((key, str(layer)))
                 continue
             if key not in held:
-                held[key] = {(int(shot), int(size), int(mtime)) for shot, size, mtime in self._conn.execute(
-                    "SELECT shot, size, mtime_ns FROM raw_layers WHERE path = ?", (key,))}
+                held[key] = self._held_raw(key)
             parsed = list(map(TxyEntry.from_json, json.loads(entries)))
-            rebuildable = str(layer).startswith(_HELAB_LAYER) and all(
-                entry.kind == "raw" and (entry.shot, entry.size, entry.mtime_ns) in held[key] for entry in parsed)
-            groups["rebuildable" if rebuildable else "seen"].append((key, str(layer)))
+            groups[layer_group(str(layer), parsed, None, held[key])].append((key, str(layer)))
         return groups
+
+    def _held_raw(self, key: str) -> set[tuple[int, int, int]]:
+        """A folder's raw layer rows as (shot, size, mtime_ns): what a raw-keyed TXY entry is rebuilt from (inside a
+        transaction)."""
+        return {(int(shot), int(size), int(mtime)) for shot, size, mtime in self._conn.execute(
+            "SELECT shot, size, mtime_ns FROM raw_layers WHERE path = ?", (key,))}
 
     def _free_space(self, budget: int, exclude: str | None, *, only_copies: bool = True) -> list[Removal]:
         """Make room's and ``trim``'s one order (Q45.6, A42.2), inside a transaction: other folders' whole rows,
@@ -3948,6 +3985,91 @@ class CacheStore:
         except sqlite3.Error as exc:
             raise StoreError(f"Disk cache could not be read: {exc}") from exc
         return {"shots": int(shots), "bytes": int(size), "only_copy": int(only)}
+
+    def folder_contents(self, path: str, *, max_results: int = 200) -> FolderContents:
+        """Everything the store holds for ``path`` (Folder info), in one read transaction so its parts agree: the raw
+        layer's totals, each TXY layer with its group (:func:`layer_group`, Make room's rule), the views, a stage 1
+        seed, the saved results (store-v4's own: no store-v3 read-through, Q64.7; the ``max_results`` most recently
+        used rows, their records as JSON text), and the folder's flags, choices, constants, scan history, last basic
+        scan and saved listing. A part that can't be read is an error of its own; the store failing to read at all
+        raises :class:`StoreError`. ``path`` must have a key here (else ``NoDataRoot`` or ``VolumeUnverified``)."""
+        key = self._path_key(path)
+        v4 = self.layout >= store_v4.LAYOUT
+
+        def part(read: Callable[[], T]) -> Read[T]:
+            try:
+                return _found(read())
+            except (sqlite3.Error, StoreError, ValueError, KeyError, TypeError) as exc:
+                return _error(f"Disk cache could not be read: {exc}")
+
+        def raw() -> dict[str, Any]:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(bytes), 0), MIN(shot), MAX(shot), MIN(saved_at), MAX(saved_at), "
+                "MAX(last_used), MAX(seen_at), COALESCE(SUM(gone_at IS NOT NULL), 0), "
+                "COALESCE(SUM(CASE WHEN gone_at IS NOT NULL THEN bytes ELSE 0 END), 0), MIN(gone_at), MAX(gone_at) "
+                "FROM raw_layers WHERE path = ?", (key,)).fetchone()
+            names = ("shots", "bytes", "first", "last", "saved_first", "saved_last", "last_used", "seen_at",
+                     "only_copy", "only_copy_bytes", "gone_first", "gone_last")
+            found: dict[str, Any] = dict(zip(names, row))
+            # The shots whose d files a listing found gone (for the converted TXY's only copies; not sent as such).
+            found["gone_shots"] = frozenset(int(shot) for (shot,) in self._conn.execute(
+                "SELECT shot FROM raw_layers WHERE path = ? AND gone_at IS NOT NULL", (key,)))
+            return found
+
+        def layers() -> list[dict[str, Any]]:
+            found: list[dict[str, Any]] = []
+            held: set[tuple[int, int, int]] | None = None
+            for layer, tags, entries, rows, size, precision, gone_at, saved_at, last_used, seen_at in self._conn.execute(
+                    "SELECT layer, tags, entries, rows, bytes, precision, gone_at, saved_at, last_used, seen_at "
+                    "FROM txy_layers WHERE path = ? ORDER BY last_used DESC, layer", (key,)).fetchall():
+                parsed = list(map(TxyEntry.from_json, json.loads(entries)))
+                if gone_at is None and held is None:
+                    held = self._held_raw(key)
+                found.append({"layer": str(layer), "tags": [str(tag) for tag in json.loads(tags) or ()],
+                              "shots": len(parsed), "first": min((entry.shot for entry in parsed), default=None),
+                              "last": max((entry.shot for entry in parsed), default=None), "rows": int(rows),
+                              "bytes": int(size), "precision": str(precision), "saved_at": float(saved_at),
+                              "last_used": float(last_used), "seen_at": float(seen_at or 0.0),
+                              "gone_at": None if gone_at is None else float(gone_at),
+                              "group": layer_group(str(layer), parsed, gone_at, held or set())})
+            return found
+
+        def views() -> list[dict[str, Any]]:
+            return [{"source": str(source), "tag": str(tag), "last_used": float(used)}
+                    for source, tag, used in self._conn.execute(
+                        "SELECT source, tag, last_used FROM txy_views WHERE path = ? ORDER BY last_used DESC",
+                        (key,)).fetchall()]
+
+        def seed() -> int:
+            row = self._conn.execute("SELECT bytes FROM datasets WHERE path = ?", (key,)).fetchone()
+            return 0 if row is None else int(row[0])
+
+        def results() -> dict[str, Any]:
+            if not self._results_table:
+                return {"count": 0, "bytes": 0, "rows": []}
+            count, size = self._conn.execute("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM results WHERE path = ?",
+                                             (key,)).fetchone()
+            names = ("result_id", "analysis_id", "action", "record", "bytes", "computed_at", "saved_at", "last_used")
+            rows = [dict(zip(names, row)) for row in self._conn.execute(
+                f"SELECT {', '.join(names)} FROM results WHERE path = ? ORDER BY last_used DESC, result_id LIMIT ?",
+                (key, max(0, int(max_results)))).fetchall()]
+            return {"count": int(count), "bytes": int(size), "rows": rows}
+
+        def one(reads: Mapping[str, Read[dict[str, Any]]]) -> Read[dict[str, Any]]:
+            return reads[path]
+
+        try:
+            with self.transaction(write=False):
+                return FolderContents(
+                    raw=part(raw) if v4 else _missing(), layers=part(layers) if v4 else _missing(),
+                    views=part(views) if v4 else _missing(), seed=part(seed) if v4 else _missing(),
+                    results=part(results) if v4 else _missing(), prefs=one(self.read_prefs([path])),
+                    convert_prefs=one(self.read_convert_prefs([path])), choices=one(self.read_folder_choices([path])),
+                    constants=one(self.read_constants([path])), history=one(self.read_records("histories", [path])),
+                    summary=one(self.read_records("summaries", [path])),
+                    listing=one(self.read_records("listings", [path])))
+        except sqlite3.Error as exc:
+            raise StoreError(f"Disk cache could not be read: {exc}") from exc
 
     def read_folder_choices(self, paths: Sequence[str]) -> dict[str, Read[dict[str, Any]]]:
         """Each folder's stage 2 choices: ``policy``, ``source`` and ``tag`` ("" for none) with when each was

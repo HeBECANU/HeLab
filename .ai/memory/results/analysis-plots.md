@@ -34,3 +34,7 @@ First plots (2026-10-19, `.ai/sessions/2026-10-19-claude-dataset-view-plots/`). 
 ## Landed since
 
 - Floating plot settings (Tony, 2026-10-19/20; landed 2026-10-20): a floating plot's settings move into its window on the right, collapsed by default, with a draggable splitter; "Settings are in this plot's window" with Show plot window (which also opens the section); the page moves only when a drag ends.
+
+## Basic plots v2 (2026-11-05)
+
+Tony's choices in the live run (landed `559baa5`): one "Basic Plots" entry with version nodes, newest first, only the newest expanded (LR-12; the "four" he saw were the four v1 scripts); new ids (`helab.v2.*`) so v1's results and presets stay v1's, and v1's files are pinned byte for byte; an X axis Shot ID / Shot time on the plots with a shot axis, TXY-time fallbacks marked as Shot times does (LR-10); XY, XT and YT density plots with the DLD port's image options (blur, counts or rate per shot, sqrt/log/power in the colour map), in s and m (LR-13, "take inspiration from the DLD front panel's XY XT YT"); an option to include events outside the cut along the summed axis, default off, and no newest-shot highlight on them (Q~6); Plot info, closed by default, on every plot's settings, with a one-line dock that keeps short outdated and warning marks (LR-4); v2's PyQtGraph titles without the input; "New" for a second Plot of an open script (Q65.2, not "Add", kept for comparing folders). v2's T, X, Y histograms and 3D scatter duplicate v1's for now ("then I'll start tweaking them").

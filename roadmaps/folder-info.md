@@ -1,7 +1,7 @@
 # Folder info window
 
 Horizon: v0.0.9 (Q64.10). Added: 2026-11-05, from Tony in Chat during a live run (LR-5,
-`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** planned; Q64.1–Q64.11 decided (Tony, 2026-11-05).
+`.ai/sessions/2026-11-05-claude-live-run/`, relayed by Side; block 64). **Status:** done (v0.0.9): the Folder Info floor, landed `03f801e` on `dev/v0.0.9` (handoff and review in `.ai/sessions/2026-11-05-claude-folder-info/`); Q64.1–Q64.11 decided (Tony, 2026-11-05), follow-ups Q67.1–Q67.6; Q64.6 (b) built in v1 (Tony: "implement now").
 Priority and completion: [overview](_readme.md). Related: [cache-store](../.ai/architecture/cache-store.md),
 [data-roots](../.ai/architecture/data-roots.md), [converter](../.ai/architecture/converter.md),
 [app-runtime-and-ui](../.ai/architecture/app-runtime-and-ui.md), the [Activity window](activity-window.md) (the
@@ -63,7 +63,8 @@ export`'s npz, mat and csv as other formats. Or: (b) in v1, npz/mat/csv only; (c
 
 ## Later (after v1)
 
-- Per-folder Clear of saved results and converted TXY (Q64.6 b).
+- ~~Per-folder Clear of saved results and converted TXY (Q64.6 b)~~: built in v1 with Clear raw pulses (Q67.6).
+- A per-folder fence for HeLab's converted TXY (A67.5).
 - Export a copy for restoring (Q64.11 a): `d<N>.txt` and TXY text into a new folder the user picks; npz, mat, csv too.
 - A summary over the folder and N levels of subfolders (Q64.9).
 
@@ -138,5 +139,4 @@ export`'s npz, mat and csv as other formats. Or: (b) in v1, npz/mat/csv only; (c
 ## Not in scope (v1)
 
 - Changing anything from the window except through the folder's existing actions (Q64.5).
-- Per-folder Clear of saved results and converted TXY (Q64.6, the first follow-up).
 - Export a copy (Q64.11) and totals over subfolders (Q64.9): see Later.

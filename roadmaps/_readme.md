@@ -56,14 +56,16 @@ that branch.
   details and status, Cancel / Retry / Pause, and this session's history; Window › Activity or a click on the
   status bar. Landed `5af4a89` (the Activity Window floor; Q63.1–Q63.4 decided; M63.1, M63.2 for Tony).
 
-- [ ] The Folder info window (LR-5; Tony, 2026-11-05; [plan](folder-info.md)): everything HeLab holds about one
+- [x] The Folder info window (LR-5; Tony, 2026-11-05; [plan](folder-info.md)): everything HeLab holds about one
   folder (store contents with the only copies, saved results, flags, TXY list, constants, scan history, converted
-  TXY, data root), read only, beside the folder's existing actions; right-click, Folder details, File menu.
-  Q64.1–Q64.10 open.
+  TXY, data root), read only, beside the folder's existing actions, plus per-folder Clears (Q67.6); right-click, Folder
+  details, File menu. Landed `03f801e` (the Folder Info floor, Ledger + Reviewer Tally; M67.1, M67.2 for Tony).
 
-- [ ] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
+- [x] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
   all four plots in a v2 with a Shot ID / Shot time x axis (fallback times marked), new XY, XT and YT 2D histograms,
-  and one "Basic Plots" group with its versions as tree nodes (the menu's repeated "Basic plots v1" fixed); v1 kept.
+  and one "Basic Plots" group with its versions as tree nodes; also the New button (LR-2), plot settings' long texts
+  (LR-3) and Plot info (LR-4); v1 pinned. Landed `559baa5` (the Basic Plots v2 floor, Vista + Reviewer Lens; Q66.1–Q66.10
+  decided, Q66.11–Q66.12 open; M66.1 for Tony).
 
 - [ ] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
   for source checkouts and frozen builds alike; then stage 2's self-update for source checkouts (git + uv,

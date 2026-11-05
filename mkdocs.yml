@@ -106,8 +106,10 @@ nav:
       - getting-started/install.md
   - How-to guides:
       - how-to/data-root.md
+      - how-to/basic-plots.md
       - how-to/live.md
       - how-to/activity.md
+      - how-to/folder-info.md
       - how-to/convert-txy.md
       - how-to/write-a-script.md
       - how-to/update.md

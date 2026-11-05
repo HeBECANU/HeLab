@@ -34,3 +34,5 @@ off: Reload when a script is saved, in Load Scripts…'s menu)
 is a file, not a setting. Before each folder load the folder is test-imported in a separate process (Q49.3 (b),
 [plots-and-scripts](plots-and-scripts.md#script-system)); the marker is the backstop for what that can't catch. The
 try-import's time limit is a constant, `PROBE_SECONDS`, not a setting (Q58.2, open).
+
+Window sizes (`str` "W,H" rows, read through `read_setting`): `activity_window_size` ("1080,440", the Activity window) and `folder_info_window_size` ("620,560", Folder info, `03f801e`).

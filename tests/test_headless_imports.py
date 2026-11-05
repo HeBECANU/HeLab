@@ -29,14 +29,15 @@ PURE = (
         "samples", "split", "timing", "txy", "txy_layer", "user_profiles")),
     "helab.updates.github", "helab.updates.updater", "helab.updates.versions",  # (App updates' pure parts.)
     "helab.utils.activity",  # (The Activity window's model, Q62.)
+    "helab.utils.folder_info",  # (The Folder info window's model, Q64.)
     "helab.utils.hlb",
     "helab.utils.ram_buffers",
     *(f"helab.analysis.{name}" for name in (
         "bec", "bec_readout", "bootstrap", "budget_core", "constant_layers", "correlations",
-        "dataset_view", "display_units", "estimates", "fits", "follow", "hotspots", "identity",
+        "dataset_view", "display_units", "estimates", "fits", "follow", "histogram2d", "hotspots", "identity",
         "masks", "orders", "parameters", "peaks", "physics", "presets", "profiles", "release", "result_cache",
-        "result_codec", "result_types", "results", "runner_core", "selection", "spectrum", "stats", "trends",
-        "velocity")),
+        "result_codec", "result_types", "results", "runner_core", "selection", "shot_axis", "spectrum", "stats",
+        "trends", "velocity")),
 )
 # Modules of helab.analysis that use Qt (signals, timers or drawing).
 QT = {"backends", "budget", "empty", "live_feed", "overlay", "panes", "parameter_tree", "plot_axes", "plot_text", "runner"}

@@ -114,10 +114,11 @@ If a folder is already in the disk cache, its data shows at once and the line sa
 
 ## Open your first plot
 
-In the **Scripts** panel on the right, choose a group (for example **Basic plots v1** or **DLD
+In the **Scripts** panel on the right, choose a group (for example **Basic Plots** or **DLD
 Front Panel Port**) and click **Plot** beside a script such as "Counts per shot". The plot opens
 in the middle, on the data the current tab has loaded; its settings show in the panel above the
-scripts. If no data is loaded yet, the status bar says "load a folder's data first".
+scripts. If no data is loaded yet, the status bar says "load a folder's data first". Basic Plots
+lists its versions, newest first: see [Plot a folder with Basic Plots](../how-to/basic-plots.md).
 
 ## Next steps
 

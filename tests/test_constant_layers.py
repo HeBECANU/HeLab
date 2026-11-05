@@ -253,9 +253,14 @@ def shown(instance: AnalysisInstance) -> ResolvedConstants:
 
 
 def label(instance: AnalysisInstance, name: str) -> str:
-    found = cast(QDockWidget, instance.dock_widget).findChild(QLabel, name)
+    dock = cast(QDockWidget, instance.dock_widget)
+    found = dock.findChild(QLabel, name)
     assert found is not None
-    return found.text() if found.isVisibleTo(instance.dock_widget) else ""
+    text = found.text() if found.isVisibleTo(instance.dock_widget) else ""
+    if name == "plot_data_source":  # Its run's detail and settings line, which LR-4 moved into Plot info.
+        detail, settings = dock.property("plotSourceDetail"), dock.property("plotSourceSettings")
+        text = " · ".join(filter(None, (text, detail or ""))) + (f"\n{settings}" if settings else "")
+    return text
 
 
 def title(instance: AnalysisInstance, key: str) -> str:

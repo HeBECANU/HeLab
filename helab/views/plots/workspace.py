@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtWidgets import QDockWidget, QLabel, QMainWindow, QMessageBox, QSizePolicy, QToolButton, QVBoxLayout, QWidget
@@ -27,6 +27,7 @@ from helab.utils.constants import read_plot_auto_reload
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size
 from helab.views.CentralHint import CentralHint
+from helab.views.ElidedLabel import ElidedLabel
 from helab.views.plots.dock import AnalysisDock
 from helab.views.plots.settings_panel import PlotSettingsPanel
 
@@ -214,11 +215,13 @@ class PlotWorkspace:
 
     def set_plot_result(self, dock: QDockWidget, content: QWidget, result: AnalysisResult,
                         parameters_text: str = "", record_text: str = "", selection_text: str = "",
-                        view: DatasetView | None = None, own_choice: bool = False) -> None:
-        """Show an analysis result in its dock, with two source lines: the input folder and
-        revision, which shots (``selection_text``) and the analysis with its version; then the
-        settings in short form (``parameters_text``). The full record (every parameter,
-        ``record_text``) is in the tooltip. ``view``: the data the result ran on (None: not the
+                        view: DatasetView | None = None, own_choice: bool = False,
+                        warnings: Sequence[str] = ()) -> None:
+        """Show an analysis result in its dock, under its source line (the input folder, revision
+        and Live state, then short marks: ``outdated`` for an outdated saved result, ``⚠ N`` for the
+        run's ``warnings``, in full first in the line's tooltip); which shots (``selection_text``), the analysis with its version and the
+        settings in short form (``parameters_text``) go to the plot's Plot info (LR-4). The full
+        record (every parameter, ``record_text``) is in the line's tooltip. ``view``: the data the result ran on (None: not the
         folder's data as any tab shows it, e.g. an outdated saved result's); ``own_choice``: of the
         plot's own TXY choice, not the tab's (the source line then compares shot numbers)."""
         identity = result.input.identity
@@ -229,6 +232,9 @@ class PlotWorkspace:
             selection_text, result.analysis.short(), PlotWorkspace._cached_text(result, bool(dock.property("plotReuse")))))))
         dock.setProperty("plotSourceSettings", parameters_text)
         dock.setProperty("plotSourceRecord", result.describe(record_text or parameters_text))
+        dock.setProperty("plotSourceMarks", " · ".join(filter(None, (
+            "outdated" if result.outdated else "", f"⚠ {len(warnings)}" if warnings else ""))))
+        dock.setProperty("plotSourceWarnings", "\n".join(f"⚠ {warning}" for warning in warnings))
         old = dock.widget()
         if old is None or content.parentWidget() is not old:  # Else updated in place: kept as it is.
             PlotWorkspace._wrap_plot(dock, content)
@@ -271,19 +277,15 @@ class PlotWorkspace:
 
     @staticmethod
     def _wrap_plot(dock: QDockWidget, content: QWidget) -> None:
-        """The dock shows its source above the plot: one or two lines (source, then settings),
-        never wrapped (a long line is cut at the dock's edge; the tooltip has it all), with no
-        vertical padding. Below them, only after a failed run, the error in amber (the plot
+        """The dock shows its source above the plot: one line, never wrapped (elided at the dock's
+        edge; the tooltip has the record), with no vertical padding. Below them, only after a failed run, the error in amber (the plot
         shown is the last one drawn)."""
         wrapper = QWidget(dock)
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(0)
-        label = QLabel(wrapper)
+        label = ElidedLabel(parent=wrapper)
         label.setObjectName("plot_data_source")
-        label.setTextFormat(Qt.TextFormat.PlainText)
-        label.setWordWrap(False)
-        label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout.addWidget(label)
         error = QLabel(wrapper)
         error.setObjectName("plot_error")
@@ -312,13 +314,17 @@ class PlotWorkspace:
             explorer is not None and path == explorer.selected_path_globally and explorer.folder_opened_path == path
             and shown is not None and shown.path == path and isinstance(held, Held) and held.shown_in(shown))
         prefix = "Data source" if current else "Showing previously loaded data"
-        parts = [dock.property(name) for name in ("plotSourceRevision", "plotFollow", "plotSourceDetail")]
-        settings = dock.property("plotSourceSettings")
-        record = dock.property("plotSourceRecord")
+        # One line: the folder, its revision, Live, and short marks a user must see without opening Plot info
+        # (outdated, ⚠ N). The shots, analysis, saved-result detail and settings are in the plot's Plot info
+        # (instance.py, from these properties); the warnings in full and the record are in the tooltip.
+        parts = [dock.property(name) for name in ("plotSourceRevision", "plotFollow", "plotSourceMarks")]
+        record, warned = dock.property("plotSourceRecord"), dock.property("plotSourceWarnings")
         name = os.path.basename(path.rstrip(os.sep)) or path
-        label.setText(" · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
-                      + (f"\n{settings}" if isinstance(settings, str) and settings else ""))
-        label.setToolTip(record if isinstance(record, str) and record else path)
+        text = " · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
+        label.setText(text)
+        dock.setProperty("plotSourceText", text)
+        tip = record if isinstance(record, str) and record else path
+        label.setToolTip(f"{warned}\n{tip}" if isinstance(warned, str) and warned else tip)  # (Plain: the app wraps it.)
         error_label = dock.findChild(QLabel, "plot_error")
         error = dock.property("plotError")
         if error_label is not None:

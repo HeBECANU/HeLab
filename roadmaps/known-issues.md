@@ -141,6 +141,7 @@ How to use it:
   passed on rerun. Again on Windows, `agent/quick-fixes-10` CI 41762330085 (Tests 2/3, job 126352703916, `feb9985`,
   2026-11-04): `assert (692.18 - 691.02) < 1.0`, quitting took 1.15 s; passed on rerun. All four on Windows Tests
   2/3 since store-v4 went on.
+  Again on Windows: Ground CI 42031225750 (Tests 2/3, job 127257995304, `90d8d9b`, 2026-11-06), passed on rerun.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -161,6 +162,9 @@ How to use it:
   on Ubuntu CI 41622979011 (Converter backends, `agent/followups` `fdd895c`, "rerun reasons": `AssertionError:
   assert -2 == 0` from `wait(20)`), passed on rerun; that branch changed only `--output`'s parsing. Next
   step: put the watcher's stderr in the assertion message.
+  Again on Ubuntu CI, `agent/folder-info` 41998150471 (Tests 3/3, job 127146449450, `4dd31db`, 2026-11-05), passed on
+  rerun.
+  Again on Ubuntu: Ground CI 42031225750 (Tests 3/3, job 127257995388, `90d8d9b`).
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
@@ -383,6 +387,7 @@ How to use it:
   `convert.error`, which line 626 waits for, before `_convert_stopped`, and the offline answer still comes from
   `FolderCache.submit`'s single-shot path; the Reviewer ran it 12 times under 16 CPU burners with `--reruns 0`,
   all passing.
+  Again on macOS: Ground CI 42031225750 (Tests 1/3, job 127257995260, `90d8d9b`, the `[as it comes]` case).
 - [ ] `test_load_queue.py::test_an_automatic_load_waits_for_the_selection_to_settle_only_while_loads_are_busy`:
   one RERUN on `agent/activity-window` CI 41794579242 (`a141e60`, Ubuntu Tests 1/3, job 126455595537):
   `assert explorer.settling` at line 674, right after a third folder is selected while the second's load is busy;
@@ -397,6 +402,9 @@ How to use it:
 - [ ] `test_result_lifecycle.py::test_save_x_eviction_of_the_same_key_before_its_transaction_saves_the_newer_copy`:
   `waitUntil` timed out (30 s) at line 71, in the same local run as the entry above (load ~37); passed on
   retry and 5 of 5 alone. Cause not looked into.
+  The sibling `test_lookup_x_eviction_of_another_result_shows_it_from_disk` timed out the same way (30 s at line 71, the
+  `saved_plot` helper) in Tally's review run on `agent/folder-info` (`f57629c`, 2026-11-05, a slow run: 4m13s against
+  2m38s), and passed on rerun.
 - [ ] `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
   ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
@@ -418,6 +426,11 @@ How to use it:
   `Path.resolve()` in the helper launch ("Clean up disk cache failed … share_of stat'ed a source path"), a warning
   only, seen in Mendy's local runs for LR-15 (2026-11-05). Not a RERUN yet; the patch should be scoped to the call it
   tests.
+- [ ] **`test_convert_helab.py::test_a_killed_helpers_workers_exit`** (`AssertionError: the pool started`): under `-n 8`
+  the converting helper's pool workers weren't yet visible to `psutil` when its first `shot_converted` arrived; 2 reruns
+  in Ledger's local run on `agent/folder-info` (`4dd31db`, 2026-11-05), 1 in its final run, and 2 under load ~500 in
+  Relay's on `agent/app-updates`; passed on rerun, unrelated to both branches. Likely fix: wait briefly (bounded) for
+  the children before asserting, or have the helper report its pool's pids.
 
 Tony (2026-10-22): note these, no fixes for now; raise them again only if they keep
 happening. Counted over the last 12 CI runs from `gh api repos/TonyXTYan/HeLab/actions/jobs/<id>/logs`

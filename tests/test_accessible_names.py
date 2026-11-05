@@ -253,7 +253,8 @@ def script_button(window: QWidget, name: str) -> QPushButton:
 @pytest.mark.no_auto_data_root  # RAM only: no save left for the quit to wait for (handoff A~5).
 @covers("HelabMainWindow", "FolderTabWidget", "FolderExplorer", "FolderDetailsPanel", "LoadBar", "CentralHint",
         "ClickableLabel", "ElidedLabel", "HoverMenuToolButton", "TreePanelWidget", "PlotSettingsPanel", "PresetBar",
-        "TxySourceRow", "ElidedButton", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture")
+        "TxySourceRow", "ElidedButton", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture",
+        "PlotInfo")
 def test_the_main_window_with_a_folder_and_plots(qtbot: QtBot, tmp_path: Path) -> None:
     """The main window empty, then with a synthetic folder loaded, two plots tabbed together, one
     released (its picture and Reload) and one floating (its own settings section)."""
@@ -354,11 +355,13 @@ def test_every_script_and_each_library(qtbot: QtBot, tmp_path: Path) -> None:
         for group in range(scripts.group_selector.count()):
             scripts.group_selector.setCurrentIndex(group)
             tree = scripts.tree_widget
-            top = tree.topLevelItem(0)
-            assert top is not None
-            for index in range(top.childCount()):
+            assert tree.topLevelItemCount()
+            # Every top-level node: a family's versions too (Basic Plots' v2 and v1), the collapsed ones included.
+            children = [top.child(index) for node in range(tree.topLevelItemCount())
+                        if (top := tree.topLevelItem(node)) is not None for index in range(top.childCount())]
+            for child in children:
                 for column in (1, 2):  # Each script's run buttons (its first two actions).
-                    button = tree.itemWidget(top.child(index), column)
+                    button = tree.itemWidget(child, column)
                     if isinstance(button, QPushButton):
                         button.click()
                         opened += 1
@@ -553,8 +556,29 @@ def update_window(cache: FolderCache, path: Path) -> QWidget:
     return window
 
 
+def folder_info_window(cache: FolderCache, path: Path) -> QWidget:
+    """Folder info with a read of every part, its saved results' list open beside it (its detail pane)."""
+    from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
+    window = FolderInfoWindow(FolderInfoSources(cache, lambda: [], lambda: None))
+    folder = str(path / "run1")
+    window.show_folder(folder)
+    rows = [{"result_id": f"r{index}", "analysis_id": "a", "version": "1", "file_name": "a.py", "action": "Plot",
+             "settings": "", "settings_full": "", "bytes": 1, "computed_at": time.time() - 600,
+             "saved_at": time.time() - 600, "last_used": time.time() - 60, "damaged": False} for index in range(6)]
+    window.answer = {"kind": "folder_info", "path": folder, "key": "", "root_state": "rooted", "layout": 4,
+                     "read_at": time.time(), "store": "", "parts": {}, "raw": None, "layers": [], "layers_more": 0,
+                     "views": [], "views_more": 0, "seed_bytes": 0, "results": {"count": 6, "bytes": 6, "rows": rows,
+                                                                                "more": 0},
+                     "prefs": None, "convert_prefs": None, "choices": None, "constants": None, "history": None,
+                     "summary": None, "listing_at": None, "converted": []}
+    window.rebuild()
+    window.open_detail("results")
+    return window
+
+
 DIALOGS: dict[str, tuple[Callable[[FolderCache, Path], QWidget], tuple[str, ...]]] = {
     "activity": (activity_window, ("ActivityWindow",)),
+    "folder info": (folder_info_window, ("FolderInfoWindow",)),
     "presets inspector": (presets_inspector, ("PresetsInspector",)),
     "folder constants": (folder_constants, ("FolderConstantsDialog",)),
     "missing shots": (missing_shots, ("MissingShotsWindow",)),

@@ -72,6 +72,8 @@ SCRIPT_AUTO_RELOAD_SETTING = "script_auto_reload"
 MAIN_SPLIT_SETTING = "main_window_split"
 # The Activity window's size (Q62.1; helab/views/ActivityWindow.py).
 ACTIVITY_SIZE_SETTING = "activity_window_size"
+# The Folder info window's size (Q64.7; helab/views/FolderInfoWindow.py).
+FOLDER_INFO_SIZE_SETTING = "folder_info_window_size"
 # Caching v2's store (Q28.3): developers only, off until stage 2 and Tony's go; no Settings control.
 STORE_V4_SETTING = "store_v4"
 CACHE_POLICY_SETTING = "cache_policy"
@@ -188,6 +190,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting(ACTIVITY_SIZE_SETTING, str, "1080,440",
             "The Activity window's size in logical pixels, \"<width>,<height>\", saved when it closes; at most the "
             "screen's, at least 400 by 200; otherwise the default (Q62.1)."),
+    Setting(FOLDER_INFO_SIZE_SETTING, str, "620,560",
+            "The Folder info window's size in logical pixels, \"<width>,<height>\", saved when it closes, without its "
+            "detail pane; at most the screen's, at least 420 by 240; otherwise the default (Q64.7)."),
     Setting(STORE_V4_SETTING, bool, True,
             "The disk cache's store: store-v4 (caching v2), on from v0.0.8 (Q47.4). Off is a hidden fallback to "
             "store-v3 kept for one release (V~2): set by hand only, never shown in Settings. Read once when "

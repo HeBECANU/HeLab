@@ -83,6 +83,8 @@ class DataRootsTab(QWidget):
         self.cache = cache
         self.enabled = bool(cache is not None and folder_cache.store_options())
         self.roots: list[dict[str, Any]] | None = None
+        # A root to select once the list has it (``select_root``: Folder info's Settings › Data roots…).
+        self._wanted_root = ""
         self.message = ""
         self._inventory_owner = ""
         self._job = ""
@@ -194,6 +196,20 @@ class DataRootsTab(QWidget):
         if not self._inventory_owner:
             self.message = "Disk cache queue full — Refresh to try again"
         self._update()
+
+    def select_root(self, identifier: str) -> bool:
+        """Select the data root ``identifier`` names (its UUID; a mounted location first), now or once the list is
+        read; selection only. Whether it is selected now."""
+        self._wanted_root = identifier
+        items = [self.list.topLevelItem(index) for index in range(self.list.topLevelItemCount())]
+        rows = [(item, item.data(self.LABEL, Qt.ItemDataRole.UserRole)) for item in items if item is not None]
+        found = sorted((item for item, row in rows if isinstance(row, dict) and row.get("uuid") == identifier),
+                       key=lambda item: not (item.data(self.LABEL, Qt.ItemDataRole.UserRole) or {}).get("path"))
+        if not found:
+            return False
+        self._wanted_root = ""
+        self.list.setCurrentItem(found[0])
+        return True
 
     def selected(self) -> dict[str, Any] | None:
         items = self.list.selectedItems()
@@ -392,6 +408,8 @@ class DataRootsTab(QWidget):
             self.list.addTopLevelItem(item)
         for column in range(len(self.COLUMNS)):
             self.list.resizeColumnToContents(column)
+        if self._wanted_root:
+            self.select_root(self._wanted_root)
         self._update()
 
     def _update(self) -> None:

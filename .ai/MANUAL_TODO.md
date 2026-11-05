@@ -336,6 +336,29 @@ and M42.1 on a lab PC with the switch on (one Live session).
 - [ ] **M63.2 Pause background I/O on a share** (the lab PC, or any slow share): pause while a background load reads
   it, and confirm that it pauses and resumes, and that quitting while paused quits normally.
 
+
+## Basic plots v2 (added 2026-11-05, block 66)
+
+- [ ] **M66.1 Basic Plots v2 on a real screen and with Live** (`559baa5`): the tree (v2 open, v1 closed), New on a
+  second Plot, Shot time on a real run with gaps (and a folder converted later, for the amber triangles), the
+  XY/XT/YT options (blur, rate per shot, colour scales, include outside), and Plot info and the one-line dock with long
+  folder names and its outdated / ⚠ marks. **On the lab's Windows PC**, open the Scripts group menu at a narrow panel:
+  every entry in full.
+
+## Folder info (added 2026-11-05, block 67)
+
+- [ ] **M67.1 Folder info on a real screen** (`03f801e`): a real folder with cached data, saved results, a TXY list and
+  constants; a folder with only copies (a raw file moved away, then Retry / Refresh: the mark and "last looked", then
+  moved back); a RAM-only folder (Place .helab-root here…); the detail pane on a long results list; the window's height
+  on the laptop screen; ⌘I with the folder panel hidden; Live on the folder (This session following each shot, a read
+  after each save and on stop). The three Clears on a copy of a real folder: sizes against Settings › Cache's, the
+  only-copy paragraph, "Removed …" and the read again, another folder's cache untouched. On macOS and Windows: open and
+  close the detail pane several times (it stays put); reopen after moving the main window to the laptop (it fits);
+  minimise during Live and restore after a save; on an external monitor, make it taller than the laptop's screen,
+  minimise, restore and reopen with ⌘I (its height kept); close it from the title bar and reopen (size kept, and
+  minimising still follows Live); and Cmd+H then back (A67.6).
+- [ ] **M67.2 Folder info on Windows** (the lab PC): Ctrl+I, the title lines' buttons with Windows' wider fonts, and the
+  detail pane on a 1366-pixel-wide screen.
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything
