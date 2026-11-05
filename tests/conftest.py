@@ -549,6 +549,28 @@ def default_constants() -> None:
         cache.constants_unsaved.clear()
 
 
+def fresh_disk_pause() -> None:
+    """Forget the app-wide FolderCache's disk usage and its 80% pause (``update_auto_load_pause``),
+    quietly: nothing of the next test is connected yet. Only an existing cache (none is created)."""
+    from helab.utils import io_service
+    service = io_service._service
+    cache = service.folder_cache if service is not None else None
+    if cache is not None:
+        cache.disk_usage, cache._usage_seq = None, None
+        cache.auto_load_paused, cache._full_warned, cache._full_ignored_until = False, False, None
+
+
+@pytest.fixture(autouse=True)
+def no_carried_disk_pause() -> None:
+    """Each test starts with the app-wide FolderCache unpaused and its disk usage unknown. The result
+    cache tests that lower the disk budget (monkeypatched, put back at their teardown) left that cache
+    paused, its usage measured against the small budget; a later test's main window re-decided the pause
+    on the real budget and showed "Disk cache below 80% — automatic loading resumed" in front of its
+    status bar (``test_text_length`` on Windows CI 42001112700), and automatic loads were paused in the
+    tests between. Each test's store is its own (``private_store``), so that usage was another store's."""
+    fresh_disk_pause()
+
+
 @pytest.fixture(autouse=True)
 def no_quitting_cache() -> Iterator[None]:
     """A main window closed while saves were pending waits in its quit window, with the app-wide
