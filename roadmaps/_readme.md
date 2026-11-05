@@ -65,6 +65,10 @@ that branch.
   all four plots in a v2 with a Shot ID / Shot time x axis (fallback times marked), new XY, XT and YT 2D histograms,
   and one "Basic Plots" group with its versions as tree nodes (the menu's repeated "Basic plots v1" fixed); v1 kept.
 
+- [ ] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
+  for source checkouts and frozen builds alike; then stage 2's self-update for source checkouts (git + uv,
+  [plan](app-updates.md#stage-2-self-update-button)). How HeLab is distributed decides the rest: Q65.1.
+
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
 **Carried over from v0.0.8:**
