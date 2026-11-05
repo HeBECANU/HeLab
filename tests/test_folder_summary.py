@@ -503,7 +503,12 @@ def test_summary_height_is_fixed_so_tree_rows_never_move(
     child = tmp_path / ("run_" + "x" * 80)
     child.mkdir()
     (child / "d_txy_forc1.txt").write_text("1,2,3\n")
-    browser.resize(260, 400)
+    # 260 px, or as wide as the Live line needs to hold Arm auto-convert beside "Live…" where the font is
+    # wider (Windows' button is 200 px: LR-3); the summary then keeps its three lines.
+    button = browser.auto_convert_button
+    need = button.width() + 4 + browser.folder_freshness_label.fontMetrics().horizontalAdvance("Live…")
+    width = max(260, need + 8 + 16)  # (The summary's left margin, and some to spare.)
+    browser.resize(width, 400)
     browser.show()
     qtbot.waitExposed(browser)
 
@@ -541,6 +546,13 @@ def test_summary_height_is_fixed_so_tree_rows_never_move(
     browser.deselect_button.click()
     assert browser.selected_folder_label.isHidden()
     assert tree_top() == top and browser.summary_widget.height() == height, why()
+    # Tight (LR-3, Tony 2026-11-05): Auto-convert on a fourth line, its text whole; wide again, three.
+    browser.resize(need + 8 - 12, 400)
+    qtbot.waitUntil(lambda: browser.summary_widget.height() == 4 * line, timeout=5_000)
+    assert not browser.convert_row.isHidden() and button.parent() is browser.convert_row, why()
+    browser.resize(width, 400)
+    qtbot.waitUntil(lambda: browser.summary_widget.height() == 3 * line, timeout=5_000)
+    assert tree_top() == top and button.parent() is browser.live_row, why()
 
 
 def test_detected_disk_cache_is_available_before_loading(
