@@ -13,7 +13,8 @@ from typing import Any, Callable, Iterator, Mapping
 import numpy as np
 import numpy.typing as npt
 from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QPainter, QPalette, QPen, QResizeEvent
+from PyQt6.QtGui import (QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen,
+                         QResizeEvent)
 from PyQt6.QtWidgets import (QApplication, QMessageBox, QHBoxLayout, QLineEdit, QMenu, QPushButton, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QTreeView, QInputDialog,
                              QStyle, QToolButton, QVBoxLayout, QWidget, QSizePolicy)
 from helab.models.SnapshotFileSystemModel import FolderNode, SnapshotFileSystemModel
@@ -64,6 +65,8 @@ LARGE_TOOLTIP = ("Automatic loads skip folders larger than the RAM budget or 10%
 REFUSED_TOOLTIP = "Folders larger than 30% of RAM are never loaded."
 # The user's choice for a folder (S10): selecting it loads nothing.
 AUTO_LOAD_OFF = "Auto-load off for this folder"
+# File › Folder info…'s shortcut (Q64.2: ⌘I on macOS, Ctrl+I elsewhere; Finder's Get Info).
+FOLDER_INFO_SHORTCUT = "Ctrl+I"
 # A folder's own TXY source or cache policy (caching v2 stage 2): following the global one.
 FOLDER_CHOICE_GLOBAL = "As Settings (every folder)"
 AUTO_LOAD_OFF_TOOLTIP = ("Load this folder now. You chose not to load it automatically "
@@ -197,6 +200,7 @@ class FolderExplorer(QWidget):
     reviewRootRequested = pyqtSignal(str)  # A pending location: Same folder or a copy?
     # Live turned on or off, or stopped by an error (the toolbar's Live action follows).
     liveChanged = pyqtSignal()
+    folderInfoRequested = pyqtSignal(str)  # Right-click › Folder info… (Q64.1): the folder.
     DWELL_MS = 3000
     # Finish and Cancel modes: while loads are busy (running, queued or stopping, or one started
     # moments ago), an automatic load waits until the selection has stayed this long, plus
@@ -2357,6 +2361,10 @@ class FolderExplorer(QWidget):
         clipboard = QApplication.clipboard()
         if clipboard:
             menu.addAction("Copy Pathname", lambda: clipboard.setText(path))
+        info = menu.addAction("Folder info…", lambda: self.folderInfoRequested.emit(path))
+        if info:
+            info.setToolTip("Everything HeLab holds and knows about this folder (File › Folder info…, "
+                            f"{QKeySequence(FOLDER_INFO_SHORTCUT).toString(QKeySequence.SequenceFormat.NativeText)})")
         # One folder the user asked for: no timeout, with elapsed time and Cancel.
         retry = menu.addAction("Retry / Refresh", lambda: self.refresh_folder(path))
         if retry:

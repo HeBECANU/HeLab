@@ -28,6 +28,8 @@ from helab.views.explorer_live import READ_STOPPED, no_hits_text
 from helab.views.explorer_text import large_text
 
 
+# The Disk cache row's link to the Folder info window (Q64.1).
+FOLDER_INFO_LINK = "Folder info…"
 # The Problems row's part for raw files overwritten since they were cached (Q28.6), which is then amber.
 RAW_OVERWRITTEN_TEXT = "raw file(s) overwritten since cached"
 # Marks the large-folder part of a state row, which is then amber.
@@ -102,6 +104,8 @@ class FolderDetailsPanel(QScrollArea):
     revealRequested = pyqtSignal(str, str)
     # The Disk cache row was clicked while it says Review…: the location awaiting Same folder or Copy.
     reviewRootRequested = pyqtSignal(str)
+    # The Disk cache row's "Folder info…" link was clicked (Q64.1): the window opens for the selected folder.
+    folderInfoRequested = pyqtSignal()
     """Single-line rows that hide when empty; longer details are in each row's tooltip."""
 
     ROWS = (("folder", "Folder"), ("state", "State"), ("files", "Files"), ("txy", "TXY"), ("time", "Time"),
@@ -136,18 +140,28 @@ class FolderDetailsPanel(QScrollArea):
         self.progress.setFixedHeight(min(8, self.fontMetrics().height()))
         self.progress.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.progress.hide()
-        row = 0
+        row = cache_row = 0
         for key, name in self.ROWS:
             label = QLabel(name)
             label.setEnabled(False)  # Dimmed, like a form's field names.
             value = identify(ElidedLabel(), f"details_{key}")  # (Named by its text; the ID finds the row.)
             grid.addWidget(label, row, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(value, row, 1)
+            # (The Disk cache row ends with its Folder info… link, Q64.1: the others span its column.)
+            grid.addWidget(value, row, 1, 1, 1 if key == "cache" else 2)
             self.names[key], self.values[key] = label, value
+            cache_row = row if key == "cache" else cache_row
             row += 1
             if key == "state":
-                grid.addWidget(self.progress, row, 1)
+                grid.addWidget(self.progress, row, 1, 1, 2)
                 row += 1
+        # The Disk cache row's end: Folder info… (Q64.1), shown with the row, never elided.
+        self.folder_info = identify(QLabel(FOLDER_INFO_LINK), "details_folder_info", "Folder info…")
+        self.folder_info.setToolTip("Everything HeLab holds and knows about this folder, in its own window")
+        self.folder_info.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.folder_info.setForegroundRole(QPalette.ColorRole.Link)
+        self.folder_info.hide()
+        self.folder_info.installEventFilter(self)
+        grid.addWidget(self.folder_info, cache_row, 2)
         # Clicking "Loading run_042" shows that folder in its tab.
         self._reveal: tuple[str, str] | None = None
         self.values["io"].installEventFilter(self)
@@ -172,8 +186,14 @@ class FolderDetailsPanel(QScrollArea):
         if value.isHidden() == bool(text):
             self.names[key].setVisible(bool(text))
             value.setVisible(bool(text))
+            if key == "cache":
+                self.folder_info.setVisible(bool(text))
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if (a0 is self.folder_info and isinstance(a1, QMouseEvent)
+                and a1.type() == QEvent.Type.MouseButtonRelease and a1.button() == Qt.MouseButton.LeftButton):
+            self.folderInfoRequested.emit()
+            return True
         if (a0 is self.values["io"] and isinstance(a1, QMouseEvent)
                 and a1.type() == QEvent.Type.MouseButtonRelease and a1.button() == Qt.MouseButton.LeftButton
                 and self._reveal is not None):

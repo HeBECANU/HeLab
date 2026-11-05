@@ -25,7 +25,7 @@ ADMIN_ACTIONS = ("inventory", "clear", "purge", "trim", "adopt", "discard", "swe
                  "convert_prefs", "clear_prefs", "clear_converted_txy", "mark_used",
                  "constants", "presets", "forget_root", "root_same", "clear_root", "clear_results",
                  "clear_root_results", "adopt_result", "discard_result", "identity", "clear_raw", "legacy_choice",
-                 "clear_legacy", "clear_txy", "folder_choice")
+                 "clear_legacy", "clear_txy", "folder_choice", "folder_info")
 # What ``purge`` takes by age (A47.4): one kind of cached data, folder records, cached analysis, or all of them.
 PURGES = ("datasets", "txy", "raw", "records", "results", "all")
 
@@ -60,7 +60,10 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
     # writes keyed by a source folder (scan history, subfolder status). ``prefs`` (the folder flags)
     # names a source folder too but trusts every hint, by design (cache-store.md: "flags still trust
     # every hint"); the other actions name no source folder.
-    verified_volumes = params.get("verified_volumes") if action in ("constants", "convert_prefs") else None
+    # (Folder info reads, and clears one folder, by the same rule, so a disk swapped in at a mount path never shows or
+    # loses another disk's cache. Its callers that send none, as every global Clear, trust every hint as before.)
+    verified_volumes = (params.get("verified_volumes") if action in (
+        "constants", "convert_prefs", "folder_info", "clear_raw", "clear_results", "clear_converted_txy") else None)
     with stores._cache_store(root, local_lane=True, verified_volumes=verified_volumes,
                              offline=bool(cache_options.get("offline"))) as store:
         if (budget is not None and budget_set_at is not None and not store.read_only
@@ -237,10 +240,19 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 send({"kind": "presets", "saved": written, "rows": stored.value or [],
                       "store": store.store_id})
         elif action == "clear_converted_txy":
-            # The user asked (Settings → Cache's Clear, confirmed): HeLab's TXY under the cache and temp folders.
+            # The user asked (Settings → Cache's Clear, confirmed): HeLab's TXY under the cache and temp folders; or,
+            # with ``path`` (Folder info's Clear this folder's converted TXY…, confirmed), that folder's in each.
+            # Never a TXY written beside the raw files.
             roots = helab_txy.converted_roots(root, str(params.get("temps") or ""))
-            gone = sum(helab_txy.clear_converted(converted)["bytes"] for converted in roots.values())
-            send({"kind": "removed", "kinds": ["converted_txy"], "paths": None, "datasets": 0, "bytes": gone})
+            if params.get("path"):
+                path = str(params["path"])
+                gone = sum(helab_txy.clear_converted_folder(folder)["bytes"]
+                           for folder in _converted_folders(store, path, root, str(params.get("temps") or "")))
+                send({"kind": "removed", "kinds": ["converted_txy"], "paths": [path], "datasets": 0, "bytes": gone})
+                result["bytes"] = gone
+            else:
+                gone = sum(helab_txy.clear_converted(converted)["bytes"] for converted in roots.values())
+                send({"kind": "removed", "kinds": ["converted_txy"], "paths": None, "datasets": 0, "bytes": gone})
             result["converted_txy"] = helab_txy.converted_summary(roots)
         elif action == "clear_prefs":
             cleared_at = time.time()
@@ -262,6 +274,7 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
                 # (S4~1, the global TXY only: the folders that follow Settings' policy; the others keep theirs.)
                 raw = store.remove_raw_following()
             else:
+                _refuse_unverified(store, paths)
                 raw = store.remove_raw(None if paths is None else [str(path) for path in paths])
             send(_raw_removed_event(raw.paths, raw.rows, raw.bytes))
             result.update({"raw": raw.rows, "bytes": raw.bytes})
@@ -289,6 +302,11 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
             if params.get("policy") == "txy":
                 # S4~1: nothing is removed; the app offers to remove the folder's raw pulses, with their size.
                 result["folder_raw"] = store.folder_raw(path)
+        elif action == "folder_info":
+            # Folder info (Q64.1–Q64.10): what the store and HeLab's converted-TXY index hold for one folder, read
+            # only; never the source folder. Answered as ``folder_info``, then ``admin_result`` as every action.
+            from helab.io_ops.folder_info import folder_info
+            send(folder_info(store, str(params["path"]), root, str(params.get("temps") or "")))
         elif action == "legacy_choice":
             # The store-v3 question's or Settings › Cache's answer: keep (read through) or ignore it.
             result["legacy"] = store.set_legacy_choice(str(params["choice"]))
@@ -330,8 +348,11 @@ def cache_admin(cache_options: dict[str, Any], action: str, send: Emit = emit, *
         elif action == "discard_result":
             result["discarded"] = store.discard_pending_result(params["pending_id"])
         elif action == "clear_results":
-            # The Cache tab's Clear cached analysis: every saved result; datasets and records stay.
-            cleared = store.remove_results()
+            # The Cache tab's Clear cached analysis: every saved result; or, with ``paths`` (Folder info's Clear this
+            # folder's saved results…, confirmed), those folders' (each one's results epoch). Datasets and records stay.
+            paths = params.get("paths")
+            _refuse_unverified(store, paths)
+            cleared = store.remove_results(None if paths is None else [str(path) for path in paths])
             send(_results_removed_event(cleared))
             result.update({"results": cleared.results, "bytes": cleared.bytes})
         elif action == "root_same":
@@ -433,3 +454,34 @@ def _cache_move_step(mover: Any, action: str, app_dir: str, move: dict[str, Any]
         send({"kind": "move_recovered", "message": message, "usable": usable})
     else:
         raise ValueError(f"Unknown cache move action: {action}")
+
+
+def _converted_folders(store: Any, path: str, cache_directory: str, temps: str) -> list[str]:
+    """HeLab's folders for ``path``'s converted TXY (``helab_txy.folders``: the cache folder by its key, the temp folder
+    by key and by path); by path only without a data root. A drive not verified this session raises, as its read does."""
+    from helab.io_ops.folder_info import folder_key
+    from helab.utils.cache_paths import UnresolvedRemotePath
+    from helab.utils.data_roots import VolumeUnverified
+    try:
+        key = folder_key(store, path)
+    except VolumeUnverified:
+        raise  # (A NoDataRoot too, but not RAM only: refused until the drive is verified.)
+    except UnresolvedRemotePath:  # (NoDataRoot among them.)
+        key = ""
+    options = {"cache_base": os.path.dirname(os.path.abspath(cache_directory)), "temps": temps}
+    return helab_txy.folders(path, options, key)
+
+
+def _refuse_unverified(store: Any, paths: Any) -> None:
+    """A Clear of named folders refuses one on a drive not verified this session (``VolumeUnverified``, its reason),
+    rather than failing as "no data root". (Folders without a data root fail in the removal, as before.)"""
+    from helab.io_ops.folder_info import folder_key
+    from helab.utils.cache_paths import UnresolvedRemotePath
+    from helab.utils.data_roots import VolumeUnverified
+    for path in paths or ():
+        try:
+            folder_key(store, str(path))
+        except VolumeUnverified:
+            raise
+        except UnresolvedRemotePath:
+            pass

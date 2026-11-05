@@ -863,6 +863,11 @@ class LiveController:
         self.explorer.model.cache.set_convert_with(path, profile)
         self._live_changed()
 
+    def set_write_beside(self, path: str, on: bool) -> None:
+        """Write TXY beside the raw files in ``path``, as the Auto-convert menu sets it (asked first when turned on):
+        for the Folder info window's Flags (Q64.5)."""
+        self._set_write_beside(path, on)
+
     def _set_write_beside(self, path: str, on: bool) -> None:
         explorer = self.explorer
         name = os.path.basename(path.rstrip(os.sep)) or path

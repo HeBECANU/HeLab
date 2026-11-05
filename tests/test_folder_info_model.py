@@ -1,0 +1,406 @@
+"""The Folder info window's model (``helab/utils/folder_info.py``; Q64.1–Q64.10) from fake reads and memory: each
+section's lines and actions, the only-copy wording with when HeLab last looked (Q64.8), "nothing saved" only from a read
+that worked, a failed read never saying so, RAM only, store-v3, long lists shortened with a detail list (Q64.7), memory
+against the store, Copy as text, and ``Reads``: one read in flight, a newer ask replacing the queued one, a retarget
+dropping the old answer."""
+from __future__ import annotations
+
+import time
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from helab.utils import folder_info
+from helab.utils.folder_info import Memory, Reads, Session, build
+
+NOW = time.time()
+PATH = "/data/run/x"
+ROOT = ("/data/run", "uuid-1", "run")
+
+
+def part(status: str = "found", error: str = "") -> dict[str, str]:
+    return {"status": status, "error": error}
+
+
+def answer(**changes: Any) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "kind": "folder_info", "path": PATH, "key": "root://uuid-1/x", "root_state": "rooted", "layout": 4,
+        "read_at": NOW - 5, "store": "s", "parts": {name: part() for name in (
+            "raw", "layers", "views", "seed", "results", "prefs", "convert_prefs", "choices", "constants", "history",
+            "summary", "listing", "converted")},
+        "raw": {"shots": 120, "bytes": 18_000_000, "first": 1, "last": 120, "saved_first": NOW - 3600,
+                "saved_last": NOW - 60, "last_used": NOW - 60, "seen_at": NOW - 100, "only_copy": 0,
+                "only_copy_bytes": 0, "gone_first": None, "gone_last": None},
+        "layers": [{"layer": "helab:abc", "tags": ["m19v1"], "shots": 120, "first": 1, "last": 120, "rows": 9000,
+                    "bytes": 9_000_000, "precision": "g8", "saved_at": NOW - 60, "last_used": NOW - 60,
+                    "seen_at": NOW - 100, "gone_at": None, "group": "rebuildable"}],
+        "layers_more": 0, "views": [{"source": "", "tag": "m19v1", "last_used": NOW - 60}], "views_more": 0,
+        "seed_bytes": 0, "results": {"count": 0, "bytes": 0, "rows": [], "more": 0},
+        "prefs": None, "convert_prefs": None, "choices": None, "constants": None, "history": None, "summary": None,
+        "listing_at": NOW - 100, "converted": []}
+    event.update(changes)
+    return event
+
+
+def memory(**changes: Any) -> Memory:
+    values: dict[str, Any] = {"path": PATH, "root": ROOT, "txy_list": "m19v1 › External", "policy": "Raw + what you load",
+                              "flags": {"no_cache": False, "no_auto_load": False}}
+    values.update(changes)
+    return Memory(**values)
+
+
+def section(info: folder_info.Info, ident: str) -> folder_info.Section:
+    return next(section for section in info.sections if section.id == ident)
+
+
+def texts(info: folder_info.Info, ident: str) -> list[str]:
+    return [row.text for row in section(info, ident).rows]
+
+
+def test_the_sections_come_in_order_with_the_folders_existing_actions() -> None:
+    info = build(answer(), memory(), NOW)
+    assert [section.id for section in info.sections] == [
+        "session", "store", "results", "flags", "choices", "constants", "scan", "converted"]
+    assert info.title == f"Folder info — {PATH}"
+    actions = {section.id: [action.id for action in section.actions] for section in info.sections}
+    assert actions == {"session": [], "store": ["clear_data", "clear_raw", "settings_cache"],
+                       "results": ["clear_results", "settings_roots"],
+                       "flags": ["flag_no_cache", "flag_no_auto_load", "flag_write_beside"],
+                       "choices": ["txy_choose", "policy_choose"], "constants": ["constants_edit"],
+                       "scan": ["scan_refresh"], "converted": ["convert", "clear_converted"]}
+    assert [action.id for action in info.header_actions] == ["settings_roots", "refresh", "copy"]
+    assert info.header[1].text == "⚓ run · /data/run" and info.header[2].text.startswith("As of ")
+
+
+def test_the_disk_cache_lines_name_raw_pulses_layers_and_loads() -> None:
+    lines = texts(build(answer(), memory(), NOW), "store")
+    assert lines[0].startswith("Raw pulses: 120 shots (d1–d120) · 18.0 MB · saved ")
+    assert lines[1] == "TXY m19v1: 120 shots · 9.0 MB · rebuildable from raw pulses"
+    assert lines[2] == "Loads saved: priority modes · m19v1"
+
+
+def test_only_copies_are_named_with_when_helab_last_looked() -> None:
+    looked = NOW - 7200
+    raw = {**answer()["raw"], "only_copy": 12, "only_copy_bytes": 1_800_000, "gone_first": looked, "gone_last": looked}
+    layers = [*answer()["layers"], {**answer()["layers"][0], "layer": "matlab", "tags": [], "group": "only",
+                                    "gone_at": looked - 10}]
+    store = section(build(answer(raw=raw, layers=layers, listing_at=looked - 50), memory(), NOW), "store")
+    first = store.rows[0]
+    assert first.warn and first.text.startswith("⚠ Only copy: 12 shots' raw pulses (1.8 MB) and 1 TXY layer · HeLab "
+                                                "last looked ")
+    assert folder_info.when(looked, NOW) in first.text and "2h ago" in first.tooltip
+    assert "the source files are gone" in first.tooltip
+    assert store.more == "All 5 lines ›" and store.detail is not None and len(store.rows) == folder_info.SHOWN - 1
+    assert any(cells[0].startswith("TXY External (MATLAB's TXY): 120 shots") and cells[0].endswith("only copy")
+               for cells, _ in store.detail.rows)
+
+
+def test_nothing_saved_only_from_a_read_that_worked() -> None:
+    empty = answer(raw={**answer()["raw"], "shots": 0}, layers=[], views=[],
+                   parts={**answer()["parts"], "raw": part("missing"), "layers": part("missing"),
+                          "views": part("missing")})
+    assert texts(build(empty, memory(), NOW), "store") == ["Nothing cached for this folder"]
+    failed = build(None, memory(), NOW, error="Disk cache could not be read: disk I/O error")
+    for ident in ("store", "results", "converted"):
+        assert texts(failed, ident) == [folder_info.NOT_READ]
+        assert section(failed, ident).rows[0].warn
+    assert any("Couldn't read the disk cache: Disk cache could not be read" in row.text and row.warn
+               for row in failed.header)
+    every = " ".join(row.text for section in failed.sections for row in section.rows)
+    assert "Nothing cached" not in every and "No saved results" not in every and "None recorded" not in every
+    assert texts(build(None, memory(), NOW, reading=True), "store") == [folder_info.READING]
+
+
+def test_a_failed_read_keeps_the_last_good_lines_marked_stale() -> None:
+    info = build(answer(), memory(), NOW, error="timed out")
+    assert section(info, "store").stale and not section(info, "session").stale
+    assert texts(info, "store")[0].startswith("Raw pulses") and "Couldn't read" in info.header[-1].text
+
+
+def test_a_part_that_failed_says_so_and_the_rest_shows() -> None:
+    event = answer(parts={**answer()["parts"], "layers": part("error", "Disk cache could not be read: bad")},
+                   layers=[])
+    lines = texts(build(event, memory(), NOW), "store")
+    assert lines[0] == "Couldn't read layers: Disk cache could not be read: bad" and lines[1].startswith("Raw pulses")
+    results = build(answer(parts={**answer()["parts"], "results": part("error", "x")}), memory(), NOW)
+    assert texts(results, "results") == ["Couldn't read saved results: x"]
+
+
+def test_ram_only_offers_place_root_and_needs_a_root_for_the_flags() -> None:
+    event = answer(root_state="no_root", key="", parts={name: part("skipped") for name in answer()["parts"]})
+    info = build(event, memory(root=None, no_root="no .helab-root found here or above"), NOW)
+    assert info.header[1].text == "RAM only: no .helab-root here or above" and info.header[1].warn
+    assert [action.id for action in info.header_actions][0] == "place_root"
+    assert texts(info, "store") == [folder_info.RAM_ONLY_ROW] and texts(info, "results") == [folder_info.RAM_ONLY_ROW]
+    flags = section(info, "flags")
+    assert not any(action.enabled for action in flags.actions)
+    store = {action.id: action for action in section(info, "store").actions}
+    assert not store["clear_data"].enabled and not store["clear_raw"].enabled and store["settings_cache"].enabled
+    assert store["clear_raw"].tooltip == folder_info.NEEDS_ROOT
+
+
+def test_store_v3_shows_store_v4_only() -> None:
+    parts = {**answer()["parts"], **{name: part("skipped", "store-v3") for name in ("raw", "layers", "views", "seed",
+                                                                                     "results")}}
+    info = build(answer(layout=3, parts=parts), memory(store_v4=False), NOW)
+    assert texts(info, "store") == [folder_info.STORE_V4_ONLY] and texts(info, "results") == [folder_info.STORE_V4_ONLY]
+    assert not any(action.enabled for action in section(info, "choices").actions)
+
+
+def result(index: int, **changes: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {"result_id": f"r{index}", "analysis_id": "tests.corr", "version": "3", "file_name": "corr.py",
+                           "action": "Plot", "settings": f"bins={index}", "settings_full": f"bins={index}",
+                           "bytes": 1_000_000, "computed_at": NOW - 600, "saved_at": NOW - 600, "last_used": NOW - index,
+                           "damaged": False}
+    row.update(changes)
+    return row
+
+
+def test_saved_results_show_a_few_lines_and_open_the_rest_to_the_side() -> None:
+    rows = [result(index) for index in range(5)] + [result(9, damaged=True, settings="", analysis_id="tests.gone")]
+    event = answer(results={"count": 206, "bytes": 206_000_000, "rows": rows, "more": 200})
+    info = build(event, memory(script_names={"tests.corr": "Correlations"}), NOW)
+    results = section(info, "results")
+    assert len(results.rows) == folder_info.SHOWN - 1 and results.more == "All 206 saved results ›"
+    assert results.rows[0].text == "206 saved results · 206 MB"
+    assert results.rows[1].text.startswith("Correlations v3 · Plot · bins=0 · used ")
+    assert results.detail is not None and len(results.detail.rows) == 7
+    assert results.detail.columns == ("Script", "Action", "Settings", "Computed", "Used", "Size")
+    damaged = results.detail.rows[5]
+    assert damaged[0][0] == "tests.gone v3" and damaged[0][2] == "record unreadable"
+    assert results.detail.rows[6][0][0] == "and 200 more not shown"
+    few = build(answer(results={"count": 1, "bytes": 1, "rows": [result(1)], "more": 0}), memory(), NOW)
+    assert section(few, "results").detail is None and len(section(few, "results").rows) == 2
+
+
+def test_flags_and_choices_are_memorys_with_the_stores_difference_named() -> None:
+    event = answer(prefs={"no_cache": True, "no_auto_load": False, "set_at": 1.0},
+                   convert_prefs={"write_beside": True, "set_at": 1.0},
+                   choices={"policy": "raw", "source": "helab-only", "tag": "m19v1", "policy_set_at": NOW - 60,
+                            "source_set_at": NOW - 60})
+    info = build(event, memory(flags={"no_cache": False, "no_auto_load": False}, write_beside=True, txy_own=True,
+                               policy_own=False), NOW)
+    flags = texts(info, "flags")
+    assert flags == ["Don't cache: off (not saved yet)", "Don't auto-load: off", "Write TXY beside: on"]
+    assert section(info, "flags").rows[0].warn and section(info, "flags").actions[2].checked is True
+    choices = section(info, "choices")
+    assert choices.rows[0].text == "TXY: m19v1 › External (this folder's own)"
+    assert choices.rows[1].text == "Cache policy: Raw + what you load (Settings')"
+    assert "Saved for this folder" in choices.rows[0].tooltip
+
+
+def test_constants_say_where_each_is_set_and_when_only_this_session() -> None:
+    info = build(answer(constants={"values": {"fall_distance": 0.848}, "set_at": NOW - 60}),
+                 memory(constants={"fall_distance": (0.848, PATH), "g": (9.8, "/data/run")},
+                        constants_note="no .helab-root found here or above"), NOW)
+    lines = texts(info, "constants")
+    assert lines[0] == "Fall distance h: 0.848 m (this folder)"
+    assert lines[1] == "Gravitational acceleration g: 9.8 m/s² (from run)"
+    assert lines[2] == "This session only: no .helab-root found here or above"
+    assert "Saved for this folder" in section(info, "constants").rows[0].tooltip
+    assert texts(build(answer(), memory(), NOW), "constants") == ["None set here or above: the lab's values"]
+
+
+def test_scan_history_names_failures_newest_first() -> None:
+    failures = [{"operation_id": f"o{index}", "revision": index, "failed_at": NOW - 1000 + index, "attempts": 1,
+                 "reason": f"timed out {index}", "kind": "error"} for index in range(4)]
+    history = {"revision": 4, "blocked": True, "failures": failures, "last_success_at": None}
+    info = build(answer(history=history, summary={"status": "ok", "raw_count": 3, "txy_count": 2,
+                                                  "scanned_at": NOW - 2000}), memory(), NOW)
+    scan = section(info, "scan")
+    assert scan.rows[0].text.startswith("Last basic scan: ok · 3 raw, 2 TXY")
+    assert scan.rows[1].text == "4 failed status checks · automatic checks skipped" and scan.rows[1].warn
+    assert scan.rows[2].text.endswith("timed out 3") and scan.more and scan.detail is not None
+    assert scan.detail.rows[-1][0][0].startswith("Last listed: ")
+    newer = dict(history, revision=9, blocked=False, failures=failures[:1], last_success_at=NOW - 10)
+    assert texts(build(answer(history=history), memory(history=newer), NOW), "scan")[0].startswith(
+        "Last folder status check that worked")
+
+
+def test_converted_txy_by_base_and_an_index_that_cant_be_read() -> None:
+    converted = [{"base": "cache", "folder": "/c/converted-txy/abc", "status": "found", "error": "", "last_used": NOW,
+                  "tags": [{"tag": "m19v1", "profile": "matlab-2019", "version": 1, "output": "beside", "shots": 3,
+                            "bytes": 3000, "newest": NOW - 5},
+                           {"tag": "m19v1", "profile": "matlab-2019", "version": 1, "output": "cache", "shots": 2,
+                            "bytes": 2_000_000, "newest": NOW - 5}]},
+                 {"base": "temp", "folder": "/t/converted-txy/abc", "status": "error",
+                  "error": "HeLab's TXY index here can't be read (damaged)", "last_used": None, "tags": []}]
+    lines = texts(build(answer(converted=converted), memory(), NOW), "converted")
+    assert lines == ["Beside the raw files: m19v1 · 3 shots · 3.0 kB (as recorded)",
+                     "Cache folder: m19v1 · 2 shots · 2.0 MB",
+                     "Temp folder: HeLab's TXY index here can't be read (damaged)"]
+    assert texts(build(answer(), memory(), NOW), "converted") == ["None recorded"]
+    unavailable = build(answer(), memory(convert_unavailable="working offline"), NOW)
+    assert not section(unavailable, "converted").actions[0].enabled
+
+
+def test_this_session_and_live() -> None:
+    session = Session(loaded_shots=120, ram_bytes=2 * 1024**3, source="m19v1 › External", newest_shot=120,
+                      newest_at=NOW - 3, live="Tab 1", auto_convert=True, plots=("A", "B", "C", "D"))
+    info = build(answer(), memory(session=session, subtree={"status": "something", "derived_at": NOW - 9}), NOW)
+    lines = texts(info, "session")
+    assert lines[0] == "Loaded: 120 shots · 2.0 GiB in RAM · m19v1 › External"
+    assert lines[1] == "Live: on in Tab 1 · Auto-convert on" and lines[2] == "Plots: A, B, C and 1 more"
+    assert lines[3].startswith("Newest shot: 120 · written ") and lines[4].startswith("Subfolders: some have data")
+    assert info.live and "Live: refreshes by itself" in info.header[2].text
+
+
+def test_copy_as_text_has_every_line() -> None:
+    rows = [result(index) for index in range(6)]
+    info = build(answer(results={"count": 6, "bytes": 6, "rows": rows, "more": 0}), memory(), NOW)
+    text = folder_info.as_text(info)
+    assert text.startswith(f"Folder info — {PATH}\n⚓ run") and "Saved plot results" in text
+    assert all(f"bins={index}" in text for index in range(6))
+
+
+def test_reads_keep_one_in_flight_and_drop_a_retargeted_answer() -> None:
+    reads = Reads()
+    assert reads.ask("/a")
+    reads.started("o1")
+    assert not reads.ask("/a") and not reads.ask("/a") and reads.queued  # (One queued, however often asked.)
+    assert reads.answered("o1", "/a")
+    assert reads.ended("o1") and not reads.in_flight  # (The queued one goes now.)
+    reads.started("o2")
+    assert not reads.ask("/b")  # Retargeted while o2 reads /a.
+    assert not reads.answered("o2", "/a") and not reads.answered("o2", "/b")
+    assert reads.ended("o2")
+    reads.started("o3")
+    assert reads.answered("o3", "/b") and not reads.answered("o1", "/b")
+    assert not reads.ended("other") and not reads.ended("o3") and not reads.in_flight
+    reads.started("")  # (Couldn't be queued.)
+    assert not reads.in_flight and reads.ask("/b")
+
+
+def test_a_time_that_cant_be_one_is_unknown_never_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows' local time refuses small or far timestamps (``OSError: [Errno 22]``): the window says "unknown"."""
+    for seconds in (1000.0, 1e12, -5.0, float("nan"), float("inf"), None, 0.0):
+        assert folder_info.when(seconds, NOW) == "unknown" and folder_info.ago(seconds, NOW) == "unknown"
+
+    def refuse(seconds: float, tz: Any = None) -> Any:
+        raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(folder_info, "datetime", SimpleNamespace(fromtimestamp=refuse))
+    assert folder_info.when(NOW, NOW) == "unknown" and folder_info.ago(NOW - 5, NOW) == "unknown"
+    info = build(answer(), memory(), NOW)  # (Builds whatever the OS says of its times.)
+    assert texts(info, "store")[0].endswith(" · saved unknown–unknown") and info.header[2].text == "As of unknown"
+
+
+# The per-folder Clears (Q~6, Q64.6 b; Tony 2026-11-05).
+
+def converted(*tags: tuple[str, int, int, int]) -> list[dict[str, Any]]:
+    """One cache base's index rows: (output, shots, bytes, only copies) per tag."""
+    return [{"base": "cache", "folder": "/c/converted-txy/abc", "status": "found", "error": "", "last_used": NOW - 60,
+             "tags": [{"tag": "m19v1", "profile": "matlab-2019", "version": 1, "output": output, "shots": shots,
+                       "bytes": size, "newest": NOW - 60, "only_copy": only, "only_copy_bytes": only * 100}
+                      for output, shots, size, only in tags]}]
+
+
+def actions(info: folder_info.Info) -> dict[str, folder_info.Action]:
+    return {action.id: action for section in info.sections for action in section.actions}
+
+
+def test_each_clear_is_offered_from_a_current_read_with_something_to_remove() -> None:
+    results = {"count": 2, "bytes": 3000, "rows": [], "more": 0}
+    event = answer(results=results, converted=converted(("cache", 4, 4000, 0)))
+    offered = actions(build(event, memory(), NOW))
+    assert all(offered[ident].enabled for ident in folder_info.CLEARS)
+    assert offered["clear_raw"].label == "Clear raw pulses…" and "18.0 MB" in offered["clear_raw"].tooltip
+    assert offered["clear_results"].label == "Clear this folder's saved results…"
+    assert offered["clear_converted"].label == "Clear this folder's converted TXY…"
+    for why, info in ((folder_info.READ_FIRST, build(None, memory(), NOW)),
+                      (folder_info.READ_FIRST, build(event, memory(), NOW, error="locked")),  # (Never a stale read.)
+                      (folder_info.REMOVING, build(event, memory(), NOW, clearing={"raw", "results", "converted"}))):
+        assert {(action.enabled, action.tooltip) for ident, action in actions(info).items()
+                if ident in folder_info.CLEARS} == {(False, why)}
+    nothing = actions(build(answer(raw={**answer()["raw"], "shots": 0, "bytes": 0},
+                                   converted=converted(("beside", 3, 300, 0))), memory(), NOW))
+    assert [(nothing[ident].enabled, nothing[ident].tooltip) for ident in folder_info.CLEARS] == [
+        (False, "No raw pulses cached for this folder"), (False, "No saved results for this folder"),
+        (False, "No converted TXY of this folder in HeLab's cache or temp folder")]  # (Beside ones are never removed.)
+    parts = {**answer()["parts"], **{name: part("skipped", "store-v3") for name in folder_info_store_v4()}}
+    v3 = actions(build(answer(layout=3, parts=parts), memory(store_v4=False), NOW))
+    assert (v3["clear_raw"].enabled, v3["clear_raw"].tooltip) == (False, folder_info.STORE_V4_ONLY)
+
+
+def folder_info_store_v4() -> tuple[str, ...]:
+    return ("raw", "layers", "views", "seed", "results")
+
+
+def test_each_clear_asks_naming_sizes_counts_and_the_only_copies() -> None:
+    raw = folder_info.clear_question(answer(), "clear_raw", PATH, NOW)
+    assert raw == folder_info.Question("Clear raw pulses of this folder", "Remove HeLab's cached raw pulses of x "
+                                       "(18.0 MB)? Your d files aren't touched. They're cached again the next time "
+                                       "this folder loads.", "Remove cached raw pulses")
+    only = folder_info.clear_question(answer(raw={**answer()["raw"], "only_copy": 7}), "clear_raw", PATH, NOW)
+    assert only is not None and only.warn and only.text.endswith(
+        "\n\n7 of them are the only copy: their raw files are gone from the folder, so they can't be read again.")
+    results = folder_info.clear_question(answer(results={"count": 1, "bytes": 2000, "rows": [], "more": 0}),
+                                         "clear_results", PATH, NOW)
+    assert results is not None and results.reject == "Keep them" and not results.warn
+    assert results.text.startswith("Remove the 1 saved plot result of x (2.0 kB)?")
+    event = answer(raw={**answer()["raw"], "gone_last": NOW - 30},
+                   converted=converted(("beside", 9, 900, 0), ("cache", 4, 4000, 2)))
+    txy = folder_info.clear_question(event, "clear_converted", PATH, NOW)
+    assert txy is not None and txy.warn and txy.accept == "Remove converted TXY"
+    assert txy.text.startswith("Remove HeLab's converted TXY of x: 4 shots (4.0 kB) in HeLab's cache folder? Your d "
+                               "files aren't touched, nor TXY written beside them")
+    assert (f"2 of them (200 B) are the only copy of that TXY: their d files were gone when HeLab last looked "
+            f"({folder_info.when(NOW - 30, NOW)})") in txy.text
+    unknown = folder_info.clear_question(answer(converted=converted(("cache", 4, 4000, 0))), "clear_converted", PATH,
+                                         NOW)
+    assert unknown is not None and not unknown.warn and "None of them is known to be the only copy" in unknown.text
+    assert folder_info.clear_question(None, "clear_raw", PATH, NOW) is None
+    assert folder_info.clear_question(answer(converted=[]), "clear_converted", PATH, NOW) is None
+
+
+def test_a_clear_says_in_the_header_when_it_worked_or_why_not() -> None:
+    done = build(answer(), memory(), NOW, notice=folder_info.cleared("clear_raw", NOW))
+    assert done.header[-1].text == f"Removed this folder's cached raw pulses · {folder_info.when(NOW, NOW)}"
+    failed = build(answer(), memory(), NOW, notice=folder_info.not_cleared("clear_converted", "disk I/O error"))
+    assert failed.header[-1].text == "Couldn't remove this folder's converted TXY: disk I/O error"
+    assert failed.header[-1].warn
+
+
+def test_converted_txy_rows_mark_their_only_copies() -> None:
+    info = build(answer(converted=converted(("cache", 4, 4000, 2))), memory(), NOW)
+    [row] = section(info, "converted").rows
+    assert row.text.endswith(" · ⚠ 2 only copies") and row.warn and "the only copy of that TXY" in row.tooltip
+
+
+def test_the_raw_pulses_question_says_whether_they_come_back() -> None:
+    """FI-4 (CoCo's wording): cached again at the next load, unless Don't cache or a TXY only policy stops that."""
+    def said(**changes: Any) -> str:
+        question = folder_info.clear_question(answer(), "clear_raw", PATH, NOW, memory(**changes))
+        assert question is not None
+        return question.text.split("aren't touched. ")[1]
+    assert said() == "They're cached again the next time this folder loads."
+    assert said(policy_id="raw") == "They're cached again the next time this folder loads."
+    assert said(policy_id="txy") == "They aren't cached again: this folder's cache policy is TXY only."
+    assert said(flags={"no_cache": True}) == "They aren't cached again: this folder is set to Don't cache."
+
+
+def test_saved_flags_choices_and_constants_that_cant_be_read_say_so() -> None:
+    """FI-7: a part that failed shows as an error line, as the other sections do; never as nothing saved."""
+    parts = {**answer()["parts"], **{name: part("error", "Disk cache could not be read: locked")
+                                     for name in ("prefs", "convert_prefs", "choices", "constants")}}
+    info = build(answer(parts=parts), memory(), NOW)
+    expected = {"flags": ["Couldn't read the saved flags: Disk cache could not be read: locked",
+                          "Couldn't read the saved Write TXY beside flag: Disk cache could not be read: locked"],
+                "choices": ["Couldn't read the saved TXY list and cache policy: Disk cache could not be read: locked"],
+                "constants": ["Couldn't read the saved constants: Disk cache could not be read: locked"]}
+    for ident, lines in expected.items():
+        rows = section(info, ident).rows
+        assert [row.text for row in rows[:len(lines)]] == lines and all(row.warn for row in rows[:len(lines)])
+    clean = build(answer(), memory(), NOW)
+    assert not any(row.text.startswith("Couldn't read") for ident in expected for row in section(clean, ident).rows)
+
+
+def test_an_unverified_drives_clears_wait_for_it() -> None:
+    """FI-2: a read that found the drive not verified offers no Clear (it would be refused), and says why."""
+    event = answer(root_state="unverified", key="", parts={name: part("skipped", "not verified")
+                                                           for name in answer()["parts"]},
+                   converted=converted(("cache", 4, 4000, 0)))
+    offered = actions(build(event, memory(), NOW))
+    assert {(offered[ident].enabled, offered[ident].tooltip) for ident in folder_info.CLEARS} == {
+        (False, folder_info.UNVERIFIED)}
+    assert texts(build(event, memory(), NOW), "store") == ["Not read: this drive isn't verified yet this session"]

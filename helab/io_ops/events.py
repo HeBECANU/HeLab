@@ -696,6 +696,135 @@ class PrefsClearedEvent(TypedDict):
     set_at: float
 
 
+# Folder info (``cache_admin`` "folder_info", ``io_ops.folder_info``): what the store and HeLab's converted-TXY
+# index hold for one folder, never per-shot data, bounded (``FOLDER_INFO_*`` limits there).
+
+
+class FolderInfoPart(TypedDict):
+    """One part's read: ``found``, ``missing`` (none saved: only from a read that worked), ``error`` (with its
+    message; never "none saved") or ``skipped`` (not read: store-v3, or no data root)."""
+    status: Literal["found", "missing", "error", "skipped"]
+    error: str
+
+
+class FolderRawField(TypedDict):
+    """The folder's raw pulses: shots and bytes, the shot range, when saved and used, the newest sighting by a
+    listing, and its only copies (raw files a listing found gone): count, bytes, when first and last found gone."""
+    shots: int
+    bytes: int
+    first: int | None
+    last: int | None
+    saved_first: float | None
+    saved_last: float | None
+    last_used: float | None
+    seen_at: float | None
+    only_copy: int
+    only_copy_bytes: int
+    gone_first: float | None
+    gone_last: float | None
+
+
+class FolderLayerField(TypedDict):
+    """One TXY layer (``matlab`` or ``helab:<profile hash>``): its tags, shots, range, hits, bytes, precision,
+    dates, and Make room's group (``rebuildable``, ``seen`` or ``only``: an only copy)."""
+    layer: str
+    tags: list[str]
+    shots: int
+    first: int | None
+    last: int | None
+    rows: int
+    bytes: int
+    precision: str
+    saved_at: float
+    last_used: float
+    seen_at: float
+    gone_at: float | None
+    group: str
+
+
+class FolderViewField(TypedDict):
+    source: str
+    tag: str
+    last_used: float
+
+
+class FolderResultRow(TypedDict):
+    """A saved result: its script (ID, version, file), action, settings (short, and in full for a tooltip, both
+    cut to a bound), size and dates; ``damaged`` when its record can't be read."""
+    result_id: str
+    analysis_id: str
+    version: str
+    file_name: str
+    action: str
+    settings: str
+    settings_full: str
+    bytes: int
+    computed_at: float
+    saved_at: float
+    last_used: float
+    damaged: bool
+
+
+class FolderResultsInfo(TypedDict):
+    """The folder's saved results: all of them counted, the most recently used ``rows`` sent, ``more`` left out."""
+    count: int
+    bytes: int
+    rows: list[FolderResultRow]
+    more: int
+
+
+class FolderConvertedTag(TypedDict):
+    tag: str
+    profile: str
+    version: int
+    output: str  # cache, temp or beside
+    shots: int
+    bytes: int
+    newest: float | None
+    # Of those shots, the ones whose d files HeLab last saw gone (its raw layer rows' ``gone_at``): this TXY is their only
+    # copy outside HeLab's cached raw pulses.
+    only_copy: int
+    only_copy_bytes: int
+
+
+class FolderConvertedBase(TypedDict):
+    """HeLab's converted TXY of the folder in one base (``cache`` or ``temp``), as its index records them."""
+    base: str
+    folder: str
+    status: Literal["found", "missing", "error"]
+    error: str
+    last_used: float | None
+    tags: list[FolderConvertedTag]
+
+
+class FolderInfoEvent(TypedDict):
+    """Folder info's answer (``cache_admin`` "folder_info"): ``root_state`` ``rooted``, ``no_root`` (RAM only) or
+    ``unverified`` (its drive isn't verified yet this session); ``read_at`` this computer's clock."""
+    kind: Literal["folder_info"]
+    path: str
+    key: str
+    root_state: Literal["rooted", "no_root", "unverified"]
+    layout: int
+    read_at: float
+    store: str
+    parts: dict[str, FolderInfoPart]
+    raw: FolderRawField | None
+    layers: list[FolderLayerField]
+    layers_more: int
+    views: list[FolderViewField]
+    views_more: int
+    seed_bytes: int
+    results: FolderResultsInfo | None
+    prefs: dict[str, Any] | None
+    convert_prefs: dict[str, Any] | None
+    choices: dict[str, Any] | None
+    constants: dict[str, Any] | None
+    history: dict[str, Any] | None
+    summary: dict[str, Any] | None
+    listing_at: float | None
+    converted: list[FolderConvertedBase]
+
+
 class AdminResultEvent(AdminResultFields, UsageFields):
     """The end of a ``cache_admin`` action."""
     kind: Literal["admin_result"]
@@ -1136,7 +1265,7 @@ HelperEvent = Union[
     ShotsMissingEvent, TooLargeEvent, CachedLoadedEvent, UnchangedCachedLoadedEvent, UnchangedHeldLoadedEvent,
     LoadedEvent, HeldLoadedEvent, LiveLoadedEvent, LiveUnchangedEvent,
     CacheSavedEvent, DiskCachedEvent, CacheSaveFailedEvent, PendingSaveEvent, RemovedEvent, InventoryEvent,
-    PrefsClearedEvent, AdminResultEvent, InvalidatedEvent, SweptEvent, SweptReadOnlyEvent,
+    PrefsClearedEvent, FolderInfoEvent, AdminResultEvent, InvalidatedEvent, SweptEvent, SweptReadOnlyEvent,
     MoveCheckEvent, MoveProgressEvent, MoveDoneEvent, MoveFailedEvent, MoveCleanedEvent, MoveAbortedEvent,
     MoveRecoveredEvent, TraceFolderEvent,
     RootFoundEvent, RootChangedEvent, RootDuplicateEvent, RootRekeyedEvent, RootConfirmedEvent, RootCreatedEvent,
@@ -1157,7 +1286,7 @@ KINDS = frozenset({
     "load_source", "progress", "file_started", "file_finished", "shot", "scan_summary", "shots_missing",
     "too_large", "loaded", "live_unchanged",
     "cache_saved", "disk_cached", "cache_save_failed", "cache_full", "cache_approval", "removed", "inventory",
-    "prefs_cleared", "admin_result", "swept",
+    "prefs_cleared", "folder_info", "admin_result", "swept",
     "move_check", "move_progress", "move_done", "move_failed", "move_cleaned", "move_aborted", "move_recovered",
     "trace_folder",
     "root_found", "root_changed", "root_duplicate", "root_rekeyed", "root_confirmed", "root_created",

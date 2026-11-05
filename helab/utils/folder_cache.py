@@ -233,6 +233,9 @@ class FolderCache(QObject):
     cacheAdminResult = pyqtSignal(str, object)
     # A cache_admin job ended: its owner, action, and "" or why it failed.
     cacheAdminDone = pyqtSignal(str, str, str)
+    # Folder info's read (``folder_info``): its owner and the ``folder_info`` event; a read that fails ends with
+    # ``cacheAdminDone`` naming why, and no event here.
+    folderInfoRead = pyqtSignal(str, object)
     # Automatic loads of folders without cached data paused (True) or resumed (False).
     autoLoadPauseChanged = pyqtSignal(bool)
     # Usage crossed 80% of the budget (or rose another 10% after Ignore): ask the user once.
@@ -3550,7 +3553,7 @@ class FolderCache(QObject):
         if not options or self.service.closed:
             return ""
         owner = uuid4().hex
-        if action in ("inventory", "clear_converted_txy"):
+        if action in ("inventory", "clear_converted_txy", "folder_info"):
             # HeLab's converted TXY are measured and cleared in the temp folder too (Q27.5).
             from helab.utils.constants import DIR_TEMPS
             params.setdefault("temps", DIR_TEMPS)
@@ -3569,6 +3572,27 @@ class FolderCache(QObject):
             self._result_writes[owner] = str(waiting.get("path") or "") or RESULTS_SAVING
             self.quitSavesChanged.emit()
         return owner
+
+    def folder_info(self, path: str) -> str:
+        """Ask for Folder info's read of ``path`` (``cache_admin`` "folder_info", local lane; the store and HeLab's
+        converted-TXY index, never the folder): its owner, or "" if it couldn't be queued (or the cache is off). The
+        answer comes as ``folderInfoRead``; the job's end as ``cacheAdminDone``."""
+        return self.cache_admin("folder_info", path=path, verified_volumes=self.verified_volumes())
+
+    def clear_folder(self, path: str, part: str) -> str:
+        """Folder info's per-folder Clears (Q~6, Q64.6 b; the user confirmed): ``part`` "raw" (the folder's cached raw
+        pulses), "results" (its saved results) or "converted" (HeLab's converted TXY of it, never TXY beside the raw
+        files). Each goes through the store's own removal for those paths (fenced, so a save running can't bring them
+        back), keyed by the volumes verified this session as its read is, sends ``removed`` and ends with
+        ``cacheAdminDone``; its owner, or "" if it couldn't be queued."""
+        volumes = self.verified_volumes()
+        if part == "raw":
+            return self.cache_admin("clear_raw", paths=[path], verified_volumes=volumes)
+        if part == "results":
+            return self.cache_admin("clear_results", paths=[path], verified_volumes=volumes)
+        if part == "converted":
+            return self.cache_admin("clear_converted_txy", path=path, verified_volumes=volumes)
+        raise ValueError(f"Unknown folder Clear: {part}")
 
     # Saved analysis results (result caching R2): reads and saves on the local lane, never of a
     # source folder. The plot that asked gets the helper's events through ``resultReady`` under
@@ -3970,6 +3994,9 @@ class FolderCache(QObject):
             return
         if kind == "folder_choices":
             self.remember_choices(event["path"], event["choices"])
+            return
+        if kind == "folder_info":
+            self.folderInfoRead.emit(producer.owner, event)
             return
         if kind == "convert_prefs":
             self._remember_convert_prefs(event["path"], event["prefs"])
