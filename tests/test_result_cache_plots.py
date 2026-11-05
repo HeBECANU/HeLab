@@ -189,9 +189,9 @@ def label(instance: AnalysisInstance, name: str) -> str:
     dock = cast(QDockWidget, instance.dock_widget)
     found = dock.findChild(QLabel, name)
     assert found is not None
-    if name == "plot_data_source":  # Its run's detail and settings, moved into Plot info (LR-4), and the record.
+    if name == "plot_data_source":  # With its run's detail and settings, moved into Plot info (LR-4).
         parts = (found.text(), dock.property("plotSourceDetail"), dock.property("plotSourceSettings"),
-                 dock.property("plotSourceRecord"))
+                 found.toolTip())
         return "\n".join(part for part in parts if isinstance(part, str) and part)
     return found.text() + "\n" + found.toolTip()
 

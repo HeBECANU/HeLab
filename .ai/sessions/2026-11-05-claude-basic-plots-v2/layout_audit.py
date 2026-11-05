@@ -1,6 +1,7 @@
 """Layout audit (Side, 2026-11-04, ``sessions/2026-11-04-claude-ui-audit/``), extended on the Basic plots v2 floor
 (LR-3, 2026-11-05) with ``test_plot_settings``: plot settings and plot docks with a long folder name at several
-panel widths and window sizes, and a check for plain-text tooltips with over-long lines. Not a test of the suite:
+panel widths and window sizes. (Its first runs also flagged plain tooltips with long lines; since dev/v0.0.9's
+LR-3 work the app wraps those itself, ``helab/views/tooltips.py``, so that check is gone.) Not a test of the suite:
 copy it into tests/ to run, on a real display (``HELAB_SHOW_GUI=1``; see README.md beside the original).
 ``-k plot_settings`` runs the new case alone; its findings go to ``findings-plot-settings.json``."""
 from __future__ import annotations
@@ -21,7 +22,6 @@ from PyQt6.QtWidgets import (QAbstractButton, QAbstractScrollArea, QAbstractSpin
 import tests.test_accessible_names as an
 
 OUT = Path(__file__).resolve().parent.parent / ".ai" / "temp" / "ui-audit"
-TOOLTIP_LINE = 100  # A plain-text tooltip line longer than this runs across the screen (Qt wraps rich text only).
 OUT.mkdir(parents=True, exist_ok=True)
 FINDINGS: list[dict[str, Any]] = []
 
@@ -88,10 +88,6 @@ def audit(top: QWidget, case: str) -> None:
             if w.height() < w.fontMetrics().height() - 2:
                 FINDINGS.append({"case": case, "kind": "label squeezed", "widget": name_of(w), "h": w.height(),
                                  "need": w.fontMetrics().height()})
-        tip = w.toolTip()
-        if tip and not tip.lstrip().startswith("<") and max(len(line) for line in tip.splitlines() or [""]) > TOOLTIP_LINE:
-            FINDINGS.append({"case": case, "kind": "tooltip too wide", "widget": name_of(w),
-                             "longest": max(len(line) for line in tip.splitlines())})
         if not in_scroll(w) and w.window() is top.window():
             r = visible_rect(w, top)
             if r.right() > top_rect.right() + 1 or r.bottom() > top_rect.bottom() + 1:

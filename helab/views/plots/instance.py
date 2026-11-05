@@ -43,7 +43,8 @@ from helab.utils.ram_buffers import Buffers, arrays_in, buffers
 from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRuns
 from helab.views.plots.dock import AnalysisDock, release_figures
 from helab.views.plots.pictures import ReleasedPlot, snapshot
-from helab.views.plots.plot_info import PlotInfo, TipLabel
+from helab.views.ElidedLabel import ElidedLabel
+from helab.views.plots.plot_info import PlotInfo
 from helab.views.plots.txy_source import TxySourceRow, known_profiles, profile_by_tag
 from helab.views.txy_list import known_names
 if TYPE_CHECKING:
@@ -200,9 +201,9 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self.policy = policy
         self.follow = Follow(view, self.policy)
         self.parameter_root: Optional[Parameter] = None
-        # One line each, the whole text in a wrapped tooltip (LR-3); the input line heads the Plot info section.
-        self.status_label = identify(TipLabel(), "plot_status")
-        self.input_label = identify(TipLabel(), "plot_input")
+        # One line each, elided, the full text in the tooltip (ElidedLabel, LR-3); the input line heads Plot info.
+        self.status_label = identify(ElidedLabel(), "plot_status")
+        self.input_label = identify(ElidedLabel(), "plot_input")
         self.plot_info = PlotInfo(self.input_label)
         self.plot_info.toggled.connect(self._info_toggled)
         self.info_open = False  # Plot info starts closed (Q~7).

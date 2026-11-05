@@ -392,8 +392,7 @@ def test_reversed_manual_bounds_are_reported_in_the_dock_and_settings_tab(
     label = source_label(instance.dock_widget)
     assert source_text(instance.dock_widget) == ("Data source: run_R · rev 1 · 2 shots · helab.txy_histograms v3\n"
                                                  "manual range: full extent · bins auto · ⚠ X: min > max, using full extent")
-    assert "Warning: X: min > max, using full extent" in instance.dock_widget.property("plotSourceRecord")
-    assert "Warning: X: min &gt; max, using full extent" in label.toolTip()  # (Wrapped: rich text, LR-3.)
+    assert "Warning: X: min > max, using full extent" in label.toolTip()
     assert instance.status_label.text() == "⚠ X: min > max, using full extent"
 
 
@@ -467,7 +466,7 @@ def test_histogram_fits_go_in_the_docks_record(window: Window, browser: FolderEx
     qtbot.waitUntil(lambda: instance.result is not first, timeout=10_000)
     label = source_label(instance.dock_widget)
     assert source_text(instance.dock_widget).endswith("bins auto · fit T Gaussian")
-    record = instance.dock_widget.property("plotSourceRecord")  # (The tooltip's text, before it is wrapped.)
+    record = label.toolTip()
     assert "\nFit T: Gaussian" in record  # 7 events: a fit or why there is none
     # The constants appear once, from the run (F0b's Constants line), with the fits' keys only;
     # all at their defaults, so the settings line names none.

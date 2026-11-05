@@ -12,3 +12,9 @@ total 1408 -> 828 / 828
    17 ->    17 /    18  label cut: QLabel[]
 Unchanged (out of this floor: compact by design or Ground's): the parameter tree's reset buttons (squeezed),
 its checkbox tips (plain, long), the toolbar's Live/auto-convert buttons, 'Preset:' at 250 px (touching/cut).
+
+After merging dev/v0.0.9 (5c21094: tooltips wrapped app-wide at 600 px by helab/views/tooltips.py, ElidedLabel's
+full-text tip, explorer_text.breakable), the floor's own tooltip wrapping was dropped and the audit's plain-tooltip
+check with it. Same 45 cases, tooltip findings left out of both counts: 895 before 4b -> 675 after the merge
+(Plot info closed and open alike). The dock line's 175 "label cut" and the input line's 45 are gone; what stays is
+"Preset:" at 250 px (touching/cut, as left by the 2026-11-04 audit) and the parameter tree's and toolbar's.

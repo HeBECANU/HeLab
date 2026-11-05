@@ -1,14 +1,11 @@
 """A plot's "Plot info" section (LR-4): a collapsible block at the top of its settings page holding what was
 repeated between the plot dock's source lines, the plot's own title and the settings page: the input, its
 revision and Live state, the shots used, the TXY source, the analysis and its saved-result mark, the settings in
-short and the full record. Closed, it is one line (the input, cut at the edge, all of it in the tooltip); open,
-its lines wrap to the panel's width, long folder names included.
-
-Also ``wrapped_tip``, a tooltip that wraps (LR-3): Qt wraps only rich-text tooltips, so a long plain one ran
-across the screen."""
+short and the full record. Closed, it is one line (the input, an ``ElidedLabel``: cut at the edge, its full text
+in the tooltip); open, its lines wrap to the panel's width, long folder names included (``explorer_text.breakable``).
+Its tooltips are plain text, which the app wraps (``helab/views/tooltips.py``)."""
 from __future__ import annotations
 
-import html
 from typing import Iterable, Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
@@ -16,51 +13,10 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolic
 
 from helab.utils.accessible import identify
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views.explorer_text import breakable
 from helab.views.gaps import LABEL_GAP
 
-# Qt wraps a label's words after "/" and "-" but not "_", so a folder name like run_0042_bragg_scan_… was cut at
-# the panel's edge: the shown text gets a zero-width break after each "_" (``lines()`` keeps the plain text).
-BREAK = "\u200b"
 BODY_LINES = 12  # The open section's most height, in lines: more scrolls (the settings below keep their room).
-
-
-def breakable(text: str) -> str:
-    """``text`` as shown in a wrapped label: a place to wrap after each underscore."""
-    return text.replace("_", "_" + BREAK)
-
-
-def rich(text: str) -> bool:
-    """Whether Qt shows ``text`` as rich text (and so wraps it as a tooltip): it opens with a tag, as Qt's own
-    test (``Qt::mightBeRichText``, which PyQt6 doesn't offer) mostly decides."""
-    stripped = text.lstrip()
-    return stripped.startswith("<") and ">" in stripped
-
-
-def wrapped_tip(text: str) -> str:
-    """``text`` as a tooltip that wraps: rich text (Qt wraps a rich tooltip, a long folder name anywhere, as a
-    word-wrapped label does), escaped, its lines kept. "" stays ""."""
-    if not text:
-        return ""
-    return "<qt>" + "<br>".join(html.escape(line, quote=False) for line in text.splitlines()) + "</qt>"
-
-
-class TipLabel(ElidedLabel):
-    """A one-line label (elided at its width, ``text()`` the full text) whose tooltip is its whole text,
-    wrapped, unless one is set (``setToolTip``, wrapped too): a plot's status line, its input line (LR-3)."""
-
-    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
-        self._own_tip = False
-        super().__init__(text, parent)
-
-    def setText(self, a0: Optional[str]) -> None:
-        super().setText(a0)
-        self._own_tip = False
-        super().setToolTip(wrapped_tip(a0 or ""))
-
-    def setToolTip(self, a0: Optional[str]) -> None:
-        text = a0 or ""
-        self._own_tip = bool(text)
-        super().setToolTip(text if rich(text) else wrapped_tip(text))
 
 
 class PlotInfo(QWidget):
@@ -125,8 +81,8 @@ class PlotInfo(QWidget):
         self.text.setText("\n".join(breakable(line) for line in self._lines))
 
     def set_summary_tip(self, text: str) -> None:
-        """The closed line's tooltip: its whole text, wrapped."""
-        self.summary.setToolTip(wrapped_tip(text))
+        """The closed line's tooltip (plain: the app wraps it; elided, the label puts its full text first)."""
+        self.summary.setToolTip(text)
 
     @pyqtSlot(bool)
     def _toggled(self, opened: bool) -> None:

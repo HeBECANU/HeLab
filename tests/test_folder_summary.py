@@ -24,7 +24,6 @@ from helab.views.CentralHint import CentralHint
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderExplorer import FolderExplorer
 from helab.views.HelabMainWindow import HelabMainWindow
-from helab.views.plots.plot_info import wrapped_tip
 from helab.views.plots.workspace import PlotWorkspace
 from helab.resources.icons import IconsInitUtil, StatusIcons
 from helab.utils.cache_freshness import CacheFreshness
@@ -399,7 +398,7 @@ def test_subfolder_scope_and_retained_plot_source(
     qtbot.waitUntil(lambda: browser.model.root is not None and browser.model.root.state == "idle")
     PlotWorkspace._update_plot_source_label(dock, browser)
     assert label.text() == "Showing previously loaded data: run_042"
-    assert label.toolTip() == wrapped_tip(str(child))  # (Wrapped: LR-3.)
+    assert label.toolTip() == str(child)
     assert browser.folder_summary_label.text() == "No TXY files here · Select a subfolder to load data"
     assert browser.displayed_dataset is not None and browser.displayed_dataset.path == str(child)
     # Rendering stays entirely in memory, including age and provenance updates.

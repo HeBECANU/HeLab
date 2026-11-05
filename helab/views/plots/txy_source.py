@@ -25,7 +25,6 @@ from helab.utils.accessible import identify
 from helab.utils.txy_sources import Entries
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.gaps import LABEL_GAP
-from helab.views.plots.plot_info import wrapped_tip
 from helab.views.txy_list import AskList, ask_txy_list, known_names, list_summary
 
 
@@ -112,7 +111,7 @@ class TxySourceRow(QWidget):
                                "Which TXY this plot's data is made of, in order: each shot from the first entry with "
                                "a usable TXY (External: the MATLAB converter's d_txy_forc; HeLab's "
                                "d_txy_helab_<tag>). As the folder's tab: what its tab and Live read.")
-        self.button.setToolTip(wrapped_tip(self.button.accessibleDescription()))  # (Wrapped: LR-3.)
+        self.button.setToolTip(self.button.accessibleDescription())
         self.button.setMinimumWidth(40)  # (It shrinks with the panel, not set its width: Q33.2.)
         self.button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.button.clicked.connect(self.edit)
@@ -127,7 +126,7 @@ class TxySourceRow(QWidget):
                                  "Keep this plot's TXY choice: save it with its presets, arrangements and the "
                                  "plots reopened at start. Off (for tweaking and exploring): they start as the "
                                  "folder's tab.")
-        self.keep_box.setToolTip(wrapped_tip(self.keep_box.accessibleDescription()))
+        self.keep_box.setToolTip(self.keep_box.accessibleDescription())
         self.keep_box.setChecked(keep)
         self.keep_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         if kept is not None:
@@ -143,7 +142,7 @@ class TxySourceRow(QWidget):
         text = (f"As the folder's tab ({tab})" if self.entries is None and tab
                 else list_summary(self.entries, tag, "As the folder's tab"))
         self.button.set_full_text(text)
-        self.button.setToolTip(wrapped_tip(f"{text}\n\n{self.button.accessibleDescription()}"))
+        self.button.setToolTip(f"{text}\n\n{self.button.accessibleDescription()}")
 
     def edit(self) -> None:
         """The list editor; a change is the plot's (``changed``)."""
@@ -159,8 +158,8 @@ class TxySourceRow(QWidget):
         """One line: the profile, the data's TXY and a plate suggestion (detail in the tooltip)."""
         suggestion = plate_note(view, profile_name)
         self.note.setText(f"HeLab converts with {profile_name}" + (f" · {suggestion}" if suggestion else ""))
-        self.note.setToolTip(wrapped_tip(
-            f"{view.txy_text()}\nHeLab's TXY are read by their profile's tag (the profiles in the list; HeLab "
-            f"Default: the one HeLab converts with, {profile_name}; Settings → TXY converter)."
-            + (f"\nThe plate swap dates suggest {suggestion}; it is not applied: choose it in Settings → TXY "
-               "converter to convert with it." if suggestion else "")))
+        self.note.setToolTip(f"{view.txy_text()}\nHeLab's TXY are read by their profile's tag (the profiles in "
+                             f"the list; HeLab Default: the one HeLab converts with, {profile_name}; "
+                             "Settings → TXY converter)."
+                             + (f"\nThe plate swap dates suggest {suggestion}; it is not applied: choose it in "
+                                "Settings → TXY converter to convert with it." if suggestion else ""))

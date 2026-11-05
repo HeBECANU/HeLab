@@ -449,7 +449,7 @@ def test_the_histograms_fits_are_keyed_on_constants_and_marked_when_one_changes(
     assert fitted.reuse_key()["constants"]["layers"]["lab"] == {"g": 9.79}
     assert fitted.resolved_constants.origins["g"] == "lab"
     record = cast(QDockWidget, instance.dock_widget).findChild(QLabel, "plot_data_source")
-    assert record is not None and record.toolTip().count("Constants: ") == 1  # (Wrapped, the same text.)
+    assert record is not None and record.toolTip().count("Constants: ") == 1
     assert fitted.constant_keys == ("fall_distance", "fall_time", "g", "mass", "k_B")  # No bimodal fit: no trap
     assert "QE = " not in record.toolTip()
     assert "constants: t_f 416.2187 ms (derived, unconfirmed) · g 9.79 m/s² (lab)" in label(instance, "plot_data_source")

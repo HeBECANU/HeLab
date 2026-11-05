@@ -29,7 +29,6 @@ from helab.utils.number_format import byte_size
 from helab.views.CentralHint import CentralHint
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.plots.dock import AnalysisDock
-from helab.views.plots.plot_info import wrapped_tip
 from helab.views.plots.settings_panel import PlotSettingsPanel
 
 if TYPE_CHECKING:
@@ -274,7 +273,7 @@ class PlotWorkspace:
     @staticmethod
     def _wrap_plot(dock: QDockWidget, content: QWidget) -> None:
         """The dock shows its source above the plot: one line, never wrapped (elided at the dock's
-        edge; the tooltip has the record, wrapped), with no vertical padding. Below them, only after a failed run, the error in amber (the plot
+        edge; the tooltip has the record), with no vertical padding. Below them, only after a failed run, the error in amber (the plot
         shown is the last one drawn)."""
         wrapper = QWidget(dock)
         layout = QVBoxLayout(wrapper)
@@ -318,7 +317,7 @@ class PlotWorkspace:
         text = " · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
         label.setText(text)
         dock.setProperty("plotSourceText", text)
-        label.setToolTip(wrapped_tip(record if isinstance(record, str) and record else path))
+        label.setToolTip(record if isinstance(record, str) and record else path)  # (Plain: the app wraps it.)
         error_label = dock.findChild(QLabel, "plot_error")
         error = dock.property("plotError")
         if error_label is not None:
