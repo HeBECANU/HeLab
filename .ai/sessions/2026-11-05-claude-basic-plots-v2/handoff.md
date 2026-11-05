@@ -205,5 +205,12 @@ At `9c8fcb4` (the handoff's own commit adds only this file), the full output is 
 - Type checks: `mypy helab/ --strict` (224 files), `mypy tests --strict` (219), `pyright helab tests`,
   `mypy helab/ --strict --platform win32` and `pyright --pythonplatform Windows helab tests`: **all clean**.
 - Manual: `ruff check` and `mkdocs build --strict` pass (in a separate docs venv).
-- CI: the run for the pushed head is reported to CoCo with its ID, after every Tests and Converter backends log is
-  read for RERUN.
+- CI run 41979487365 (`b01dcce`) **failed one job**: Windows Tests (1/3). My new
+  `test_basic_plots_v2_plot_info.py::test_a_long_folder_name_fits_the_narrowest_panel` failed on its first try and on
+  all 5 reruns. The reason was `'Preset:' is cut`: at 250 px, Windows' fonts cut the Presets row's label. That's the
+  known issue the 2026-11-04 audit left (A~4), not one of the lines LR-3 is about, so the test was too broad. The
+  test now leaves the Presets row out (as it does the parameter tree), saying why. Every other job was green, and
+  the other 11 Tests and Converter backends logs have 0 RERUN. That RERUN was a real failure, not a flake: nothing
+  goes to known-issues.
+- After the fix, the full suite is **9,501 passed, 673 skipped, 0 RERUN**, and mypy tests (strict and not) and
+  pyright (macOS and Windows) are clean. The final CI run's ID goes to CoCo with the summary.

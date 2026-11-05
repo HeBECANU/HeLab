@@ -97,13 +97,16 @@ def test_v1_plots_get_the_section_too(window: HelabMainWindow, qtbot: QtBot, tmp
 
 
 def page_widgets(instance: AnalysisInstance) -> list[QWidget]:
-    """The plot's settings page, its parameter tree left out (its rows' own tooltips: the parameters' tips)."""
+    """The plot's settings page, its parameter tree (its rows' tooltips are the parameters' tips) and its Presets
+    row left out: at 250 px "Preset:" is cut with Windows' fonts, known since the 2026-11-04 layout audit and not
+    one of the lines LR-3 is about (the handoff's A~4)."""
     page = instance.param_tab
     assert page is not None
     from helab.analysis.parameter_tree import SettingsTree
-    trees = page.findChildren(SettingsTree)
+    from helab.views.plots.presets import PresetBar
+    left_out: list[QWidget] = [*page.findChildren(SettingsTree), *page.findChildren(PresetBar)]
     return [widget for widget in page.findChildren(QWidget) if widget.isVisibleTo(page)
-            and not any(tree is widget or tree.isAncestorOf(widget) for tree in trees)]
+            and not any(other is widget or other.isAncestorOf(widget) for other in left_out)]
 
 
 def test_a_long_folder_name_fits_the_narrowest_panel(window: HelabMainWindow, qtbot: QtBot,  # noqa: F811
