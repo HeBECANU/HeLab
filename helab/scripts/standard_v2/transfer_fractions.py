@@ -30,8 +30,8 @@ from helab.analysis.selection import select_shots
 from helab.scripts.base import ScriptMetadata
 from helab.scripts.standard import transfer_fractions as v1
 from helab.scripts.standard_v2 import group
-from helab.scripts.standard_v2.common import (ShotSeries, bottom_axis, matplotlib_axis, matplotlib_series,
-                                              plotly_axis, plotly_series)
+from helab.scripts.standard_v2.common import (ShotSeries, bottom_axis, drawn_on, matplotlib_axis,
+                                              matplotlib_series, plotly_axis, plotly_series, same_axis)
 
 X_AXIS = x_axis_spec("Fractions")
 UI_REVISION = "helab.v2.transfer_fractions"
@@ -100,10 +100,10 @@ class TransferFractions(v1.TransferFractions):
 
     def update(self, widget: QWidget, result: AnalysisResult) -> bool:
         """A rerun (e.g. Live's next shots) updates the plot in place, in every library: a zoom or pan stays,
-        else the axes follow the new data. PyQtGraph draws anew when the orders, the highlight or its colour, or
-        the X axis changed."""
+        else the axes follow the new data. Another X axis draws it anew in every library, as do, in PyQtGraph,
+        other orders or another highlight or colour."""
         data: TimedFractions = result.data
-        if empty_text(data):
+        if empty_text(data) or not same_axis(widget, data.axis):
             return False
         if isinstance(widget, PlotlyPane):
             widget.update_figure(plotly_figure(result))
@@ -125,9 +125,9 @@ class TransferFractions(v1.TransferFractions):
         if text := empty_text(data):
             return empty_pane(text, parent)
         if backend == PLOTLY:
-            return PlotlyPane(plotly_figure(result), parent=parent)
+            return drawn_on(PlotlyPane(plotly_figure(result), parent=parent), data.axis)
         if backend == MATPLOTLIB:
-            return MatplotlibPane(matplotlib_figure(result), parent)
+            return drawn_on(MatplotlibPane(matplotlib_figure(result), parent), data.axis)
         widget: Any = pg.GraphicsLayoutWidget(parent)
         widget.setBackground("w")
         widget.title_label = WrappingLabel("")
@@ -174,7 +174,7 @@ class TransferFractions(v1.TransferFractions):
         widget.ci.layout.setRowStretchFactor(2, 2)
         widget.drawn_layout = layout(data)
         fill_pyqtgraph(widget, result)
-        return cast(QWidget, widget)
+        return cast(QWidget, drawn_on(widget, data.axis))
 
 
 def empty_text(data: TimedFractions) -> str:

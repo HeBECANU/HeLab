@@ -25,8 +25,9 @@ from helab.analysis.stats import counts_per_shot
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.standard.basic_plots import matplotlib_update, plotly_update
 from helab.scripts.standard_v2 import group
-from helab.scripts.standard_v2.common import (ShotSeries, bottom_axis, matplotlib_axis, matplotlib_series, notes_html,
-                                              plotly_axis, plotly_series, source_title)
+from helab.scripts.standard_v2.common import (ShotSeries, bottom_axis, drawn_on, matplotlib_axis, matplotlib_series,
+                                              notes_html, plotly_axis, plotly_series, same_axis,
+                                              source_title)
 
 PLOT_GROUP = "Plot"
 X_AXIS = x_axis_spec(PLOT_GROUP)
@@ -111,9 +112,9 @@ class CountsPerShot(DatasetAnalysis):
             return empty_pane("None of the chosen shots has a time" if untimed
                               else empty_text(data.total_shots, data.chosen, 0), parent)
         if backend == PLOTLY:
-            return PlotlyPane(counts_plotly(result), parent=parent)
+            return drawn_on(PlotlyPane(counts_plotly(result), parent=parent), data.axis)
         if backend == MATPLOTLIB:
-            return MatplotlibPane(counts_matplotlib(result), parent)
+            return drawn_on(MatplotlibPane(counts_matplotlib(result), parent), data.axis)
         plot: Any = pg.PlotWidget(parent, axisItems=bottom_axis(data.axis))
         plot.setBackground("w")
         plot.setLabel("bottom", data.axis.label)
@@ -122,18 +123,17 @@ class CountsPerShot(DatasetAnalysis):
         if data.axis.by_time:
             plot.setToolTip(TOOLTIP)
         plot.counts_series = ShotSeries(plot, COLOUR)
-        plot.axis_mode = data.axis.mode
         fill(plot, data)
-        return cast(QWidget, plot)
+        return cast(QWidget, drawn_on(plot, data.axis))
 
     def update(self, widget: QWidget, result: AnalysisResult) -> bool:
         """A rerun (e.g. Live's next shots) updates the plot in place, in every library: a zoom or pan stays,
         else the axes follow the new data. Another X axis draws it anew."""
         data: ShotCounts = result.data
-        if not data.total:
+        if not data.total or not same_axis(widget, data.axis):
             return False
         if isinstance(widget, pg.PlotWidget):
-            if getattr(widget, "axis_mode", None) != data.axis.mode or not hasattr(widget, "counts_series"):
+            if not hasattr(widget, "counts_series"):
                 return False
             fill(cast(Any, widget), data)
             return True

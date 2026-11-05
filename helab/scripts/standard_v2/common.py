@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -29,6 +29,24 @@ def source_title(result: AnalysisResult, text: str) -> str:
 def notes_html(notes: Sequence[str]) -> str:
     """The notes as a second line of a PyQtGraph title (escaped), "" for none."""
     return f'<br><span style="color: {NOTE_COLOUR}">{html.escape(" · ".join(notes))}</span>' if notes else ""
+
+
+AXIS_MODE = "shot_axis_mode"  # The attribute a drawing keeps its X axis in (``drawn_on``, ``same_axis``).
+
+
+Drawing = TypeVar("Drawing")
+
+
+def drawn_on(widget: Drawing, axis: ShotAxis) -> Drawing:
+    """``widget``, a per-shot drawing in any library, marked with its X axis (``same_axis``)."""
+    setattr(widget, AXIS_MODE, axis.mode)
+    return widget
+
+
+def same_axis(widget: Any, axis: ShotAxis) -> bool:
+    """Whether ``widget`` was drawn on ``axis``'s X axis: another (Shot ID or Shot time) is drawn anew in every
+    library, so the old axis's zoom never carries over (a shot-ID range read as dates in 1970)."""
+    return getattr(widget, AXIS_MODE, None) == axis.mode
 
 
 # PyQtGraph

@@ -173,11 +173,14 @@ def test_shot_axis_plots_draw_and_follow_live_in_every_library(
     # Live's next shot shows in place, in either mode.
     later = result_of(script, view(range(1, 11)), dict(first.parameters))
     assert script.update(widget, later)
-    # Another X axis is drawn anew.
+    # Another X axis is drawn anew in every library, so the old axis's zoom never carries over (in Matplotlib and
+    # Plotly a shot-ID range would read as dates in 1970); the new drawing then updates in place.
     other = {"x_axis": SHOT_ID if values else SHOT_TIME}
     switched = result_of(script, view(range(1, 11)), {**dict(first.parameters), **other})
-    if backend == PYQTGRAPH:
-        assert not script.update(widget, switched)
+    assert not script.update(widget, switched)
+    redrawn = script.draw(switched, backend)
+    qtbot.addWidget(redrawn)
+    assert script.update(redrawn, switched)
 
 
 def test_counts_per_shot_pyqtgraph_update_keeps_the_items(qtbot: QtBot) -> None:
