@@ -387,8 +387,8 @@ class HelabMainWindow(QMainWindow):
         if window is not None:
             window.live_changed()
 
-    def _folder_info_settings(self, tab: str) -> None:
-        self.show_settings_dialog(tab=tab)
+    def _folder_info_settings(self, tab: str, root: str = "") -> None:
+        self.show_settings_dialog(tab=tab, root=root)
 
     def convert_folder_in_current_tab(self) -> bool:
         """As the tree's Convert this folder… does, for the current tab's selected folder."""
@@ -1083,9 +1083,9 @@ class HelabMainWindow(QMainWindow):
                 logging.info(f"{r = }")
 
 
-    def show_settings_dialog(self, purge: bool = False, *, tab: str = "") -> None:
+    def show_settings_dialog(self, purge: bool = False, *, tab: str = "", root: str = "") -> None:
         """Settings, modal: at its Cache tab's Remove old entries (``purge``), or at the tab titled
-        ``tab`` (Debug › Settings Tab)."""
+        ``tab`` (Debug › Settings Tab), with the data root ``root`` (its UUID) selected in Data roots."""
         if self._closing or QApplication.activeModalWidget() is not None:
             return
         cache = get_folder_cache(get_io_service())
@@ -1096,6 +1096,8 @@ class HelabMainWindow(QMainWindow):
             self.settings_dialog.show_purge()
         elif tab:
             self.settings_dialog.show_tab(tab)
+        if root and roots is not None:
+            roots.select_root(root)
         self.settings_dialog.exec()
         self._set_root_window_modality(Qt.WindowModality.NonModal)  # Review… from Settings made it modal.
         settings = app_settings()

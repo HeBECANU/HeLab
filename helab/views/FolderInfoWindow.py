@@ -49,14 +49,14 @@ ROOT_ACTIONS = ("place_root", "review_root", "settings_roots")
 
 class FolderInfoSources:
     """What the window reads and calls in the app: the folder cache, the tabs (their text and explorer), the current
-    tab, the plots open on a folder, the loaded scripts' names by analysis ID, and the main window's Settings and
-    Review…. ``memory`` gathers the model's ``Memory`` from them, memory only."""
+    tab, the plots open on a folder, the loaded scripts' names by analysis ID, and the main window's Settings (a tab,
+    and a data root's UUID to select in Data roots) and Review…. ``memory`` gathers the model's ``Memory`` from them, memory only."""
 
     def __init__(self, cache: FolderCache, tabs: Callable[[], list[tuple[str, FolderExplorer]]],
                  current: Callable[[], Optional[FolderExplorer]],
                  plots_on: Callable[[str], tuple[str, ...]] = lambda path: (),
                  script_names: Callable[[], Mapping[str, str]] = dict,
-                 open_settings: Callable[[str], None] = lambda tab: None,
+                 open_settings: Callable[[str, str], None] = lambda tab, root: None,
                  review_root: Callable[[str], None] = lambda location: None) -> None:
         self.cache = cache
         self.tabs = tabs
@@ -350,9 +350,10 @@ class FolderInfoWindow(QWidget):
             return
         self.arm()
         if ident == "settings_cache":
-            self.sources.open_settings("Cache")
+            self.sources.open_settings("Cache", "")
         elif ident == "settings_roots":
-            self.sources.open_settings("Data roots")
+            root = self.cache.root_of(path)
+            self.sources.open_settings("Data roots", root[1] if root is not None else "")
         elif ident == "review_root" and (pending := self.cache.pending_root(path)) is not None:
             self.sources.review_root(str(pending["location"]))
         elif explorer is None:

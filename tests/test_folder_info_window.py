@@ -77,14 +77,14 @@ def setup(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iter
     cache = FolderCache(service)
     explorer = FakeExplorer()
     explorer.live_control.live = None
-    settings_opened: list[str] = []
+    settings_opened: list[tuple[str, str]] = []
 
     def tabs() -> list[tuple[str, Any]]:
         explorer.live_control.live = explorer.live
         return [("Tab 1", explorer)]
     fake: Any = explorer
     sources = FolderInfoSources(cache, tabs, lambda: fake, lambda path: ("Correlations (1)",),
-                                lambda: {"tests.corr": "Correlations"}, settings_opened.append)
+                                lambda: {"tests.corr": "Correlations"}, lambda tab, root: settings_opened.append((tab, root)))
     window = FolderInfoWindow(sources)
     qtbot.addWidget(window)
     path = str(tmp_path / "data" / "x")  # (Never made: nothing may read it.)
@@ -186,7 +186,7 @@ def test_each_button_calls_the_tabs_existing_action(setup: Any) -> None:
                                 ("convert", path)]
     button(s.window, "folder_info_store_settings_cache").click()
     button(s.window, "folder_info_results_settings_roots").click()
-    assert s.settings == ["Cache", "Data roots"]
+    assert s.settings == [("Cache", ""), ("Data roots", "uuid-1")]  # (Data roots with the folder's root selected.)
     # The window changes nothing itself: a toggle shows the folder's flag as memory has it.
     assert not button(s.window, "folder_info_flags_flag_no_cache").isChecked()
 
@@ -337,3 +337,29 @@ def test_the_file_menu_and_the_right_click_open_it(qtbot: QtBot, monkeypatch: py
         assert not action.isEnabled()
     finally:
         window.close()
+
+
+def test_settings_data_roots_selects_the_folders_root(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
+                                                     tmp_path: Path) -> None:
+    """Data roots selects the root Folder info names (a mounted location first), now or once its list is read."""
+    from helab.views.DataRootsTab import DataRootsTab
+    service = IOService()
+    service.timer.stop()
+    monkeypatch.setattr(service, "_dispatch", lambda: None)
+    cache = FolderCache(service)
+    monkeypatch.setattr(cache, "cache_admin", lambda action, **params: "job-1")
+    monkeypatch.setattr("helab.utils.folder_cache.store_options", lambda: {"directory": str(tmp_path)})
+    try:
+        page = DataRootsTab(cache)
+        qtbot.addWidget(page)
+        assert not page.select_root("uuid-b")  # (Not read yet: selected when it is.)
+        row = {"kind": "vol", "label": "b", "first_seen": 1.0e9, "last_seen": 1.6e9, "decision": "confirmed"}
+        rows = [{**row, "location": "vol://a/x", "uuid": "uuid-a", "label": "a", "path": "/a"},
+                {**row, "location": "vol://b/old", "uuid": "uuid-b", "path": ""},
+                {**row, "location": "vol://b/now", "uuid": "uuid-b", "path": "/b"}]
+        cache.cacheAdminResult.emit("inventory", {"kind": "inventory", "inventory": {"roots": rows}})
+        assert (page.selected() or {}).get("location") == "vol://b/now"
+        assert page.select_root("uuid-a") and (page.selected() or {}).get("location") == "vol://a/x"
+        assert not page.select_root("uuid-none") and (page.selected() or {}).get("location") == "vol://a/x"
+    finally:
+        service.shutdown()
