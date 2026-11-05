@@ -159,7 +159,7 @@ class TxySourceRow(QWidget):
         suggestion = plate_note(view, profile_name)
         self.note.setText(f"HeLab converts with {profile_name}" + (f" · {suggestion}" if suggestion else ""))
         self.note.setToolTip(f"{view.txy_text()}\nHeLab's TXY are read by their profile's tag (the profiles in "
-                             f"the list; Conversion profile: the one HeLab converts with, {profile_name}; "
+                             f"the list; HeLab Default: the one HeLab converts with, {profile_name}; "
                              "Settings → TXY converter)."
                              + (f"\nThe plate swap dates suggest {suggestion}; it is not applied: choose it in "
                                 "Settings → TXY converter to convert with it." if suggestion else ""))

@@ -513,7 +513,7 @@ def txy_list(cache: FolderCache, path: Path) -> QWidget:
     from helab.views.txy_list import TxyListDialog
     return TxyListDialog("TXY for this folder", "This folder's tab and Live read:", ("m23v1", "External"), "m19v1",
                          {"m19v1": "matlab-2019", "m23v1": "matlab-2023-lab-edit"}, "As Settings",
-                         "Conversion (m19v1) › External")
+                         "HeLab Default (m19v1) › External")
 
 
 def convert_folder(cache: FolderCache, path: Path) -> QWidget:

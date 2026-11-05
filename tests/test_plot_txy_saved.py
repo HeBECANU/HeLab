@@ -126,7 +126,7 @@ def test_a_reopened_plot_never_reads_its_folder_by_itself_for_its_choice(
     cache.datasets[cache.dataset_key(cached)] = cached
     instance = reopened(qtbot, cache, windows, SavedPlot(REF, path, txy=TxyChoice("helab-only")))
     qtbot.waitUntil(lambda: instance._own_waits, timeout=10_000)
-    assert loads(cache) == [] and "or Rerun, to load Conversion (m19v1) only" in instance.status_label.text()
+    assert loads(cache) == [] and "or Rerun, to load HeLab Default (m19v1) only" in instance.status_label.text()
     instance.run()  # Rerun: the user's word.
     assert len(loads(cache)) == 1 and not instance._own_waits
 

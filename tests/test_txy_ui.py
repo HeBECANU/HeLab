@@ -311,11 +311,11 @@ def test_folder_details_names_a_folders_own_choices() -> None:
     text, tip = FolderDetailsPanel._with_choices(row, {"source": "helab-only", "tag": "m19v1", "policy": "txy"})
     assert "this folder: m19v1" in text and "cache: TXY only (no raw)" in text
     text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""})
-    assert text.endswith("this folder: m23v1 › Conversion › External")
+    assert text.endswith("this folder: m23v1 › HeLab Default › External")
     text, _ = FolderDetailsPanel._with_choices(row, {"source": "m23v1>Conversion>External", "tag": ""}, "m19v1")
-    assert text.endswith("this folder: m23v1 › Conversion (m19v1) › External")  # (As Settings and plots say, TP-10.)
+    assert text.endswith("this folder: m23v1 › HeLab Default (m19v1) › External")  # (As Settings and plots say, TP-10.)
     text, _ = FolderDetailsPanel._with_choices(row, {"source": "Conversion>m19v1", "tag": ""}, "m19v1")
-    assert text.endswith("this folder: Conversion (m19v1) › m19v1 (reads as m19v1 only)")  # (TP-8's note.)
+    assert text.endswith("this folder: HeLab Default (m19v1) › m19v1 (reads as m19v1 only)")  # (TP-8's note.)
     assert "right-click › TXY for this folder…" in tip
 
 

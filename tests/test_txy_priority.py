@@ -59,7 +59,7 @@ def test_modes_and_lists_read_and_write_in_their_old_form() -> None:
     assert txy_sources.source_text("m23v1>m19v1>External") == "m23v1>m19v1>External"
     assert txy_sources.source_text("m23v1>External") is None  # (A mode's list is sent as the mode.)
     assert txy_sources.resolve((CONVERSION, "m19v1", EXTERNAL), "m19v1") == ("m19v1", EXTERNAL)
-    assert txy_sources.summary((CONVERSION, "m23v1", EXTERNAL), "m19v1") == "Conversion (m19v1) › m23v1 › External"
+    assert txy_sources.summary((CONVERSION, "m23v1", EXTERNAL), "m19v1") == "HeLab Default (m19v1) › m23v1 › External"
 
 
 def test_the_four_modes_keep_their_identities_exactly() -> None:
@@ -354,14 +354,14 @@ def test_the_list_editor_ticks_orders_and_follows(qtbot: Any) -> None:
     from PyQt6.QtWidgets import QDialogButtonBox
     from helab.views.txy_list import TxyListDialog
     names = {M19: "matlab-2019", M23: "matlab-2023-lab-edit", "p22v1": "plates-2022"}
-    dialog = TxyListDialog("TXY", "", (M23, EXTERNAL), M19, names, "As Settings", "Conversion (m19v1) › External")
+    dialog = TxyListDialog("TXY", "", (M23, EXTERNAL), M19, names, "As Settings", "HeLab Default (m19v1) › External")
     qtbot.addWidget(dialog)
     editor = dialog.editor
     ok = dialog.buttons.button(QDialogButtonBox.StandardButton.Ok)
     assert ok is not None and ok.isEnabled()
     assert editor.entries() == (M23, EXTERNAL) and editor.summary.text() == "m23v1 › External"
     texts = [editor.list.item(row).text() for row in range(editor.list.count())]  # type: ignore[union-attr]
-    assert texts[:3] == ["matlab-2023-lab-edit (m23v1)", "External (MATLAB converter)", "Conversion profile (m19v1)"]
+    assert texts[:3] == ["matlab-2023-lab-edit (m23v1)", "External (MATLAB converter)", "HeLab Default (now m19v1)"]
     # Move External up, tick Conversion: the order is the list's.
     editor.list.setCurrentRow(1)
     editor.move_entry(-1)
@@ -369,20 +369,41 @@ def test_the_list_editor_ticks_orders_and_follows(qtbot: Any) -> None:
     assert conversion is not None
     conversion.setCheckState(Qt.CheckState.Checked)
     assert editor.entries() == (EXTERNAL, M23, CONVERSION)
-    assert editor.summary.text() == "External › m23v1 › Conversion (m19v1)"
+    assert editor.summary.text() == "External › m23v1 › HeLab Default (m19v1)"
     # Nothing ticked: OK off; the follow box: OK on, the list off, None chosen.
     editor.set_ticked(())
     assert not ok.isEnabled() and editor.summary.text() == "Nothing ticked"
     assert editor.follow_box is not None
     editor.follow_box.setChecked(True)
     assert ok.isEnabled() and editor.entries() is None and not editor.list.isEnabled()
-    assert editor.summary.text() == "Conversion (m19v1) › External"
+    assert editor.summary.text() == "HeLab Default (m19v1) › External"
     # A saved tag no profile is known by is still offered, and said so.
     other = TxyListDialog("TXY", "", ("u0123abcd",), M19, names)
     qtbot.addWidget(other)
     first_item = other.editor.list.item(0)
     assert first_item is not None and first_item.text() == "u0123abcd (no profile known by this tag)"
 
+
+def test_dragging_an_entry_reorders_the_list(qtbot: Any) -> None:
+    """The list is set up for Qt's drag to reorder (InternalMove, items draggable but not drop targets), and a
+    move of its rows, as that drop makes it (the model's moveRows), keeps the tick and updates the list."""
+    from PyQt6.QtCore import QModelIndex, Qt
+    from PyQt6.QtWidgets import QAbstractItemView
+    from helab.views.txy_list import TxyListEditor
+    editor = TxyListEditor((M23, EXTERNAL), M19, {M19: "matlab-2019", M23: "matlab-2023-lab-edit"})
+    qtbot.addWidget(editor)
+    widget = editor.list
+    assert widget.dragDropMode() == QAbstractItemView.DragDropMode.InternalMove
+    assert widget.defaultDropAction() == Qt.DropAction.MoveAction
+    items = [widget.item(row) for row in range(widget.count())]
+    assert all(item is not None and item.flags() & Qt.ItemFlag.ItemIsDragEnabled
+               and not item.flags() & Qt.ItemFlag.ItemIsDropEnabled for item in items)
+    changes: list[None] = []
+    editor.changed.connect(lambda: changes.append(None))
+    model = widget.model()
+    assert model is not None
+    assert model.moveRows(QModelIndex(), 1, 1, QModelIndex(), 0)  # (External above m23v1.)
+    assert editor.entries() == (EXTERNAL, M23) and editor.summary.text() == "External › m23v1" and changes
 
 def test_the_fallback_is_said_in_the_plots_line_and_folder_details() -> None:
     from helab.views.FolderDetailsPanel import FolderDetailsPanel
@@ -571,6 +592,6 @@ def test_lives_save_under_a_list_keeps_held_shots_and_records_the_fallback(tmp_p
 def test_a_list_that_resolves_to_fewer_entries_says_so() -> None:
     """TP-8: Conversion and the tag it resolves to are one entry; the summary says what the list reads as."""
     from helab.views.txy_list import list_summary
-    assert list_summary((CONVERSION, M19), M19) == "Conversion (m19v1) › m19v1 (reads as m19v1 only)"
-    assert list_summary((CONVERSION, M23, EXTERNAL), M19) == "Conversion (m19v1) › m23v1 › External"
+    assert list_summary((CONVERSION, M19), M19) == "HeLab Default (m19v1) › m19v1 (reads as m19v1 only)"
+    assert list_summary((CONVERSION, M23, EXTERNAL), M19) == "HeLab Default (m19v1) › m23v1 › External"
     assert list_summary(None, M19, "As Settings") == "As Settings" and list_summary((), M19) == "Nothing ticked"

@@ -183,11 +183,11 @@ def entries_of(source: str, tag: str = "") -> Entries:
 
 
 def short_entry(token: str, conversion_tag: str = "") -> str:
-    """An entry as a summary names it: "External", "m23v1", "Conversion (m19v1)"."""
+    """An entry as a summary names it: "External", "m23v1", "HeLab Default (m19v1)"."""
     if token == EXTERNAL:
         return EXTERNAL_SHORT
     if token == CONVERSION:
-        return f"Conversion ({conversion_tag})" if conversion_tag else "Conversion"
+        return f"HeLab Default ({conversion_tag})" if conversion_tag else "HeLab Default"
     return token
 
 

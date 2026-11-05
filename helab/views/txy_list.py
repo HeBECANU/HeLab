@@ -1,7 +1,7 @@
 """The TXY priority list control (Q53.2): one editor for Settings › TXY converter, right-click › TXY for this
 folder… and each plot's TXY row.
 
-A list of every entry a choice can name: "Conversion profile (m19v1)" (``Conversion``, the profile HeLab
+A list of every entry a choice can name: "HeLab Default (now m19v1)" (``Conversion``, the profile HeLab
 converts with), "External (MATLAB converter)" (MATLAB's ``d_txy_forc``, Q53.1) and every built-in and user
 profile by its tag. The ticked ones, in their order, are the list (drag to reorder, or Move up / Move down);
 each shot takes the first entry with a usable TXY. A "follow" box at the top ("As Settings", "As the folder's
@@ -42,7 +42,7 @@ def known_names() -> dict[str, str]:
 def entry_text(token: str, conversion_tag: str, names: Mapping[str, str]) -> str:
     """An entry as the list names it."""
     if token == CONVERSION:
-        return f"Conversion profile ({conversion_tag})" if conversion_tag else "Conversion profile"
+        return f"HeLab Default (now {conversion_tag})" if conversion_tag else "HeLab Default"
     if token == EXTERNAL:
         return txy_sources.EXTERNAL_LABEL
     name = names.get(token)
@@ -50,7 +50,7 @@ def entry_text(token: str, conversion_tag: str, names: Mapping[str, str]) -> str
 
 
 def list_summary(entries: Optional[Sequence[str]], conversion_tag: str, follows: str = "") -> str:
-    """A choice in short: the list, or what it follows ("As Settings (Conversion (m19v1) › External)")."""
+    """A choice in short: the list, or what it follows ("As Settings (HeLab Default (m19v1) › External)")."""
     if entries is None:
         return follows
     if not entries:

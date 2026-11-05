@@ -163,9 +163,9 @@ def test_saving_picks_the_profile_backend_and_output(qtbot: QtBot, tmp_path: Pat
         # Tabs and Live read helab-priority until set otherwise (Q18.2).
         assert tab.txy_entries == ("Conversion", "External") and cache.tab_source() == "helab-priority"
         tab.profile_combo.setCurrentIndex(tab.profile_combo.findData("matlab-2023-lab-edit"))
-        assert tab.source_label.text() == "Conversion (m23v1) › External"  # (Before Save too, TP-10.)
+        assert tab.source_label.text() == "HeLab Default (m23v1) › External"  # (Before Save too, TP-10.)
         tab.profile_combo.setCurrentIndex(tab.profile_combo.findData("mine"))
-        assert tab.source_label.text().startswith("Conversion (u") and tab.source_label.text().endswith("› External")
+        assert tab.source_label.text().startswith("HeLab Default (u") and tab.source_label.text().endswith("› External")
         # Edit… (the list editor answered here, Q53.2): a mode's list is saved as the mode.
         tab.ask_list = lambda *args: (True, ("External", "Conversion"))
         tab.edit_txy_list()
@@ -459,7 +459,7 @@ def view_dated(day: str, origins: dict[str, str] | None = None) -> Any:
 
 def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> None:
     picked: list[Any] = []
-    row = TxySourceRow(None, picked.append, lambda: ("m19v1", "Conversion (m19v1) › External"))
+    row = TxySourceRow(None, picked.append, lambda: ("m19v1", "HeLab Default (m19v1) › External"))
     qtbot.addWidget(row)
     view = view_dated("2023-02-04")
     assert folder_day(view) == "2023-02-04"
@@ -470,7 +470,7 @@ def test_the_row_suggests_a_plate_profile_without_applying_it(qtbot: QtBot) -> N
                                "(2023-02-04)")
     assert "it is not applied" in row.note.toolTip()
     # One button naming the list (Q53.2), the list editor behind it ("As the folder's tab" at its top).
-    assert row.entries is None and row.button.full == "As the folder's tab (Conversion (m19v1) › External)"
+    assert row.entries is None and row.button.full == "As the folder's tab (HeLab Default (m19v1) › External)"
     asked: list[tuple[Any, ...]] = []
 
     def answer(*args: Any) -> tuple[bool, Any]:
@@ -511,7 +511,7 @@ def test_a_plot_loads_its_own_source_and_goes_back_to_the_tabs(qtbot: QtBot, mon
         instance.set_txy_source("helab-only")
         [request] = [r for r in service.pending if r.operation == "load"]
         assert request.payload["txy"]["source"] == "helab-only" and request.payload["no_cache"] is True
-        assert instance.follow_text() == "TXY: Conversion (m19v1) only (loading…)"
+        assert instance.follow_text() == "TXY: HeLab Default (m19v1) only (loading…)"
         helab = Dataset(path, "sig", {1: np.ones((1, 3)), 2: np.ones((1, 3))},
                         {"fingerprint": [[1, 11, 101], [2, 12, 102]],
                          "txy": {"source": "helab-only", "origins": {"1": "helab:h", "2": "helab:h"},

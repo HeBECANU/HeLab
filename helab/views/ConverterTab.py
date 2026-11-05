@@ -237,7 +237,7 @@ class ConverterTab(QWidget):
         # (The summary names the conversion profile picked above, before Save too: TP-10.)
         self.profile_combo.currentIndexChanged.connect(self._profile_picked)
         tip = ("Which TXY a folder's tab and Live load, in order: each shot takes the first entry with a usable TXY "
-               "(External: the MATLAB converter's d_txy_forc; Conversion profile: the one above; or a profile's "
+               "(External: the MATLAB converter's d_txy_forc; HeLab Default: the conversion profile above; or a profile's "
                "d_txy_helab_<tag>). A change applies when a folder loads again (Refresh, or selecting it again): "
                "the data a tab shows now stays until then, and a load already running finishes first. A folder "
                "(right-click › TXY for this folder…) and a plot can have their own.")
