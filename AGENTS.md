@@ -223,6 +223,8 @@ store-v3 for one release (Q50.14).
   plotting library or `helab.utils.constants` (`PURE` in `tests/test_headless_imports.py`; a new
   `helab/analysis` module is listed there as pure or Qt).
 - Datasets share read-only NumPy arrays; analysis code that changes an array calls `.copy()`.
+- Basic plots v1's plot files (`helab/scripts/standard/`) stay byte for byte: their SHA-256 keys saved
+  results (`tests/test_basic_plots_v2_v1_frozen.py`); changes go to v2 (`helab/scripts/standard_v2/`).
 - `compute` runs on the worker thread, `render` and `update` on the GUI thread. A hook that
   raises is logged and HeLab goes on.
 - A reload of the user's scripts never runs while a `compute` of them is queued or running
@@ -278,7 +280,7 @@ that needs Python uses `weakref.finalize` (`tests/test_destroyed_connections.py`
 | `helab/views/plots/` | `PlotWorkspace`, docks, settings panel, presets, arrangements, cached results, each plot's TXY row (`txy_source.py`) | [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
 | `helab/analysis/` | analysis core, mostly Qt-free (`QT` in `tests/test_headless_imports.py` lists the rest): `DatasetView`, runner, parameters, selection, fits and other numerics, presets, result cache | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
 | `helab/convert/`, `native/` | the TXY converter (Qt-free): `raw`, `profile`, `reconstruct` and `backends/` (numpy the default; cython ships; reference; rust, numba, mlx for developers only, A9.1), `txy`, `fastio`, `split`, `pipeline`, `provenance` (the converted-TXY index), `raw_layer` and `txy_layer` (caching v2: raw pulses; TXY segments, `.hlb` kind `txy`), `user_profiles`, built-in profiles as JSON; harness `samples`, `check`, `timing` (scripts in `dev/txy/`); compiled backends' sources in `native/`; TXY sources' four modes `helab/utils/txy_sources.py` | [converter](.ai/architecture/converter.md) |
-| `helab/scripts/standard/`, `helab/scripts/dld/` | Basic plots v1; the DLD Front Panel Port | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
+| `helab/scripts/standard/`, `standard_v2/`, `helab/scripts/dld/` | Basic Plots v1 (pinned) and v2; the DLD Front Panel Port | [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [dld-analyses](.ai/architecture/dld-analyses.md) |
 | `helab/utils/settings_store.py`, `settings_defaults.py`, `lab_parameters.py` | settings | [settings](.ai/architecture/settings.md) |
 | `helab/utils/app_log.py`, `gui_watchdog.py`, `events.py`, `dash_server.py` | logging, stall dumps, notifications, the Plotly server | [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md), [plots-and-scripts](.ai/architecture/plots-and-scripts.md) |
 | `docs/`, `mkdocs.yml`; `helab/utils/user_manual.py` | the user manual (MkDocs Material, API reference by mkdocstrings); Help › User manual's targets | [release-and-ci](.ai/architecture/release-and-ci.md), [plots-and-scripts](.ai/architecture/plots-and-scripts.md), [app-runtime-and-ui](.ai/architecture/app-runtime-and-ui.md) |

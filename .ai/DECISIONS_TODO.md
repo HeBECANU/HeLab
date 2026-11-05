@@ -81,6 +81,27 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
   checks and shows the releases (notify, with the download link). The venv is rebuilt only when
   `requirements.lock` changed.
 
+## Basic plots v2 (block 66; [handoff](sessions/2026-11-05-claude-basic-plots-v2/handoff.md))
+
+Q66.1–Q66.10 decided (Tony in Chat, 2026-11-05) and built in `559baa5`; Q66.11 and Q66.12 open.
+
+- **Q66.1** LR-12's repeated "Basic plots v1": answered by Tony's screenshot: no repeated entry (the four lines were
+  the four scripts); built as he asked (one "Basic Plots" entry, v2 above v1, only v2 open), with the Windows popup fix.
+- **Q66.2** v2's T/X/Y histograms and 3D scatter duplicate v1's for now ("then I'll start tweaking them").
+- **Q66.3** XY/XT/YT as three entries, with the DLD port's density options ("take inspiration from the DLD front
+  panel's XY XT YT plot").
+- **Q66.4** Shot time's line breaks at gaps over 10× the median interval ("ok").
+- **Q66.5** the group choice isn't remembered across restarts ("ok"; a preset saves a plot, not the group).
+- **Q66.6** an option to include events outside the cut along the summed axis, default off; no newest-shot highlight.
+- **Q66.7** Plot info closed by default ("ok").
+- **Q66.8** v2's PyQtGraph titles drop the input ("ok"; other plotting libraries surveyed: none added now).
+- **Q66.9** v1's plots get Plot info and the one-line dock too ("ok").
+- **Q66.10** "X axis: Shot ID / Shot time", axis "Shot ID" ("ok").
+- **Q66.11** (open) Datashader later, only if Live on very large folders (over about 10 M events per image) makes the
+  2D plots lag after A66.1. Proposed: not now; ask again with numbers from a real run.
+- **Q66.12** (open) Align the DLD port's "shot number" with v2's "Shot ID"? Proposed: yes, on a DLD floor, keeping
+  its parameter values (presets save them).
+
 ## Folder info window (block 64; [plan](../roadmaps/folder-info.md))
 
 From Tony's live run (LR-5, 2026-11-05). The window, its three ways in, read only, one helper job and its eight
