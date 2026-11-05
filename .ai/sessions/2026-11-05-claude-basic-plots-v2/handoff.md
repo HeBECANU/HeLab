@@ -18,6 +18,7 @@ Worker (Claude, Opus 5.5), floor "Basic Plots v2", 2026-11-05. Brief: `brief.md`
 | `624a34f` | — | The long-name layout test leaves the Presets row out (a CI failure on Windows, Checks) |
 | `485a39d` and after | — | `dev/v0.0.9` merged (5c21094, Mendy's LR-3 text-length work); the floor's own tooltip wrapping dropped for the app's |
 | `9c8fcb4` | 5 | The manual page; the plotting-library comparison |
+| `259e50a` … `ffb8ea4` | review | Lens's `review.md` (BP-1 to BP-9), a commit per finding, each with a test that failed before (BP-8, a removal, excepted): see **Review fixes** |
 
 Checkpoint ◆ after step 4: `94c659b`, CI run 41974019806 green on every job of the three OSes, 0 RERUN in all 12
 Tests and Converter backends logs (read, and confirmed by CoCo). The final suite, type checks and CI run are in
@@ -80,6 +81,23 @@ Tests and Converter backends logs (read, and confirmed by CoCo). The final suite
   library now. Datashader is the only good fit; it bins 1 M events in 1.3 ms against `np.histogram2d`'s 84 ms.
   `np.bincount` gives identical counts in 4.8 ms with NumPy alone (A~1).
 
+## Review fixes (Lens's `review.md`, at `cb6a5bf`)
+
+| Finding | Commit | Fix | Test (failed before) |
+|---|---|---|---|
+| BP-1 Major | `259e50a` | A manual View range's unset (min = max) or reversed shown axis covers its full extent, as v1 and the note say: `compute` passes keep = 1.0 in manual mode | `_hist2d.py::test_manual_axes_left_unset_or_reversed_use_their_full_extent` (per plane, keep at 50 %) |
+| BP-2 | `aebb27f` | An X-axis switch is drawn anew in every library: each drawing is marked with its axis (`common.drawn_on`), and `update` refuses another (`same_axis`), so Matplotlib and Plotly never keep a shot-ID zoom on a date axis | `_shot_axis.py`'s every-library test: the switch isn't an update in any library; the new drawing updates in place (8 Plotly/Matplotlib cases failed) |
+| BP-3 | `bb85a67` | `histograms_2d.py` is registered itself, with the classes `Histogram1XY`, `Histogram2XT`, `Histogram3YT` (numbered: the manager lists a module's classes by name); the three stubs are removed. Ids, names, versions unchanged | `_hist2d.py::test_the_identity_hashes_the_shared_code` (a `ScriptsManager` load: in order, `histograms_2d.py`'s name and hash) |
+| BP-4 | `5f9ca07` | The instance filters its dock's events: any change of `plotSourceText` (the main window's relabel too) refreshes Plot info | `_plot_info.py::test_plot_info_follows_the_docks_relabel` (another tab loads another folder) |
+| BP-5 | `4bef5dc` | The manual's dock line in backticks (`<folder>` was dropped as an HTML element); the paragraph names the new marks, and View range says an unset or reversed axis covers all its events | `_manual.py::test_no_bare_angle_bracket_placeholder`; `mkdocs build --strict` renders `&lt;folder&gt;` |
+| BP-6 | `f92b103` | The dock line ends with ` · outdated` (an outdated saved result) and ` · ⚠ N` (the run's warnings, once each: the run's description, parameter warnings, constants' notes, the result's description); the tooltip lists the warnings in full before the record. `set_plot_result` gains `warnings` | Two existing tests extended (below) |
+| BP-7 | `2d31d3b` | No Q~/A~/BP- ID in the branch's code, docstrings or tests: the reason is said instead | `git diff 127b1e8` grep: none |
+| BP-8 | `2788f4c` | `AnalysisInstance.info_open`, its slot and `PlotInfo.toggled` removed; the toggle is the state (`is_open`) | A removal: the Plot info tests read `is_open()` |
+| BP-9 | `ffb8ea4` | — | `_threads.py`: each of the 7 v2 plots opened from the panel and rerun; `compute` off the GUI thread, `render`/`draw`/`update` on it, each plot updated in place (a flipped copy fails) |
+
+The BP-6 marks show on every plot's dock (the DLD port and user scripts too), like the rest of the one-line dock.
+While an outdated saved result shows, the amber line below also says so, at more length.
+
 ## Existing tests changed (each with why)
 
 - `test_script_system.py`, 2 asserts (CoCo's (e)): the selector reads "Basic Plots" where it read "Basic plots
@@ -104,6 +122,13 @@ Tests and Converter backends logs (read, and confirmed by CoCo). The final suite
     unchanged).
   - `test_result_cache_plots.py`: its `label()` helper adds the detail and settings for `plot_data_source`, and
     `source_line()` adds the detail (asserts unchanged).
+  - **Review fix BP-6** (added asserts, none weakened):
+    `test_analysis_gui.py::test_reversed_manual_bounds_are_reported_in_the_dock_and_settings_tab` now asserts the
+    line itself, `Data source: run_R · rev 1 · ⚠ 1`, and the tooltip's first line (the warning in full). Its
+    `source_text` expectation gains the ` · ⚠ 1` the line now holds.
+    `test_result_cache_plots.py::test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_ends`
+    asserts the line ends with ` · outdated` while the saved result shows, and holds no "outdated" after the rerun.
+  - (Review fix BP-7: comments only in `test_analysis_gui.py` and `test_result_cache_plots.py`.)
   - `test_live_plots.py`: a `source_text(instance)` helper in 6 asserts of
     `test_shots_arriving_faster_than_a_run_give_one_rerun_on_the_newest`,
     `test_a_plot_follows_live_from_an_empty_folder_to_its_first_shots` and
@@ -118,7 +143,8 @@ Tests and Converter backends logs (read, and confirmed by CoCo). The final suite
 `test_basic_plots_v2_groups.py` (LR-12, the family, the popup under the Windows style: it fails without the fix),
 `_v1_frozen.py` (v1's SHA-256 with line endings normalised, ids, versions, parameters, and the helpers v2 imports),
 `_shot_axis.py`, `_hist2d.py`, `_buttons.py` (LR-2), and `_plot_info.py` (Plot info, the dock line,
-and LR-3's long-name check at 250 px, offscreen).
+and LR-3's long-name check at 250 px, offscreen). From the review: `_threads.py` (BP-9) and `_manual.py` (BP-5),
+plus new cases in `_hist2d.py` and `_plot_info.py`.
 
 ## Notes for CoCo and Ground
 
@@ -152,12 +178,19 @@ and LR-3's long-name check at 250 px, offscreen).
   `GAP_FACTOR` 10× the median interval; `standard_v2/common.py` draws it in each library). The 2D histograms:
   `helab/analysis/histogram2d.py` (planes, auto-crop leaving the summed axis whole, manual bounds limiting it unless
   `include_outside`, bins at most 1,000 automatic, blur, rate per shot, `compress` in the colour map only);
-  `standard_v2/histograms_2d.py` (shared) with one module per plane, so the tree lists XY, XT, YT in that order (the
-  manager registers a module's classes alphabetically). v2's PyQtGraph titles leave out the input; Plotly and
-  Matplotlib keep it (Q~8).
+  `standard_v2/histograms_2d.py`, registered itself so that the three plots' identity names it and carries its hash,
+  its classes numbered (`Histogram1XY`, `Histogram2XT`, `Histogram3YT`) so that the tree lists XY, XT, YT in that
+  order (the manager registers a module's classes by name). **A script's hash covers only its own module:**
+  `standard_v2/common.py` (the shot axis drawn in each library, shared by Counts per shot and Transfer fractions) is
+  not in their hash, so a change there bumps those plots' `version`; v2's 3D scatter, T, X, Y histograms and
+  Transfer fractions also run v1's pinned code. An X-axis switch is drawn anew in every library (`drawn_on`,
+  `same_axis`). v2's PyQtGraph titles leave out the input; Plotly and Matplotlib keep it (Q~8).
 - *Following Live, coverage and plot display*: replace "Each plot dock's source is two lines, the input and the
   settings in short form (…)" with: "Each plot dock's source is one line, elided: `Data source: <run> · rev N ·
-  <Live state>` (or "Showing previously loaded data"), the record in its tooltip. The rest (shots, `<id> vX`,
+  <Live state>` (or "Showing previously loaded data"), then short marks a user sees without opening Plot info:
+  `outdated` for an outdated saved result and `⚠ N` for the run's warnings (`plotSourceMarks`), which the tooltip
+  lists in full before the record (`plotSourceWarnings`). Plot info follows every relabel (the instance filters its
+  dock's `plotSourceText` changes). The rest (shots, `<id> vX`,
   the saved-result mark, the settings in short) is in the plot's **Plot info** (`plots/plot_info.py`, LR-4): the top
   of its settings page, closed by default to one line (the input, an `ElidedLabel`), open with wrapped lines at most 12
   high (scrolling), from the dock's properties (`plotSourceText`, `plotSourceDetail`, `plotSourceSettings`,
@@ -218,3 +251,9 @@ At `9c8fcb4` (the handoff's own commit adds only this file), the full output is 
 - **After merging `dev/v0.0.9` (5c21094)** and dropping the floor's own tooltip wrapping: full suite **9,527
   passed, 673 skipped, 0 RERUN**; all five type checks clean (226 and 220 files). The audit's merged run (above,
   `audit-results.txt`) shows no plot-settings label cut. The CI run for this head goes to CoCo with its ID.
+- **After the review fixes** (BP-1 to BP-9, `259e50a` … `ffb8ea4`) and merging `dev/v0.0.9` again (`8690a2f`, as
+  `8bae2b1`; no conflict): full suite **9,551 passed, 673 skipped, 0 RERUN** (`.ai/temp/review-fix-suite.txt`; the
+  2 warnings are pyqtgraph's NumPy 2.5 deprecation in `test_t_spectrum.py`, not this branch's); all five type
+  checks clean (225 and 224 files: the three plane stubs are gone, three test files are new;
+  `.ai/temp/review-fix-types.txt`). `mkdocs build --strict` and `ruff check` clean. The CI run for the pushed head
+  goes to CoCo with its ID.
