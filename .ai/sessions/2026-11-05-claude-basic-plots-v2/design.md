@@ -1,5 +1,7 @@
 # Design: Basic plots v2 (LR-10, LR-12, LR-13; Addendum 1: LR-2, LR-3, LR-4)
 
+Superseded where Tony answered Q~2–Q~10 and CoCo chose (A) for the dock line: see `handoff.md`.
+
 Worker on floor "Basic Plots v2", branch `agent/basic-plots-v2`, base `a1d3c2c`, `dev/v0.0.9` merged at `7ea6622`
 (Addendum 1). Step 1 of the brief: no code yet. Questions for Tony are `Q~n`; things CoCo can settle are marked
 **(CoCo)**.
