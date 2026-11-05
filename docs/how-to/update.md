@@ -34,7 +34,9 @@ Settings › General, **Updates from:**
 - **What to follow** (a checkout only):
   - **The branch HeLab runs from** (the default on a branch): HeLab moves forward along that branch, only
     to a commit whose automatic tests passed on macOS, Windows and Ubuntu. It never skips back, never
-    rewrites history, and never moves to a commit whose tests failed or haven't finished.
+    rewrites history, and never moves to a commit whose tests failed or haven't finished. It moves only to
+    the branch's own commits, never to one that came in from another branch by a merge: after a merge,
+    it waits for the merge's own tests.
   - **Releases**: HeLab moves from release to release (the default when the checkout is on a release, not
     a branch). The checkout leaves its branch; to work on a branch there again, check it out by hand.
   A compiled HeLab always follows releases.
@@ -56,7 +58,9 @@ newer one is offered again.
    which takes a few minutes; otherwise the venv is kept.
 
 When HeLab starts again, the status bar says it was updated. If anything went wrong, HeLab is put back as
-it was and starts again, and a message says what happened, with the updater's log.
+it was and starts again, and a message says what happened, with the updater's log. (If the new version
+couldn't start and its helper processes still ran two minutes later, it is left in place instead, and the
+message says how to go back.)
 
 HeLab won't update, and says why, when:
 
@@ -74,7 +78,8 @@ HeLab won't update, and says why, when:
 
 **Help › Restore previous version…** goes back to the version HeLab had before its last update, and to its
 previous venv when that update built a new one. It quits and starts again the same way. Restoring again
-undoes it. HeLab keeps one previous version; when a later update builds a new venv, the venv from before the
+undoes it. The version it left isn't offered again at start (as with **Skip this version**); a newer one
+is. HeLab keeps one previous version; when a later update builds a new venv, the venv from before the
 previous one is deleted once the new version has started.
 
 The disk cache and the settings stay as they are: an older HeLab reads what a newer one wrote, and treats

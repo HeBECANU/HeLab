@@ -22,7 +22,7 @@ from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
 
 from helab.build_info import PACKAGE_DIR, BuildInfo
 from helab.updates import updater
-from helab.updates.versions import RELEASES, Offer
+from helab.updates.versions import RELEASES, Offer, parse_version
 
 TOKEN_ENV = "HELAB_UPDATE_TOKEN"
 UPDATER_SOURCE = Path(updater.__file__)
@@ -225,33 +225,44 @@ def _start_detached(program: str, arguments: list[str], folder: str) -> bool:
 
 # -- At start ---------------------------------------------------------------------------------------------
 
-def mark_started(app_dir: str) -> bool:
+def mark_started(app_dir: str) -> str:
     """Started by the updater (``HELAB_UPDATE_TOKEN``): tell it this version runs, once the window has shown
-    (``main``). The token goes from the environment, so helpers and the next updater don't inherit it."""
+    (``main``); the token, or "" when not started by an updater (or the mark couldn't be written). The token goes
+    from the environment, so helpers and the next updater don't inherit it."""
     token = os.environ.pop(TOKEN_ENV, "")
     if not token or not token.isalnum():
-        return False
+        return ""
     try:
         folder = updates_dir(app_dir)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"started-{token}").write_text(str(os.getpid()), encoding="utf-8")
     except OSError:
         logging.exception("Couldn't tell the updater HeLab started")
-        return False
-    return True
+        return ""
+    return token
 
 
-def take_last_outcome(app_dir: str) -> dict[str, Any]:
-    """The last update's outcome, once: {} when there is none, or it was shown already."""
+def take_last_outcome(app_dir: str, token: str = "") -> dict[str, Any]:
+    """The last update's outcome, once: {} when there is none, it was shown already, or (``token`` given) it is
+    another run's than the updater that started this HeLab."""
     path = updates_dir(app_dir) / "last.json"
     found = updater.read_json(path)
-    if not found or found.get("shown"):
+    if not found or found.get("shown") or (token and found.get("token") != token):
         return {}
     try:
         updater.write_json(path, dict(found, shown=True))
     except OSError:
         return {}
     return found
+
+
+def restored_key(found: dict[str, Any]) -> str:
+    """What a Restore left, as Skip this version stores it (the version in releases mode, else the commit), so
+    the startup reminder doesn't offer it straight back (design §7); "" when it isn't a restore."""
+    if found.get("outcome") != "restored":
+        return ""
+    version = parse_version(str(found.get("tag", ""))) if found.get("mode") == RELEASES else None
+    return str(version) if version is not None else str(found.get("from", ""))
 
 
 def outcome_words(found: dict[str, Any]) -> tuple[bool, str]:

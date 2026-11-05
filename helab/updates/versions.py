@@ -71,9 +71,10 @@ class BranchFacts:
     """The repo's branch against the running commit (``github``'s compare), and the newest green candidate."""
     branch: str
     state: str  # "identical", "ahead" (the repo has newer commits), "behind", "diverged", "missing"
-    candidates: tuple[Commit, ...] = ()  # The repo's newer commits, newest first.
+    candidates: tuple[Commit, ...] = ()  # The branch's own newer commits (first-parent, from the tip), newest first.
     ci: tuple[tuple[str, str], ...] = ()  # (sha, "green" / "pending" / "red" and why) for the ones looked at
     target: Commit | None = None  # The newest candidate whose CI is green on all three OSes.
+    more: bool = False  # The line goes on past the commits GitHub listed: counts are floors.
 
     def ci_of(self, sha: str) -> str:
         return dict(self.ci).get(sha, "")
@@ -177,7 +178,8 @@ def branch_offer(facts: Facts) -> Offer | None:
     if branch is None or branch.target is None:
         return None
     ahead = len(branch.candidates) - [c.sha for c in branch.candidates].index(branch.target.sha)
-    return Offer(BRANCH, branch.target.sha, f"{branch.branch} +{ahead}", commit=branch.target, ahead=ahead)
+    return Offer(BRANCH, branch.target.sha, f"{branch.branch} +{ahead}{'+' if branch.more else ''}",
+                 commit=branch.target, ahead=ahead)
 
 
 def status(build: BuildInfo, facts: Facts | None, mode: str, prereleases: bool, skipped: str = "") -> Status:
@@ -207,6 +209,7 @@ def branch_note(branch: BranchFacts) -> str:
     if branch.state == "missing":
         return f"This commit or {branch.branch} isn't on the chosen repository."
     if branch.state == "ahead":
-        return (f"{branch.branch} has {len(branch.candidates)} newer commit(s), none of them (of those checked) "
+        return (f"{branch.branch} has {len(branch.candidates)}{'+' if branch.more else ''} newer commit(s), "
+                "none of them (of those checked) "
                 "with CI passed on macOS, Windows and Ubuntu yet.")
     return ""

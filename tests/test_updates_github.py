@@ -46,11 +46,16 @@ def runs(conclusions: dict[str, str] | None = None, *, oses: tuple[str, ...] = g
     return {"total_count": len(found), "check_runs": found}
 
 
-def compare(state: str, shas: list[str]) -> dict[str, Any]:
-    """GitHub lists a compare's commits oldest first."""
-    return {"status": state, "ahead_by": len(shas), "commits": [
+def compare(state: str, shas: list[str], *, base: str = C_OLD, parents: dict[str, list[str]] | None = None,
+            ahead_by: int | None = None) -> dict[str, Any]:
+    """GitHub lists a compare's commits oldest first; each one's parents are the one before it (the first one's
+    ``base``) unless ``parents`` says otherwise."""
+    chain = dict(zip(shas, [[base], *([sha] for sha in shas[:-1])]))
+    chain.update(parents or {})
+    return {"status": state, "ahead_by": len(shas) if ahead_by is None else ahead_by, "commits": [
         {"sha": sha, "html_url": f"https://github.com/{REPO}/commit/{sha}",
-         "commit": {"message": f"Commit {sha[:3]}\n\nbody", "committer": {"date": "2026-11-05T01:00:00Z"}}}
+         "commit": {"message": f"Commit {sha[:3]}\n\nbody", "committer": {"date": "2026-11-05T01:00:00Z"}},
+         "parents": [{"sha": parent, "url": "https://api.github.com/x"} for parent in chain[sha]]}
         for sha in shas]}
 
 
@@ -194,8 +199,8 @@ def test_the_platform_asset_is_found_by_os() -> None:
 
 # -- Branch mode ----------------------------------------------------------------------------------------
 
-def branch_feed(state: str, newer: list[str], ci: dict[str, dict[str, Any]]) -> Feed:
-    extra: dict[str, Any] = {f"/repos/{REPO}/compare/{C_OLD}...dev/v0.0.9": compare(state, newer)}
+def branch_feed(state: str, newer: list[str], ci: dict[str, dict[str, Any]], **shape: Any) -> Feed:
+    extra: dict[str, Any] = {f"/repos/{REPO}/compare/{C_OLD}...dev/v0.0.9": compare(state, newer, **shape)}
     extra.update({f"/repos/{REPO}/commits/{sha}/check-runs": reply for sha, reply in ci.items()})
     return feed(extra=extra)
 
@@ -241,6 +246,44 @@ def test_branch_mode_looks_at_no_more_than_five_commits() -> None:
     source = branch_feed("ahead", newer, {sha: runs(status="queued") for sha in newer})
     run(branch_build(), source, BRANCH)
     assert sum("/check-runs" in path for path in source.asked) == github.MAX_CI_LOOKUPS
+
+
+SIDE_1, SIDE_2, MERGE, AFTER = "51" * 20, "52" * 20, "4e" * 20, "af" * 20
+
+
+def test_branch_mode_never_moves_onto_a_commit_merged_in_from_another_branch() -> None:
+    """A floor's branch (two commits off the running one, its tip green) merged into dev/v0.0.9, the merge's CI
+    still running: nothing is offered, not the floor's tip (its state was never dev/v0.0.9's)."""
+    merged = {MERGE: [C_OLD, SIDE_2]}
+    source = branch_feed("ahead", [SIDE_1, SIDE_2, MERGE], {MERGE: runs(status="in_progress"), SIDE_2: runs(),
+                                                            SIDE_1: runs()}, parents=merged)
+    facts = run(branch_build(), source, BRANCH)
+    found = status(branch_build(), facts, BRANCH, False)
+    assert found.offer is None, found.offer
+    assert facts.branch is not None and [c.sha for c in facts.branch.candidates] == [MERGE]
+    assert "none of them" in found.notes[0] and "has 1 newer" in found.notes[0]
+    # Once the merge's own CI passed (or a newer commit of the branch's own), that is what is offered; +N counts
+    # the branch's own commits only.
+    source = branch_feed("ahead", [SIDE_1, SIDE_2, MERGE, AFTER], {AFTER: runs(), MERGE: runs()},
+                         parents=dict(merged, **{AFTER: [MERGE]}))
+    found = status(branch_build(), run(branch_build(), source, BRANCH), BRANCH, False)
+    assert found.offer is not None and found.offer.commit is not None
+    assert found.offer.commit.sha == AFTER and found.offer.label == "dev/v0.0.9 +2"
+
+
+def test_a_checkout_on_a_merged_side_commit_moves_along_the_branchs_own_line() -> None:
+    """Running SIDE_1 (a side branch's commit, since merged): the branch's own commits that contain it."""
+    data = compare("ahead", [SIDE_2, MERGE, AFTER], base="unused" * 8,
+                   parents={SIDE_2: [SIDE_1], MERGE: [C_OLD, SIDE_2], AFTER: [MERGE]})
+    line, more = github.branch_line(github.trim_compare(data), SIDE_1)
+    assert [c.sha for c in line] == [AFTER, MERGE] and not more
+
+
+def test_a_compare_cut_at_250_commits_keeps_the_tip_and_says_the_count_is_a_floor() -> None:
+    newer = [f"{n:040x}" for n in range(1, 251)]
+    source = branch_feed("ahead", newer, {newer[-1]: runs()}, base="f" * 40, ahead_by=1006)
+    found = status(branch_build(), run(branch_build(), source, BRANCH), BRANCH, False)
+    assert found.offer is not None and found.offer.label == "dev/v0.0.9 +250+"
 
 
 # -- The CI rule ----------------------------------------------------------------------------------------

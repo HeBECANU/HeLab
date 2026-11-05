@@ -37,6 +37,23 @@ class Transport(Protocol):
         """Start a GET of ``url``; ``done`` is called once, later, from the event loop."""
 
 
+def network_request(url: str, headers: dict[str, str]) -> Any:
+    """A ``QNetworkRequest`` for ``url``: Qt's transfer timeout, no cookies, no disk cache, and redirects followed
+    only within the same origin (``api.github.com``, as for a renamed repo), so nothing else is ever asked."""
+    from PyQt6.QtNetwork import QNetworkRequest
+    request = QNetworkRequest(QUrl(url))
+    request.setTransferTimeout(github.TIMEOUT_MS)
+    request.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute,
+                         QNetworkRequest.CacheLoadControl.AlwaysNetwork)
+    request.setAttribute(QNetworkRequest.Attribute.CookieLoadControlAttribute, QNetworkRequest.LoadControl.Manual)
+    request.setAttribute(QNetworkRequest.Attribute.CookieSaveControlAttribute, QNetworkRequest.LoadControl.Manual)
+    request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                         QNetworkRequest.RedirectPolicy.SameOriginRedirectPolicy)
+    for key, value in headers.items():
+        request.setRawHeader(key.encode(), value.encode())
+    return request
+
+
 class QtTransport:
     """GETs on ``QNetworkAccessManager``: asynchronous, no cookies, no disk cache, Qt's transfer timeout."""
 
@@ -51,17 +68,7 @@ class QtTransport:
             raise ValueError(f"Update checks only ask {github.API}")
         if os.environ.get("HELAB_TEST_SOURCE_GUARD"):  # (tests/conftest.py: tests never reach the network.)
             raise RuntimeError("Update checks don't reach the network under tests: give UpdateCheck a transport")
-        request = QNetworkRequest(QUrl(url))
-        request.setTransferTimeout(github.TIMEOUT_MS)
-        request.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute,
-                             QNetworkRequest.CacheLoadControl.AlwaysNetwork)
-        request.setAttribute(QNetworkRequest.Attribute.CookieLoadControlAttribute,
-                             QNetworkRequest.LoadControl.Manual)
-        request.setAttribute(QNetworkRequest.Attribute.CookieSaveControlAttribute,
-                             QNetworkRequest.LoadControl.Manual)
-        for key, value in headers.items():
-            request.setRawHeader(key.encode(), value.encode())
-        reply = self.manager.get(request)
+        reply = self.manager.get(network_request(url, headers))
         assert reply is not None
 
         def finished() -> None:

@@ -144,13 +144,14 @@ def trim_tag(data: Any) -> Any:
     return {"type": _text(target, "type"), "sha": _text(target, "sha")} if isinstance(target, dict) else {}
 
 
-def _commit(item: dict[str, Any]) -> dict[str, str]:
+def _commit(item: dict[str, Any]) -> dict[str, Any]:
     inner = item.get("commit")
     inner = inner if isinstance(inner, dict) else {}
     committer = inner.get("committer")
     message = _text(inner, "message").split("\n", 1)[0][:200]
     return {"sha": _text(item, "sha"), "subject": message,
-            "date": _text(committer, "date") if isinstance(committer, dict) else "", "html_url": _text(item, "html_url")}
+            "date": _text(committer, "date") if isinstance(committer, dict) else "", "html_url": _text(item, "html_url"),
+            "parents": [_text(parent, "sha") for parent in _items(item, "parents")]}
 
 
 def trim_compare(data: Any) -> Any:
@@ -167,6 +168,54 @@ def parse_compare(data: Any) -> tuple[str, tuple[Commit, ...]]:
     commits = [Commit(_text(c, "sha"), _text(c, "subject"), _text(c, "date"), _text(c, "html_url"))
                for c in _items(data, "commits") if _text(c, "sha")]
     return _text(data, "status"), tuple(reversed(commits))
+
+
+def branch_line(data: Any, base: str) -> tuple[tuple[Commit, ...], bool]:
+    """The branch's own newer commits, newest first: its first-parent chain from the tip, down to ``base`` (the
+    running commit), keeping only commits that contain ``base`` (a fast-forward from it). Never a commit merged
+    in from another branch: those are the branch's state only through the merge. And whether the chain may go on
+    past what GitHub listed (a compare lists at most 250 commits, the newest, so the "+N" is then a floor)."""
+    if not isinstance(data, dict):
+        return (), False
+    items = [item for item in _items(data, "commits") if _text(item, "sha")]
+    ahead_by = data.get("ahead_by")
+    more = isinstance(ahead_by, int) and ahead_by > len(items)
+    listed = {_text(item, "sha"): item for item in items}
+    if not listed:
+        return (), more
+
+    def parents(sha: str) -> list[str]:
+        found = listed[sha].get("parents")
+        return [str(parent) for parent in found if isinstance(parent, str)] if isinstance(found, list) else []
+
+    # A listed commit contains base when a parent is base, or a listed parent contains it. A parent not listed is
+    # an ancestor of base (the compare lists what base lacks), unless the list was cut short: then unknown, and
+    # taken as containing it (the updater checks the ancestry again before it moves anything).
+    contains: dict[str, bool] = {}
+    for start in listed:
+        stack = [start]
+        while stack:
+            sha = stack[-1]
+            if sha in contains:
+                stack.pop()
+                continue
+            waiting = [parent for parent in parents(sha) if parent in listed and parent not in contains]
+            if waiting:
+                stack.extend(waiting)
+                continue
+            stack.pop()
+            contains[sha] = any(parent == base or (contains[parent] if parent in listed else more)
+                                for parent in parents(sha))
+    children = {parent for sha in listed for parent in parents(sha)}
+    tips = [sha for sha in listed if sha not in children]
+    sha = tips[0] if len(tips) == 1 else _text(items[-1], "sha")  # (GitHub lists the head last.)
+    line: list[Commit] = []
+    while sha in listed and contains.get(sha) and len(line) < len(listed):
+        item = listed[sha]
+        line.append(Commit(sha, _text(item, "subject"), _text(item, "date"), _text(item, "html_url")))
+        first = parents(sha)
+        sha = first[0] if first else ""
+    return tuple(line), more and sha not in (base, "")
 
 
 def trim_check_runs(data: Any) -> Any:
@@ -257,7 +306,8 @@ def _need(fetched: Fetched) -> Any:
 
 def check(repo: str, commit: str, version: str, mode: str, branch: str, prereleases: bool) -> Check:
     """One check of ``repo`` for a run of ``commit`` (``version``): its releases and their tags, which of
-    the newer ones is on main, and in branch mode ``branch``'s newer commits and the newest green one."""
+    the newer ones is on main, and in branch mode ``branch``'s own newer commits (its first-parent line) and the
+    newest green one."""
     releases = parse_releases(_need((yield releases_request(repo))))
     refs = parse_refs(_need((yield tags_request(repo))))
     tags: dict[str, str] = {}
@@ -291,7 +341,9 @@ def check(repo: str, commit: str, version: str, mode: str, branch: str, prerelea
         if fetched.status == 404:
             branch_facts = BranchFacts(branch, "missing")
         else:
-            state, candidates = parse_compare(_need(fetched))
+            data = _need(fetched)
+            state = parse_compare(data)[0]
+            candidates, more = branch_line(data, commit)
             ci: list[tuple[str, str]] = []
             target = None
             if state == "ahead":
@@ -301,7 +353,7 @@ def check(repo: str, commit: str, version: str, mode: str, branch: str, prerelea
                     if found == "green":
                         target = candidate
                         break
-            branch_facts = BranchFacts(branch, state, candidates, tuple(ci), target)
+            branch_facts = BranchFacts(branch, state, candidates, tuple(ci), target, more)
     return Facts(repo, releases, tuple(tags.items()), tuple(off_main), tuple(on_main), branch_facts)
 
 

@@ -63,6 +63,13 @@ if token and behaviour == "crash-new":
     raise SystemExit(3)
 if token and behaviour == "hang":
     time.sleep(30)
+if token and behaviour == "crash-new-with-helper":
+    # A helper from the venv that outlives its HeLab, then says which version's code it found at its end.
+    import subprocess
+    python = checkout / "venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    subprocess.Popen([str(python), "-m", "helab.io_helper", str(base / "helper-saw")], cwd=checkout,
+                     start_new_session=sys.platform != "win32")
+    raise SystemExit(3)
 if token:
     (Path(os.environ["FAKE_APP_DIR"]) / "updates" / f"started-{token}").write_text("")
 '''
@@ -204,11 +211,11 @@ class Lab:
         data["_log"] = log.read_text() if log.is_file() else ""
         return data
 
-    def launches(self, count: int = 0) -> list[dict[str, Any]]:
-        """Each start of the fake HeLab; waits (up to 20 s) for ``count`` of them: a start without a token is
+    def launches(self, count: int = 0, wait: float = 20) -> list[dict[str, Any]]:
+        """Each start of the fake HeLab; waits (up to ``wait`` s) for ``count`` of them: a start without a token is
         detached, and the updater doesn't wait for it."""
         path = self.base / "launches.jsonl"
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + wait
         while True:
             found = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
             if len(found) >= count or time.monotonic() > deadline:
@@ -252,7 +259,13 @@ def test_releases_mode_checks_out_the_tag_and_restarts_into_it(lab: Lab) -> None
     launches = lab.launches()
     assert len(launches) == 1 and launches[0]["token"] and launches[0]["version"] == "0.0.2"
     previous = json.loads((lab.app_dir / "updates" / "previous.json").read_text())
-    assert previous["to"] == target and previous["rebuilt"] is False
+    assert previous["to"] == target and previous["rebuilt"] is False and previous["tag"] == "v0.0.2"
+    # Restore says what it left, so HeLab's startup reminder skips that release.
+    restored = lab.run(action="restore", mode="releases")
+    assert restored["outcome"] == "restored", why(restored)
+    assert restored["mode"] == "releases" and restored["tag"] == "v0.0.2" and lab.version() == "0.0.1"
+    from helab.updates import launch
+    assert launch.restored_key(restored) == "0.0.2"
 
 
 def test_a_tag_not_on_main_is_refused(lab: Lab) -> None:
@@ -305,6 +318,20 @@ def test_branch_mode_refuses_a_detached_checkout_another_branch_or_a_diverged_on
     assert "can't fast-forward" in refusals
 
 
+def test_branch_mode_refuses_a_commit_merged_in_from_another_branch(lab: Lab) -> None:
+    """A floor's commit, landed by a merge: on the branch's history, but never its state. The merge itself is
+    fine."""
+    lab.git(lab.seed, "checkout", "-q", "-b", "floor")
+    side = lab.commit("0.0.2-floor", files={"helab/floor.py": "x = 1\n"})
+    lab.git(lab.seed, "checkout", "-q", "main")
+    lab.git(lab.seed, "merge", "-q", "--no-ff", "-m", "Land the floor", "floor")
+    lab.git(lab.seed, "push", "-q", "origin", "main")
+    merge = lab.git(lab.seed, "rev-parse", "HEAD")
+    refusals = " ".join(lab.dry_run(mode="branch", branch="main", target=side)["refusals"])
+    assert "came into main from another branch" in refusals
+    assert lab.dry_run(mode="branch", branch="main", target=merge)["ok"]
+
+
 def test_a_commit_not_on_the_branch_is_refused(lab: Lab) -> None:
     lab.publish("0.0.2")
     refusals = " ".join(lab.dry_run(mode="branch", branch="main", target="e" * 40)["refusals"])
@@ -330,6 +357,16 @@ def test_untracked_files_the_update_would_overwrite_are_named(lab: Lab) -> None:
     (lab.checkout / "helab" / "new_module.py").write_text("mine\n")
     refusals = " ".join(lab.dry_run(mode="branch", branch="main", target=target)["refusals"])
     assert "untracked: helab/new_module.py" in refusals
+
+
+def test_a_file_the_update_renames_onto_an_untracked_one_is_named(lab: Lab) -> None:
+    lab.publish("0.0.2", files={"helab/old_name.py": "x = 1\n" * 20})
+    lab.git(lab.checkout, "pull", "-q", "--ff-only")
+    lab.git(lab.seed, "mv", "helab/old_name.py", "helab/new_name.py")
+    target = lab.publish("0.0.3")
+    (lab.checkout / "helab" / "new_name.py").write_text("mine\n")
+    refusals = " ".join(lab.dry_run(mode="branch", branch="main", target=target)["refusals"])
+    assert "untracked: helab/new_name.py" in refusals
 
 
 def test_a_different_python_minor_version_is_refused(lab: Lab) -> None:
@@ -387,6 +424,21 @@ def test_the_test_guard_refuses_folders_outside_the_tests_root(lab: Lab, tmp_pat
     assert "Under tests, the updater only works below" in " ".join(plan["refusals"])
 
 
+def test_the_test_guard_refuses_before_writing_anything(lab: Lab, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Outside the test's root nothing is written (no log, no ready, no outcome) and nothing started: the asking
+    HeLab says its updater didn't start, and stays."""
+    target = lab.publish("0.0.2")
+    elsewhere = dict(lab.env, HELAB_UPDATER_TEST_ROOT=str(tmp_path_factory.mktemp("elsewhere")))
+    before = sorted(path.name for path in (lab.app_dir / "updates").iterdir())
+    updater = lab.start(env=elsewhere, mode="branch", branch="main", target=target)
+    _, err = updater.communicate(timeout=60)
+    assert updater.returncode == 2 and "Under tests, the updater only works below" in err
+    # (Only the test's own copy and request are there.)
+    after = sorted(path.name for path in (lab.app_dir / "updates").iterdir())
+    assert [name for name in after if name not in before and not name.startswith(("request-", "updater-"))] == []
+    assert lab.launches(1, wait=2) == []
+
+
 def test_a_refusal_after_helab_quit_changes_nothing_and_starts_the_old_one(lab: Lab) -> None:
     target = lab.publish("0.0.2")
     (lab.checkout / "helab" / "build_info.py").write_text("# mine\n")
@@ -399,7 +451,14 @@ def test_a_refusal_after_helab_quit_changes_nothing_and_starts_the_old_one(lab: 
 
 # -- Waiting --------------------------------------------------------------------------------------------
 
-def test_the_updater_waits_for_helab_and_its_helpers_before_changing_a_file(lab: Lab) -> None:
+@pytest.mark.parametrize("folder", ["lab", "My Projects"])
+def test_the_updater_waits_for_helab_and_its_helpers_before_changing_a_file(tmp_path: Path, folder: str) -> None:
+    """The helper as HeLab starts one from source (``<venv python> -m helab.io_helper``), also from a checkout
+    whose path has a space."""
+    if shutil.which("git") is None:
+        pytest.skip("git isn't installed")
+    lab = Lab(tmp_path / folder)
+    (lab.checkout / "helab" / "io_helper.py").write_text("import time\ntime.sleep(60)\n")  # (Untracked.)
     target = lab.publish("0.0.2")
     helab = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     python = lab.venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
@@ -412,8 +471,7 @@ def test_the_updater_waits_for_helab_and_its_helpers_before_changing_a_file(lab:
             time.sleep(0.1)
             ready = list((lab.app_dir / "updates").glob("ready-*"))
         assert ready, "the updater never said it was ready"
-        # A helper from the venv, its command naming HeLab's helper.
-        helper = subprocess.Popen([str(python), "-c", "import time; time.sleep(60)", "--helab-io-helper"],
+        helper = subprocess.Popen([str(python), "-m", "helab.io_helper"], cwd=lab.checkout,
                                   env={k: v for k, v in lab.env.items() if k != "PYTHONHOME"})
         time.sleep(1.0)
         assert lab.head() != target and updater.poll() is None
@@ -440,6 +498,7 @@ def test_helab_that_never_quits_leaves_everything_as_it_was(lab: Lab) -> None:
         last.communicate(timeout=60)
         assert lab.last()["outcome"] == "refused" and "didn't quit" in lab.last()["reason"]
         assert lab.head() != target
+        assert lab.launches(1, wait=2) == []  # (Not a second HeLab beside the one still running.)
     finally:
         helab.kill()
 
@@ -496,6 +555,46 @@ def test_a_new_version_that_exits_before_starting_is_rolled_back(lab: Lab) -> No
                                                                                          (False, "0.0.1")]
 
 
+def test_a_rollback_waits_for_the_new_versions_helpers(lab: Lab) -> None:
+    before = lab.head()
+    target = lab.publish("0.0.2", files={"helab/io_helper.py": (
+        "import sys, time\nfrom pathlib import Path\ntime.sleep(4)\n"
+        "Path(sys.argv[1]).write_text(Path('helab/_version.py').read_text().split(chr(34))[1])\n")})
+    (lab.base / "behaviour").write_text("crash-new-with-helper")
+    last = lab.run(mode="branch", branch="main", target=target)
+    assert last["outcome"] == "rolled back", why(last)
+    assert (lab.base / "helper-saw").read_text() == "0.0.2"  # (Its code stayed until it had gone.)
+    assert lab.head() == before
+
+
+def test_an_unexpected_error_after_the_code_moved_rolls_everything_back(lab: Lab,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Any exception once a file may have changed (here a KeyError right after the merge) puts the previous
+    version back, as a known failure does; it isn't left to ``main``'s last word on the moved code."""
+    from helab.updates import updater
+    before = lab.head()
+    target = lab.publish("0.0.2")
+    for key in [key for key in os.environ if key not in lab.env]:
+        monkeypatch.delenv(key)
+    for key, value in lab.env.items():
+        monkeypatch.setenv(key, value)
+    real = updater.move_code
+
+    def then_fail(job: Any, found: Any, log: Any) -> None:
+        real(job, found, log)
+        raise KeyError("boom")
+
+    monkeypatch.setattr(updater, "move_code", then_fail)
+    quit_helab = subprocess.Popen([sys.executable, "-c", "pass"])
+    quit_helab.wait()
+    path = lab.request(pid=quit_helab.pid, mode="branch", branch="main", target=target)
+    assert updater.main([str(path)]) == 1
+    last = lab.last()
+    assert last["outcome"] == "failed" and "boom" in last["reason"] and last["from"] == before, why(last)
+    assert lab.head() == before and not (lab.app_dir / "updates" / "previous.json").exists()
+    assert [launch["version"] for launch in lab.launches(1)] == ["0.0.1"]
+
+
 def test_a_slow_new_version_is_never_killed(lab: Lab) -> None:
     target = lab.publish("0.0.2")
     (lab.base / "behaviour").write_text("hang")
@@ -537,6 +636,60 @@ def test_a_second_update_deletes_only_the_venv_before_the_previous_one(lab: Lab)
     assert "b" in (lab.checkout / "venv.previous" / "marker.txt").read_text()
     assert not list(lab.checkout.glob("venv.previous-*"))  # (Q~8 (a): the one before that is gone.)
     assert "Deleted the older venv" in last["_log"]
+
+
+def test_every_program_the_updater_runs_reads_utf_8_and_opens_no_console_window(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """One call runs them all (git, uv, ps, the venv's check): UTF-8 with replacement, no input, and on Windows
+    ``CREATE_NO_WINDOW`` (the updater runs under pythonw.exe, so each would open a console)."""
+    import ast
+    from helab.updates import updater
+    tree = ast.parse(UPDATER.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+             and isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess"
+             and node.func.attr in ("run", "check_output", "call", "check_call")]
+    assert len(calls) == 1  # (``_run``'s own.)
+    seen: dict[str, Any] = {}
+
+    def fake_run(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(options)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)  # (The updater's ``subprocess`` is this module.)
+    updater._run(["git", "--version"], timeout=5)
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    assert seen["creationflags"] == no_window and (no_window != 0) is (sys.platform == "win32")
+    assert seen["encoding"] == "utf-8" and seen["errors"] == "replace" and seen["stdin"] == subprocess.DEVNULL
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows: the modules each Python loaded")
+def test_windows_counts_a_venv_module_a_python_loaded_not_its_hard_link_loaded_elsewhere(lab: Lab) -> None:
+    """uv hard-links packages from its cache into each venv: a DLL another venv's Python loaded (through that
+    venv's path) is the same file, but not this venv's, and mustn't hold up the update."""
+    from helab.updates import updater
+    source = next(iter(sorted((Path(sys.base_prefix) / "DLLs").glob("select*.pyd"))), None)
+    if source is None:
+        pytest.skip("no select.pyd in the base Python")
+    elsewhere = lab.base / "elsewhere"
+    elsewhere.mkdir()
+    original = elsewhere / source.name
+    shutil.copyfile(source, original)
+    inside = lab.venv / "Lib" / "site-packages" / "stub_select"
+    inside.mkdir(parents=True)
+    linked = inside / source.name
+    os.link(original, linked)
+    job = updater.read_job(lab.request())
+    load = ("import importlib.util as u, sys, time; s = u.spec_from_file_location('select', sys.argv[1]); "
+            "m = u.module_from_spec(s); s.loader.exec_module(m); print('loaded', flush=True); time.sleep(60)")
+    for path, counted in ((original, False), (linked, True)):
+        process = subprocess.Popen([sys.executable, "-c", load, str(path)], stdout=subprocess.PIPE, text=True)
+        try:
+            assert process.stdout is not None and process.stdout.readline().strip() == "loaded"
+            found = updater.running_from(job)
+            assert bool(found) is counted, (path, found)
+        finally:
+            process.kill()
+            process.wait()
 
 
 def test_the_updater_imports_only_the_standard_library() -> None:

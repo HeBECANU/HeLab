@@ -8,7 +8,9 @@ from collections.abc import Iterator
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
+import threading
 import time
 from typing import Any
 from unittest.mock import patch
@@ -118,7 +120,7 @@ def test_the_started_mark_is_written_only_with_the_token(tmp_path: Path, monkeyp
     monkeypatch.delenv(launch.TOKEN_ENV, raising=False)
     assert not launch.mark_started(str(tmp_path))
     monkeypatch.setenv(launch.TOKEN_ENV, "0123abcd0123abcd")
-    assert launch.mark_started(str(tmp_path))
+    assert launch.mark_started(str(tmp_path)) == "0123abcd0123abcd"
     assert (tmp_path / "updates" / "started-0123abcd0123abcd").read_text() == str(os.getpid())
     assert launch.TOKEN_ENV not in os.environ  # (Helpers and the next updater don't inherit it.)
     monkeypatch.setenv(launch.TOKEN_ENV, "../evil")
@@ -203,6 +205,55 @@ def test_the_last_outcome_shows_at_start(window: Any, qtbot: QtBot) -> None:
         window.show_last_update()
         qtbot.waitUntil(lambda: warning.called, timeout=2000)
     assert "No uv." in warning.call_args.args[2]
+
+
+def test_a_helab_the_updater_started_shows_that_updates_outcome_on_this_start(
+        window: Any, qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``main``'s order, with the updater's own wait and record: the window after its start writes the mark; the
+    updater, seeing it, records "updated"; the notice shows on this start (not at the next one)."""
+    from helab.utils.constants import app_folder
+    app = Path(app_folder())
+    updater.write_json(app / "updates" / "last.json", {"token": "0" * 16, "outcome": "updated", "to": "e" * 40,
+                                                       "shown": True})  # (The run before, shown then.)
+    token = "1234abcd1234abcd"
+    monkeypatch.setenv(launch.TOKEN_ENV, token)
+    job = updater.Job(token=token, action=updater.UPDATE, checkout=tmp_path, venv=tmp_path, app_dir=app, pid=0,
+                      mode=BRANCH, repository="HeBECANU/HeLab", branch="main", tag="", target="", stash=False,
+                      git=["git"], uv=[], python=sys.executable, relaunch=[], timeouts=dict(updater.TIMEOUTS, started=30))
+    log = updater.Log(tmp_path / "update.log")
+    new_helab = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def the_updater() -> None:
+        state = updater.wait_started(job, new_helab, token)
+        updater.record(job, "updated" if state == "started" else state, "", "a" * 40, "f" * 40, log)
+
+    thread = threading.Thread(target=the_updater)
+    thread.start()
+    try:
+        window.after_start()
+        qtbot.waitUntil(lambda: window._status_notice is not None
+                        and "updated to FFFFFF" in window._status_notice[0], timeout=15000)
+        assert updater.read_json(app / "updates" / "last.json")["shown"] is True  # (Once.)
+    finally:
+        new_helab.kill()
+        new_helab.wait()
+        thread.join(40)
+
+
+def test_a_restore_skips_what_it_left_so_it_isnt_offered_straight_back(window: Any) -> None:
+    from helab.utils.constants import app_folder
+    from helab.utils.settings_defaults import UPDATES_SKIPPED_SETTING
+    from helab.utils.settings_store import app_settings
+    last = Path(app_folder()) / "updates" / "last.json"
+    updater.write_json(last, {"outcome": "restored", "action": "restore", "mode": BRANCH, "tag": "",
+                              "from": "b" * 40, "to": "a" * 40})
+    window.show_last_update()
+    assert app_settings().value(UPDATES_SKIPPED_SETTING) == "b" * 40
+    updater.write_json(last, {"outcome": "restored", "action": "restore", "mode": RELEASES, "tag": "v0.0.9",
+                              "from": "c" * 40, "to": "a" * 40})
+    window.show_last_update()
+    assert app_settings().value(UPDATES_SKIPPED_SETTING) == "0.0.9"
+    assert launch.restored_key({"outcome": "updated", "from": "c" * 40}) == ""
 
 
 def test_restore_is_offered_only_with_this_checkouts_previous_version(window: Any) -> None:

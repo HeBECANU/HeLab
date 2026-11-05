@@ -5,7 +5,8 @@ nothing from HeLab, because HeLab copies this one file out of the checkout it re
     python updater-<token>.py REQUEST.json [--check]
 
 The request (JSON, written by ``helab.updates.launch``) names everything: the checkout, its venv, HeLab's app
-folder and process, the mode (``branch``: fast-forward only to the commit the check found green; ``releases``:
+folder and process, the mode (``branch``: fast-forward only to the commit the check found green, one of the
+branch's own (first-parent) commits; ``releases``:
 the release tag, checked to be on the repo's ``main``), the target, the tools and the relaunch command. Nothing
 comes from the command line but the request's path and ``--check``.
 
@@ -15,17 +16,20 @@ JSON line, changing nothing else. Without it, the updater:
 1. opens a handle on HeLab's process (safe against pid reuse), then writes ``ready-<token>``, after which HeLab
    quits through its normal path;
 2. waits for that process, then for HeLab's locks (``running.lock``, ``instances/*.lock``, ``move.lock``) and
-   for every process still running from the checkout's venv: **no file changes before**;
+   for every process still running from the checkout's venv (macOS and Linux: ``ps``, by the program's folder;
+   Windows: each program's path, and the modules each Python loaded): **no file changes before**;
 3. checks every refusal again, records the previous state (``previous.json``), stashes if asked (never drops or
    pops a stash), moves the code (``git checkout --detach <tag>`` or ``git merge --ff-only``), runs
    ``git submodule update``, and only when ``requirements.lock`` or ``setup.py`` changed builds a new venv beside
    the old one (``uv venv --relocatable``), checks it imports HeLab, and swaps it in (the old one kept for
    Restore; a ``venv`` symlink stays a symlink);
 4. starts HeLab again, detached, with ``HELAB_UPDATE_TOKEN``, and waits for its started mark; a HeLab that exits
-   before marking its start is rolled back (code and venv) and the old one started. A slow one is never killed.
+   before marking its start is rolled back (code and venv), once its helpers have gone too, and the old one
+   started. A slow one is never killed.
 
-Any refusal or failure leaves the previous version in place and starts it again; ``last.json`` and the log say
-what happened, and the next HeLab shows it. ``action: restore`` goes back to ``previous.json``'s commit and venv
+Any refusal or failure leaves the previous version in place and starts it again (unless the old HeLab never
+quit); ``last.json`` and the log say what happened, and the next HeLab shows it (the new one, on the start it
+concerns: it waits for this outcome after writing its mark). ``action: restore`` goes back to ``previous.json``'s commit and venv
 the same way.
 """
 from __future__ import annotations
@@ -68,6 +72,9 @@ GITHUB_REMOTE = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@
                            r"(?P<owner>[A-Za-z0-9-]+)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?")
 SHA = re.compile(r"[0-9a-f]{40,64}")
 TAG = re.compile(r"v[0-9A-Za-z.+-]+")
+# Windows: the updater runs under pythonw.exe (no console), so each console child (git, uv, python) would open a
+# console window of its own.
+NO_WINDOW: int = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 
 class Refused(Exception):
@@ -129,6 +136,14 @@ def read_job(path: Path) -> Job:
     if job.action not in (UPDATE, RESTORE):
         raise ValueError(f"unknown action {job.action!r}")
     return job
+
+
+def _run(command: list[str], *, timeout: float, cwd: Path | None = None,
+         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Every program the updater runs and waits for: its output read as UTF-8 (never the Windows code page, so
+    no decoding error), no console window, no input."""
+    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=timeout, cwd=cwd, env=env, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
 
 class Log:
@@ -325,44 +340,101 @@ def running_from(job: Job) -> list[str]:
     folders = sorted({str(job.venv), str(job.venv.resolve())})
     found: list[str] = []
     if sys.platform == "win32":
-        found += _windows_images(folders + [str(job.checkout), str(job.checkout.resolve())])
-        found += _windows_locked_files(job)
-        return found
+        return _windows_images(folders + [str(job.checkout), str(job.checkout.resolve())])
     try:
         # -ww: procps (Linux) cuts a piped listing to 80 columns, which would hide a helper's venv path.
-        listing = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,command="], capture_output=True, text=True,
-                                 timeout=20)
+        listing = _run(["ps", "-A", "-ww", "-o", "pid=,command="], timeout=20)
     except (OSError, subprocess.SubprocessError):
         return ["the process list couldn't be read (ps)"]
+    places = sorted(set(folders) | {str(job.checkout), str(job.checkout.resolve())})
     for line in listing.stdout.splitlines():
         pid, _, command = line.strip().partition(" ")
+        command = command.strip()
         if not pid.isdigit() or int(pid) == os.getpid():
             continue
-        first = command.split(" ", 1)[0]
-        if "--helab-io-helper" in command or (_under(first, folders) and "helab" in command[len(first):]):
+        # (By folder only: ``--helab-io-helper`` names a frozen HeLab's helper, which never runs a checkout's code,
+        # so it would only ever match another HeLab, a HeLab.app or another checkout's tests.)
+        if _runs_helab_from(command, places):
             found.append(f"process {pid}: {command[:160]}")
     return found
 
 
+def _runs_helab_from(command: str, folders: list[str]) -> bool:
+    """Whether ``command`` (a process's whole command line, as ``ps`` shows it) runs a program from one of
+    ``folders`` (the venv's, or the checkout's) and names HeLab after it: ``<venv>/bin/python -m helab.io_helper``,
+    ``<venv>/bin/helab convert``. Matched on the folder as a prefix, never by splitting at spaces (a checkout
+    under ``My Projects``)."""
+    for folder in folders:
+        prefix = folder.rstrip(os.sep) + os.sep
+        if command.startswith(prefix) and "helab" in command[len(prefix):]:
+            return True
+    return False
+
+
 def _windows_images(folders: list[str]) -> list[str]:
-    """Processes whose program is in one of ``folders`` (Windows only)."""
+    """Processes whose program is in one of ``folders``, or a Python that has loaded a module (a ``.pyd`` or
+    ``.dll``) from one of them (Windows only: a venv's ``python.exe`` hands over to the base one, whose image isn't
+    in the venv). By the path each module was loaded from: a file uv hard-linked into this venv and loaded by
+    another venv's Python, through that venv's path, isn't this venv's."""
     if sys.platform == "win32":
         return _windows_images_win(folders)
     return []
 
 
 if sys.platform == "win32":
+    class _Module(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("th32ModuleID", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("GlblcntUsage", wintypes.DWORD), ("ProccntUsage", wintypes.DWORD),
+                    ("modBaseAddr", ctypes.c_void_p), ("modBaseSize", wintypes.DWORD), ("hModule", ctypes.c_void_p),
+                    ("szModule", ctypes.c_wchar * 256), ("szExePath", ctypes.c_wchar * 260)]
+
+    def _kernel() -> Any:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                      ctypes.POINTER(wintypes.DWORD)]
+        for name in ("Process32FirstW", "Process32NextW", "Module32FirstW", "Module32NextW"):
+            getattr(kernel, name).argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        return kernel
+
+    def _windows_modules_win(kernel: Any, pid: int, folders: list[str]) -> str:
+        """The first module ``pid`` loaded from one of ``folders``, or "" (also when it can't be read)."""
+        snapshot = None
+        for _ in range(5):  # (ERROR_BAD_LENGTH while the process loads a module: try again.)
+            snapshot = kernel.CreateToolhelp32Snapshot(0x8 | 0x10, pid)  # TH32CS_SNAPMODULE | SNAPMODULE32
+            if snapshot and snapshot != wintypes.HANDLE(-1).value:
+                break
+            snapshot = None
+            if ctypes.get_last_error() != 24:
+                return ""
+        if snapshot is None:
+            return ""
+        try:
+            module = _Module()
+            module.dwSize = ctypes.sizeof(_Module)
+            more = kernel.Module32FirstW(snapshot, ctypes.byref(module))
+            while more:
+                if _under(module.szExePath, folders):
+                    return str(module.szExePath)
+                more = kernel.Module32NextW(snapshot, ctypes.byref(module))
+        finally:
+            kernel.CloseHandle(snapshot)
+        return ""
+
     def _windows_images_win(folders: list[str]) -> list[str]:
-        """Processes whose program is in one of ``folders`` (ctypes: a toolhelp snapshot and each image's path)."""
+        """Processes whose program is in one of ``folders``, and Pythons with a module from one of them (ctypes: a
+        toolhelp snapshot, each image's path, each Python's modules)."""
         class Entry(ctypes.Structure):
             _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
                         ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", wintypes.DWORD),
                         ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
                         ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
                         ("szExeFile", ctypes.c_wchar * 260)]
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel = _kernel()
         snapshot = kernel.CreateToolhelp32Snapshot(0x2, 0)
         found: list[str] = []
         if not snapshot or snapshot == wintypes.HANDLE(-1).value:
@@ -384,42 +456,22 @@ if sys.platform == "win32":
                                 found.append(f"process {pid}: {buffer.value}")
                         finally:
                             kernel.CloseHandle(handle)
+                    if not (found and found[-1].startswith(f"process {pid}:")) and str(
+                            entry.szExeFile).lower().startswith("python"):
+                        loaded = _windows_modules_win(kernel, pid, folders)
+                        if loaded:
+                            found.append(f"process {pid} ({entry.szExeFile}) has {loaded} loaded")
                 more = kernel.Process32NextW(snapshot, ctypes.byref(entry))
         finally:
             kernel.CloseHandle(snapshot)
         return found
 
 
-def _windows_locked_files(job: Job) -> list[str]:
-    """A venv's Python on Windows hands over to the base ``python.exe``, whose image isn't in the venv; but it
-    loads the venv's ``.pyd``/``.dll`` files, which can't then be opened for writing. Opening changes nothing."""
-    found: list[str] = []
-    roots = [job.venv, job.checkout / "helab"]
-    for root in roots:
-        for folder, _, files in os.walk(root):
-            for name in files:
-                if not name.lower().endswith((".pyd", ".dll", ".exe")):
-                    continue
-                path = os.path.join(folder, name)
-                try:
-                    fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
-                except PermissionError:
-                    found.append(f"{path} is in use")
-                    if len(found) >= 3:
-                        return found
-                except OSError:
-                    continue
-                else:
-                    os.close(fd)
-    return found
-
-
 # -- Git ----------------------------------------------------------------------------------------------
 
 def git(job: Job, *arguments: str, check: bool = True, timeout: float = 600) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="")
-    done = subprocess.run([*job.git, "-C", str(job.checkout), *arguments], capture_output=True, text=True,
-                          timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+    done = _run([*job.git, "-C", str(job.checkout), *arguments], timeout=timeout, env=env)
     if check and done.returncode != 0:
         raise Failed(f"git {' '.join(arguments)} failed: {(done.stderr or done.stdout).strip()[:500]}")
     return done
@@ -467,6 +519,12 @@ def fetch(job: Job, log: Log) -> str:
         if not SHA.fullmatch(commit) or git(job, "merge-base", "--is-ancestor", commit, tip,
                                             check=False).returncode != 0:
             raise Refused(f"The commit the check found isn't on {job.repository}'s {job.branch}.")
+        # The branch's own commits only (its first-parent line, back to this checkout's commit): never one merged
+        # in from another branch, whose state the branch never had.
+        line = out(job, "rev-list", "--first-parent", tip, "^HEAD").split()
+        if commit not in line:
+            raise Refused(f"{commit[:7]} came into {job.branch} from another branch (by a merge): HeLab only moves "
+                          f"to {job.branch}'s own commits.")
     if job.target and commit != job.target:
         raise Refused(f"The repo's {job.tag or job.branch} is now {commit[:7]}, not the {job.target[:7]} the check "
                       "found. Check for updates again.")
@@ -558,7 +616,9 @@ def plan(job: Job, log: Log, *, running: bool) -> Plan:
         refuse(f"{job.branch} on GitHub doesn't contain this checkout's commit: it can't fast-forward.")
     if found.target == found.previous:
         refuse("This checkout is already on that version.")
-    added = set(out(job, "diff", "--name-only", "--diff-filter=A", found.previous, found.target).splitlines())
+    # (--no-renames: a file the update renames into place is added there too.)
+    added = set(out(job, "diff", "--name-only", "--no-renames", "--diff-filter=A", found.previous,
+                    found.target).splitlines())
     untracked = set(out(job, "ls-files", "--others", "--exclude-standard").splitlines())
     if added & untracked:
         refuse("Files the update adds exist here untracked: " + ", ".join(sorted(added & untracked)[:8]) + ".")
@@ -624,8 +684,7 @@ def build_venv(job: Job, commit: str, log: Log) -> Path:
                     [*job.uv, "pip", "install", "--python", str(venv_python(new)), "-r",
                      str(job.checkout / "requirements.lock"), "-e", str(job.checkout)]):
         log("Running " + " ".join(command))
-        done = subprocess.run(command, capture_output=True, text=True, timeout=1800, cwd=job.checkout,
-                              stdin=subprocess.DEVNULL)
+        done = _run(command, timeout=1800, cwd=job.checkout)
         if done.returncode != 0:
             raise Failed(f"Building the new venv failed: {(done.stderr or done.stdout).strip()[-800:]}")
     check = ("import helab._version, helab.build_info, helab.utils.settings_defaults, PyQt6.QtCore; "
@@ -636,8 +695,7 @@ def build_venv(job: Job, commit: str, log: Log) -> Path:
     cache = job.updates / f"pycache-{job.token}"
     env["PYTHONPYCACHEPREFIX"] = str(cache)
     try:
-        done = subprocess.run([str(venv_python(new)), "-c", check], capture_output=True, text=True, timeout=300,
-                              cwd=job.checkout, env=env, stdin=subprocess.DEVNULL)
+        done = _run([str(venv_python(new)), "-c", check], timeout=300, cwd=job.checkout, env=env)
     finally:
         shutil.rmtree(cache, ignore_errors=True)  # (This check's own bytecode.)
     wanted = target_version(job, commit)
@@ -735,14 +793,20 @@ def wait_for_helab(job: Job, handle: ProcessHandle, log: Log) -> None:
     log(f"Waiting for HeLab (process {job.pid}) to quit")
     if not handle.wait(job.timeouts["helab"]):
         raise Refused("HeLab didn't quit: nothing was changed.")
+    busy = wait_quiet(job)
+    if busy:
+        raise Refused("HeLab's helpers are still running: " + "; ".join(busy[:3]) + ". Nothing was changed.")
+    log("HeLab and its helpers have exited")
+
+
+def wait_quiet(job: Job) -> list[str]:
+    """Wait (up to ``others``) until no HeLab lock is held and nothing runs from the venv or the checkout; what
+    still is, or []."""
     deadline = time.monotonic() + job.timeouts["others"]
     while True:
         busy = helab_locks(job.app_dir, None) + running_from(job)
-        if not busy:
-            log("HeLab and its helpers have exited")
-            return
-        if time.monotonic() > deadline:
-            raise Refused("HeLab's helpers are still running: " + "; ".join(busy[:3]) + ". Nothing was changed.")
+        if not busy or time.monotonic() > deadline:
+            return busy
         time.sleep(POLL * 2)
 
 
@@ -793,21 +857,23 @@ def move_code_back(job: Job, found: Plan, log: Log) -> None:
 
 
 def update(job: Job, log: Log) -> int:
-    """The real run: wait, check, change, restart."""
+    """The real run: wait, check, change, restart. (``main`` has checked the test guard.)"""
     job.updates.mkdir(parents=True, exist_ok=True)
     handle = ProcessHandle(job.pid)
     write_json(job.updates / f"ready-{job.token}", {"pid": os.getpid()})
     found = Plan()
     try:
         try:
-            guard(job)
             wait_for_helab(job, handle, log)
             found = plan(job, log, running=False)
             if found.refusals:
                 raise Refused(" ".join(found.refusals))
         except Refused as refused:
             record(job, "refused", str(refused), found.previous, found.target, log)
-            relaunch(job, None, log)
+            if handle.wait(0):
+                relaunch(job, None, log)
+            else:  # (It never quit: a second one would only find it running.)
+                log("HeLab is still running: not started again")
             return 2
     finally:
         handle.close()
@@ -835,10 +901,11 @@ def update(job: Job, log: Log) -> int:
             swapped = True
         write_json(job.updates / "previous.json", {
             "checkout": str(job.checkout), "from": found.previous, "to": found.target,
-            "branch": found.previous_branch, "mode": job.mode, "rebuilt": found.rebuild,
-            "stash": stash_message, "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-    except (Failed, OSError, subprocess.SubprocessError) as failed:
-        log(f"Failed: {failed}")
+            "branch": found.previous_branch, "mode": job.mode, "tag": job.tag if job.mode == RELEASES else "",
+            "rebuilt": found.rebuild, "stash": stash_message,
+            "time": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    except Exception as failed:  # (Anything once a file may have changed: put it all back.)
+        log(f"Failed: {failed!r}")
         rollback(job, found, moved, swapped, older, previous_record, log)
         record(job, "failed", str(failed), found.previous, found.target, log, stash=stash_message)
         relaunch(job, None, log)
@@ -847,6 +914,14 @@ def update(job: Job, log: Log) -> int:
     state = wait_started(job, process, job.token)
     if state == "exited":
         log("The new version exited before it started")
+        # Its helpers (and a cache move's) don't follow it out: nothing changes under them either.
+        busy = wait_quiet(job)
+        if busy:
+            record(job, "failed", "The new version exited before it started, and its helpers still ran ("
+                   + "; ".join(busy[:3]) + "), so it was left in place. Once they have gone, use Help › Restore "
+                   f"previous version, or by hand: git -C \"{job.checkout}\" checkout {found.previous[:12]}",
+                   found.previous, found.target, log, stash=stash_message)
+            return 1
         rollback(job, found, moved, swapped, older, previous_record, log)
         record(job, "rolled back", "The new version didn't start, so the previous one was put back.",
                found.previous, found.target, log, stash=stash_message)
@@ -854,8 +929,11 @@ def update(job: Job, log: Log) -> int:
         return 1
     if state == "started":
         discard_older(older, log)
+        # (A restore says what it left, so the startup reminder skips it: design §7.)
+        left = ({"mode": str(previous_record.get("mode", "")), "tag": str(previous_record.get("tag", ""))}
+                if job.action == RESTORE else {})
         record(job, "restored" if job.action == RESTORE else "updated", "", found.previous, found.target, log,
-               stash=stash_message)
+               stash=stash_message, **left)
     else:
         record(job, "unconfirmed", "The new version is still starting: it wasn't stopped.", found.previous,
                found.target, log, stash=stash_message)
@@ -884,14 +962,13 @@ def rollback(job: Job, found: Plan, moved: bool, swapped: bool, older: Path | No
             write_json(job.updates / "previous.json", previous_record)
         elif job.action == UPDATE and moved:
             (job.updates / "previous.json").unlink(missing_ok=True)
-    except (Failed, OSError, subprocess.SubprocessError) as failed:
-        log(f"Rolling back failed too: {failed}. Fix the checkout by hand: git -C {job.checkout} status")
+    except Exception as failed:
+        log(f"Rolling back failed too: {failed!r}. Fix the checkout by hand: git -C {job.checkout} status")
 
 
 def check(job: Job, log: Log) -> dict[str, Any]:
     """The dry run while HeLab runs: refusals and the plan."""
     try:
-        guard(job)
         found = plan(job, log, running=True)
     except (Refused, Failed) as refused:
         found = Plan(refusals=[str(refused)])
@@ -907,6 +984,15 @@ def main(argv: list[str]) -> int:
         print("usage: updater.py REQUEST.json [--check]", file=sys.stderr)
         return 64
     job = read_job(Path(argv[0]))
+    try:
+        guard(job)  # (Before anything is written: no log, no ready, nothing started.)
+    except Refused as refused:
+        if "--check" in argv[1:]:
+            print(json.dumps({"ok": False, "refusals": [str(refused)], "steps": [], "target": "", "previous": "",
+                              "rebuild": False, "stashable": False}))
+            return 0
+        print(refused, file=sys.stderr)
+        return 2
     log = Log(job.updates / f"update-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{job.token[:8]}.log")
     if "--check" in argv[1:]:
         print(json.dumps(check(job, log)))

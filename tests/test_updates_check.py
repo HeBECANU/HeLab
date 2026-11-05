@@ -224,6 +224,14 @@ def test_the_transport_never_reaches_the_network_under_tests(qtbot: QtBot) -> No
         transport.get("https://example.com/", {}, lambda reply: None)
 
 
+def test_a_request_follows_redirects_only_within_api_github_com() -> None:
+    from PyQt6.QtNetwork import QNetworkRequest
+    request = update_check.network_request(github.API + "/repos/HeBECANU/HeLab/releases", {"User-Agent": "HeLab/x"})
+    assert request.attribute(QNetworkRequest.Attribute.RedirectPolicyAttribute) == \
+        QNetworkRequest.RedirectPolicy.SameOriginRedirectPolicy
+    assert request.transferTimeout() == github.TIMEOUT_MS and request.rawHeader(b"User-Agent").data() == b"HeLab/x"
+
+
 # -- Settings ------------------------------------------------------------------------------------------
 
 def test_the_default_mode_follows_what_the_checkout_is_on(monkeypatch: pytest.MonkeyPatch) -> None:

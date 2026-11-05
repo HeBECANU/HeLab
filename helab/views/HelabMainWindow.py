@@ -87,6 +87,8 @@ REFRESH_TOOLTIP = ("Refresh folder list\nUpdate folder names and expanded folder
 
 # The status bar message's tooltip ends with this: a click opens Activity (Q62.1).
 ACTIVITY_HINT = "Click for Activity"
+# Started by the updater: how long to look for its run's outcome (it records it right after seeing the started mark).
+UPDATE_OUTCOME_WAIT_S = 20.0
 
 
 class HelabMainWindow(QMainWindow):
@@ -1008,18 +1010,42 @@ class HelabMainWindow(QMainWindow):
     def _update_failed(self, reason: str) -> None:
         QMessageBox.warning(self, "HeLab update", reason)
 
-    def show_last_update(self) -> None:
-        """At start (``main``): the last update's outcome, once, and the updater's leftovers tidied."""
+    def after_start(self) -> None:
+        """At start (``main``, once the event loop turns): the started mark, when an updater started this HeLab,
+        then the last update's outcome, once. The updater records an update's outcome only after it sees the mark,
+        so a HeLab it started polls for its own run's outcome (never waits)."""
+        self.show_last_update(update_launch.mark_started(app_folder()))
+
+    def show_last_update(self, token: str = "") -> None:
+        """The last update's outcome, once (with ``token``: that updater's, polled for up to
+        ``UPDATE_OUTCOME_WAIT_S``), and the updater's leftovers tidied."""
         update_launch.tidy(app_folder())
-        found = update_launch.take_last_outcome(app_folder())
-        if not found:
+        self._outcome_token = token
+        self._outcome_deadline = time.monotonic() + UPDATE_OUTCOME_WAIT_S
+        if self._take_last_update() or not token:
             return
+        self._outcome_timer = QTimer(self)
+        self._outcome_timer.setInterval(250)
+        self._outcome_timer.timeout.connect(self._poll_last_update)
+        self._outcome_timer.start()
+
+    def _poll_last_update(self) -> None:
+        if (self._take_last_update() or time.monotonic() > self._outcome_deadline) and self._outcome_timer:
+            self._outcome_timer.stop()
+
+    def _take_last_update(self) -> bool:
+        found = update_launch.take_last_outcome(app_folder(), self._outcome_token)
+        if not found:
+            return False
+        if key := update_launch.restored_key(found):
+            self.update_check.skip(key)  # (What Restore left isn't offered straight back.)
         fine, text = update_launch.outcome_words(found)
         logging.info("Last update: %s", text)
         if fine:
             self.show_status_notice(text, 30.0)
         else:
             QTimer.singleShot(0, lambda: QMessageBox.warning(self, "HeLab update", text))
+        return True
 
     def _update_status_changed(self) -> None:
         """The status-bar mark and Help's entry, from memory."""
@@ -1034,6 +1060,11 @@ class HelabMainWindow(QMainWindow):
         self.action_update_available.setText(
             f"HeLab {offer.label} is available…" if offer.release is not None
             else f"{offer.label.split(' +')[0]} has newer commits ({offer.ahead})…")
+
+    # The last update's outcome at start: the updater's token that started this HeLab, and the poll for it.
+    _outcome_token = ""
+    _outcome_deadline = 0.0
+    _outcome_timer: QTimer | None = None
 
     # Help › User manual's site check under way: its reply and the targets it chooses between.
     _manual_check: tuple[Any, user_manual.ManualTargets] | None = None
