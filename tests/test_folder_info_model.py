@@ -6,7 +6,10 @@ dropping the old answer."""
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from helab.utils import folder_info
 from helab.utils.folder_info import Memory, Reads, Session, build
@@ -265,3 +268,16 @@ def test_reads_keep_one_in_flight_and_drop_a_retargeted_answer() -> None:
     assert not reads.ended("other") and not reads.ended("o3") and not reads.in_flight
     reads.started("")  # (Couldn't be queued.)
     assert not reads.in_flight and reads.ask("/b")
+
+
+def test_a_time_that_cant_be_one_is_unknown_never_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows' local time refuses small or far timestamps (``OSError: [Errno 22]``): the window says "unknown"."""
+    for seconds in (1000.0, 1e12, -5.0, float("nan"), float("inf"), None, 0.0):
+        assert folder_info.when(seconds, NOW) == "unknown" and folder_info.ago(seconds, NOW) == "unknown"
+
+    def refuse(seconds: float, tz: Any = None) -> Any:
+        raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(folder_info, "datetime", SimpleNamespace(fromtimestamp=refuse))
+    assert folder_info.when(NOW, NOW) == "unknown" and folder_info.ago(NOW - 5, NOW) == "unknown"
+    info = build(answer(), memory(), NOW)  # (Builds whatever the OS says of its times.)
+    assert texts(info, "store")[0].endswith(" · saved unknown–unknown") and info.header[2].text == "As of unknown"

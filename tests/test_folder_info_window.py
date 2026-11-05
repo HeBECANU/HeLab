@@ -25,6 +25,8 @@ from helab.utils.settings_store import app_settings
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
 
+NOW = time.time()  # (Realistic times: Windows' local time refuses some small ones.)
+
 
 class FakeExplorer:
     """A tab: its existing actions recorded, Live watching ``live_path`` when set."""
@@ -106,8 +108,8 @@ def answer(path: str, **changes: Any) -> dict[str, Any]:
         "read_at": time.time(), "store": "", "parts": {name: {"status": "found", "error": ""} for name in (
             "raw", "layers", "views", "seed", "results", "prefs", "convert_prefs", "choices", "constants", "history",
             "summary", "listing", "converted")},
-        "raw": {"shots": 3, "bytes": 3000, "first": 1, "last": 3, "saved_first": 1.0, "saved_last": 2.0,
-                "last_used": 2.0, "seen_at": 2.0, "only_copy": 0, "only_copy_bytes": 0, "gone_first": None,
+        "raw": {"shots": 3, "bytes": 3000, "first": 1, "last": 3, "saved_first": NOW - 600, "saved_last": NOW - 60,
+                "last_used": NOW - 60, "seen_at": NOW - 60, "only_copy": 0, "only_copy_bytes": 0, "gone_first": None,
                 "gone_last": None},
         "layers": [], "layers_more": 0, "views": [], "views_more": 0, "seed_bytes": 0,
         "results": {"count": 0, "bytes": 0, "rows": [], "more": 0}, "prefs": None, "convert_prefs": None,
@@ -231,7 +233,8 @@ def test_while_live_watches_it_reads_after_each_save_and_follows_checks(setup: A
 def results(count: int) -> dict[str, Any]:
     rows = [{"result_id": f"r{index}", "analysis_id": "tests.corr", "version": "1", "file_name": "c.py",
              "action": "Plot", "settings": f"bins={index}", "settings_full": f"bins={index}", "bytes": 10,
-             "computed_at": 1.0, "saved_at": 1.0, "last_used": 2.0, "damaged": False} for index in range(count)]
+             "computed_at": NOW - 600, "saved_at": NOW - 600, "last_used": NOW - 60, "damaged": False}
+            for index in range(count)]
     return {"count": count, "bytes": 10 * count, "rows": rows, "more": 0}
 
 

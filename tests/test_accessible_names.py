@@ -543,8 +543,8 @@ def folder_info_window(cache: FolderCache, path: Path) -> QWidget:
     folder = str(path / "run1")
     window.show_folder(folder)
     rows = [{"result_id": f"r{index}", "analysis_id": "a", "version": "1", "file_name": "a.py", "action": "Plot",
-             "settings": "", "settings_full": "", "bytes": 1, "computed_at": 1.0, "saved_at": 1.0, "last_used": 1.0,
-             "damaged": False} for index in range(6)]
+             "settings": "", "settings_full": "", "bytes": 1, "computed_at": time.time() - 600,
+             "saved_at": time.time() - 600, "last_used": time.time() - 60, "damaged": False} for index in range(6)]
     window.answer = {"kind": "folder_info", "path": folder, "key": "", "root_state": "rooted", "layout": 4,
                      "read_at": time.time(), "store": "", "parts": {}, "raw": None, "layers": [], "layers_more": 0,
                      "views": [], "views_more": 0, "seed_bytes": 0, "results": {"count": 6, "bytes": 6, "rows": rows,

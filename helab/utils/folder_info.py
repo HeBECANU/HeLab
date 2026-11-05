@@ -130,11 +130,30 @@ class Memory:
     script_names: Mapping[str, str] = field(default_factory=dict)
 
 
+# Times outside these (s since the epoch: 1980 to 9999) are no real record's: "unknown". Windows' local time refuses
+# some of them outright (``OSError``), so the window never formats one.
+EARLIEST, LATEST = 315_532_800.0, 253_402_300_799.0
+
+
+def local_time(seconds: float | None) -> datetime | None:
+    """``seconds`` as local time, or None when it can't be one (missing, out of range, or refused by the OS)."""
+    if seconds is None or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or not (
+            EARLIEST <= seconds <= LATEST):
+        return None
+    try:
+        return datetime.fromtimestamp(seconds).astimezone()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 def when(seconds: float | None, now: float) -> str:
-    """A time as the window shows it: "14:02:31" today, "5 Nov 14:02" this year, else "5 Nov 2025"."""
-    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
+    """A time as the window shows it: "14:02:31" today, "5 Nov 14:02" this year, else "5 Nov 2025"; "unknown" for
+    one that can't be a real time (never raises)."""
+    moment, today = local_time(seconds), local_time(now)
+    if moment is None:
         return "unknown"
-    moment, today = datetime.fromtimestamp(seconds).astimezone(), datetime.fromtimestamp(now).astimezone()
+    if today is None:
+        return f"{moment.day} {moment:%b %Y %H:%M}"
     if moment.date() == today.date():
         return moment.strftime("%H:%M:%S")
     if moment.year == today.year:
@@ -143,8 +162,8 @@ def when(seconds: float | None, now: float) -> str:
 
 
 def ago(seconds: float | None, now: float) -> str:
-    """``when`` and how long ago: "5 Nov 14:02, 2h ago"."""
-    if seconds is None or seconds <= 0:
+    """``when`` and how long ago: "5 Nov 14:02, 2h ago"; "unknown" for a time ``when`` can't show."""
+    if seconds is None or local_time(seconds) is None:
         return "unknown"
     return f"{when(seconds, now)}, {relative_age(max(0.0, now - seconds))}"
 
