@@ -21,7 +21,7 @@ from helab.utils import activity
 from helab.utils.activity import Finished, Route
 from helab.utils.folder_cache import Dataset, FolderCache, get_folder_cache
 from helab.utils.io_service import BACKGROUND, FOREGROUND, USER_HOLD_NOTE, IORequest, IOService
-from helab.views.ActivityWindow import ActivityActions, ActivitySources, ActivityWindow
+from helab.views.ActivityWindow import STATE_COLUMN, ActivityActions, ActivitySources, ActivityWindow
 from helab.views.explorer_convert import FolderConversion
 from helab.views.explorer_live import AutoConvert, LiveSession
 from helab.views.FolderExplorer import FolderExplorer
@@ -519,7 +519,7 @@ def test_the_windows_buttons_call_the_owners(qtbot: QtBot, monkeypatch: pytest.M
     window.refresh()
     group = window.now.topLevelItem(0)
     child = group.child(0) if group is not None else None
-    assert child is not None and child.text(3).startswith("stopping")
+    assert child is not None and child.text(STATE_COLUMN).startswith("stopping")
     assert not window.buttons["cancel"].isEnabled()
     activity.record(Finished("io:q", "loads", "Load data", "/data", time.time(), "failed", "broken", owners=("tab",),
                              route=Route("io", "q", "load", "/data")))

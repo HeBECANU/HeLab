@@ -166,6 +166,7 @@ class LiveSession:
     listed_mtime: int | None = None
     next_at: float = 0.0  # Monotonic.
     new: int = 0  # New shots since Live started.
+    new_at: float | None = None  # Wall time: when the last new shot came in.
     unsettled: int = 0  # Files still being written at the last check.
     # New shots not yet in a save, and those in the save that runs (until it ends).
     unsaved: set[int] = field(default_factory=set)
@@ -183,6 +184,20 @@ class LiveSession:
     convert: AutoConvert | None = None
     # A conversion wrote a shot while a check ran: the next check starts at once.
     check_soon: bool = False
+
+def live_brief(session: LiveSession, name: str) -> str:
+    """The status bar's phrase for a Live session that is on (LR-9, Tony 2026-11-05): steady while it only
+    checks ("Live checking run_1 · 12 new shots"), changed while it reads, converts or saves new shots."""
+    convert = session.convert
+    if session.request == "check" and session.reading:
+        return f"Live updating {name} · reading new shots"
+    if convert is not None and convert.request and convert.todo:
+        return f"Live auto-converting {name} · {convert.done:,} of {convert.todo:,}"
+    if session.request == "save":
+        return f"Live saving {name} · {plural(session.new, 'new shot')}"
+    verb = "Live + auto-convert checking" if convert is not None else "Live checking"
+    return f"{verb} {name} · {plural(session.new, 'new shot')}"
+
 
 # Work Offline: Live reads the folder, so it is off (cache-only browsing).
 OFFLINE_LIVE = "Live is off while working offline"
@@ -608,6 +623,8 @@ class LiveController:
         changed = {int(entry["shot"]) for entry in reread}
         session.dataset, session.shots = dataset, set(dataset.data)
         session.new += len(new)
+        if new:
+            session.new_at = time.time()
         session.checks += 1
         session.checked_at, session.reading = time.time(), False
         session.seconds = event.get("live_seconds")

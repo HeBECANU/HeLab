@@ -36,7 +36,7 @@ from helab.utils.cache_freshness import CacheFreshness, data_as_of, freshness_to
 from helab.utils.scan_history import history_tooltip
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.explorer_convert import ExplorerConverter
-from helab.views.explorer_live import ARM_AUTO_CONVERT, LiveController, LiveSession
+from helab.views.explorer_live import ARM_AUTO_CONVERT, LiveController, LiveSession, live_brief
 from helab.views.explorer_text import large_text, plural
 
 # Where a load's data came from, as the cache summary and Folder details name it.
@@ -1668,7 +1668,7 @@ class FolderExplorer(QWidget):
         """This tab's most important activity in a few words, for the main status bar."""
         if self.live is not None:
             name = os.path.basename(self.live.path.rstrip(os.sep)) or self.live.path
-            return f"Live stopped: {name}" if self.live.error else f"Live {name} · {plural(self.live.new, 'new shot')}"
+            return f"Live stopped: {name}" if self.live.error else live_brief(self.live, name)
         if self.loading and self._load_path:
             name = os.path.basename(self._load_path.rstrip(os.sep)) or self._load_path
             if self.load_queued:

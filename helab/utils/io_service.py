@@ -770,18 +770,23 @@ class IOService(QObject):
         return [r for r in self.active
                 if not r.paused and (not r.completed or self.finishing(r) and writing(r.owner))]
 
-    def activity_counts(self) -> str:
-        """Short app-wide status-bar phrase: counts only; ``queue_tooltip`` lists each one."""
-        running = len(self.running_requests())
+    def activity_counts(self, quiet: Callable[[IORequest], bool] = lambda request: False) -> str:
+        """Short app-wide status-bar phrase: counts only; ``queue_tooltip`` lists each one. ``quiet``: requests
+        left out (the status bar's: Live's quick checks, which its Live phrase stands for, LR-9); paused ones are
+        always counted."""
+        running = sum(not quiet(r) for r in self.running_requests())
         paused = sum(r.paused and not r.completed for r in self.active)
+        held = {id(r) for r in self.held_requests()}
+        queued = sum(id(r) not in held and not quiet(r) for r in self.pending)
         parts = [f"{count:,} {label}" for count, label in (
             # A retry held until its previous helper exits is counted under stopping.
-            (running, "running"), (paused, "paused"), (len(self.pending) - len(self.held_requests()), "queued"))
+            (running, "running"), (paused, "paused"), (queued, "queued"))
             if count]
-        if self.retired:
+        stopping = [r for r in self.retired if not quiet(r)]
+        if stopping:
             now = time.monotonic()
-            ages = [age for r in self.retired if (age := self.stopping_for(r, now)) is not None]
-            parts.append(f"{len(self.retired):,} stopping" + (f" ({duration(max(ages))})" if ages else ""))
+            ages = [age for r in stopping if (age := self.stopping_for(r, now)) is not None]
+            parts.append(f"{len(stopping):,} stopping" + (f" ({duration(max(ages))})" if ages else ""))
         if self.user_hold:
             parts.append(USER_HOLD_NOTE)
         return " · ".join(parts) or "Ready"

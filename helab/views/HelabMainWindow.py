@@ -352,7 +352,10 @@ class HelabMainWindow(QMainWindow):
         if self._status_notice is not None and time.monotonic() > self._status_notice[1]:
             self._status_notice = None
         notice = self._status_notice[0] if self._status_notice else ""
-        app = service.activity_counts()
+        quiet = self._live_quick()
+        app = service.activity_counts(quiet)
+        if app == "Ready" and any(explorer.live is not None for _, explorer in self._explorers()):
+            app = ""  # (Live's phrase says what runs: LR-9.)
         self.status_bar_message_left.setText("  │  ".join(filter(None, (notice, tab, app))))
         # A load's tooltip already lists the queue and this tab's background loads.
         loading = bool(explorer and explorer.loading)
@@ -364,7 +367,8 @@ class HelabMainWindow(QMainWindow):
             "" if summary == "Ready" else summary,
             "" if loading else service.queue_tooltip(),
             ACTIVITY_HINT))))
-        busy = bool(explorer and explorer.activity_busy or service.active or service.pending or service.retired)
+        busy = bool(explorer and explorer.activity_busy
+                    or any(not quiet(r) for r in (*service.active, *service.pending, *service.retired)))
         self.status_bar_spinner_angle = (self.status_bar_spinner_angle + 30) % 360 if busy else 0
         self.status_bar_spinner.setPixmap(self._spinner_pixmap() if busy else QPixmap())
         # The selected load's progress; its counts are in the explorer's summary.
@@ -1825,6 +1829,26 @@ class HelabMainWindow(QMainWindow):
         """The current tab's folder browser (None: no tab, or another kind)."""
         current = self.tab_widget.currentWidget()
         return current if isinstance(current, FolderExplorer) else None
+
+    def _live_quick(self) -> Callable[[IORequest], bool]:
+        """The status bar leaves out Live's own quick work (its checks, saves and auto-convert's passes) while
+        Live is on: it comes and goes with each check, and the tab's Live phrase stands for it (LR-9). Work
+        that runs ``activity.LIVE_CHILD_SECONDS`` or more, or is paused, is counted, as the Activity window
+        shows it (LR-7)."""
+        owners = {owner for _, explorer in self._explorers() if explorer.live is not None
+                  for owner in (explorer.live_owner, explorer.live_save_owner)}
+        if not owners:
+            return lambda request: False
+        service = get_io_service()
+        now = time.monotonic()
+
+        def quiet(request: IORequest) -> bool:
+            if request.paused or not owners & set(service.owners_of(request)):
+                return False
+            since = request.retired_at if request.retired_at is not None else request.started
+            return not since or now - since < activity.LIVE_CHILD_SECONDS
+
+        return quiet
 
     def _explorers(self) -> list[tuple[int, FolderExplorer]]:
         return [(index, widget) for index in range(self.tab_widget.count())

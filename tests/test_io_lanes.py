@@ -69,6 +69,17 @@ def test_tooltip_lists_each_running_helper_the_count_includes(
     service.shutdown()
 
 
+
+def test_the_counts_leave_out_what_the_status_bar_calls_quiet(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LR-9: the status bar's counts leave out Live's quick checks (its Live phrase stands for them)."""
+    service = lanes_service(monkeypatch, {"tab"})
+    service.submit("other-tab", 0, "/old", "load")
+    service.submit("tab:live", 0, "/live", "load", {"live": True})
+    assert service.activity_counts() == "1 running · 1 queued"  # (One background slot.)
+    assert service.activity_counts(lambda request: request.owner == "tab:live") == "1 running"
+    assert service.activity_counts(lambda request: True) == "Ready"
+    service.shutdown()
+
 def test_background_pauses_while_foreground_works_and_resumes_after_delay(
     qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

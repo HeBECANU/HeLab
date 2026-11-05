@@ -286,8 +286,13 @@ def test_a_live_session_lists_its_check_and_auto_convert_under_it(qtbot: QtBot, 
     built = sources(service, cache, [("live tab", explorer)]).snapshot()
     parent = task(built, "live:")
     assert parent.id == live_id(explorer, "/live")
-    assert (parent.state, parent.state_text, parent.tab) == ("running", "checking for new shots", "live tab")
+    # (LR-7: a check says nothing new on the session's row, and gets a row of its own only after 2 s.)
+    assert (parent.state, parent.state_text, parent.tab) == ("waiting", "watching · 2 new shots", "live tab")
+    assert "Checking now" in parent.details
     assert {"stop_live", "show"} <= parent.actions and "retry" not in parent.actions
+    assert not [row for row in built.tasks if row.id.startswith(f"io:{request.owner}:")]
+    request.started -= activity.LIVE_CHILD_SECONDS
+    built = sources(service, cache, [("live tab", explorer)]).snapshot()
     check = task(built, f"io:{request.owner}:")
     assert (check.title, check.group, check.parent) == ("Live check", "live", parent.id)
     assert "cancel" not in check.actions and "stop_live" in check.actions
@@ -444,3 +449,63 @@ def test_the_user_hold_is_named(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -
     assert paused_text(service, service.active[0]) == PAUSED_BY_YOU
     assert sources(service).snapshot().user_paused
     service.shutdown()
+
+
+def test_a_live_sessions_quick_work_has_no_rows_and_its_state_changes_with_new_shots() -> None:
+    """LR-7 (Tony (a), 2026-11-05): at a 0.5 s check interval the rows stay put. A Live session's own
+    helper work gets a row only after ``LIVE_CHILD_SECONDS`` or while paused, stalled or failed; other rows
+    and a stopped session's work are left as they are. The session's state names new shots, by clock time."""
+    from helab.utils.activity import LIVE_CHILD_SECONDS, Route, Task, quiet_live
+    from helab.views.ActivityWindow import watching_text
+
+    def row(name: str, state: str = "running", elapsed: float | None = 0.3, parent: str = "live:a") -> Task:
+        return Task(name, "live", name, "/live", "tab", state, state, elapsed=elapsed,  # type: ignore[arg-type]
+                    route=Route("io", name), parent=parent)
+
+    rows = [row("quick"), row("queued", "queued", None), row("slow", elapsed=LIVE_CHILD_SECONDS),
+            row("paused", "paused"), row("stalled", "stalled"), row("failed", "failed"),
+            row("other session", parent="live:b"), row("top", parent="")]
+    assert [task.id for task in quiet_live(rows, {"live:a"})] == ["slow", "paused", "stalled", "failed",
+                                                                  "other session", "top"]
+    data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
+    session = LiveSession("/live", time.time(), set(), data)
+    assert watching_text(session) == "watching · no new shots yet"
+    session.new, session.new_at = 1, time.mktime((2026, 11, 5, 14, 2, 31, 0, 0, -1))
+    assert watching_text(session) == "watching · 1 new shot · last 14:02:31"
+
+
+def test_an_auto_convert_pass_with_nothing_to_convert_leaves_its_row_as_it_was(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LR-7: auto-convert runs a pass with each check; one with no shots to convert says nothing new."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
+    session = LiveSession("/live", time.time(), set(), data)
+    session.convert = AutoConvert(time.time(), request=True, converted=5)
+    explorer = fake_explorer("tab", [session])
+    convert = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "autoconvert:")
+    assert (convert.state, convert.state_text, convert.progress) == ("waiting", "converted 5 · converts with each check",
+                                                                     None)
+    session.convert.todo = 2
+    convert = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "autoconvert:")
+    assert (convert.state, convert.state_text) == ("running", "converting 0 of 2")
+    service.shutdown()
+
+
+
+def test_the_status_bars_live_phrase_changes_only_when_shots_come_in() -> None:
+    """LR-9 (Tony 2026-11-05): steady while Live only checks; it says so while it reads, converts or saves."""
+    from helab.views.explorer_live import live_brief
+    data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
+    session = LiveSession("/live", time.time(), set(), data, new=12)
+    assert live_brief(session, "run_1") == "Live checking run_1 · 12 new shots"
+    session.request = "check"  # (A check that finds nothing says the same.)
+    assert live_brief(session, "run_1") == "Live checking run_1 · 12 new shots"
+    session.convert = AutoConvert(time.time(), request=True)  # (A pass with nothing to convert too.)
+    assert live_brief(session, "run_1") == "Live + auto-convert checking run_1 · 12 new shots"
+    session.convert.todo, session.convert.done = 3, 1
+    assert live_brief(session, "run_1") == "Live auto-converting run_1 · 1 of 3"
+    session.reading = True
+    assert live_brief(session, "run_1") == "Live updating run_1 · reading new shots"
+    session.reading, session.request, session.convert = False, "save", None
+    assert live_brief(session, "run_1") == "Live saving run_1 · 12 new shots"

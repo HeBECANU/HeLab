@@ -279,6 +279,12 @@ class ActivitySources:
                 tasks.append(_question_task(text, explorer, explorer.converter.box, "convert"))
         return tasks
 
+    def live_on(self) -> set[str]:
+        """The rows of the Live sessions that are on: their quick work has no rows of its own (LR-7). A session
+        Live has stopped keeps its save's row, which quitting waits for."""
+        return {live_id(explorer, session.path) for _, explorer in self.tabs()
+                for session in explorer.live_control.sessions() if session.on}
+
     @staticmethod
     def _live_task(tab: str, explorer: FolderExplorer, session: LiveSession, wall: float, now: float) -> Task:
         control = explorer.live_control
@@ -289,23 +295,27 @@ class ActivitySources:
             state, text = "failed", f"stopped: {session.error}"
             actions |= {"retry", "stop_live"}
         elif session.on:
+            # The text changes when something happens, not with each check (LR-7): "watching" between new
+            # shots, the check itself included; the next check's countdown is in the details.
             actions.add("stop_live")
-            if session.request == "check":
-                state, text = "running", "reading new shots" if session.reading else "checking for new shots"
+            if session.request == "check" and session.reading:
+                state, text = "running", "reading new shots"
             elif session.request == "save":
                 state, text = "running", "saving new shots"
             elif session.unsettled:
                 state, text = "settling", f"waiting for {session.unsettled:,} file{'' if session.unsettled == 1 else 's'} to settle"
             else:
-                state, text = "waiting", f"next check in {clock(max(0.0, session.next_at - now))}"
+                state, text = "waiting", watching_text(session)
         else:
             state, text = "running", "saving new shots (Live is off)"
         details = (f"Live · {session.path}", f"Tab: {tab}",
                    "Started " + time.strftime("%H:%M:%S", time.localtime(session.started_at)),
                    f"Checks: {session.checks:,} · new shots: {session.new:,} · not yet saved: {len(session.unsaved):,}",
+                   "Checking now" if session.request == "check" and session.on
+                   else f"Next check in {clock(max(0.0, session.next_at - now))}" if session.on else "",
                    line, *[part for part in tooltip.splitlines() if part])
         return Task(live_id(explorer, session.path), "live", "Live", session.path, tab, state, text, None,
-                    max(0.0, wall - session.started_at), None, tuple(details), frozenset(actions),
+                    max(0.0, wall - session.started_at), None, tuple(line for line in details if line), frozenset(actions),
                     Route("live", explorer.live_owner, path=session.path))
 
     @staticmethod
@@ -318,9 +328,8 @@ class ActivitySources:
         if convert.error:
             state, status = "failed", f"stopped: {convert.error}"
             actions.add("retry")
-        elif convert.request:
-            state, status = "running", (f"converting {convert.done:,} of {convert.todo:,}" if convert.todo
-                                        else "converting")
+        elif convert.request and convert.todo:  # (A pass with nothing to convert, each check, says nothing: LR-7.)
+            state, status = "running", f"converting {convert.done:,} of {convert.todo:,}"
         elif convert.waiting:
             state, status = "settling", f"waiting for {len(convert.waiting):,} raw file{'' if len(convert.waiting) == 1 else 's'} to settle"
         else:
@@ -418,6 +427,7 @@ class ActivitySources:
         known = {task.id for task in tasks}
         # (A child whose parent row isn't listed is shown at the top of its group.)
         tasks = [task if not task.parent or task.parent in known else _orphan(task) for task in tasks]
+        tasks = activity.quiet_live(tasks, self.live_on())
         running = len(service.running_requests())
         paused = sum(r.paused and not r.completed for r in service.active)
         queued = len(service.pending) - len(service.held_requests())
@@ -444,6 +454,14 @@ def _orphan(task: Task) -> Task:
 def _pid(request: IORequest) -> Optional[int]:
     process = request.process
     return None if process is None else int(process.pid)
+
+
+def watching_text(session: LiveSession) -> str:
+    """A Live session's state between new shots: "watching · 12 new shots · last 14:02:31"."""
+    if not session.new:
+        return "watching · no new shots yet"
+    text = f"watching · {session.new:,} new shot{'' if session.new == 1 else 's'}"
+    return text if session.new_at is None else text + " · last " + time.strftime("%H:%M:%S", time.localtime(session.new_at))
 
 
 def live_id(explorer: FolderExplorer, path: str) -> str:
@@ -479,7 +497,9 @@ def parse_size(text: object, default: tuple[int, int] = (1080, 440)) -> tuple[in
 MIN_SIZE = (400, 200)
 # Listings and scans: their Retry is the tree's right-click Retry (``FolderExplorer.refresh_folder``).
 LISTINGS = frozenset({"list", "details", "scan", "resolve"})
-NOW_COLUMNS = ("Task", "Tab", "Folder", "State", "Progress", "Elapsed", "Left")
+# State is last: its text changes length as a task goes on, and the columns before it stay put (Tony, LR-6).
+NOW_COLUMNS = ("Task", "Tab", "Folder", "Progress", "Elapsed", "Left", "State")
+STATE_COLUMN = NOW_COLUMNS.index("State")
 HISTORY_COLUMNS = ("Ended", "Task", "Tab", "Folder", "Outcome", "Took")
 # IOService events that change what the list shows at once (progress waits for the 1 s tick).
 REFRESH_KINDS = frozenset({"queued", "started", "paused", "resumed", "done", "error", "cancelled", "loaded"})
@@ -1063,17 +1083,17 @@ class ActivityWindow(QWidget):
 
     @staticmethod
     def _fill(item: QTreeWidgetItem, task: Task) -> None:
-        texts = (task.title, task.tab, _name(task.folder) if task.folder else "", task.state_text,
+        texts = (task.title, task.tab, _name(task.folder) if task.folder else "",
                  task.progress.text() if task.progress is not None else "",
                  "" if task.elapsed is None else clock(task.elapsed),
-                 "" if task.left is None else f"~{clock(task.left)}")
+                 "" if task.left is None else f"~{clock(task.left)}", task.state_text)
         tooltip = "\n".join(task.details)
         for column, text in enumerate(texts):
             if item.text(column) != text:
                 item.setText(column, text)
             item.setToolTip(column, task.folder if column == 2 and task.folder else tooltip)
         brush = QBrush(QColor(AMBER)) if task.state in ("failed", "stalled") else QBrush()
-        item.setForeground(3, brush)
+        item.setForeground(STATE_COLUMN, brush)
 
     def _render_history(self) -> None:
         """Show the history, newest first: new entries put on top and dropped ones taken off the bottom, the

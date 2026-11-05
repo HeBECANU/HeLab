@@ -8,7 +8,7 @@ import os
 import subprocess
 import time
 import sys
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -89,11 +89,13 @@ def loaded_event(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 def status_window(explorer: FolderExplorer | None, parent: QWidget) -> Any:
     """The main window's status-bar widgets, without a full main window and its startup jobs."""
+    tabs: Any = lambda: [] if explorer is None else [(0, explorer)]
     return SimpleNamespace(
         _closing=False, _status_notice=None, _update_live_action=lambda: None, _update_cancel_loading_action=lambda: None,
         tab_widget=SimpleNamespace(currentWidget=lambda: explorer, set_tab_switching_enable=lambda: None),
         status_bar_message_left=ElidedLabel("", parent), status_bar_spinner=QLabel(parent),
-        status_bar_spinner_angle=0, status_bar_progress=QProgressBar(parent), _spinner_pixmap=QPixmap)
+        status_bar_spinner_angle=0, status_bar_progress=QProgressBar(parent), _spinner_pixmap=QPixmap,
+        _explorers=tabs, _live_quick=lambda: HelabMainWindow._live_quick(cast(Any, SimpleNamespace(_explorers=tabs))))
 
 
 def explorer_for_test(qtbot: QtBot, path: str) -> FolderExplorer:

@@ -19,7 +19,7 @@ from helab.utils.folder_cache import FolderCache, get_folder_cache
 from helab.utils.io_service import IORequest, IOService
 from helab.utils.settings_defaults import ACTIVITY_SIZE_SETTING, read_setting
 from helab.utils.settings_store import app_settings
-from helab.views.ActivityWindow import ActivitySources, ActivityWindow, parse_size
+from helab.views.ActivityWindow import STATE_COLUMN, ActivitySources, ActivityWindow, parse_size
 from helab.views.HelabMainWindow import ACTIVITY_HINT, HelabMainWindow
 
 
@@ -54,7 +54,7 @@ def texts(window: ActivityWindow) -> list[list[str]]:
     for index in range(window.now.topLevelItemCount()):
         group = window.now.topLevelItem(index)
         assert group is not None
-        rows.append([group.text(0)] + [f"{child.text(0)} | {child.text(3)}" for child in
+        rows.append([group.text(0)] + [f"{child.text(0)} | {child.text(STATE_COLUMN)}" for child in
                                        (group.child(n) for n in range(group.childCount())) if child is not None])
     return rows
 
@@ -74,7 +74,7 @@ def test_it_lists_tasks_by_group_with_their_columns_and_details(qtbot: QtBot, mo
     row = group.child(0)
     assert row is not None and row.text(2) == "run_1" and row.toolTip(2) == "/data/run_1"
     assert [window.now.headerItem().text(n) for n in range(7)] == [  # type: ignore[union-attr]
-        "Task", "Tab", "Folder", "State", "Progress", "Elapsed", "Left"]
+        "Task", "Tab", "Folder", "Progress", "Elapsed", "Left", "State"]
     window.now.setCurrentItem(row)
     assert "Folder: /data/run_1" in window.details.toPlainText()
     assert "Lane: background" in window.details.toPlainText()

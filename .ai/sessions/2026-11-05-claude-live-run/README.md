@@ -1,0 +1,23 @@
+# Live run feedback (2026-11-05)
+
+Tony's feedback from a live run test, sent through Chat. Each item gets an ID (LR-n) and a route:
+Ground (a small fix by the Assistant), CoCo (to a floor) or Tony (a decision).
+
+| ID | What | Route | State |
+|---|---|---|---|
+| LR-1 | The TXY list shows m19v1 twice ("Conversion profile" follows Settings › TXY converter; "matlab-2019" is pinned). Tony: label it "HeLab Default (now m19v1)" (summaries "HeLab Default (m19v1)"); the saved token stays `Conversion`. Drag to reorder already works (the list was greyed by the follow box); a test now covers it. | Ground | committed |
+| LR-2 | Scripts panel: every Plot opens a new plot window. Once one is open, the button should read "Add" (`script_tree.py` run buttons, `create_button`). What Add does to be confirmed. | Tony, then CoCo | asked |
+| LR-3 | Plot settings' top lines and their tooltips run very long (long folder names): split them into lines (`instance.py` input/status labels, `txy_source.py` note, `dock.py` tooltip). | CoCo | screenshot asked |
+| LR-4 | Info repeated between the Qt plot panel and inside the plot: move it, with the other info in plot settings, into a collapsible "plot info" section of the settings. What stays inside the plot to be confirmed. | Tony, then CoCo | asked |
+| LR-5 | A per-folder info window: what's cached (raw pulses, TXY layers by tag, sizes, ages, only copies), saved plot results by script, the folder's flags, TXY list and policy, constants, scan history, HeLab's converted TXY, the data root. Tony: yes; opened from right-click › Folder info…, a button in Folder details, and the File menu (for when the folder explorer is hidden). Read only, one store helper job; each section next to the folder's existing actions. | CoCo (plan `roadmaps/folder-info.md`, then a floor) | sent to CoCo |
+| LR-6 | Activity window: the State column's width keeps changing as its text does, moving the columns after it. Tony: move it last. `NOW_COLUMNS` now ends with State (`STATE_COLUMN`); History unchanged; manual `docs/how-to/activity.md` updated. | Ground | committed |
+| LR-7 | Activity window with Live checking every 0.5 s: rows keep appearing and going (each check, conversion pass and autosave is a child row of the Live session while it runs). Tony wants static rows whose state changes when a new shot arrives. Options sent to Tony.  Tony: (a), a conversion pass or autosave gets its own row only after 2 s. | Ground | building |
+| LR-8 | With Live at 0.5 s and auto-convert, the GUI hitches when a new shot arrives and is converted. Audit of the GUI-thread work on that path running (a subagent); Tony's log asked for (its "GUI stalled" lines). | Ground (audit), then Ground or CoCo | investigating |
+| LR-8 | (paused by Tony: "leave for now before I dig deeper"; the audit subagent was stopped before it reported) | — | paused |
+| LR-9 | Status bar with Live + auto-convert flickers between Ready and 1–2 running every 0.5 s. Built: the tab's Live phrase is steady ("Live checking run_1 · 12 new shots", "Live + auto-convert checking …") and changes only while reading ("Live updating …"), converting ("Live auto-converting … · 1 of 3") or saving; the app counts after "│" leave out Live's quick work (under 2 s, not paused; `HelabMainWindow._live_quick`, `IOService.activity_counts(quiet)`), "Ready" dropped while Live is on; the spinner ignores it too. | Ground | committed |
+| LR-10 | Per-shot plots: an option for the x axis, shot ID or shot time (`DatasetView.shot_time`, the raw file's mtime). | Tony, then CoCo | asked |
+| LR-11 | Plots following Live: an option to show the latest shot's age ("N s ago") next to its ID. | Tony, then CoCo | asked |
+| LR-10 | Tony: yes, as a new floor: build all four Basic plots to v2, with an x-axis setting Shot ID / Shot time on every plot with a shot axis (clock time; TXY-mtime fallbacks marked, as Shot times does). | CoCo (floor) | sent to CoCo |
+| LR-12 | The Scripts panel's group menu shows "Basic plots v1" several times (Tony: four entries reading the same). Rename the menu entry to "Basic Plots", with the versions (v2, v1, …) as nodes in the tree, newest first, only the newest expanded. | CoCo (with the v2 floor) | sent to CoCo |
+| LR-13 | v2 adds XY, XT and YT plots: 2D histograms with one axis flattened. | CoCo (with the v2 floor) | sent to CoCo |
+| LR-11 | Tony: where a plot's legend says "shot NN (newest)" (Highlight latest in red: `scatter_3d.py` both, `dld/shot_times.py`), add its age ("shot 1235 (newest, 12 s ago)"); and the main status bar's Live phrase names the latest shot and its age ("Live monitoring run_1 · latest shot 1235 · 12 s ago"). | CoCo → Mendy (Ground) | sent to CoCo |

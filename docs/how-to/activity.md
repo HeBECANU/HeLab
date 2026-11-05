@@ -27,8 +27,8 @@ Tasks are grouped by kind:
 | Analysis | each plot's run, queued or computing |
 | Scripts | test imports of your script folders, and a reload waiting for runs to end |
 
-Each row is one line: **Task**, **Tab** (or the plot it is for), **Folder**, **State**, **Progress**
-(files and per cent), **Elapsed** and **Left** (an estimate, while a load reads files). Hover over a
+Each row is one line: **Task**, **Tab** (or the plot it is for), **Folder**, **Progress** (files and
+per cent), **Elapsed**, **Left** (an estimate, while a load reads files) and **State**. Hover over a
 row, or select it, for the details: what it is, its folder, which lane of HeLab's work queue it is
 in, its helper process, when it started and last made progress, and the file it is on.
 

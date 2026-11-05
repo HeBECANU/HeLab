@@ -40,6 +40,10 @@ GROUP_TITLES: dict[str, str] = dict(GROUPS)
 STALL_SECONDS = LoadClock.STALL_SECONDS
 
 HISTORY_SIZE = 200  # Q62.4: this session's last 200 finished tasks.
+# A Live session's own helper work (its checks, saves, auto-convert's passes) gets a row under the session only
+# once it has run this long, or when it is paused, stalled or failed: at a 0.5 s check interval the quick ones
+# would come and go every check (LR-7, Tony (a), 2026-11-05). The session's row says what it is doing.
+LIVE_CHILD_SECONDS = 2.0
 LOG_LINES = 500  # Warnings kept in memory for the details pane (``LogLines``).
 
 # Operations by group (``group_of``); a load's own payload refines it (a save, a Live check).
@@ -473,6 +477,19 @@ def io_tasks(active: Iterable[Request], pending: Iterable[Request], retired: Ite
                                               waiting=waiting.get(key(request)), attempts=attempts),
                               frozenset(actions), told.route, told.parent))
     return tasks
+
+
+def quiet_live(tasks: Iterable[Task], sessions: Iterable[str], seconds: float = LIVE_CHILD_SECONDS) -> list[Task]:
+    """``tasks`` without the quick helper work of the Live sessions ``sessions`` (their rows' ids): a task
+    under one of them stays once it has run ``seconds``, or while it is paused, stalled or failed."""
+    sessions = set(sessions)
+
+    def shown(task: Task) -> bool:
+        if task.parent not in sessions or task.route.kind != "io":
+            return True
+        return task.state in ("paused", "stalled", "failed") or (task.elapsed is not None and task.elapsed >= seconds)
+
+    return [task for task in tasks if shown(task)]
 
 
 def ordered(tasks: Iterable[Task]) -> tuple[Task, ...]:
