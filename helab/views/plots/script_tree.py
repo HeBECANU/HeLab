@@ -18,13 +18,13 @@ from PyQt6.QtCore import (QCoreApplication, QFileSystemWatcher, QObject, QProces
                           pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import QAction, QBrush, QColor, QPalette
 from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
-                             QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
+                             QMenu, QMessageBox, QPushButton, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QWidget)
 
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.presets import SavedPlot, ScriptRef, waiting_view
 from helab.analysis.runner import AnalysisRunner, get_analysis_runner
-from helab.scripts import dld, probe, standard
+from helab.scripts import dld, probe, standard, standard_v2
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.scripts_manager import LoadError, ScriptsManager
 from helab.utils import activity
@@ -44,6 +44,10 @@ if TYPE_CHECKING:
 AUTO = "auto"
 # The narrowest a run column gets (its "Run" heading); it widens to its buttons ("Plot").
 RUN_COLUMN_WIDTH = 48
+# A script's Plot button while a plot of it is open (LR-2, Q65.2: Tony's pick); it still opens another plot.
+# Not "Add": that word is kept for adding a folder's data to an open plot (comparing folders).
+NEW_PLOT_TEXT = "New"
+PLOT_ACTION = "Plot"
 # Auto-reload: a change starts this wait (ms) before the folder's files are compared, so an editor's save
 # (often a temporary file, then a rename) has finished.
 SETTLE_MS = 750
@@ -70,6 +74,64 @@ PROBED_NOTE = ("HeLab first test-imports each script folder in a separate proces
                "crashes at import can't stop HeLab.")
 # File systems that are network shares (as ``cache_paths``' mounts name them).
 NETWORK_TYPES = ("smbfs", "cifs", "smb", "smb2", "smb3", "afpfs", "nfs", "nfs4", "webdav", "davfs", "remote")
+
+
+# Groups the selector lists as one entry, each a version node in its tree, newest first: (entry, ((group,
+# node label), ...)). Basic plots v2 and v1 are "Basic Plots" (LR-12); every other group is its own entry.
+FAMILIES: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = ((standard.FAMILY, standard.FAMILY_GROUPS),)
+
+
+def entry_of(group: str) -> str:
+    """The selector's entry for ``group``: its family's name, else the group's own."""
+    for family, members in FAMILIES:
+        if group == family or any(group == name for name, _ in members):
+            return family
+    return group
+
+
+def is_family(entry: str) -> bool:
+    return any(entry == family for family, _ in FAMILIES)
+
+
+@dataclass(frozen=True)
+class Node:
+    """A top-level node of the Scripts tree: its label, the group whose scripts it lists, its tooltip, and
+    ``older``: a version of its family other than the newest (its run buttons name the version)."""
+    label: str
+    group: str
+    tooltip: str = ""
+    older: bool = False
+
+
+def nodes_of(entry: str, groups: List[str]) -> List[Node]:
+    """The tree's top-level nodes for the selector's ``entry``, given the groups loaded: a family's version
+    nodes, newest first (and a loaded group named as the family itself after them), else the group alone."""
+    for family, members in FAMILIES:
+        if entry != family:
+            continue
+        nodes = [Node(label, name, f"{name}: the newest" if not index else
+                      f"{name}: kept so that its saved results and presets still open", older=index > 0)
+                 for index, (name, label) in enumerate(member for member in members if member[0] in groups)]
+        nodes += [Node(family, family)] if family in groups else []
+        return nodes
+    return [Node(entry, entry)] if entry in groups else []
+
+
+def fit_popup(combo: QComboBox) -> None:
+    """The selector's popup as wide as its longest entry, never cut (LR-12). Qt widens a combo's popup to its
+    entries only in styles with a popup of their own (macOS, Fusion); in the Windows styles it is the combo's
+    width, which shrinks with the panel (Q33.2), and its view cut the entries in the middle ("Basic…ts v1")."""
+    view = combo.view()
+    if view is None:
+        return
+    view.setTextElideMode(Qt.TextElideMode.ElideNone)
+    style = view.style()
+    scroll = style.pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent) if style is not None else 16
+    metrics = view.fontMetrics()
+    widest = max((metrics.horizontalAdvance(combo.itemText(index)) for index in range(combo.count())), default=0)
+    wanted = max(view.sizeHintForColumn(0), widest + 2 * metrics.averageCharWidth()) + 2 * view.frameWidth() + scroll
+    screen = combo.screen()
+    view.setMinimumWidth(min(wanted, screen.availableGeometry().width()) if screen is not None else wanted)
 
 
 def marker_path() -> str:
@@ -346,9 +408,11 @@ class TreePanelWidget(QWidget):
     """The Scripts panel: a group selector, Load Scripts… and the selected group's scripts, each
     with up to two run buttons (its first actions).
 
-    Groups are each script's metadata group: HeLab's bundled analyses ("Basic plots v1",
-    ``helab.scripts.standard.group``; "DLD Front Panel Port", ``helab.scripts.dld.group``) and
-    those of scripts loaded from a folder (``ScriptsManager``).
+    Groups are each script's metadata group: HeLab's bundled analyses ("Basic plots v2" and "Basic
+    plots v1", ``helab.scripts.standard_v2.group`` and ``helab.scripts.standard.group``, listed as one
+    entry, "Basic Plots", with a version node each in the tree, LR-12; "DLD Front Panel Port",
+    ``helab.scripts.dld.group``) and those of scripts loaded from a folder (``ScriptsManager``). The
+    selector lists each entry once, and its popup fits its longest entry (``fit_popup``).
 
     ``plotsChanged`` says when a plot opened or closed (the plots to reopen at start are recorded
     then, helab/views/plots/arrangement.py).
@@ -385,7 +449,13 @@ class TreePanelWidget(QWidget):
         self.workspace = workspace  # The plot area new plots open in.
         self.script_manager = ScriptsManager()
         
-        self.groups: List[str] = []  # As the group selector lists them.
+        self.groups: List[str] = []  # As the group selector lists them (a family once: ``FAMILIES``).
+        # The family version nodes the user opened or closed this session (family, node label) -> expanded.
+        self._expanded: Dict[Tuple[str, str], bool] = {}
+        self._listing = False  # The tree is being filled: its expansions are HeLab's, not the user's.
+        # LR-2: the listed Plot buttons by script (script_id -> (button, script name, its description)).
+        self._plot_buttons: Dict[str, List[Tuple[QPushButton, str, str]]] = {}
+        self.plotsChanged.connect(self._show_open_plots)
 
         # Analysis instance tracking
         self._instance_counter = 0
@@ -448,6 +518,8 @@ class TreePanelWidget(QWidget):
 
         # Tree list widget
         self.tree_widget = identify(QTreeWidget(), "scripts", "Scripts", "The group's scripts and their run buttons")
+        self.tree_widget.itemExpanded.connect(self._node_expanded)
+        self.tree_widget.itemCollapsed.connect(self._node_collapsed)
         # One "Run" heading over the run buttons (a second column only shows for a script with two).
         self.tree_widget.setHeaderLabels(["Script", "Run", ""])
         self.tree_widget.setColumnCount(3)
@@ -512,8 +584,10 @@ class TreePanelWidget(QWidget):
         logging.info(f"TreePanelWidget initialized. {type(self.parent()) = }")
 
     def _load_default_scripts(self) -> None:
-        """Register HeLab's bundled analyses (``helab.scripts.standard``, then the DLD front panel port, ``helab.scripts.dld``) and show the first group."""
-        for module in (*standard.MODULES, *dld.MODULES):
+        """Register HeLab's bundled analyses (Basic plots v2, ``helab.scripts.standard_v2``, and v1,
+        ``helab.scripts.standard``, shown as one entry, "Basic Plots"; then the DLD front panel port,
+        ``helab.scripts.dld``) and show the first group."""
+        for module in (*standard_v2.MODULES, *standard.MODULES, *dld.MODULES):
             try:
                 self.script_manager.load_module(module)
             except Exception as e:
@@ -1171,32 +1245,21 @@ class TreePanelWidget(QWidget):
         return box
 
     def _update_groups(self) -> None:
-        """Update the group selector with available groups.
-        
-        This method manages the UI state when groups are added or removed:
-        1. Preserves the current selection if possible
-        2. Updates the dropdown with all available groups
-        3. Attempts to restore the previous selection
-        4. Falls back to first item if previous selection is gone
-        5. Clears the tree widget if no groups are available
-        
-        This provides a smooth transition when the available groups change,
-        maintaining user selection when possible while ensuring the UI
-        stays in a valid state.
-        """
+        """The selector's entries from the groups loaded, each once (a family's groups as one entry,
+        ``FAMILIES``), keeping the entry shown if it is still there, else the first; no groups: an empty
+        tree (with the load errors). The popup fits its longest entry (``fit_popup``)."""
         current = self.group_selector.currentText()
-        groups = self.script_manager.get_groups()
-        self.groups = list(groups)  # Known before the selector lists them (it selects one at once).
+        entries: List[str] = []
+        for group in self.script_manager.get_groups():
+            if (entry := entry_of(group)) not in entries:
+                entries.append(entry)
+        self.groups = entries  # Known before the selector lists them (it selects one at once).
         self.group_selector.clear()
-        if groups:
-            self.group_selector.addItems(groups)
-            
-            # Try to restore previous selection
+        if entries:
+            self.group_selector.addItems(entries)
+            fit_popup(self.group_selector)
             index = self.group_selector.findText(current)
-            if index >= 0:
-                self.group_selector.setCurrentIndex(index)
-            else:
-                self.group_selector.setCurrentIndex(0)
+            self.group_selector.setCurrentIndex(index if index >= 0 else 0)
         else:
             self.tree_widget.clear()
             self._show_errors()
@@ -1210,25 +1273,38 @@ class TreePanelWidget(QWidget):
                 logging.error(f"Unknown group: {group_name}")
 
     def _load_current_group(self) -> None:
-        """Load the currently selected group's scripts into the tree widget.
-        
-        1. Loads script metadata from ScriptsManager
-        2. Creates script class instances
-        3. Sets up action buttons for each script
-        4. Handles errors by displaying them in red
-        
-        The loaded scripts appear as child items under their group in the tree,
-        with up to two action buttons for each script.
-        """
+        """List the selector's entry in the tree: a top-level node per group (``nodes_of``: a family's
+        version nodes, newest first, only the newest expanded unless the user opened or closed one this
+        session; any other group, one node, expanded), each with its scripts and their run buttons (up to
+        two; a script that fails to make its actions is listed in red), then the load errors."""
         group_name = self.group_selector.currentText()
         if not group_name or group_name not in self.groups:
             return
 
-        self.tree_widget.clear()
-        group_item = QTreeWidgetItem(self.tree_widget, [group_name])
-        group_item.setFirstColumnSpanned(True)
+        self._listing = True
+        try:
+            self.tree_widget.clear()
+            self._plot_buttons = {}
+            nodes = nodes_of(group_name, self.script_manager.get_groups())
+            for index, node in enumerate(nodes):
+                # A family's newest version opens (or as the user left it this session); other groups open.
+                family = is_family(group_name)
+                self._list_node(group_name, node, expanded=self._expanded.get((group_name, node.label), index == 0)
+                                if family else True)
+            self._show_open_plots()  # (Fits the run columns.)
+            self._show_errors()
+        finally:
+            self._listing = False
 
-        for metadata in self.script_manager.get_scripts_in_group(group_name):
+    def _list_node(self, entry: str, node: Node, expanded: bool) -> None:
+        """One top-level node of the tree: its group's scripts with their run buttons."""
+        group_item = QTreeWidgetItem(self.tree_widget, [node.label])
+        group_item.setFirstColumnSpanned(True)
+        group_item.setData(0, Qt.ItemDataRole.UserRole + 1, entry)
+        if node.tooltip:
+            group_item.setToolTip(0, node.tooltip)
+        version = f" ({node.label})" if node.older else ""
+        for metadata in self.script_manager.get_scripts_in_group(node.group):
             script_class = self.script_manager.get_script(metadata.script_id)
             if script_class:
                 try:
@@ -1239,19 +1315,54 @@ class TreePanelWidget(QWidget):
                     item.setToolTip(0, f"{metadata.description}\n{metadata.identity().text()}")
                     for column, action in enumerate(actions[:2], start=1):
                         button = self.create_button(action, self._action_callback(metadata, script, action))
-                        # "Plot Counts per shot", its ID from the script's analysis ID (not its name).
+                        # "Plot Counts per shot", its ID from the script's analysis ID (not its name); an older
+                        # version of a family names its version: "Plot Counts per shot (v1)".
+                        description = f"Run {metadata.name} on this tab's loaded data"
                         identify(button, f"run_{id_part(metadata.identity().analysis_id)}_{id_part(action)}",
-                                 f"{action} {metadata.name}", f"Run {metadata.name} on this tab's loaded data")
+                                 f"{action} {metadata.name}{version}", description)
                         self.tree_widget.setItemWidget(item, column, button)
+                        if column == 1 and action == PLOT_ACTION:
+                            self._plot_buttons.setdefault(metadata.script_id, []).append(
+                                (button, metadata.name, description))
                 except Exception as e:
                     logging.error(f"Error loading script {metadata.name}: {e}")
                     error_item = QTreeWidgetItem(group_item, [f"{metadata.name} (Error)"])
                     error_item.setForeground(0, Qt.GlobalColor.red)
                     error_item.setToolTip(0, f"{type(e).__name__}: {e}")
+        group_item.setExpanded(expanded)
 
-        group_item.setExpanded(True)
+    def _node_state(self, item: QTreeWidgetItem, expanded: bool) -> None:
+        """The user opened or closed a family's version node: kept for the session (memory only)."""
+        entry = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if not self._listing and item.parent() is None and isinstance(entry, str) and is_family(entry):
+            self._expanded[(entry, item.text(0))] = expanded
+
+    @pyqtSlot(QTreeWidgetItem)
+    def _node_expanded(self, item: QTreeWidgetItem) -> None:
+        self._node_state(item, True)
+
+    @pyqtSlot(QTreeWidgetItem)
+    def _node_collapsed(self, item: QTreeWidgetItem) -> None:
+        self._node_state(item, False)
+
+    @pyqtSlot()
+    def _show_open_plots(self) -> None:
+        """LR-2: a script's Plot button reads ``NEW_PLOT_TEXT`` while a plot of it is open, its tooltip
+        saying how many ("Open another Counts per shot plot (1 open)"); "Plot" again once none is. Its
+        accessible name stays ("Plot Counts per shot"), so runners and the Debug menu still find it."""
+        counts: Dict[str, int] = {}
+        for instance in self.instances():
+            counts[instance.metadata.script_id] = counts.get(instance.metadata.script_id, 0) + 1
+        for script_id, buttons in self._plot_buttons.items():
+            for button, name, description in buttons:
+                if sip.isdeleted(button):
+                    continue
+                count = counts.get(script_id, 0)
+                button.setText(NEW_PLOT_TEXT if count else PLOT_ACTION)
+                text = f"Open another {name} plot ({count:,} open)" if count else description
+                button.setToolTip(text)
+                button.setAccessibleDescription(text)
         self._fit_run_columns()
-        self._show_errors()
 
     def _fit_run_columns(self) -> None:
         """The run columns as wide as their buttons, the second hidden when no script has a second action,
