@@ -286,3 +286,41 @@ Neither AU-13 nor AU-14 affects the f951fc0 questions. The launcher match doesn'
 `IOService` starts one (`sys.executable`, the venv's own `bin/python`, which sets the variable afresh). It doesn't
 match another HeLab: another checkout's venv is a different prefix, and the trailing separator stops
 `venv` from matching `venv2`. The environment is never logged or shown.
+
+## Re-check 2
+
+Reviewer (Sentry), 2026-11-05. The fix diff only: `git diff c099caf 235859d -- helab tests` (AU-13, AU-14). HEAD is
+`f73cd13`, which adds the handoff's CI record.
+
+### Checks rerun
+
+- The touched test files plus `test_typing.py` (`pytest -n 4 --reruns 5 --reruns-delay 1
+  --basetemp=.ai/temp/pytest-sentry tests/test_updates_{updater,launch,github,check}.py tests/test_typing.py -rA`):
+  **124 passed, 1 skipped, no RERUN**. The skip is the Windows-only AU-7 test. The new tests and the `framework`
+  waiting case ran and passed. Output is whole in `.ai/temp/recheck2-tests.txt`. The full suite wasn't rerun:
+  the change is two lines of updater code plus two new tests, and CI ran it on all three OSes.
+- The five type checks, all clean (`.ai/temp/recheck2-types.txt`): `mypy helab/ --strict` 223 files, `mypy tests
+  --strict` 220, `pyright helab tests` 0 errors, `--platform win32` 223, `--pythonplatform Windows` 0 errors.
+- I reran both new tests in a scratch copy of `235859d`, with `c099caf`'s updater swapped in. Both fail there:
+  - `test_the_outcome_is_recorded_before_the_older_venv_is_deleted`: the slow delete reads `{}`, so nothing has
+    been recorded yet;
+  - `test_a_framework_venvs_python_counts_only_when_it_runs_helab`: the framework venv's `python -c …` is counted.
+- CI run 42026547431 on `235859d`, read-only: all 17 jobs that ran succeeded.
+  - The 12 Tests and Converter backends logs were read. 11 have no RERUN.
+  - macOS Tests (1/3) (job 127242189697) has "2 rerun": `test_root_discovery.py::test_volume_check_alone_refreshes_hints_without_visiting_markers`,
+    once in setup and once in teardown, with `Failed: visited a source folder` from its process-wide `os.lstat`
+    patch.
+  - That test and mechanism are already in `roadmaps/known-issues.md`, and they have nothing to do with
+    `helab/updates/`. That entry should record this run too.
+
+### AU-13 and AU-14
+
+| ID | Status |
+|---|---|
+| AU-13 | Fixed: on "started", `record(...)` comes first, then `discard_older`. The test fails on `c099caf`. |
+| AU-14 | Fixed: the launcher match also needs `"helab"` in the plain command, as the plain match does. A helper started the way `IOService` starts one (`sys.executable -m helab.io_helper`), the script probe (`-m helab.scripts.probe`) and `bin/helab convert` all name helab after the re-exec, so none is missed. The `os.environ.pop` comment now calls it a safeguard. The test fails on `c099caf`. |
+
+### Open findings
+
+None. No blocker; AU-1 to AU-14 all fixed or closed (AU-7 and AU-8 to the known-issues line and M~3 for the
+lab PC).
