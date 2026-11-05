@@ -117,3 +117,30 @@ existing test pins.
 
 When done: `maestri floor status "<summary>" --state review`, then
 `maestri ask "CoCo" "Basic plots v2: done at <hash>, suite <N> passed, RERUNs <…>, CI <run>"`.
+
+## Addendum 1 (2026-11-05): LR-2, LR-3's plot settings, LR-4
+
+Tony, in the same live run (relayed by Side; the log's LR-2, LR-3 and LR-4 rows and their "(cont.)" rows). These join
+the floor; the design (step 1) covers them too, and they are built after step 4 as **step 4b** (its own commits, with
+tests), before the handoff.
+
+- **LR-2: the Plot button's second name.** While any plot of a script is open, its Plot button in the Scripts panel
+  reads another name and its tooltip says so, e.g. "Open another Counts per shot plot (1 open)"; it still opens
+  another window. **Not "Add"**: that word is kept for comparing folders, which is coming (adding a folder's data to
+  an open plot). The name is **Q65.2**, still Tony's pick: "New" is proposed ("Another" and "+" the others). Build it
+  with the name in one constant so the pick is a one-line change. `script_tree.py`'s run buttons (`create_button`).
+- **LR-3, plot settings' half: long texts.** Plot settings' top lines and their tooltips run very long with long
+  folder names: split them into lines, with detail in tooltips that wrap (`helab/views/plots/instance.py`'s input and
+  status labels, `txy_source.py`'s note, `dock.py`'s tooltip). Tony wants this checked automatically: extend the
+  UI audit (`.ai/sessions/2026-11-04-claude-ui-audit/layout_audit.py` and its README) to plot settings with long folder
+  names at several panel widths and window sizes, keep your copy in this floor's session folder, and run it before
+  and after (a real display, as its README says). If a check is cheap and stable offscreen, propose it as a suite test.
+  The rest of the app's audit is Ground's (Mendy), not this floor's.
+- **LR-4: "Plot info".** Audit the information repeated between the plot settings panel and the plot itself (titles,
+  notes, counts, the input folder, TXY source, cached-result lines), then give plot settings a **collapsible "Plot
+  info" section** holding it and the other info lines. Changes inside the plots go into **v2 only** (Tony): v1's plots
+  keep drawing what they draw. In the design, list each piece of info, where it shows today and where it goes, and
+  say whether v1's settings panel gets the section too (the panel is shared; propose, as a `Q~`).
+
+**Edits allowed for these, kept small:** `helab/views/plots/script_tree.py` (run buttons as well as the selector and
+tree), `instance.py`, `txy_source.py`, `dock.py` and the plot settings panel's module. Ask CoCo before others.
