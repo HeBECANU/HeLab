@@ -5,16 +5,16 @@ from __future__ import annotations
 
 from collections import Counter
 
-from helab.scripts import dld, standard
+from helab.scripts import dld, standard, standard_v2
 from helab.scripts.scripts_manager import ScriptsManager
 
 
 def test_bundled_analyses_have_unique_ids_and_versions() -> None:
     manager = ScriptsManager()
-    for module in (*standard.MODULES, *dld.MODULES):
+    for module in (*standard_v2.MODULES, *standard.MODULES, *dld.MODULES):
         manager.load_module(module)
     metadata = [meta for group in manager.get_groups() for meta in manager.get_scripts_in_group(group)]
-    assert len(metadata) >= len(standard.MODULES) + len(dld.MODULES)
+    assert len(metadata) >= len(standard_v2.MODULES) + len(standard.MODULES) + len(dld.MODULES)
     missing = [meta.name for meta in metadata if not (meta.analysis_id and meta.version)]
     assert missing == [], f"Without analysis_id or version: {missing}"
     ids = Counter(meta.analysis_id for meta in metadata)

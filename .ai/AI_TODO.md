@@ -519,6 +519,20 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   `helab/views/ActivityWindow.py`). Live's and conversions' state changes show within the 1 s tick; connect each
   tab's `liveChanged` and `loadStateChanged` too if that delay shows in use.
 
+## Basic plots v2 (block 66)
+
+- [ ] **A66.1 Bin the 2D histograms with `np.bincount`** (the floor's A~1; `helab/analysis/histogram2d.py`): about 17×
+  faster than `histogram2d` with the same counts, NumPy only; the last bin's right-edge rule must match. The DLD port's
+  Density images could follow on its own floor.
+- [ ] **A66.2 Transfer fractions' Y axis in PyQtGraph** (A~2; v2 only): it reads "(x0.001)" with ticks up to 600; set
+  the axis's units or turn off its SI prefix scaling.
+- [ ] **A66.3 The Presets row at the panel's 250 px minimum** (A~3): "Preset:" is cut and touching (left by the
+  2026-11-04 audit) and the TXY row's "HeLab converts with …" elides early; a one-line layout pass.
+- [ ] **A66.4 A warning that isn't last takes the parts after it into its tooltip** (Lens's BP-11, Info;
+  `helab/views/plots/instance.py:91`): a non-listed warning inside `describe_run`/`describe_result` text that isn't
+  the last part shows the following parts in its tooltip line ("⚠ X · bins auto"); the count is right and HeLab's own
+  scripts put warnings last, so only a user script shows it.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

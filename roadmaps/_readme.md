@@ -61,9 +61,11 @@ that branch.
   TXY, data root), read only, beside the folder's existing actions; right-click, Folder details, File menu.
   Q64.1–Q64.10 open.
 
-- [ ] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
+- [x] Basic plots v2 (LR-10, LR-12, LR-13; Tony, 2026-11-05; [brief](../.ai/sessions/2026-11-05-claude-basic-plots-v2/brief.md)):
   all four plots in a v2 with a Shot ID / Shot time x axis (fallback times marked), new XY, XT and YT 2D histograms,
-  and one "Basic Plots" group with its versions as tree nodes (the menu's repeated "Basic plots v1" fixed); v1 kept.
+  and one "Basic Plots" group with its versions as tree nodes; also the New button (LR-2), plot settings' long texts
+  (LR-3) and Plot info (LR-4); v1 pinned. Landed `559baa5` (the Basic Plots v2 floor, Vista + Reviewer Lens; Q66.1–Q66.10
+  decided, Q66.11–Q66.12 open; M66.1 for Tony).
 
 - [ ] App updates (Tony, 2026-11-05, live run; [plan](app-updates.md)): stage 1, the update check (notify only),
   for source checkouts and frozen builds alike; then stage 2's self-update for source checkouts (git + uv,

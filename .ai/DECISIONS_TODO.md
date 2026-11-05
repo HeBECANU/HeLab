@@ -81,12 +81,33 @@ From Tony's live run (2026-11-05); the log's LR-n items name what each is for.
   checks and shows the releases (notify, with the download link). The venv is rebuilt only when
   `requirements.lock` changed.
 
+## Basic plots v2 (block 66; [handoff](sessions/2026-11-05-claude-basic-plots-v2/handoff.md))
+
+Q66.1–Q66.10 decided (Tony in Chat, 2026-11-05) and built in `559baa5`; Q66.11 and Q66.12 open.
+
+- **Q66.1** LR-12's repeated "Basic plots v1": answered by Tony's screenshot: no repeated entry (the four lines were
+  the four scripts); built as he asked (one "Basic Plots" entry, v2 above v1, only v2 open), with the Windows popup fix.
+- **Q66.2** v2's T/X/Y histograms and 3D scatter duplicate v1's for now ("then I'll start tweaking them").
+- **Q66.3** XY/XT/YT as three entries, with the DLD port's density options ("take inspiration from the DLD front
+  panel's XY XT YT plot").
+- **Q66.4** Shot time's line breaks at gaps over 10× the median interval ("ok").
+- **Q66.5** the group choice isn't remembered across restarts ("ok"; a preset saves a plot, not the group).
+- **Q66.6** an option to include events outside the cut along the summed axis, default off; no newest-shot highlight.
+- **Q66.7** Plot info closed by default ("ok").
+- **Q66.8** v2's PyQtGraph titles drop the input ("ok"; other plotting libraries surveyed: none added now).
+- **Q66.9** v1's plots get Plot info and the one-line dock too ("ok").
+- **Q66.10** "X axis: Shot ID / Shot time", axis "Shot ID" ("ok").
+- **Q66.11** (open) Datashader later, only if Live on very large folders (over about 10 M events per image) makes the
+  2D plots lag after A66.1. Proposed: not now; ask again with numbers from a real run.
+- **Q66.12** (open) Align the DLD port's "shot number" with v2's "Shot ID"? Proposed: yes, on a DLD floor, keeping
+  its parameter values (presets save them).
+
 ## Folder info window (block 64; [plan](../roadmaps/folder-info.md))
 
 From Tony's live run (LR-5, 2026-11-05). The window, its three ways in, read only, one helper job and its eight
 sections are decided; the plan has each question's options and reasons.
 
-All ten decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decided" section has them in full.
+All eleven decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decided" section has them in full.
 
 - **Q64.1** (a) a "Folder info…" link at the end of the Disk cache row.
 - **Q64.2** "ok": File › Folder info… on the current tab's selected folder, also with the explorer hidden,
@@ -107,7 +128,7 @@ All ten decided (Tony in Chat, 2026-11-05, his words quoted); the plan's "Decide
   macOS summary info": this folder only in v1; a summary over the folder and N levels of subfolders (like
   Finder's Show Summary Info) later.
 - **Q64.10** "yes in v0.0.9": a floor on this Mac.
-- **Q64.11** (open) Export a copy of a folder's cached data so the user can restore it by hand (from Q64.8). The
+- **Q64.11** (a) decided (Tony, 2026-11-05: "64.11 a"). Export a copy of a folder's cached data so the user can restore it by hand (from Q64.8). The
   raw layer keeps pulses in time order, not file order, so a rebuilt `d<N>.txt` isn't byte for byte the original,
   though every converter gives the same TXY from it. Proposed: a follow-up after v1, "Export a copy…" in the
   Only copy section, writing `d<N>.txt` from raw pulses and TXY text from TXY layers into a new folder the user

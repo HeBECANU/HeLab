@@ -189,6 +189,10 @@ def label(instance: AnalysisInstance, name: str) -> str:
     dock = cast(QDockWidget, instance.dock_widget)
     found = dock.findChild(QLabel, name)
     assert found is not None
+    if name == "plot_data_source":  # With its run's detail and settings, moved into Plot info (LR-4).
+        parts = (found.text(), dock.property("plotSourceDetail"), dock.property("plotSourceSettings"),
+                 found.toolTip())
+        return "\n".join(part for part in parts if isinstance(part, str) and part)
     return found.text() + "\n" + found.toolTip()
 
 
@@ -276,8 +280,13 @@ def test_a_changed_script_or_data_shows_the_saved_result_outdated_until_the_run_
     reason = "script version 1 → 2" if change == "script" else "data changed (1 shot changed)"
     assert reason in label(second, "plot_error") and "outdated" in label(second, "plot_error")
     assert "saved result of" in label(second, "plot_data_source")
+    line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")
+    # A short mark on the line itself, seen with Plot info closed.
+    assert line is not None and line.text().endswith(" · outdated")
     script.go.set()
     qtbot.waitUntil(lambda: saved(second), timeout=WAIT)
+    line = cast(QDockWidget, second.dock_widget).findChild(QLabel, "plot_data_source")  # (Drawn anew: a new line.)
+    assert line is not None and "outdated" not in line.text()
     assert cast(AnalysisResult, second.shown).source != FROM_DISK and label(second, "plot_error").strip() == ""
     assert script.computed == 1
     close(window)
@@ -460,7 +469,8 @@ def source_line(instance: AnalysisInstance) -> str:
     dock = cast(QDockWidget, instance.dock_widget)
     found = dock.findChild(QLabel, "plot_data_source")
     assert found is not None
-    return found.text()
+    detail = dock.property("plotSourceDetail")  # (Moved from the line into Plot info: LR-4.)
+    return " · ".join(part for part in (found.text(), detail) if isinstance(part, str) and part)
 
 
 class Quick(Costly):

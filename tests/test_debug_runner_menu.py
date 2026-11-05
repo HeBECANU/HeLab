@@ -207,7 +207,8 @@ def test_dump_state_saves_what_the_window_shows_from_memory(
     assert state["folder_details"]["folder"]["shown"] and state["status_bar"]["activity"]["shown"]
     assert state["plot_count"] == 1
     [shown] = state["plots"]
-    assert shown["script"] == "helab.counts_per_shot" and shown["path"] == str(run) and shown["shown_in_settings"]
+    # (The newest Basic Plots version's button keeps the plain name: "Plot Counts per shot" opens v2's.)
+    assert shown["script"] == "helab.v2.counts_per_shot" and shown["path"] == str(run) and shown["shown_in_settings"]
     assert shown["source"]["text"].startswith("Data source: run") and not shown["released"]
     assert state["script_group"] == window.panel_right_bottom_script_selector.group_selector.currentText()
 
