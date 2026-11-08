@@ -111,3 +111,36 @@ def test_the_dock_button_puts_a_floating_plot_back_with_its_settings(plots: Plot
     button.click()
     qtbot.waitUntil(one.settings.isHidden)
     assert not one.isFloating() and page.parentWidget() is plots.panel.stack and page.text() == "edited"
+
+
+def test_a_floating_plot_is_an_ordinary_window_that_can_minimise(plots: Plots, qtbot: QtBot,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Floating, a plot is a window of its own (minimise, maximise, close; not Qt's tool window), at the place it
+    floated to; during a drag only once it is let go (so the drag can still dock it); docked again by its button."""
+    from helab.views.plots import dock as dock_module
+
+    one, two = (cast(AnalysisDock, plots.add()) for _ in range(2))
+    plots.show(qtbot)
+    float_(one, qtbot)
+    qtbot.waitUntil(lambda: one.windowFlags() == AnalysisDock.WINDOW_FLAGS)
+    flags = one.windowFlags()
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint and flags & Qt.WindowType.WindowMaximizeButtonHint
+    assert one.windowType() == Qt.WindowType.Window and one.isFloating() and one.isVisible()
+    assert one.size() == AnalysisDock.FLOAT_SIZE.boundedTo(available(one).size())
+    one.showMinimized()
+    qtbot.waitUntil(one.isMinimized)
+    one.showNormal()
+    # During a drag (a button held), it stays Qt's floating window until let go.
+    held = [True]
+    monkeypatch.setattr(dock_module, "mouse_held", lambda: held[0])
+    two.setFloating(True)
+    qtbot.wait(3 * AnalysisDock.WINDOW_WAIT_MS)
+    assert two.windowFlags() != AnalysisDock.WINDOW_FLAGS and two.isFloating()
+    held[0] = False
+    qtbot.waitUntil(lambda: two.windowFlags() == AnalysisDock.WINDOW_FLAGS)
+    # Docked again (its Dock button), and floated again: a window again.
+    one.settings.dock_button.click()
+    qtbot.waitUntil(lambda: not one.isFloating())
+    assert one.windowType() != Qt.WindowType.Window
+    float_(one, qtbot)
+    qtbot.waitUntil(lambda: one.windowFlags() == AnalysisDock.WINDOW_FLAGS)

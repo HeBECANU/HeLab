@@ -213,8 +213,16 @@ class AnalysisDock(QDockWidget):
     Floated other than by a drag (its title's float button, a double-click on its title), it opens
     at ``FLOAT_SIZE``, ``FLOAT_STEP`` right of and below the plot floated last (the first, of its
     place docked), kept on its screen (Q33.3); dragged, it stays where it is let go. A restart puts
-    it back where the user left it (the arrangement's saved dock state)."""
+    it back where the user left it (the arrangement's saved dock state).
+
+    Floating, it is an ordinary window (``WINDOW_FLAGS``: minimise, maximise and close buttons; it can go behind
+    the main window and doesn't hide while HeLab is in the background), not Qt's tool window. The change waits
+    until a drag is let go (``_as_window``), so a drag can still dock it; the Dock button and Qt's
+    ``setFloating(False)`` dock it again."""
     closed = pyqtSignal()
+    WINDOW_FLAGS = (Qt.WindowType.Window | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint
+                    | Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint)
+    WINDOW_WAIT_MS = 50  # How often a float during a drag checks whether the drag was let go.
     FLOAT_SIZE = QSize(800, 600)
     FLOAT_STEP = 40
     _floated_count = 0  # (Each float's turn, ``floated_turn``: the last one floated is the highest.)
@@ -244,6 +252,10 @@ class AnalysisDock(QDockWidget):
         super().setWidget(self.frame)
         self.floated_turn = 0
         self._double_clicked = False  # (During a double-click on the title, which floats it on the press.)
+        self._window_soon = QTimer(self)
+        self._window_soon.setSingleShot(True)
+        self._window_soon.setInterval(self.WINDOW_WAIT_MS)
+        self._window_soon.timeout.connect(self._as_window)
         self.topLevelChanged.connect(self._floated)
 
     def event(self, event: QEvent | None) -> bool:
@@ -270,6 +282,24 @@ class AnalysisDock(QDockWidget):
         self.floated_turn = AnalysisDock._floated_count
         if self._double_clicked or not mouse_held():  # (A drag: where the user lets go.)
             self.place_floating()
+        self._window_soon.start(0 if not mouse_held() else self.WINDOW_WAIT_MS)
+
+    @pyqtSlot()
+    def _as_window(self) -> None:
+        """Floating, an ordinary window (``WINDOW_FLAGS``), at the same place; during a drag, once it is let go
+        (a drag that docks it needs Qt's own floating window)."""
+        if not self.isFloating() or sip.isdeleted(self):
+            return
+        if mouse_held():
+            self._window_soon.start(self.WINDOW_WAIT_MS)
+            return
+        if self.windowFlags() == self.WINDOW_FLAGS:
+            return
+        geometry, visible = self.geometry(), self.isVisible()
+        self.setWindowFlags(self.WINDOW_FLAGS)  # (Hides it, as any flag change does.)
+        self.setGeometry(geometry)
+        if visible:
+            self.show()
 
     def place_floating(self) -> None:
         """At ``FLOAT_SIZE`` (less on a smaller screen), ``FLOAT_STEP`` right of and below the visible

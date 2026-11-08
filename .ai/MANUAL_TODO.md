@@ -372,6 +372,16 @@ and M42.1 on a lab PC with the switch on (one Live session).
 - [ ] **M68.3 Windows' locks and consoles** (Sentry's AU-7, AU-8): update while another uv venv's Python with numpy runs
   (e.g. a second checkout's `python -c "import numpy, time; time.sleep(600)"`): the update goes ahead and isn't held by
   that venv's DLLs; and no console window opens during the update (git, uv, the venv check).
+
+## Floating plots as windows (added 2026-11-09, block 69)
+
+- [ ] **M69.1 A floating plot is an ordinary window** (`AnalysisDock.WINDOW_FLAGS`), on this Mac **and** a lab PC
+  (Windows): float a plot (its title's float button, a double-click, a drag): it has minimise and maximise
+  buttons, minimises (macOS: to the Dock), goes behind the main window when that is clicked, and stays shown
+  while HeLab is in the background. Then: does dragging its own title bar onto the plot area still dock it?
+  (Offscreen tests can't show it; if not, the Dock button does, and that is to be said in the manual.) A
+  restart puts it back floating as a window. While it's minimised, the Settings panel shows another plot.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything
