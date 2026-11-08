@@ -26,7 +26,7 @@ with its own settings, so that you can compare settings side by side.
 | 3D scatter | The events in T, X and Y, cropped to the region holding most of them |
 | Counts per shot | The events in each shot, against its shot ID or its time |
 | T, X, Y histograms | The distributions of T, X and Y |
-| XY histogram, XT histogram, YT histogram | The events binned in a plane, the third axis summed |
+| XY, XT, YT histograms | The events binned in the XY, XT and YT planes side by side, each plane's third axis summed |
 | Transfer fractions | Each shot's share of atoms in each diffraction order, against its shot ID or its time |
 
 Every Basic plot can be drawn with PyQtGraph (the default for 2D plots), Plotly (the default for the 3D
@@ -53,19 +53,40 @@ next shot is over ten times the shots' usual interval.
 
 While Live is on, new shots join either axis in place, and a zoom or pan you made stays.
 
-## XY, XT and YT histograms
+## XY, XT, YT histograms
 
-These bin the chosen shots' events in a plane and sum the third axis over them: XY sums T, XT and YT sum Y or
-X. XY has X across and Y up, at equal scales; XT and YT have T across. Their settings:
+This plot bins the chosen shots' events in up to three planes, side by side, and sums each plane's third axis
+over them: XY sums T, XT and YT sum Y or X. XY has X across and Y up; XT and YT have X or Y across and T up. Every space axis
+shown has the same scale, so a cloud is as wide in XT as in XY, and zooming or panning one plane moves the others
+with it (X shared by XY and XT, Y by XY and YT, T by XT and YT).
+The planes share one set of settings and one colour bar, right of the last plane. Each image is coloured
+over the same range, from 0 to the highest bin of the planes shown:
 
+- **Planes**: turn XY, XT and YT on or off. Only the planes that are on are computed.
 - **View range.** With **auto-crop**, each shown axis covers the shortest range holding the share of events
   you keep (99 % by default), and the summed axis isn't cut. With **manual**, the bounds you set cut the
   events: a T range on the XY histogram images one cloud. An axis left unset (min = max), or with its min
   above its max, covers all its events. Turn on **Sum the whole summed axis** to leave the
   summed axis's bounds out, so that they cut only the two shown axes.
-- **Bins across** and **Bins up**: 0 picks each axis's bin count from the data.
-- **Blur σ**: a Gaussian blur, its σ in bins, that keeps the total. At most a quarter of the image's longer
-  side is used, and the plot says so.
+- **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown; 0 picks the count from the data.
+- **Blur**: six filters, each in its own section with an **On** switch; its settings show once it's on. They
+  run one after another, in increasing **Order** (filters with the same number run in the order listed), and
+  each plane's title lists the ones that ran:
+    - **Median**: each bin becomes the median of the square of bins around it (**Size**), which takes out lone
+      hot bins and keeps edges sharp. It's the only one that doesn't keep the total.
+    - **Denoise (counts)**: made for counts. It evens out the counting noise (the Anscombe transform), blurs by
+      **σ** bins and transforms back. Best first, on the counts themselves.
+    - **Adaptive KDE**: an adaptive kernel density estimate. Faint regions are smoothed more and bright cores
+      less: each bin's own σ is between ¼ and 4 times **σ**, set by how bright it is (**α**: 0 is a plain
+      Gaussian, ½ the usual choice).
+    - **Gaussian (σ in bins)**: a Gaussian blur, **σ** in bins.
+    - **Gaussian (σ in m, s)**: a Gaussian blur with **σ on X, Y** in metres and **σ on T** in seconds, so
+      it's the same size in every plane whatever their bins.
+    - **Box**: the mean over the square of bins around each bin (**Size**).
+
+  The two Gaussians and the box commute: their order among themselves changes nothing. The median, denoise
+  and the adaptive KDE don't, so where they sit in the order matters. A σ is at most a quarter of the
+  image's side on each axis, and the plot says when it was capped.
 - **Show**: counts per bin, or a rate per shot (counts per shot per bin area: per m² for XY, per m·s for XT and
   YT).
 - **Colour scale**: linear, sqrt, log (spanning **Decades** below the maximum) or power γ. Only the colours

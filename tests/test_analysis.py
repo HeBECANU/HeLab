@@ -284,6 +284,29 @@ def test_choice_parameters_gate_what_applies() -> None:
     assert [child["name"] for child in children[0]["children"]] == ["mode", "keep", "low"]
 
 
+def test_groups_nest_with_a_slash(qtbot: QtBot) -> None:
+    """``group="Blur/Median"`` is the Median section inside Blur: the tree nests it, ``parameter_of`` finds its
+    parameters, a ``when`` in it still hides them, and pages place it by its outermost section."""
+    on = ParameterSpec("median", "On", "bool", False, group="Blur/Median")
+    size = ParameterSpec("size", "Size", "int", 3, (2, 9), group="Blur/Median", when=("median", "True"))
+    sigma = ParameterSpec("sigma", "σ", "float", 1.0, group="Blur/Gaussian")
+    top = ParameterSpec("other", "Other", "bool", False, group="Blur", page="Second")
+    log = ParameterSpec("log", "Log Y", "bool", False)
+    specs = [on, size, sigma, top, log]
+    children = tree_children(specs)
+    assert [child["name"] for child in children] == ["Blur", "log"]
+    assert [child["name"] for child in children[0]["children"]] == ["Median", "Gaussian", "other"]
+    assert [child["name"] for child in children[0]["children"][0]["children"]] == ["median", "size"]
+    root = build_tree(specs)
+    assert parameter_of(root, size).value() == 3 and parameter_of(root, sigma).value() == 1.0
+    assert parameter_of(root, size).opts.get("visible") is False
+    parameter_of(root, on).setValue(True)
+    assert parameter_of(root, size).opts.get("visible") is True
+    widget = settings_widget(root, specs)  # "Blur" is on the first page (its first parameter's), "log" too.
+    qtbot.addWidget(widget)
+    assert isinstance(widget, SettingsTree)
+
+
 def test_parameter_tree_shows_only_what_applies(qtbot: QtBot) -> None:
     specs = scatter_3d.Scatter3D().parameters("Plot")
     root = build_tree(specs)

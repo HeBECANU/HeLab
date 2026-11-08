@@ -16,7 +16,7 @@ from pyqtgraph.parametertree.parameterTypes.list import ListParameter, ListParam
 from pyqtgraph.parametertree.parameterTypes.numeric import NumericParameterItem
 from pyqtgraph.widgets.SpinBox import SpinBox
 
-from helab.analysis.parameters import ParameterSpec, tree_children
+from helab.analysis.parameters import ParameterSpec, group_path, tree_children
 
 # Numbers use HeLab's spin box, under their own type names so pyqtgraph's own stay as they are.
 NUMBER_TYPES = {"float": "helab_float", "int": "helab_int"}
@@ -345,7 +345,7 @@ def build_tree(specs: Sequence[ParameterSpec]) -> Parameter:
 
 
 def parameter_of(root: Parameter, spec: ParameterSpec) -> Parameter:
-    return root.child(spec.group, spec.name) if spec.group else root.child(spec.name)
+    return root.child(*group_path(spec.group), spec.name)
 
 
 def tree_values(root: Parameter, specs: Sequence[ParameterSpec]) -> dict[str, Any]:
@@ -414,7 +414,7 @@ def settings_widget(root: Parameter, specs: Sequence[ParameterSpec]) -> QWidget:
     pages: dict[str, list[Parameter]] = {}
     placed: set[str] = set()
     for spec in specs:
-        top = spec.group or spec.name
+        top = (group_path(spec.group) or (spec.name,))[0]
         if top not in placed:
             placed.add(top)
             pages.setdefault(spec.page, []).append(root.child(top))

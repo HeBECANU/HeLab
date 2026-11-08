@@ -3,7 +3,8 @@
 A ``choice`` parameter picks one of its ``choices`` and a ``text`` one holds free text the
 analysis reads itself (e.g. mask circles, ``masks``); another parameter can say it applies
 only under one of them (``when``, and ``shown_with`` for a condition on several), so the parameter tree shows it only then and the dock's
-source line leaves it out otherwise. ``group`` names the tree section it sits in, and
+source line leaves it out otherwise. ``group`` names the tree section it sits in ("/" nests one in another:
+``"Blur/Median"``), and
 ``page`` the settings tab (a plot whose parameters name more than one page gets a tab each).
 """
 from __future__ import annotations
@@ -38,7 +39,8 @@ class ParameterSpec:
         suffix: The unit shown after a number (e.g. " %", " s").
         tip: The tooltip in the plot's settings.
         choices: For kind "choice": the allowed values, shown as a drop-down.
-        group: The settings section it belongs to ("" for the top level).
+        group: The settings section it belongs to ("" for the top level); "/" nests sections
+            (``"Blur/Median"``: the Median section inside Blur).
         when: (choice parameter, value): the parameter applies only while that choice
             parameter has that value; None for always.
         si: A float in a base unit (s, m), shown with SI prefixes (4 mm) and stepped by decade.
@@ -58,7 +60,7 @@ class ParameterSpec:
     suffix: str = ""
     tip: str = ""
     choices: tuple[str, ...] = ()  # kind "choice": the allowed values, a drop-down in the tree
-    group: str = ""  # the parameter tree section this belongs to ("" = top level)
+    group: str = ""  # the parameter tree section this belongs to ("" = top level; "/" nests sections)
     when: tuple[str, str] | None = None  # (choice parameter, value) this applies under; None = always
     si: bool = False  # a float in a base unit (s, m): shown with SI prefixes (4 mm), stepped by decade
     page: str = ""  # the settings tab this is on ("" = the first); a group goes on its first parameter's page
@@ -146,7 +148,8 @@ def describe(specs: Sequence[ParameterSpec], values: Mapping[str, Any], every: b
 
 
 def tree_children(specs: Sequence[ParameterSpec]) -> list[dict[str, Any]]:
-    """pyqtgraph ``Parameter`` definitions, grouped by ``group`` in declaration order."""
+    """pyqtgraph ``Parameter`` definitions, grouped by ``group`` in declaration order ("/" nests a group in
+    another)."""
     children: list[dict[str, Any]] = []
     groups: dict[str, dict[str, Any]] = {}
     for spec in specs:
@@ -154,12 +157,21 @@ def tree_children(specs: Sequence[ParameterSpec]) -> list[dict[str, Any]]:
         if not spec.group:
             children.append(item)
             continue
-        group = groups.get(spec.group)
-        if group is None:
-            group = groups[spec.group] = {"name": spec.group, "type": "group", "children": []}
-            children.append(group)
-        group["children"].append(item)
+        siblings, path = children, ""
+        for name in group_path(spec.group):
+            path = f"{path}/{name}" if path else name
+            group = groups.get(path)
+            if group is None:
+                group = groups[path] = {"name": name, "type": "group", "children": []}
+                siblings.append(group)
+            siblings = group["children"]
+        siblings.append(item)
     return children
+
+
+def group_path(group: str) -> tuple[str, ...]:
+    """A ``group``'s sections, outermost first (``"Blur/Median"`` → ``("Blur", "Median")``; "" → ())."""
+    return tuple(name for name in group.split("/") if name)
 
 
 def unused_parameters(specs: Sequence[ParameterSpec], values: Mapping[str, Any]) -> frozenset[str]:

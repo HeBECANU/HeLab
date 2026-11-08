@@ -4,8 +4,8 @@ Each shown axis covers the exact shortest range holding the auto-crop share of i
 (``stats.shortest_range``, as the 1D histograms), or the manual bounds set for it. The flattened axis isn't
 cut by auto-crop, so every event of the chosen shots counts; manual bounds set for it limit the events summed
 (a T window on the XY histogram images one cloud). Bins are automatic per axis (Freedman–Diaconis, at most
-``MAX_AUTO_BINS``) or set. The image shown may be blurred (σ in bins, the total kept) and its colour range
-compressed (``compress``), as the DLD port's Density images.
+``MAX_AUTO_BINS``) or set. The image shown may be filtered (``image_filters``) and its colour range compressed
+(``compress``), as the DLD port's Density images.
 
 Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 """
@@ -20,8 +20,9 @@ import numpy.typing as npt
 from helab.analysis.dataset_view import Events
 from helab.analysis.stats import AXES, MAX_BINS, freedman_diaconis_bins, shortest_range
 
-# The plane's (horizontal, vertical, summed) axes. Never rotated: XY has X across and Y up; T runs across.
-PLANES = {"XY": ("X", "Y", "T"), "XT": ("T", "X", "Y"), "YT": ("T", "Y", "X")}
+# The plane's (horizontal, vertical, summed) axes. Never rotated: XY has X across and Y up; T runs up (a space axis
+# across every plane, so that they can share its scale).
+PLANES = {"XY": ("X", "Y", "T"), "XT": ("X", "T", "Y"), "YT": ("Y", "T", "X")}
 MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image (set by hand: up to ``stats.MAX_BINS``).
 Bounds = Optional[tuple[float, float]]
 
@@ -111,22 +112,6 @@ def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] =
 # compressed in the colour map only (the values stay linear, and the colour bar reads them).
 LINEAR, SQRT, LOG, POWER = "linear", "sqrt", "log", "power γ"
 SCALES = (LINEAR, SQRT, LOG, POWER)
-
-
-def blur_limit(shape: tuple[int, ...]) -> float:
-    """The largest blur σ used, in bins: a quarter of the image's longer side (at least 1). Beyond it the image
-    is nearly flat, and the cost keeps a Live rerun bounded."""
-    return max(1.0, max(shape) / 4)
-
-
-def blurred(counts: npt.NDArray[np.float64], sigma: float) -> npt.NDArray[np.float64]:
-    """``counts`` with a Gaussian blur of ``sigma`` bins (0: as they are, a copy). Edges reflect, so the total
-    is kept."""
-    if sigma <= 0:
-        return counts.astype(np.float64)
-    from scipy.ndimage import gaussian_filter
-
-    return cast(npt.NDArray[np.float64], gaussian_filter(counts.astype(np.float64), sigma=sigma, mode="reflect"))
 
 
 def bin_area(item: Histogram2D) -> float:

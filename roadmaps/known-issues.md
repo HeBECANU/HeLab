@@ -124,6 +124,13 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] **`tests/test_basic_plots_v2_hist2d.py` prints "RuntimeError: wrapped C/C++ object of type FigureCanvasQTAgg
+  has been deleted"** (2026-11-09, macOS, local; the tests pass, no RERUN). Matplotlib's queued `_draw_idle`
+  fires after qtbot deleted a `MatplotlibPane` that `update` had just redrawn
+  (`test_every_library_draws_and_updates_in_place`'s Matplotlib cases). It predates the XY, XT, YT merge (the
+  three-plot version prints it too). Likely fix: cancel the canvas's pending idle draw when the pane closes, or
+  process events before the test ends.
+
 - [ ] **The PR-only compatibility jobs (Python 3.11, 3.12, 3.14) fail** (soft; HeLab requires 3.13). PR #11's CI
   41648018025 (`f0bb9f9`), as on v0.0.7's PR (41104589243): 3.14's every job fails installing pygame (no 3.14
   wheel: "SDL.h file not found"); 3.11 and 3.12 Tests fail widely, mostly `test_cache_move` (116), `test_store_v4`

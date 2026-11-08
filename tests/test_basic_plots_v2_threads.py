@@ -45,7 +45,7 @@ def test_compute_on_the_worker_drawing_and_updates_on_the_gui_thread(
         names.append(name)
         for hook in HOOKS:
             monkeypatch.setattr(cls, hook, recording(calls, name, hook, getattr(cls, hook)))
-    assert len(names) == 7
+    assert len(names) == 5
     scripts = window.panel_right_bottom_script_selector
     load(window, qtbot, run_folder(tmp_path))
     for name in names:

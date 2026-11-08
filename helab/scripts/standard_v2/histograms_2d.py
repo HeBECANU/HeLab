@@ -1,33 +1,35 @@
-"""XY, XT and YT histograms (Basic plots v2, LR-13): the chosen shots' events binned in a plane, the third
-axis summed over the selection (``helab.analysis.histogram2d``), with the DLD port's Density images' options
-(Tony's choice): a Gaussian blur (σ in bins, the total kept), counts per bin or a rate per shot, and the colour
-range compressed (sqrt, log, power γ) in the colour map only, so the colour bar reads real values. In s and m
-with SI prefixes (Basic plots' units). Drawn with PyQtGraph (``ImageItem``) by default, or Plotly or
-Matplotlib; updated in place as Live adds shots. XY keeps equal scales (both lengths); T runs across XT and YT.
-
-The three plots are this module's ``Histogram1XY``, ``Histogram2XT`` and ``Histogram3YT``, so that their identity
-names this file and carries its hash (an edit here is new code). They are numbered because the Scripts panel lists a
-module's scripts in the order of their class names."""
+"""XY, XT and YT histograms (Basic plots v2, LR-13): one plot of the chosen shots' events binned in up to three
+planes, each plane's third axis summed over the selection (``helab.analysis.histogram2d``), side by side under
+one set of settings; each plane is turned on or off under Planes. With the DLD port's Density images' options
+(Tony's choice): blur filters under Blur (``helab.analysis.image_filters``: Gaussian in bins or in m and s, box,
+median, Poisson denoise, adaptive KDE; each on by itself, run in the order set), counts per bin or a rate per shot, and the colour
+range compressed (sqrt, log, power γ) in the colour map only, so the colour bar reads real values. Bins are set
+per axis (T, X, Y), so an axis shown in two planes has the same bins in both. In s and m with SI prefixes (Basic
+plots' units). Drawn with PyQtGraph (``ImageItem``) by default, or Plotly or Matplotlib; updated in place as Live
+adds shots. A space axis runs across every plane and T runs up XT and YT. In PyQtGraph and Plotly every space
+axis shown has the same scale (metres per pixel, ``SpaceScale``), XY's at equal scales, and T is the same in XT and
+YT. Matplotlib gives the space axes the same span instead."""
 from __future__ import annotations
 
-from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, List, Mapping, Optional, Sequence, cast
+from typing import Any, Callable, List, Mapping, Optional, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
 import plotly.graph_objs as go
 import pyqtgraph as pg
-from PyQt6.QtCore import QRectF
+from PyQt6.QtCore import QObject, QRectF, QTimer
 from PyQt6.QtWidgets import QWidget
 
 from helab.analysis.backends import MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane, WrappingLabel, mpl_figure
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.empty import empty_pane, empty_text
+from helab.analysis import image_filters
+from helab.analysis.display_units import si_text
 from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, Histogram2D, bin_area,
-                                        blur_limit, blurred, compress, histogram2d, scale_text)
+                                        compress, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
-from helab.analysis.parameters import ParameterSpec
+from helab.analysis.parameters import Kind, ParameterSpec, Value
 from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.analysis.selection import (MANUAL, RANGE_GROUP, RANGE_MODE, SHOT_SPECS, keep_fraction, manual,
                                       manual_bounds, range_brief, range_specs, range_text, range_warnings,
@@ -46,16 +48,123 @@ OUTSIDE = ParameterSpec(
     tip="On: the bounds set on the summed axis are left out, so every event of the chosen shots along it counts "
         "and the bounds cut only the two shown axes. Off: they limit the events summed (a T window on XY "
         "images one cloud).")
+PLANES_GROUP = "Planes"
+SHOW = {plane: ParameterSpec(
+    f"show_{plane.lower()}", f"{plane} ({PLANES[plane][2]} summed)", "bool", True, group=PLANES_GROUP,
+    tip=f"Show the {plane} histogram: {PLANES[plane][0]} across, {PLANES[plane][1]} up, {PLANES[plane][2]} summed "
+        f"over the chosen shots.") for plane in PLANES}
 IMAGE_GROUP = "Image"
-BINS_ACROSS = ParameterSpec(
-    "bins_across", "Bins across (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
-    tip=f"Bins on the horizontal axis. 0 = automatic (Freedman–Diaconis on that axis, at most {MAX_AUTO_BINS:,}).")
-BINS_UP = ParameterSpec(
-    "bins_up", "Bins up (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
-    tip=f"Bins on the vertical axis. 0 = automatic (Freedman–Diaconis on that axis, at most {MAX_AUTO_BINS:,}).")
-BLUR = ParameterSpec("blur", "Blur σ", "float", 0.0, (0.0, 50.0), " bins", group=IMAGE_GROUP,
-                     tip="Gaussian blur of the image, its σ in bins; 0 = off. The total is kept (edges reflect). "
-                         "At most a quarter of the image's longer side is used (the plot says so).")
+BINS = {axis: ParameterSpec(
+    f"bins_{axis.lower()}", f"{axis} bins (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
+    tip=f"Bins on {axis} wherever it is shown. 0 = automatic (Freedman–Diaconis on {axis} in each plane, at most "
+        f"{MAX_AUTO_BINS:,}).") for axis in AXES}
+BLUR_GROUP = "Blur"
+ORDER_TIP = ("Where this filter runs in the chain: lower first (an equal number runs in the order listed). Gaussian, "
+             "Gaussian in m and s, and box commute with one another, so their order among themselves changes nothing; "
+             "median, denoise and adaptive KDE don't, so where they sit matters.")
+CAP_TIP = "A σ is at most a quarter of the image's side on each axis (the plot says so)."
+FILTER_TITLES = {image_filters.MEDIAN: "Median", image_filters.DENOISE: "Denoise (counts)",
+                 image_filters.ADAPTIVE: "Adaptive KDE", image_filters.GAUSSIAN: "Gaussian (σ in bins)",
+                 image_filters.UNITS: "Gaussian (σ in m, s)", image_filters.BOX: "Box"}
+FILTER_TIPS = {
+    image_filters.MEDIAN: "Each bin becomes the median of the square of bins around it: lone hot bins and speckle go, "
+                          "edges stay sharp. It doesn't keep the total (counts and rates near it change).",
+    image_filters.DENOISE: "For counts: the Anscombe transform (2√(n + 3/8), whose noise is about the same whatever the "
+                           "count), a Gaussian blur there, and back, scaled to keep the total. Best first, on the "
+                           "counts themselves.",
+    image_filters.ADAPTIVE: "An adaptive kernel density estimate on the bins (Abramson's): a pilot Gaussian of σ sets "
+                            "each bin's own σ, wider where it is faint and narrower where bright (¼ … 4 times σ), so "
+                            "sparse regions are smoothed and dense cores kept. The total is kept.",
+    image_filters.GAUSSIAN: "A Gaussian blur, its σ in bins on both axes. The total is kept (edges reflect).",
+    image_filters.UNITS: "A Gaussian blur, its σ in metres on X and Y and in seconds on T, so it is the same size in "
+                         "every plane whatever their bins. The total is kept.",
+    image_filters.BOX: "The mean over the square of bins around each bin (a top-hat). The total is kept.",
+}
+
+
+def filter_group(kind: str) -> str:
+    return f"{BLUR_GROUP}/{FILTER_TITLES[kind]}"
+
+
+def filter_on(kind: str) -> ParameterSpec:
+    return ParameterSpec(f"blur_{kind}", "On", "bool", False, group=filter_group(kind), tip=FILTER_TIPS[kind])
+
+
+def when_on(kind: str) -> tuple[str, str]:
+    return f"blur_{kind}", "True"  # (``when`` compares the value's text.)
+
+
+def filter_order(kind: str) -> ParameterSpec:
+    return ParameterSpec(f"blur_{kind}_order", "Order", "int", image_filters.FILTERS.index(kind) + 1,
+                         (1, len(image_filters.FILTERS)), group=filter_group(kind), when=when_on(kind), tip=ORDER_TIP)
+
+
+def filter_spec(kind: str, name: str, title: str, kind_of: Kind, default: Value, limits: tuple[float, float],
+                suffix: str = "", tip: str = "", si: bool = False) -> ParameterSpec:
+    return ParameterSpec(f"blur_{kind}_{name}", title, kind_of, default, limits, suffix, group=filter_group(kind),
+                         when=when_on(kind), tip=tip, si=si)
+
+
+FILTER_SPECS = {
+    image_filters.MEDIAN: (filter_spec(image_filters.MEDIAN, "size", "Size", "int", 3, (2, 51), " bins",
+                                       "The square's side, in bins."),),
+    image_filters.DENOISE: (filter_spec(image_filters.DENOISE, "sigma", "σ", "float", 1.0, (0.1, 50.0), " bins",
+                                        "The blur's σ after the transform, in bins. " + CAP_TIP),),
+    image_filters.ADAPTIVE: (filter_spec(image_filters.ADAPTIVE, "sigma", "σ", "float", 2.0, (0.1, 50.0), " bins",
+                                         "The pilot's σ, and the middle of the bins' own σ, in bins. " + CAP_TIP),
+                             filter_spec(image_filters.ADAPTIVE, "alpha", "α", "float", 0.5, (0.0, 1.0), "",
+                                         "How strongly a bin's σ follows its brightness: σ × (pilot / its geometric "
+                                         "mean)^-α. 0 is a plain Gaussian; ½ is Abramson's.")),
+    image_filters.GAUSSIAN: (filter_spec(image_filters.GAUSSIAN, "sigma", "σ", "float", 1.0, (0.1, 50.0), " bins",
+                                         "The blur's σ, in bins. " + CAP_TIP),),
+    image_filters.UNITS: (filter_spec(image_filters.UNITS, "space", "σ on X, Y", "float", 1e-4, (1e-7, 1.0), " m",
+                                      "The blur's σ on X and Y. " + CAP_TIP, si=True),
+                          filter_spec(image_filters.UNITS, "time", "σ on T", "float", 1e-4, (1e-8, 10.0), " s",
+                                      "The blur's σ on T. " + CAP_TIP, si=True)),
+    image_filters.BOX: (filter_spec(image_filters.BOX, "size", "Size", "int", 3, (2, 51), " bins",
+                                    "The square's side, in bins."),),
+}
+BLUR_SPECS = [spec for kind in image_filters.FILTERS
+              for spec in (filter_on(kind), *FILTER_SPECS[kind], filter_order(kind))]
+
+
+def blur_steps(values: Mapping[str, Any], item: Histogram2D) -> list[image_filters.Step]:
+    """The filters turned on, as steps for ``item``'s bins (σ in m and s become bins on each axis)."""
+    steps = []
+    for kind in image_filters.FILTERS:
+        if not values.get(f"blur_{kind}"):
+            continue
+        order = int(values.get(f"blur_{kind}_order", image_filters.FILTERS.index(kind) + 1))
+        if kind in (image_filters.MEDIAN, image_filters.BOX):
+            size = int(values.get(f"blur_{kind}_size", 3))
+            steps.append(image_filters.Step(kind, order, size=size, text=f"{kind} {size} × {size} bins"))
+        elif kind == image_filters.UNITS:
+            space, time = float(values.get("blur_units_space", 1e-4)), float(values.get("blur_units_time", 1e-4))
+            widths = (float(item.h_edges[1] - item.h_edges[0]), float(item.v_edges[1] - item.v_edges[0]))
+            wanted = tuple(time if axis == "T" else space for axis in item.axes[:2])
+            sigma = (wanted[0] / widths[0] if widths[0] > 0 else 0.0, wanted[1] / widths[1] if widths[1] > 0 else 0.0)
+            sizes = " × ".join(dict.fromkeys(si_text(value, "s" if axis == "T" else "m", 3)
+                                             for value, axis in zip(wanted, item.axes[:2])))
+            steps.append(image_filters.Step(kind, order, sigma=sigma,
+                                            text=f"Gaussian σ {sizes} ({sigma[0]:.3g} × {sigma[1]:.3g} bins)"))
+        else:
+            sigma_bins = float(values.get(f"blur_{kind}_sigma", 1.0))
+            alpha = float(values.get("blur_adaptive_alpha", 0.5))
+            name = {image_filters.GAUSSIAN: "Gaussian", image_filters.DENOISE: "denoise",
+                    image_filters.ADAPTIVE: "adaptive KDE"}[kind]
+            extra = f", α {alpha:g}" if kind == image_filters.ADAPTIVE else ""
+            steps.append(image_filters.Step(kind, order, sigma=(sigma_bins, sigma_bins), alpha=alpha,
+                                            text=f"{name} σ {sigma_bins:g} bins{extra}"))
+    return image_filters.chain(steps)
+
+
+def blur_brief(values: Mapping[str, Any]) -> str:
+    """The filters on, in their order, for the dock's line ("" for none)."""
+    on = [kind for kind in image_filters.FILTERS if values.get(f"blur_{kind}")]
+    ordered = sorted(on, key=lambda kind: (int(values.get(f"blur_{kind}_order", 0)), image_filters.FILTERS.index(kind)))
+    names = {image_filters.MEDIAN: "median", image_filters.DENOISE: "denoise", image_filters.ADAPTIVE: "adaptive KDE",
+             image_filters.GAUSSIAN: "Gaussian", image_filters.UNITS: "Gaussian (m, s)", image_filters.BOX: "box"}
+    return "blur " + " → ".join(names[kind] for kind in ordered) if ordered else ""
 COUNTS, PER_SHOT = "counts per bin", "rate per shot"
 QUANTITY = ParameterSpec("quantity", "Show", "choice", COUNTS, choices=(COUNTS, PER_SHOT), group=IMAGE_GROUP,
                          tip="Counts per bin, or a rate per shot: counts / shots chosen / bin area (per m² for XY; "
@@ -77,18 +186,36 @@ LUT_SIZE = 1024
 
 @dataclass(frozen=True)
 class PlaneCounts:
-    """A plane's counts (``histogram``) and the image shown (``image``: blurred, per shot if chosen)."""
+    """A plane's counts (``histogram``) and the image shown (``image``: filtered, per shot if chosen)."""
     histogram: Histogram2D
     image: npt.NDArray[np.float64]
-    shots: tuple[int, ...]
-    total_shots: int
     per_shot: bool = False
-    blur: float = 0.0  # the σ used, in bins (0: none)
+    filters: tuple[str, ...] = ()  # the filters run, in their order (``image_filters.Step.text``)
     notes: tuple[str, ...] = ()  # settings not followed as given
 
     @property
     def peak(self) -> float:
         return float(self.image.max()) if self.image.size else 0.0
+
+
+@dataclass(frozen=True)
+class Planes:
+    """The plot's result: the planes shown (in ``PLANES``' order), the chosen shots, and notes on the shared
+    settings."""
+    items: tuple[PlaneCounts, ...]
+    shots: tuple[int, ...]
+    total_shots: int
+    notes: tuple[str, ...] = ()  # settings not followed as given (each plane's own are on it)
+
+    @property
+    def peak(self) -> float:
+        """The highest bin of the planes shown: the top of their one colour bar."""
+        return max((item.peak for item in self.items), default=0.0)
+
+    @property
+    def top(self) -> float:
+        """The colour bar's top (1 when every bin is empty)."""
+        return self.peak if self.peak > 0 else 1.0
 
 
 @dataclass(frozen=True)
@@ -115,17 +242,18 @@ def bins_text(item: Histogram2D) -> str:
 
 
 def plane_title(data: PlaneCounts) -> str:
-    """What the image shows, for its title (the input is on the dock's line and in Plot info)."""
+    """What a plane's image shows, for its own title (the shots are in the plot's)."""
     item = data.histogram
     summed = item.axes[2]
     flattened = (f"{summed} summed over {range_text(AXES.index(summed), *item.flattened)}" if item.flattened
                  else f"{summed} summed")
-    parts = [shots_text(data.shots, data.total_shots), bins_text(item),
-             f"{item.inside:,} of {item.total:,} events", flattened]
+    parts = [bins_text(item), f"{item.inside:,} of {item.total:,} events", flattened]
+    if not item.summed:
+        parts.append("no events inside the summed axis's bounds")
     if item.outside:
         parts.append(f"{item.outside:,} outside the range")
-    if data.blur:
-        parts.append(f"blur σ {data.blur:g} bins")
+    if data.filters:
+        parts.append("blur " + " → ".join(data.filters))
     return " · ".join(parts)
 
 
@@ -133,9 +261,14 @@ def notes(data: PlaneCounts) -> list[str]:
     return [f"⚠ {note}" for note in data.notes]
 
 
+def planes_title(data: Planes) -> str:
+    """The plot's title: the shots chosen (the input is on the dock's line and in Plot info)."""
+    return shots_text(data.shots, data.total_shots)
+
+
 def plain_title(result: AnalysisResult) -> str:
-    data: PlaneCounts = result.data
-    return " · ".join([source_title(result, plane_title(data)), *notes(data)])
+    data: Planes = result.data
+    return " · ".join([source_title(result, planes_title(data)), *(f"⚠ {note}" for note in data.notes)])
 
 
 def axis_label(name: str) -> str:
@@ -144,7 +277,7 @@ def axis_label(name: str) -> str:
 
 def quantity_text(data: PlaneCounts) -> str:
     """The colour bar's quantity: events per bin, or per area per shot in s and m."""
-    blur = " (blurred)" if data.blur else ""
+    blur = " (filtered)" if data.filters else ""
     if not data.per_shot:
         return f"Events per bin{blur}"
     across, up, _ = data.histogram.axes
@@ -152,16 +285,25 @@ def quantity_text(data: PlaneCounts) -> str:
     return f"Events / {area} / shot{blur}"
 
 
-def bar_label(data: PlaneCounts, colours: Colours) -> str:
+def planes_quantity(data: Planes) -> str:
+    """The one colour bar's quantity: each plane's, or with a rate per shot over planes of different units (XY's
+    per m², XT's and YT's per m·s), which unit is whose."""
+    texts = list(dict.fromkeys(quantity_text(item) for item in data.items))
+    if len(texts) == 1:
+        return texts[0]
+    blur = " (filtered)" if any(item.filters for item in data.items) else ""
+    return f"Events / bin area / shot (XY per m², XT and YT per m·s){blur}"
+
+
+def bar_label(data: Planes, colours: Colours) -> str:
     """The quantity, and with a compressed colour scale, that only the colours are (the numbers are real)."""
     how = colours.text()
-    return quantity_text(data) + (f" · colours {how}, values linear" if how else "")
+    return planes_quantity(data) + (f" · colours {how}, values linear" if how else "")
 
 
-def colour_positions(data: PlaneCounts, colours: Colours) -> npt.NDArray[np.float64]:
-    """Each bin's place in the colour map (0…1): its value over the peak, compressed."""
-    peak = data.peak
-    return compress(data.image / peak if peak > 0 else np.zeros_like(data.image), colours.scale, colours.gamma,
+def colour_positions(item: PlaneCounts, colours: Colours, peak: float) -> npt.NDArray[np.float64]:
+    """Each bin's place in the colour map (0…1): its value over the planes' peak (``Planes.peak``), compressed."""
+    return compress(item.image / peak if peak > 0 else np.zeros_like(item.image), colours.scale, colours.gamma,
                     colours.decades)
 
 
@@ -177,21 +319,180 @@ def bar_map(colours: Colours) -> pg.ColorMap:
     return pg.ColorMap(positions, picked, name=f"{COLOUR_MAP} ({colours.scale})")
 
 
-class Histogram2DPlot(DatasetAnalysis):
-    """A plane's histogram; each subclass names its ``plane`` ("XY", "XT" or "YT")."""
+def shown_planes(values: Mapping[str, Any]) -> tuple[str, ...]:
+    """The planes turned on, in ``PLANES``' order."""
+    return tuple(plane for plane in PLANES if values.get(SHOW[plane].name, True))
 
-    @property
-    @abstractmethod
-    def plane(self) -> str: ...
+
+def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[str, Any], chosen: int,
+                 check: Callable[[], None]) -> PlaneCounts:
+    """One plane's counts and image under the plot's settings, from the chosen shots' ``events``."""
+    across, up, summed = PLANES[plane]
+    bounds = list(manual_bounds(values)) if manual(values) else [None, None, None]
+    if values.get(OUTSIDE.name):
+        bounds[AXES.index(summed)] = None  # The bounds cut only the shown axes.
+    # Manual: a shown axis without bounds (unset or reversed) covers its full extent, as v1's and the note say.
+    item = histogram2d(events, plane, 1.0 if manual(values) else keep_fraction(values),
+                       (int(values[BINS[across].name]), int(values[BINS[up].name])),
+                       (bounds[0], bounds[1], bounds[2]), check)
+    check()
+    image, filters, capped = image_filters.apply(item.counts, blur_steps(values, item))
+    per_shot = values.get(QUANTITY.name) == PER_SHOT
+    if per_shot and chosen and item.summed:
+        image = image / chosen / bin_area(item)
+    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped))
+
+
+@dataclass
+class PlanePanel:
+    """A PyQtGraph drawing's items for one plane: its title, plot and image, and the plane's axes and extent
+    (horizontal, vertical; set by ``fill``). The planes share one colour bar (``plane_bar``)."""
+    label: Any
+    plot: Any
+    image: Any
+    axes: tuple[str, str] = ("X", "Y")
+    extent: tuple[tuple[float, float], tuple[float, float]] = ((0.0, 1.0), (0.0, 1.0))
+
+
+FIT_MARGIN = 1.04  # The fitted view's margin around the images.
+
+
+def middle(span: Sequence[float]) -> float:
+    return (float(span[0]) + float(span[1])) / 2
+
+
+class SpaceScale(QObject):
+    """Keeps one scale (metres per pixel) on every space axis of a PyQtGraph drawing, each plane's horizontal axis
+    and XY's vertical one, with X shared by XY and XT and Y by XY and YT; and T alike in XT and YT. Until the user
+    zooms or pans, the views fit the images at that scale (again as Live adds shots or the plot is resized); after,
+    the other views follow the one changed. Settled after the event (a zoom's range change comes before PyQtGraph
+    says it was the user's), so a child of the drawing whose timer goes with it."""
+
+    def __init__(self, widget: QWidget, panels: Sequence[PlanePanel]) -> None:
+        super().__init__(widget)
+        self.panels = list(panels)
+        self.zoomed = False
+        self.busy = False
+        self.last: Optional[PlanePanel] = None  # the view the user last zoomed or panned
+        self.changing: Optional[PlanePanel] = None  # the view whose range changed last, for ``manual``
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.settle)
+        for panel in self.panels:
+            box = panel.plot.getViewBox()
+            box.disableAutoRange()
+            box.sigRangeChanged.connect(self.changed)
+            box.sigResized.connect(self.changed)
+            box.sigRangeChangedManually.connect(self.manual)
+
+    def panel_of(self, box: Any) -> Optional[PlanePanel]:
+        return next((panel for panel in self.panels if panel.plot.getViewBox() is box), None)
+
+    def changed(self, box: Any, *args: Any) -> None:
+        if self.busy:
+            return
+        self.changing = self.panel_of(box) or self.changing
+        self.schedule()
+
+    def manual(self, *args: Any) -> None:
+        """The user's zoom or pan, said by PyQtGraph right after that view's range changed: it leads from now on
+        (a later change of another view's, e.g. on a resize, doesn't)."""
+        self.zoomed = True
+        self.last = self.changing or self.last
+        self.schedule()
+
+    def schedule(self) -> None:
+        if not self.timer.isActive():
+            self.timer.start(0)
+
+    def settle(self) -> None:
+        if self.zoomed and self.last is not None:
+            self.follow(self.last)
+        else:
+            self.fit()
+
+    def sizes(self) -> Optional[list[tuple[float, float]]]:
+        sizes = [(float(panel.plot.getViewBox().width()), float(panel.plot.getViewBox().height()))
+                 for panel in self.panels]
+        return sizes if all(width > 1 and height > 1 for width, height in sizes) else None  # Laid out yet?
+
+    def apply(self, ranges: Sequence[tuple[tuple[float, float], tuple[float, float]]]) -> None:
+        self.busy = True
+        try:
+            for panel, (across, up) in zip(self.panels, ranges):
+                panel.plot.getViewBox().setRange(xRange=across, yRange=up, padding=0)
+        finally:
+            self.busy = False
+
+    def fit(self) -> None:
+        """Every image in view at the one scale that fits the most cramped of them."""
+        sizes = self.sizes()
+        if sizes is None:
+            return
+        needed = []
+        times: list[float] = []
+        for panel, (width, height) in zip(self.panels, sizes):
+            (h0, h1), (v0, v1) = panel.extent
+            needed.append((h1 - h0) / width)
+            if panel.axes[1] == "T":
+                times += [v0, v1]
+            else:
+                needed.append((v1 - v0) / height)
+        scale = max(max(needed), 1e-12) * FIT_MARGIN
+        time = (0.0, 1.0)
+        if times:
+            pad = (max(times) - min(times)) * (FIT_MARGIN - 1) / 2 or 1e-6
+            time = (min(times) - pad, max(times) + pad)
+        ranges = []
+        for panel, (width, height) in zip(self.panels, sizes):
+            across, up = panel.extent
+            centre = middle(across)
+            vertical = (time if panel.axes[1] == "T" else
+                        (middle(up) - scale * height / 2, middle(up) + scale * height / 2))
+            ranges.append(((centre - scale * width / 2, centre + scale * width / 2), vertical))
+        self.apply(ranges)
+
+    def follow(self, source: PlanePanel) -> None:
+        """The other views at ``source``'s scale, centred where it shows a shared axis, T as it shows T."""
+        sizes = self.sizes()
+        if sizes is None:
+            return
+        box = source.plot.getViewBox()
+        (x0, x1), (y0, y1) = box.viewRange()
+        scale = (x1 - x0) / float(box.width())
+        centres = {source.axes[0]: middle((x0, x1))}
+        time: Optional[tuple[float, float]] = None
+        if source.axes[1] == "T":
+            time = (y0, y1)
+        else:
+            centres[source.axes[1]] = middle((y0, y1))
+        ranges = []
+        for panel, (width, height) in zip(self.panels, sizes):
+            if panel is source:
+                ranges.append(((x0, x1), (y0, y1)))
+                continue
+            across, up = panel.plot.getViewBox().viewRange()
+            centre = centres.get(panel.axes[0], middle(across))
+            if panel.axes[1] == "T":
+                vertical = time or (float(up[0]), float(up[1]))
+            else:
+                mid = centres.get(panel.axes[1], middle(up))
+                vertical = (mid - scale * height / 2, mid + scale * height / 2)
+            ranges.append(((centre - scale * width / 2, centre + scale * width / 2), vertical))
+        self.apply(ranges)
+
+
+class PlaneHistograms(DatasetAnalysis):
+    """The XY, XT and YT histograms in one plot, each plane turned on or off under Planes."""
 
     def get_metadata(self) -> ScriptMetadata:
-        across, up, summed = PLANES[self.plane]
         return self.create_metadata(
-            name=f"{self.plane} histogram",
-            description=f"The loaded events' {across} against {up}, binned, {summed} summed over the chosen shots",
+            name="XY, XT, YT histograms",
+            description="The loaded events binned in the XY, XT and YT planes, the third axis summed over the "
+                        "chosen shots",
             group=group.NAME,
             file_path=__file__,
-            analysis_id=f"helab.v2.{self.plane.lower()}_histogram",
+            analysis_id="helab.v2.plane_histograms",
             version="1",
         )
 
@@ -199,46 +500,41 @@ class Histogram2DPlot(DatasetAnalysis):
         return ["Plot"]
 
     def parameters(self, action_name: str) -> List[ParameterSpec]:
-        return [*SHOT_SPECS, *RANGE, OUTSIDE, BINS_ACROSS, BINS_UP, BLUR, QUANTITY, SCALE, GAMMA, DECADES]
+        return [*SHOT_SPECS, *SHOW.values(), *RANGE, OUTSIDE, *BINS.values(), QUANTITY, *BLUR_SPECS, SCALE, GAMMA,
+                DECADES]
 
     def describe_run(self, action_name: str, values: Mapping[str, Any], view: DatasetView) -> tuple[str, str]:
-        across, up = int(values[BINS_ACROSS.name]), int(values[BINS_UP.name])
-        bins = "bins auto" if not across and not up else f"bins {across or 'auto'} × {up or 'auto'}"
-        blur = float(values.get(BLUR.name, 0.0))
+        planes = shown_planes(values)
+        used = [axis for axis in AXES if any(axis in PLANES[plane][:2] for plane in planes)]
+        bins = {axis: int(values[BINS[axis].name]) for axis in used}
+        bins_part = ("bins auto" if not any(bins.values())
+                     else "bins " + ", ".join(f"{axis} {count or 'auto'}" for axis, count in bins.items()))
         colours = Colours.of(values)
-        settings = (shots_brief(values), range_brief(values),
-                    f"whole {PLANES[self.plane][2]}" if manual(values) and values.get(OUTSIDE.name) else "", bins,
-                    f"blur σ {blur:g}" if blur else "", "per shot" if values.get(QUANTITY.name) == PER_SHOT else "",
+        summed = "/".join(PLANES[plane][2] for plane in planes)
+        settings = (", ".join(planes) if len(planes) < len(PLANES) else "", shots_brief(values),
+                    range_brief(values), f"whole {summed}" if manual(values) and values.get(OUTSIDE.name) else "",
+                    bins_part, blur_brief(values),
+                    "per shot" if values.get(QUANTITY.name) == PER_SHOT else "",
                     f"colours {colours.text()}" if colours.text() else "")
         return selection_text(view, values), " · ".join(part for part in settings if part)
 
     def parameter_warnings(self, action_name: str, values: Mapping[str, Any]) -> List[str]:
-        return list(range_warnings(values))
+        planes = [] if shown_planes(values) else ["No plane is on: turn on XY, XT or YT under Planes"]
+        return [*planes, *range_warnings(values)]
 
     def minimum_size(self, action_name: str) -> tuple[int, int]:
-        return 240, 260  # An image and its colour bar under a title.
+        return 480, 280  # Up to three images side by side, one colour bar, under a title.
 
     def compute(self, action_name: str, context: AnalysisContext) -> Any:
         values = context.parameters
         shots = select_shots(context.view, values)
         events = context.view.events(shots)
-        bounds = list(manual_bounds(values)) if manual(values) else [None, None, None]
-        if values.get(OUTSIDE.name):
-            bounds[AXES.index(PLANES[self.plane][2])] = None  # The bounds cut only the shown axes.
-        # Manual: a shown axis without bounds (unset or reversed) covers its full extent, as v1's and the note say.
-        item = histogram2d(events, self.plane, 1.0 if manual(values) else keep_fraction(values),
-                           (int(values[BINS_ACROSS.name]), int(values[BINS_UP.name])),
-                           (bounds[0], bounds[1], bounds[2]), context.check)
-        context.check()
-        wanted = float(values.get(BLUR.name, 0.0))
-        sigma = min(wanted, blur_limit(item.counts.shape)) if wanted > 0 else 0.0
-        kept = (f"blur σ {wanted:g} bins is over a quarter of the image: {sigma:g} used",) if sigma < wanted else ()
-        image = blurred(item.counts.astype(np.float64), sigma)
-        per_shot = values.get(QUANTITY.name) == PER_SHOT
-        if per_shot and shots:
-            image = image / len(shots) / bin_area(item)
+        items = []
+        for plane in shown_planes(values):
+            context.check()
+            items.append(plane_counts(events, plane, values, len(shots), context.check))
         warnings = tuple(f"{axis}: min > max, using full extent" for axis in reversed_axes(values))
-        return PlaneCounts(item, image, shots, len(context.view.shots), per_shot, sigma, (*warnings, *kept))
+        return Planes(tuple(items), shots, len(context.view.shots), warnings)
 
     def backends(self, action_name: str) -> Sequence[str]:
         return (PYQTGRAPH, PLOTLY, MATPLOTLIB)
@@ -247,89 +543,97 @@ class Histogram2DPlot(DatasetAnalysis):
         return self.draw(result, PYQTGRAPH, parent)
 
     def draw(self, result: AnalysisResult, backend: str, parent: Optional[QWidget] = None) -> QWidget:
-        data: PlaneCounts = result.data
-        if not data.histogram.summed:
-            return empty_pane(empty_text(data.total_shots, len(data.shots), data.histogram.total)
-                              or "No events inside the summed axis's bounds (View range)", parent)
+        why = nothing_text(result.data)
+        if why:
+            return empty_pane(why, parent)
         if backend == PLOTLY:
-            return PlotlyPane(plane_plotly(result), parent=parent)
+            return PlotlyPane(planes_plotly(result), parent=parent)
         if backend == MATPLOTLIB:
-            return MatplotlibPane(plane_matplotlib(result), parent)
-        across, up, _ = data.histogram.axes
+            return MatplotlibPane(planes_matplotlib(result), parent)
+        data: Planes = result.data
+        colours = Colours.of(result.parameters)
         widget: Any = pg.GraphicsLayoutWidget(parent)
         widget.setBackground("w")
         widget.title_label = WrappingLabel("")
-        widget.addItem(widget.title_label, row=0, col=0, colspan=2)
-        plot = widget.addPlot(row=1, col=0)
-        plot.setLabel("bottom", across, units=UNITS[AXES.index(across)])
-        plot.setLabel("left", up, units=UNITS[AXES.index(up)])
-        if self.plane == "XY":
-            plot.setAspectLocked(True)  # Both lengths: equal scales.
-        # image[across, up], as the counts are; drawn from each bin's compressed colour position over plain
-        # viridis (exact at any depth), the bar a legend in real values, never attached to the image.
-        image = pg.ImageItem(axisOrder="col-major")
-        image.setLookupTable(viridis().getLookupTable(nPts=LUT_SIZE, alpha=False))
-        plot.addItem(image)
-        colours = Colours.of(result.parameters)
-        bar = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(colours), interactive=False,
-                              label=bar_label(data, colours))
-        widget.addItem(bar, row=1, col=1)
-        widget.plane_plot, widget.plane_image, widget.plane_bar = plot, image, bar
-        widget.plane_layout = (self.plane, colours)
+        count = len(data.items)
+        widget.addItem(widget.title_label, row=0, col=0, colspan=count + 1)
+        panels = []
+        for column, item in enumerate(data.items):
+            across, up, _ = item.histogram.axes
+            label = WrappingLabel("")
+            widget.addItem(label, row=1, col=column)
+            plot = widget.addPlot(row=2, col=column)
+            plot.setLabel("bottom", across, units=UNITS[AXES.index(across)])
+            plot.setLabel("left", up, units=UNITS[AXES.index(up)])
+            if item.histogram.plane == "XY":
+                plot.setAspectLocked(True)  # Both lengths: equal scales.
+            # image[across, up], as the counts are; drawn from each bin's compressed colour position over plain
+            # viridis (exact at any depth), the bar a legend in real values, never attached to the images.
+            image = pg.ImageItem(axisOrder="col-major")
+            image.setLookupTable(viridis().getLookupTable(nPts=LUT_SIZE, alpha=False))
+            plot.addItem(image)
+            plot.hideButtons()  # (Its auto-range button would break the shared scale.)
+            panels.append(PlanePanel(label, plot, image))
+        # One colour bar for every plane (their images over the same range), right of the last.
+        widget.plane_bar = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(colours), interactive=False,
+                                           label=bar_label(data, colours))
+        widget.addItem(widget.plane_bar, row=2, col=count)
+        widget.plane_panels = panels
+        widget.plane_layout = planes_layout(result)
+        widget.plane_scale = SpaceScale(widget, panels)
         fill(widget, result)
         return cast(QWidget, widget)
 
     def update(self, widget: QWidget, result: AnalysisResult) -> bool:
-        """A rerun (e.g. Live's next shots) updates the image in place, in every library: a zoom or pan stays,
-        else the axes follow the new ranges. Another colour scale draws it anew in PyQtGraph."""
-        data: PlaneCounts = result.data
-        if not data.histogram.summed:
+        """A rerun (e.g. Live's next shots) updates the images in place, in every library: a zoom or pan stays,
+        else the axes follow the new ranges. Another colour scale or set of planes draws it anew in PyQtGraph."""
+        if nothing_text(result.data):
             return False
         if isinstance(widget, pg.GraphicsLayoutWidget):
-            if getattr(widget, "plane_layout", None) != (self.plane, Colours.of(result.parameters)):
+            if getattr(widget, "plane_layout", None) != planes_layout(result):
                 return False
             fill(cast(Any, widget), result)
             return True
-        return (plotly_update(widget, plane_plotly(result))
-                or matplotlib_update(widget, lambda figure: plane_matplotlib(result, figure)))
+        return (plotly_update(widget, planes_plotly(result))
+                or matplotlib_update(widget, lambda figure: planes_matplotlib(result, figure)))
 
 
-class Histogram1XY(Histogram2DPlot):
-    """The XY histogram: X across, Y up (equal scales), T summed."""
-
-    @property
-    def plane(self) -> str:
-        return "XY"
-
-
-class Histogram2XT(Histogram2DPlot):
-    """The XT histogram: T across, X up, Y summed."""
-
-    @property
-    def plane(self) -> str:
-        return "XT"
+def nothing_text(data: Planes) -> str:
+    """Why there is nothing to draw ("" when there is)."""
+    if not data.items:
+        return "No plane is on: turn on XY, XT or YT under Planes"
+    first = data.items[0].histogram
+    return (empty_text(data.total_shots, len(data.shots), first.total)
+            or ("" if any(item.histogram.summed for item in data.items)
+                else "No events inside the summed axis's bounds (View range)"))
 
 
-class Histogram3YT(Histogram2DPlot):
-    """The YT histogram: T across, Y up, X summed."""
+def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours]:
+    """What a PyQtGraph drawing was built for: its planes and colour scale (any other change refills it)."""
+    data: Planes = result.data
+    return tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters)
 
-    @property
-    def plane(self) -> str:
-        return "YT"
+
+def panel_title(item: PlaneCounts) -> str:
+    return f"<b>{item.histogram.plane}</b> · {plane_title(item)}{notes_html(notes(item))}"
 
 
 def fill(widget: Any, result: AnalysisResult) -> None:
-    data: PlaneCounts = result.data
-    item = data.histogram
+    data: Planes = result.data
     colours = Colours.of(result.parameters)
-    widget.title_label.setText(plane_title(data) + notes_html(notes(data)))
-    widget.plane_image.setImage(colour_positions(data, colours), levels=(0.0, 1.0))
-    h0, h1 = float(item.h_edges[0]), float(item.h_edges[-1])
-    v0, v1 = float(item.v_edges[0]), float(item.v_edges[-1])
-    widget.plane_image.setRect(QRectF(h0, v0, h1 - h0, v1 - v0))
-    peak = data.peak
-    widget.plane_bar.setLevels((0.0, peak if peak > 0 else 1.0))
+    widget.title_label.setText(planes_title(data) + notes_html([f"⚠ {note}" for note in data.notes]))
+    for panel, item in zip(widget.plane_panels, data.items):
+        histogram = item.histogram
+        panel.label.setText(panel_title(item))
+        panel.image.setImage(colour_positions(item, colours, data.peak), levels=(0.0, 1.0))
+        h0, h1 = float(histogram.h_edges[0]), float(histogram.h_edges[-1])
+        v0, v1 = float(histogram.v_edges[0]), float(histogram.v_edges[-1])
+        panel.image.setRect(QRectF(h0, v0, h1 - h0, v1 - v0))
+        panel.axes = (histogram.axes[0], histogram.axes[1])
+        panel.extent = ((h0, h1), (v0, v1))
+    widget.plane_bar.setLevels((0.0, data.top))
     widget.plane_bar.getAxis("left").setLabel(bar_label(data, colours))  # (ColorBarItem labels its left axis.)
+    widget.plane_scale.schedule()  # Fitted to the new images unless zoomed.
 
 
 def plotly_scale(colours: Colours, stops: int = 64) -> list[list[Any]]:
@@ -341,55 +645,98 @@ def plotly_scale(colours: Colours, stops: int = 64) -> list[list[Any]]:
     return [[float(position), colour] for position, colour in zip(positions, picked)]
 
 
-def plane_plotly(result: AnalysisResult) -> go.Figure:
-    data: PlaneCounts = result.data
-    item = data.histogram
-    across, up, _ = item.axes
+def axis_suffix(column: int) -> str:
+    """Plotly's name suffix for a subplot's axes ("" for the first, then "2", "3")."""
+    return "" if column == 1 else str(column)
+
+
+def planes_plotly(result: AnalysisResult) -> go.Figure:
+    """The planes side by side, one colour bar (a shared colour axis) right of the last."""
+    from plotly.subplots import make_subplots
+
+    data: Planes = result.data
     colours = Colours.of(result.parameters)
-    centres_h = (item.h_edges[:-1] + item.h_edges[1:]) / 2
-    centres_v = (item.v_edges[:-1] + item.v_edges[1:]) / 2
-    figure = go.Figure(go.Heatmap(
-        z=data.image.T, x=centres_h, y=centres_v, colorscale=plotly_scale(colours), zmin=0.0,
-        zmax=data.peak if data.peak > 0 else 1.0, colorbar=dict(title=bar_label(data, colours)),
-        customdata=item.counts.T,
-        hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
-                      f"<extra></extra>"))
+    count = len(data.items)
+    titles = [f"{item.histogram.plane} · {plane_title(item)}"
+              + "".join(f" · {note}" for note in notes(item)) for item in data.items]
+    figure = make_subplots(rows=1, cols=count, subplot_titles=titles,
+                           horizontal_spacing=0.07 if count > 1 else 0.02)
+    time_axis: Optional[str] = None
+    for column, item in enumerate(data.items, start=1):
+        histogram = item.histogram
+        across, up, _ = histogram.axes
+        centres_h = (histogram.h_edges[:-1] + histogram.h_edges[1:]) / 2
+        centres_v = (histogram.v_edges[:-1] + histogram.v_edges[1:]) / 2
+        figure.add_trace(go.Heatmap(
+            z=item.image.T, x=centres_h, y=centres_v, coloraxis="coloraxis", customdata=histogram.counts.T,
+            name=histogram.plane,
+            hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
+                          f"<extra>{histogram.plane}</extra>"), row=1, col=column)
+        figure.update_xaxes(title_text=axis_label(across), row=1, col=column)
+        figure.update_yaxes(title_text=axis_label(up), row=1, col=column)
+        # Every space axis at the first plane's horizontal scale (each plane has one across; XY's Y too), and T
+        # the same in XT and YT.
+        if column > 1:
+            figure.update_xaxes(scaleanchor="x", scaleratio=1, row=1, col=column)
+        if up != "T":
+            figure.update_yaxes(scaleanchor="x", scaleratio=1, row=1, col=column)
+        elif time_axis is None:
+            time_axis = f"y{axis_suffix(column)}"
+        else:
+            figure.update_yaxes(matches=time_axis, row=1, col=column)
+    figure.update_annotations(font_size=10)
     figure.update_layout(title=dict(text=plain_title(result), x=0.01, font=dict(size=13)), template="plotly_white",
-                         margin=dict(l=60, r=20, t=50, b=50), uirevision=f"helab.v2.{item.plane.lower()}_histogram",
-                         xaxis_title=axis_label(across), yaxis_title=axis_label(up))
-    if item.plane == "XY":
-        figure.update_yaxes(scaleanchor="x", scaleratio=1)
+                         margin=dict(l=60, r=20, t=80, b=50), uirevision="helab.v2.plane_histograms",
+                         coloraxis=dict(colorscale=plotly_scale(colours), cmin=0.0, cmax=data.top,
+                                        colorbar=dict(title=dict(text=bar_label(data, colours), side="right"),
+                                                      thickness=12)))
     return figure
 
 
-def plane_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
+def matplotlib_norm(colours: Colours, peak: float) -> Any:
+    """The colour scale as a Matplotlib norm over 0…peak."""
     from matplotlib import colors as typed_colors
 
     mpl_colors: Any = typed_colors  # (Its classes are untyped.)
-    data: PlaneCounts = result.data
-    item = data.histogram
-    across, up, _ = item.axes
-    colours = Colours.of(result.parameters)
-    peak = data.peak if data.peak > 0 else 1.0
     if colours.scale == LOG:
-        norm: Any = mpl_colors.LogNorm(vmin=peak * 10.0 ** -colours.decades, vmax=peak, clip=True)
-    elif colours.scale == LINEAR:
-        norm = mpl_colors.Normalize(vmin=0.0, vmax=peak)
-    else:
-        gamma = 0.5 if colours.scale != POWER else colours.gamma
-        norm = mpl_colors.PowerNorm(gamma, vmin=0.0, vmax=peak, clip=True)
+        return mpl_colors.LogNorm(vmin=peak * 10.0 ** -colours.decades, vmax=peak, clip=True)
+    if colours.scale == LINEAR:
+        return mpl_colors.Normalize(vmin=0.0, vmax=peak)
+    return mpl_colors.PowerNorm(0.5 if colours.scale != POWER else colours.gamma, vmin=0.0, vmax=peak, clip=True)
+
+
+def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
     from matplotlib import colormaps
 
+    data: Planes = result.data
+    colours = Colours.of(result.parameters)
     cmap = colormaps[COLOUR_MAP].with_extremes(bad=colormaps[COLOUR_MAP](0.0), under=colormaps[COLOUR_MAP](0.0))
     figure = mpl_figure(figure)
-    axes = figure.add_subplot()
-    shown = np.where(data.image.T > 0, data.image.T, np.nan) if colours.scale == LOG else data.image.T
-    mesh = axes.pcolormesh(item.h_edges, item.v_edges, shown, cmap=cmap, norm=norm, shading="flat")
-    figure.colorbar(mesh, ax=axes, label=quantity_text(data))
-    axes.set_xlabel(axis_label(across), fontsize=8)
-    axes.set_ylabel(axis_label(up), fontsize=8)
-    axes.tick_params(labelsize=7)
-    if item.plane == "XY":
-        axes.set_aspect("equal")
+    panes = list(figure.subplots(1, len(data.items), squeeze=False)[0])
+    span = max([float(np.ptp(item.histogram.h_edges)) for item in data.items]
+               + [float(np.ptp(item.histogram.v_edges)) for item in data.items if item.histogram.axes[1] != "T"])
+    timed = [axes for axes, item in zip(panes, data.items) if item.histogram.axes[1] == "T"]
+    for axes in timed[1:]:
+        axes.sharey(timed[0])  # T the same in XT and YT.
+    norm = matplotlib_norm(colours, data.top)  # One for every plane: their one colour bar.
+    mesh: Any = None
+    for axes, item in zip(panes, data.items):
+        histogram = item.histogram
+        across, up, _ = histogram.axes
+        shown = np.where(item.image.T > 0, item.image.T, np.nan) if colours.scale == LOG else item.image.T
+        mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
+                               norm=norm, shading="flat")
+        axes.set_title(histogram.plane, fontsize=9)
+        axes.set_xlabel(axis_label(across), fontsize=8)
+        axes.set_ylabel(axis_label(up), fontsize=8)
+        axes.tick_params(labelsize=7)
+        # The same span on every space axis (equal widths: the same scale across); XY at equal scales.
+        centre = middle((histogram.h_edges[0], histogram.h_edges[-1]))
+        axes.set_xlim(centre - span / 2, centre + span / 2)
+        if histogram.plane == "XY":
+            mid = middle((histogram.v_edges[0], histogram.v_edges[-1]))
+            axes.set_ylim(mid - span / 2, mid + span / 2)
+            axes.set_aspect("equal", adjustable="datalim")
+    figure.colorbar(mesh, ax=panes, label=planes_quantity(data))
     figure.suptitle(plain_title(result), fontsize=9, wrap=True)
     return figure
