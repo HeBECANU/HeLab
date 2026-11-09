@@ -3,7 +3,13 @@
 Run from source, HeLab sometimes prints errors to its terminal that its log never sees: a traceback
 printed by a library, a C++ warning, NumPy's. ``ConsoleTee`` catches them at the file-descriptor
 level, so C-level writes are caught too: file descriptors 1 and 2 are each pointed at a pipe, and a
-daemon thread per pipe writes every chunk to the original terminal and to the file. At ``CAP`` bytes
+daemon thread per pipe writes every chunk to the file, then hands it to its terminal's own writer thread
+(``_Terminal``), so a terminal that stops taking output (a PowerShell window paused by a selection) never
+stops the pump: a full pipe would block every writer, ``faulthandler`` too, which writes holding the GIL and
+so froze the whole process (the TDC PC, 2026-11-09). What a stuck terminal can't take is dropped there,
+never from the file. On Windows, Python's own ``sys.stdout``/``sys.stderr`` on a console write to the
+console's handle, not through the descriptor, so they are pointed at the new descriptors too (with the
+logging handlers that write to them), or the file would never see them. At ``CAP`` bytes
 the file is renamed ``console-<pid>.txt.1`` (replacing the one before) and a new one started, so the
 latest output is always kept and a run keeps at most twice ``CAP`` (the console shows the log at
 DEBUG). Tidied with the logs; removed at a clean exit while empty.
@@ -14,13 +20,68 @@ Off where ``OFF_ENV`` is set (the test suite's conftest sets it, so test runs pr
 """
 from __future__ import annotations
 
+import io
+import logging
 import os
+import queue
 import sys
 import threading
+from typing import Any, Callable, TextIO, cast
 
 CONSOLE_NAME = "console-{pid}.txt"
 CAP = 20 * 1000 * 1000  # bytes, before the file is rotated once
 OFF_ENV = "HELAB_NO_CONSOLE_FILE"
+TERMINAL_CHUNKS = 256  # held for a slow terminal before its output is dropped (each up to 64 KiB)
+# (Windows: a console's raw stream, which writes UTF-8 bytes as text; absent elsewhere.)
+_WINDOWS_CONSOLE_IO = cast(Callable[..., Any] | None, getattr(io, "_WindowsConsoleIO", None))
+
+
+def writes_past_its_descriptor(stream: TextIO) -> bool:
+    """Whether ``stream`` writes to a Windows console's handle rather than through its descriptor (so
+    ``dup2`` doesn't redirect it). Tests patch it."""
+    raw = getattr(getattr(stream, "buffer", None), "raw", None)
+    return _WINDOWS_CONSOLE_IO is not None and isinstance(raw, cast(type, _WINDOWS_CONSOLE_IO))
+
+
+class _Terminal:
+    """Writes chunks to the original terminal on its own thread; ``put`` never waits."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+        self.dropped = 0  # bytes the terminal didn't take in time
+        self.chunks: queue.Queue[bytes | None] = queue.Queue(TERMINAL_CHUNKS)
+        self.console: Any = None
+        if _WINDOWS_CONSOLE_IO is not None:  # (UTF-8 written as text, as Python writes to a console.)
+            try:
+                self.console = _WINDOWS_CONSOLE_IO(fd, "w", closefd=False)
+            except (OSError, ValueError):  # (Not a console: a pipe or a file, written as bytes.)
+                pass
+        self.thread = threading.Thread(target=self._run, name=f"console-tee-terminal-{fd}", daemon=True)
+        self.thread.start()
+
+    def put(self, chunk: bytes) -> None:
+        try:
+            self.chunks.put_nowait(chunk)
+        except queue.Full:
+            self.dropped += len(chunk)
+
+    def _run(self) -> None:
+        while (chunk := self.chunks.get()) is not None:
+            try:
+                view = memoryview(chunk)
+                while view:
+                    written = self.console.write(view) if self.console is not None else os.write(self.fd, view)
+                    view = view[written or len(view):]
+            except (OSError, ValueError):
+                return  # (The terminal went: the file still gets it.)
+
+    def close(self, timeout: float) -> None:
+        """Let it write what it holds, for up to ``timeout`` seconds."""
+        try:
+            self.chunks.put(None, timeout=timeout)
+        except queue.Full:
+            return
+        self.thread.join(timeout=timeout)
 
 
 class ConsoleTee:
@@ -32,7 +93,8 @@ class ConsoleTee:
         self.rotations = 0
         self._file = open(path, "ab", buffering=0)
         self._lock = threading.Lock()
-        self._ends: list[tuple[int, int | None, threading.Thread]] = []  # (fd, its original, the pump)
+        self._ends: list[tuple[int, int | None, threading.Thread, _Terminal | None]] = []  # (fd, its original, ...)
+        self._rebound: list[tuple[str, TextIO, TextIO]] = []  # (sys's name, the stream it had, the new one)
 
     def start(self) -> None:
         for fd in (1, 2):
@@ -46,13 +108,28 @@ class ConsoleTee:
                     stream.flush()
             os.dup2(write, fd)
             os.close(write)
-            pump = threading.Thread(target=self._pump, args=(read, original), name=f"console-tee-{fd}", daemon=True)
+            terminal = _Terminal(original) if original is not None else None
+            pump = threading.Thread(target=self._pump, args=(read, terminal), name=f"console-tee-{fd}", daemon=True)
             pump.start()
-            self._ends.append((fd, original, pump))
+            self._ends.append((fd, original, pump, terminal))
+        self._rebind()
 
-    def _pump(self, read: int, original: int | None) -> None:
-        """Copy the pipe to the terminal and the file until it closes. Never stops early: a writer to a
-        full pipe would wait for ever."""
+    def _rebind(self) -> None:
+        """Point a ``sys.stdout``/``sys.stderr`` that writes past its descriptor (a Windows console) at the
+        descriptor, and the logging handlers writing to it at the new stream."""
+        for name, fd in (("stdout", 1), ("stderr", 2)):
+            old = cast(TextIO | None, getattr(sys, name))
+            if old is None or not writes_past_its_descriptor(old):
+                continue
+            new = cast(TextIO, io.TextIOWrapper(io.FileIO(fd, "w", closefd=False), encoding="utf-8",
+                                                errors="backslashreplace", line_buffering=True, write_through=True))
+            setattr(sys, name, new)
+            _swap_handler_streams(old, new)
+            self._rebound.append((name, old, new))
+
+    def _pump(self, read: int, terminal: _Terminal | None) -> None:
+        """Copy the pipe to the file and the terminal until it closes. Never stops early, never waits on the
+        terminal: a writer to a full pipe would wait for ever."""
         while True:
             try:
                 chunk = os.read(read, 65536)
@@ -60,14 +137,9 @@ class ConsoleTee:
                 break
             if not chunk:
                 break
-            if original is not None:
-                try:
-                    view = memoryview(chunk)
-                    while view:
-                        view = view[os.write(original, view):]
-                except OSError:
-                    original = None  # (The terminal went: the file still gets it.)
             self.write(chunk)
+            if terminal is not None:
+                terminal.put(chunk)
         os.close(read)
 
     def write(self, chunk: bytes) -> None:
@@ -94,15 +166,23 @@ class ConsoleTee:
                     stream.flush()
                 except (OSError, ValueError):
                     pass
-        for fd, original, _ in self._ends:
+        for name, old, new in reversed(self._rebound):
+            setattr(sys, name, old)
+            _swap_handler_streams(new, old)
+        self._rebound = []
+        for fd, original, _, _ in self._ends:
             if original is not None:
                 os.dup2(original, fd)  # (Closes the pipe's write end: the pump reads the rest, then stops.)
             else:
                 null = os.open(os.devnull, os.O_WRONLY)
                 os.dup2(null, fd)
                 os.close(null)
-        for _, original, pump in self._ends:
-            pump.join(timeout=2.0)  # (It still writes the rest to the terminal: closed after.)
+        for _, original, pump, terminal in self._ends:
+            pump.join(timeout=2.0)
+            if terminal is not None:
+                terminal.close(timeout=2.0)  # (It still writes the rest to the terminal: closed after.)
+                if terminal.thread.is_alive():
+                    continue  # (Stuck on a terminal that takes nothing: its descriptor left open for it.)
             if original is not None:
                 os.close(original)
         self._ends = []
@@ -113,6 +193,17 @@ class ConsoleTee:
                 os.remove(self.path)
         except OSError:
             pass
+
+
+def _swap_handler_streams(old: TextIO, new: TextIO) -> None:
+    """Logging handlers writing to ``old`` write to ``new`` (``coloredlogs``' console handler holds the
+    ``sys.stderr`` it was installed with)."""
+    loggers = [logging.getLogger(), *(logger for logger in logging.Logger.manager.loggerDict.values()
+                                      if isinstance(logger, logging.Logger))]
+    for logger in loggers:
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream is old:
+                handler.setStream(new)
 
 
 def start(folder: str) -> ConsoleTee | None:

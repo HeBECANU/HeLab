@@ -4,7 +4,7 @@ from __future__ import annotations
 import faulthandler
 import logging
 import os
-import sys
+import tempfile
 import threading
 import time
 
@@ -20,11 +20,28 @@ def describe(owner: QObject | None) -> str:
     return f"{type(owner).__name__} {name!r}" if name else type(owner).__name__
 
 
+STALL_SECONDS = 2.0  # Without a beat, once the event loop has beaten once.
+# Before the first beat: the window is still being built and the event loop not yet running, which takes over
+# 2 s on a slow PC (the lab's TDC PC: about 15 s), so only a far longer wait is a stall.
+STARTUP_STALL_SECONDS = 60.0
+
+
+def thread_stacks() -> str:
+    """Every thread's Python stack, as ``faulthandler`` writes it. It writes holding the GIL, so it writes to
+    a regular file, which never blocks: into a pipe the console tee no longer drains (its console blocked),
+    the write would never return and the whole process would freeze with it (the TDC PC, 2026-11-09)."""
+    with tempfile.TemporaryFile() as file:
+        faulthandler.dump_traceback(file=file, all_threads=True)
+        file.seek(0)
+        return file.read().decode("utf-8", "replace")
+
+
 class GUIWatchdog(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.last_beat = time.monotonic()
         self.max_delay = 0.0
+        self.beats = 0  # (Set on the GUI thread, read on the watching one.)
         self.stopped = threading.Event()
         # For the stall line (A~3 of Quick Fixes 9: Windows CI's stalls came from a window an earlier test left
         # alive): its window, kept current on the GUI thread so the watching thread never calls Qt, and, under
@@ -39,10 +56,14 @@ class GUIWatchdog(QObject):
     def _beat(self) -> None:
         now = time.monotonic()
         delay = now - self.last_beat
-        self.max_delay = max(self.max_delay, delay)
-        if delay > 0.5:
-            logging.warning("GUI heartbeat delayed %.3fs", delay)
+        if self.beats == 0:
+            logging.info("GUI event loop's first beat %.3fs after its watchdog started", delay)
+        else:
+            self.max_delay = max(self.max_delay, delay)
+            if delay > 0.5:
+                logging.warning("GUI heartbeat delayed %.3fs", delay)
         self.last_beat = now
+        self.beats += 1
         self.owner = describe(self.parent())
 
     def _watch(self) -> None:
@@ -54,11 +75,11 @@ class GUIWatchdog(QObject):
                 self.stopped.set()
                 return
             now = time.monotonic()
-            if now - self.last_beat > 2.0 and now - last_dump > 30.0:
+            limit = STALL_SECONDS if self.beats else STARTUP_STALL_SECONDS
+            if now - self.last_beat > limit and now - last_dump > 30.0:
                 logging.error("GUI stalled for %.2fs (%s); capturing thread stacks", now - self.last_beat, self.where())
                 try:
-                    if sys.__stderr__ is not None:
-                        faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
+                    logging.error("GUI stall's thread stacks:\n%s", thread_stacks().rstrip())
                 except (OSError, RuntimeError, ValueError):
                     logging.exception("Could not dump GUI stall traceback")
                 last_dump = now

@@ -14,6 +14,18 @@ How to use it:
 
 ## App
 
+- [ ] **HeLab froze overnight on the TDC PC (2026-11-09, 00:47, Live idle, the PC unattended) until force
+  quit**: `GUI stalled for 5.68s` was the log's last line, with no repeat 30 s later and no stacks in
+  `console-19092.txt` (last written 2026-11-06). Most likely (inferred, not reproduced) the watchdog's
+  `faulthandler` dump went into the console tee's pipe while its pump was stuck writing to the PowerShell
+  console (why, with nobody at the PC, is unknown); the pipe full, the dump waited holding the GIL and every
+  thread stopped. Fixed so it can't recur (stacks to the log through a regular file; the tee never waits
+  on its terminal), but **the first 5.68 s's cause is unknown**: the next stall's stacks will be in the log.
+  The same logs showed Python's own console output (the log at DEBUG) lost on a Windows console once the tee
+  started (fixed with it), and a false stall dump at every start (the watchdog armed before the event loop ran;
+  fixed: 60 s before its first beat). Earlier stalls there (2026-11-06, 2.6 s and 3.5 s) came as Live loaded a
+  new shot, the GUI thread in `explorer_live.low_hits_threshold` (a settings read every 80 ms animation tick).
+
 - [ ] **The RAM budget box clips its text** (Settings → Cache): Qt's `QAbstractSpinBox.sizeHint`
   measures at most 18 characters, and "16.0 GiB (1/8 of 128 GiB)" is 25 (it was 23 as "17.2 GB (1/8
   of 137 GB)", clipped too; widths 131 and 135 px offscreen). A `sizeHint` override on

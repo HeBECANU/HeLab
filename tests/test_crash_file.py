@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, cast
 
@@ -150,6 +151,75 @@ def test_the_console_is_kept_in_the_logs_folder_and_still_reaches_the_terminal(t
     # descriptors may leave: there only HeLab's own writes are checked.)
     for text in ("python-stdout", "fd-stderr", *(() if sys.platform == "win32" else ("from-a-child-process",))):
         assert text in kept, kept
+
+
+REBIND_CHILD = """
+import atexit, logging, os, sys
+sys.path.insert(0, sys.argv[1])
+os.environ.pop("HELAB_NO_CONSOLE_FILE", None)
+from helab.utils import console_tee
+handler = logging.StreamHandler(sys.stderr)  # (As coloredlogs holds the sys.stderr it was installed with.)
+logging.getLogger().addHandler(handler)
+logging.getLogger().setLevel(logging.INFO)
+console_tee.writes_past_its_descriptor = lambda stream: True  # (As a Windows console's streams do.)
+tee = console_tee.start(sys.argv[2])
+atexit.register(tee.stop)
+assert handler.stream is sys.stderr and sys.stderr is not sys.__stderr__
+logging.info("a-logged-line")
+print("printed-to-stdout", flush=True)
+print(tee.path, flush=True)
+"""
+
+
+def test_a_console_python_writes_past_its_descriptor_still_reaches_the_file(tmp_path: Path) -> None:
+    """On a Windows console, ``sys.stderr`` writes to the console's handle, so after ``dup2`` the log's console
+    lines were lost to the terminal and the file alike (the TDC PC's console showed nothing after "Logging to").
+    Such streams, and the logging handlers holding them, are pointed at the descriptors."""
+    logs = tmp_path / "logs"
+    result = subprocess.run([sys.executable, "-c", REBIND_CHILD, str(ROOT), str(logs)], capture_output=True,
+                            text=True, timeout=60,
+                            env={k: v for k, v in os.environ.items() if k != "HELAB_NO_CONSOLE_FILE"})
+    assert result.returncode == 0, result.stderr
+    assert "a-logged-line" in result.stderr and "printed-to-stdout" in result.stdout
+    kept = Path(result.stdout.strip().splitlines()[-1]).read_text()
+    assert "a-logged-line" in kept and "printed-to-stdout" in kept, kept
+
+
+def test_a_terminal_that_takes_nothing_never_stops_the_pump(tmp_path: Path) -> None:
+    """2026-11-09, the TDC PC: a stall dump went into the tee's pipe while its pump waited on the terminal; the
+    pipe full, ``faulthandler`` (holding the GIL) waited too, and HeLab froze until force quit. The pump hands
+    chunks to the terminal's own thread and never waits: the file gets everything, the terminal what it takes."""
+    read, write = os.pipe()  # (The terminal: nobody reads it, so it fills and its writes block.)
+    path = tmp_path / "console-1.txt"
+    tee = console_tee.ConsoleTee(str(path))
+    terminal = console_tee._Terminal(write)
+    chunk = b"x" * 65536
+    pump_read, pump_write = os.pipe()
+    pump = threading.Thread(target=tee._pump, args=(pump_read, terminal), daemon=True)
+    pump.start()
+    try:
+        count = console_tee.TERMINAL_CHUNKS + 40
+        for _ in range(count):
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(pump_write, view):]
+        os.close(pump_write)
+        pump.join(timeout=20)
+        assert not pump.is_alive()  # It read to the end, the terminal stuck all along.
+        assert path.stat().st_size == count * len(chunk)
+        assert terminal.dropped > 0 and terminal.thread.is_alive()
+    finally:
+        def drain() -> None:  # (The terminal takes output again: its thread writes what it held, then ends.)
+            while os.read(read, 65536):
+                pass
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        terminal.close(timeout=20)
+        os.close(write)
+        reader.join(timeout=5)
+        os.close(read)
+        tee.stop()
+    assert not terminal.thread.is_alive()
 
 
 def test_the_console_file_is_off_under_the_test_suite(tmp_path: Path) -> None:
