@@ -382,6 +382,17 @@ and M42.1 on a lab PC with the switch on (one Live session).
   (Offscreen tests can't show it; if not, the Dock button does, and that is to be said in the manual.) A
   restart puts it back floating as a window. While it's minimised, the Settings panel shows another plot.
 
+## Console and stall stacks on Windows (added 2026-11-09, block 70)
+
+- [ ] **M70.1 The TDC PC's console after `96df3ed`** (the overnight hang's fix; known-issues): on the TDC PC,
+  `git pull` and start HeLab from PowerShell (`venv\Scripts\helab`). The log's lines keep showing in the
+  PowerShell window after "Logging to …" (before the fix nothing did), and they are in
+  `logs\console-<pid>.txt` too; text such as "›" and "…" shows as itself, not `â€º`. No "GUI stalled" at the
+  start, however slow (only an INFO "GUI event loop's first beat …s"). Then click into the PowerShell window
+  to start a selection and leave it for a minute: HeLab stays responsive (its log goes on); press Esc and the
+  console catches up. If HeLab ever stalls again, its thread stacks are in `helab-<pid>.log` after
+  "GUI stall's thread stacks:": send them over.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything
