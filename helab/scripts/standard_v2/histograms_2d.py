@@ -6,7 +6,9 @@ median, Poisson denoise, adaptive KDE; each on by itself, run in the order set),
 range compressed (sqrt, log, power γ) in the colour map only, so the colour bar reads real values. Bins are set
 per axis (T, X, Y), so an axis shown in two planes has the same bins in both. In s and m with SI prefixes (Basic
 plots' units). Drawn with PyQtGraph (``ImageItem``) by default, or Plotly or Matplotlib; updated in place as Live
-adds shots. A space axis runs across every plane and T runs up XT and YT. In PyQtGraph and Plotly every space
+adds shots. Under Image, Draw › dots draws each event (up to Max dots, a fixed sample beyond) instead of the bins,
+coloured by nothing, the summed axis or the local density (its bin's value in the image, filtered, on the image's colour
+scale), on a white or black plot area. A space axis runs across every plane and T runs up XT and YT. In PyQtGraph and Plotly every space
 axis shown has the same scale (metres per pixel, ``SpaceScale``), XY's at equal scales, and T is the same in XT and
 YT. Matplotlib gives the space axes the same span instead."""
 from __future__ import annotations
@@ -26,15 +28,15 @@ from helab.analysis.dataset_view import DatasetView
 from helab.analysis.empty import empty_pane, empty_text
 from helab.analysis import image_filters
 from helab.analysis.display_units import si_text
-from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, Histogram2D, bin_area,
-                                        compress, histogram2d, scale_text)
+from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, Histogram2D,
+                                        bin_area, compress, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import Kind, ParameterSpec, Value
 from helab.analysis.results import AnalysisContext, AnalysisResult
 from helab.analysis.selection import (MANUAL, RANGE_GROUP, RANGE_MODE, SHOT_SPECS, keep_fraction, manual,
                                       manual_bounds, range_brief, range_specs, range_text, range_warnings,
                                       reversed_axes, select_shots, selection_text, shots_brief, shots_text)
-from helab.analysis.stats import AXES, MAX_BINS, UNITS
+from helab.analysis.stats import AXES, UNITS, display_sample
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.standard.basic_plots import matplotlib_update, plotly_update
 from helab.scripts.standard_v2 import group
@@ -57,7 +59,40 @@ IMAGE_GROUP = "Image"
 BINS = {axis: ParameterSpec(
     f"bins_{axis.lower()}", f"{axis} bins (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
     tip=f"Bins on {axis} wherever it is shown. 0 = automatic (Freedman–Diaconis on {axis} in each plane, at most "
-        f"{MAX_AUTO_BINS:,}).") for axis in AXES}
+        f"{MAX_AUTO_BINS:,}; set by hand, at most {MAX_BINS:,}).") for axis in AXES}
+HISTOGRAM, DOTS = "histogram", "dots"
+DRAW = ParameterSpec(
+    "draw", "Draw", "choice", HISTOGRAM, choices=(HISTOGRAM, DOTS), group=IMAGE_GROUP,
+    tip="The events binned (histogram), or each event as a dot, no bins drawn. Dots cover the same view range, and "
+        "their local density colouring is their bin's value in the image (bins, blur and rate per shot as set).")
+NO_COLOUR, SUMMED, DENSITY = "none", "summed axis", "local density"
+DOT_COLOUR = ParameterSpec(
+    "dot_colour", "Dot colour", "choice", DENSITY, choices=(NO_COLOUR, SUMMED, DENSITY), group=IMAGE_GROUP,
+    when=(DRAW.name, DOTS),
+    tip="None: one colour. Summed axis: each dot's own third coordinate (T on XY, Y on XT, X on YT), linear over its "
+        "range in that plane (in the plane's title). Local density: the value of the dot's bin in the image, on the "
+        "colour scale set under Colour, the densest dots drawn on top.")
+MAX_DOTS = ParameterSpec(
+    "max_dots", "Max dots", "int", 200_000, (1_000, 5_000_000), " per plane", group=IMAGE_GROUP,
+    when=(DRAW.name, DOTS),
+    tip="At most this many dots in each plane: beyond it, a fixed random sample of the events in the view range "
+        "(the plane's title says so). The bins and the local density count every event.")
+WHITE, BLACK = "white", "black"
+BACKGROUND = ParameterSpec(
+    "dot_background", "Background", "choice", WHITE, choices=(WHITE, BLACK), group=IMAGE_GROUP,
+    when=(DRAW.name, DOTS),
+    tip="The plot area behind the dots (the titles, axes and colour bar stay on white). Black brings out faint "
+        "dots; uncoloured dots are then white.")
+DOT_SIZE = 2  # px (PyQtGraph and Plotly; Matplotlib's smallest marker)
+# Dots without colouring: one translucent tint, so that overlaps read as stronger: blue on white, white on black.
+DOT_TINTS = {WHITE: (31, 78, 156, 140), BLACK: (255, 255, 255, 120)}
+AREA_COLOURS = {WHITE: "#ffffff", BLACK: "#000000"}
+DARK_GRID = "#3a3a3a"  # Plotly's grid and zero lines on black
+
+
+def background(values: Mapping[str, Any]) -> str:
+    """The plot area's colour: black only for dots set so."""
+    return BLACK if values.get(DRAW.name) == DOTS and values.get(BACKGROUND.name) == BLACK else WHITE
 BLUR_GROUP = "Blur"
 ORDER_TIP = ("Where this filter runs in the chain: lower first (an equal number runs in the order listed). Gaussian, "
              "Gaussian in m and s, and box commute with one another, so their order among themselves changes nothing; "
@@ -185,6 +220,49 @@ LUT_SIZE = 1024
 
 
 @dataclass(frozen=True)
+class Dots:
+    """A plane's events drawn as dots: those inside the shown ranges (and the summed axis's bounds), or a fixed
+    sample of them beyond Max dots (``display_sample``). ``values``: each dot's colour value (its summed-axis
+    coordinate, or its bin's value in the image; empty for none); ``span``: the summed axis's range over every
+    event inside, for its colouring."""
+    h: npt.NDArray[np.float64]
+    v: npt.NDArray[np.float64]
+    colour: str
+    values: npt.NDArray[np.float64]
+    inside: int
+    span: tuple[float, float] = (0.0, 1.0)
+
+    @property
+    def drawn(self) -> int:
+        return len(self.h)
+
+
+def plane_dots(events: npt.NDArray[np.float64], item: Histogram2D, image: npt.NDArray[np.float64], colour: str,
+               cap: int) -> Dots:
+    """``item``'s events as dots, coloured by ``colour`` (``image``: the plane's image, for the local density)."""
+    horizontal, vertical, summed = (AXES.index(name) for name in item.axes)
+    if item.flattened is not None and len(events):
+        column = events[:, summed]
+        events = events[(column >= item.flattened[0]) & (column <= item.flattened[1])]
+    h_edges, v_edges = item.h_edges, item.v_edges
+    h, v = events[:, horizontal], events[:, vertical]
+    inside = events[(h >= h_edges[0]) & (h <= h_edges[-1]) & (v >= v_edges[0]) & (v <= v_edges[-1])]
+    span = (float(inside[:, summed].min()), float(inside[:, summed].max())) if len(inside) else (0.0, 1.0)
+    picked = inside[display_sample(len(inside), cap)]
+    h, v = np.ascontiguousarray(picked[:, horizontal]), np.ascontiguousarray(picked[:, vertical])
+    values = np.empty(0)
+    if colour == SUMMED:
+        values = np.ascontiguousarray(picked[:, summed])
+    elif colour == DENSITY:
+        across = np.clip(np.searchsorted(h_edges, h, side="right") - 1, 0, image.shape[0] - 1)
+        up = np.clip(np.searchsorted(v_edges, v, side="right") - 1, 0, image.shape[1] - 1)
+        values = image[across, up]
+        order = np.argsort(values, kind="stable")  # The densest last: drawn on top.
+        h, v, values = h[order], v[order], values[order]
+    return Dots(h, v, colour, np.asarray(values, dtype=np.float64), len(inside), span)
+
+
+@dataclass(frozen=True)
 class PlaneCounts:
     """A plane's counts (``histogram``) and the image shown (``image``: filtered, per shot if chosen)."""
     histogram: Histogram2D
@@ -192,6 +270,7 @@ class PlaneCounts:
     per_shot: bool = False
     filters: tuple[str, ...] = ()  # the filters run, in their order (``image_filters.Step.text``)
     notes: tuple[str, ...] = ()  # settings not followed as given
+    dots: Optional[Dots] = None  # drawn as dots (Draw › dots) instead of the image
 
     @property
     def peak(self) -> float:
@@ -216,6 +295,30 @@ class Planes:
     def top(self) -> float:
         """The colour bar's top (1 when every bin is empty)."""
         return self.peak if self.peak > 0 else 1.0
+
+    @property
+    def dot_colour(self) -> str:
+        """How the dots are coloured ("" when the planes are drawn as images)."""
+        dots = self.items[0].dots if self.items else None
+        return dots.colour if dots is not None else ""
+
+    @property
+    def real_summed(self) -> bool:
+        """Dots coloured by the summed axis in its own units: one plane shown (with more, each plane's summed
+        axis differs, and each is coloured over its own range, low to high)."""
+        return self.dot_colour == SUMMED and len(self.items) == 1
+
+    @property
+    def bar_range(self) -> tuple[float, float]:
+        """The colour bar's range: 0 … the highest bin, or with dots coloured by the summed axis its range in
+        the one plane shown (0 … 1, low to high, with more)."""
+        dots = self.items[0].dots if self.items else None
+        if self.dot_colour == SUMMED and dots is not None:
+            if not self.real_summed:
+                return 0.0, 1.0
+            low, high = dots.span
+            return (low, high) if high > low else (low - 0.5, low + 0.5)
+        return 0.0, self.top
 
 
 @dataclass(frozen=True)
@@ -247,7 +350,16 @@ def plane_title(data: PlaneCounts) -> str:
     summed = item.axes[2]
     flattened = (f"{summed} summed over {range_text(AXES.index(summed), *item.flattened)}" if item.flattened
                  else f"{summed} summed")
-    parts = [bins_text(item), f"{item.inside:,} of {item.total:,} events", flattened]
+    dots = data.dots
+    if dots is None:
+        parts = [bins_text(item)]
+    else:
+        parts = [f"{dots.drawn:,} dots" + (f" (a sample of {dots.inside:,})" if dots.drawn < dots.inside else "")]
+        if dots.colour == DENSITY:
+            parts.append(f"density in {bins_text(item)}")
+        elif dots.colour == SUMMED:
+            parts.append(f"colour {range_text(AXES.index(summed), *dots.span)}")
+    parts += [f"{item.inside:,} of {item.total:,} events", flattened]
     if not item.summed:
         parts.append("no events inside the summed axis's bounds")
     if item.outside:
@@ -296,9 +408,40 @@ def planes_quantity(data: Planes) -> str:
 
 
 def bar_label(data: Planes, colours: Colours) -> str:
-    """The quantity, and with a compressed colour scale, that only the colours are (the numbers are real)."""
+    """The quantity, and with a compressed colour scale, that only the colours are (the numbers are real); for
+    dots coloured by the summed axis, that axis (or with several planes, that each runs over its own range)."""
+    if data.dot_colour == SUMMED:
+        if data.real_summed:
+            return f"Dot colour: {axis_label(data.items[0].histogram.axes[2])}"
+        return "Dot colour: the summed axis, low → high over its range in each plane's title"
     how = colours.text()
-    return planes_quantity(data) + (f" · colours {how}, values linear" if how else "")
+    prefix = "Dot colour: local density, " if data.dot_colour == DENSITY else ""
+    return prefix + planes_quantity(data) + (f" · colours {how}, values linear" if how else "")
+
+
+def bar_colours(data: Planes, colours: Colours) -> Colours:
+    """The colour scale the bar and dots use: the one set, but linear for the summed axis."""
+    return Colours() if data.dot_colour == SUMMED else colours
+
+
+def dot_values(item: PlaneCounts, data: Planes) -> npt.NDArray[np.float64]:
+    """The dots' values on the colour bar (``Planes.bar_range``): the local density, or the summed axis in its
+    units (one plane) or over this plane's range, 0 … 1."""
+    dots = item.dots
+    if dots is None:
+        return np.empty(0)
+    if dots.colour != SUMMED or data.real_summed:
+        return dots.values
+    low, high = dots.span
+    return (dots.values - low) / (high - low) if high > low else np.full(len(dots.values), 0.5)
+
+
+def dot_positions(item: PlaneCounts, data: Planes, colours: Colours) -> npt.NDArray[np.float64]:
+    """Each dot's place in the colour map (0…1), as the image's bins (compressed) for the local density."""
+    low, high = data.bar_range
+    linear = (dot_values(item, data) - low) / (high - low) if high > low else np.zeros(len(dot_values(item, data)))
+    shown = bar_colours(data, colours)
+    return compress(linear, shown.scale, shown.gamma, shown.decades)
 
 
 def colour_positions(item: PlaneCounts, colours: Colours, peak: float) -> npt.NDArray[np.float64]:
@@ -340,7 +483,12 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
     per_shot = values.get(QUANTITY.name) == PER_SHOT
     if per_shot and chosen and item.summed:
         image = image / chosen / bin_area(item)
-    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped))
+    dots = None
+    if values.get(DRAW.name) == DOTS:
+        check()
+        dots = plane_dots(events, item, image, str(values.get(DOT_COLOUR.name, DENSITY)),
+                          int(values.get(MAX_DOTS.name, MAX_DOTS.default)))
+    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped), dots)
 
 
 @dataclass
@@ -350,6 +498,7 @@ class PlanePanel:
     label: Any
     plot: Any
     image: Any
+    dots: Any = None  # a ScatterPlotItem (Draw › dots)
     axes: tuple[str, str] = ("X", "Y")
     extent: tuple[tuple[float, float], tuple[float, float]] = ((0.0, 1.0), (0.0, 1.0))
 
@@ -500,8 +649,9 @@ class PlaneHistograms(DatasetAnalysis):
         return ["Plot"]
 
     def parameters(self, action_name: str) -> List[ParameterSpec]:
-        return [*SHOT_SPECS, *SHOW.values(), *RANGE, OUTSIDE, *BINS.values(), QUANTITY, *BLUR_SPECS, SCALE, GAMMA,
-                DECADES]
+        return [*SHOT_SPECS, *SHOW.values(), *RANGE, OUTSIDE, DRAW, DOT_COLOUR, MAX_DOTS, BACKGROUND,
+                *BINS.values(), QUANTITY,
+                *BLUR_SPECS, SCALE, GAMMA, DECADES]
 
     def describe_run(self, action_name: str, values: Mapping[str, Any], view: DatasetView) -> tuple[str, str]:
         planes = shown_planes(values)
@@ -511,9 +661,12 @@ class PlaneHistograms(DatasetAnalysis):
                      else "bins " + ", ".join(f"{axis} {count or 'auto'}" for axis, count in bins.items()))
         colours = Colours.of(values)
         summed = "/".join(PLANES[plane][2] for plane in planes)
+        dots = (f"dots, {values.get(DOT_COLOUR.name, DENSITY)}" if values.get(DOT_COLOUR.name) != NO_COLOUR
+                else "dots") if values.get(DRAW.name) == DOTS else ""
+        dots += " on black" if dots and background(values) == BLACK else ""
         settings = (", ".join(planes) if len(planes) < len(PLANES) else "", shots_brief(values),
                     range_brief(values), f"whole {summed}" if manual(values) and values.get(OUTSIDE.name) else "",
-                    bins_part, blur_brief(values),
+                    dots, bins_part, blur_brief(values),
                     "per shot" if values.get(QUANTITY.name) == PER_SHOT else "",
                     f"colours {colours.text()}" if colours.text() else "")
         return selection_text(view, values), " · ".join(part for part in settings if part)
@@ -572,12 +725,18 @@ class PlaneHistograms(DatasetAnalysis):
             image = pg.ImageItem(axisOrder="col-major")
             image.setLookupTable(viridis().getLookupTable(nPts=LUT_SIZE, alpha=False))
             plot.addItem(image)
+            dots = None
+            if item.dots is not None:
+                image.setVisible(False)
+                dots = pg.ScatterPlotItem(pxMode=True, size=DOT_SIZE, symbol="s", pen=None)
+                plot.addItem(dots)
             plot.hideButtons()  # (Its auto-range button would break the shared scale.)
-            panels.append(PlanePanel(label, plot, image))
+            panels.append(PlanePanel(label, plot, image, dots))
         # One colour bar for every plane (their images over the same range), right of the last.
-        widget.plane_bar = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(colours), interactive=False,
-                                           label=bar_label(data, colours))
+        widget.plane_bar = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(bar_colours(data, colours)),
+                                           interactive=False, label=bar_label(data, colours))
         widget.addItem(widget.plane_bar, row=2, col=count)
+        widget.plane_bar.setVisible(data.dot_colour != NO_COLOUR)
         widget.plane_panels = panels
         widget.plane_layout = planes_layout(result)
         widget.plane_scale = SpaceScale(widget, panels)
@@ -608,10 +767,21 @@ def nothing_text(data: Planes) -> str:
                 else "No events inside the summed axis's bounds (View range)"))
 
 
-def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours]:
-    """What a PyQtGraph drawing was built for: its planes and colour scale (any other change refills it)."""
+def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours, str]:
+    """What a PyQtGraph drawing was built for: its planes, colour scale and dot colouring ("" for images; any
+    other change refills it)."""
     data: Planes = result.data
-    return tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters)
+    return tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters), data.dot_colour
+
+
+def dot_brushes(item: PlaneCounts, data: Planes, colours: Colours, area: str = WHITE) -> Any:
+    """The dots' brushes in PyQtGraph: viridis at each one's colour position (in ``LUT_SIZE`` steps), or one
+    tint for the ``area``'s background."""
+    if data.dot_colour == NO_COLOUR:
+        return pg.mkBrush(*DOT_TINTS[area])
+    table = [pg.mkBrush(*colour) for colour in viridis().getLookupTable(nPts=LUT_SIZE, alpha=False)]
+    steps = np.rint(dot_positions(item, data, colours) * (LUT_SIZE - 1)).astype(np.intp)
+    return [table[step] for step in steps]
 
 
 def panel_title(item: PlaneCounts) -> str:
@@ -621,17 +791,22 @@ def panel_title(item: PlaneCounts) -> str:
 def fill(widget: Any, result: AnalysisResult) -> None:
     data: Planes = result.data
     colours = Colours.of(result.parameters)
+    area = background(result.parameters)
     widget.title_label.setText(planes_title(data) + notes_html([f"⚠ {note}" for note in data.notes]))
     for panel, item in zip(widget.plane_panels, data.items):
         histogram = item.histogram
         panel.label.setText(panel_title(item))
-        panel.image.setImage(colour_positions(item, colours, data.peak), levels=(0.0, 1.0))
+        panel.plot.getViewBox().setBackgroundColor(AREA_COLOURS[area] if area == BLACK else None)
+        if item.dots is not None and panel.dots is not None:
+            panel.dots.setData(x=item.dots.h, y=item.dots.v, brush=dot_brushes(item, data, colours, area))
+        else:
+            panel.image.setImage(colour_positions(item, colours, data.peak), levels=(0.0, 1.0))
         h0, h1 = float(histogram.h_edges[0]), float(histogram.h_edges[-1])
         v0, v1 = float(histogram.v_edges[0]), float(histogram.v_edges[-1])
         panel.image.setRect(QRectF(h0, v0, h1 - h0, v1 - v0))
         panel.axes = (histogram.axes[0], histogram.axes[1])
         panel.extent = ((h0, h1), (v0, v1))
-    widget.plane_bar.setLevels((0.0, data.top))
+    widget.plane_bar.setLevels(data.bar_range)
     widget.plane_bar.getAxis("left").setLabel(bar_label(data, colours))  # (ColorBarItem labels its left axis.)
     widget.plane_scale.schedule()  # Fitted to the new images unless zoomed.
 
@@ -662,16 +837,28 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
     figure = make_subplots(rows=1, cols=count, subplot_titles=titles,
                            horizontal_spacing=0.07 if count > 1 else 0.02)
     time_axis: Optional[str] = None
+    area = background(result.parameters)
+    tint = DOT_TINTS[area]
     for column, item in enumerate(data.items, start=1):
         histogram = item.histogram
         across, up, _ = histogram.axes
         centres_h = (histogram.h_edges[:-1] + histogram.h_edges[1:]) / 2
         centres_v = (histogram.v_edges[:-1] + histogram.v_edges[1:]) / 2
-        figure.add_trace(go.Heatmap(
-            z=item.image.T, x=centres_h, y=centres_v, coloraxis="coloraxis", customdata=histogram.counts.T,
-            name=histogram.plane,
-            hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
-                          f"<extra>{histogram.plane}</extra>"), row=1, col=column)
+        if item.dots is not None:
+            coloured = data.dot_colour != NO_COLOUR
+            marker = (dict(size=DOT_SIZE, color=dot_values(item, data), coloraxis="coloraxis") if coloured
+                      else dict(size=DOT_SIZE, color="rgba({}, {}, {}, {})".format(*tint[:3], tint[3] / 255)))
+            figure.add_trace(go.Scattergl(
+                x=item.dots.h, y=item.dots.v, mode="markers", marker=marker, name=histogram.plane, showlegend=False,
+                hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}" + ("<br>%{marker.color:.4g}" if coloured
+                                                                             else "")
+                              + f"<extra>{histogram.plane}</extra>"), row=1, col=column)
+        else:
+            figure.add_trace(go.Heatmap(
+                z=item.image.T, x=centres_h, y=centres_v, coloraxis="coloraxis", customdata=histogram.counts.T,
+                name=histogram.plane,
+                hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
+                              f"<extra>{histogram.plane}</extra>"), row=1, col=column)
         figure.update_xaxes(title_text=axis_label(across), row=1, col=column)
         figure.update_yaxes(title_text=axis_label(up), row=1, col=column)
         # Every space axis at the first plane's horizontal scale (each plane has one across; XY's Y too), and T
@@ -685,9 +872,15 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
         else:
             figure.update_yaxes(matches=time_axis, row=1, col=column)
     figure.update_annotations(font_size=10)
+    if area == BLACK:
+        figure.update_xaxes(gridcolor=DARK_GRID, zerolinecolor=DARK_GRID)
+        figure.update_yaxes(gridcolor=DARK_GRID, zerolinecolor=DARK_GRID)
+    low, high = data.bar_range
     figure.update_layout(title=dict(text=plain_title(result), x=0.01, font=dict(size=13)), template="plotly_white",
                          margin=dict(l=60, r=20, t=80, b=50), uirevision="helab.v2.plane_histograms",
-                         coloraxis=dict(colorscale=plotly_scale(colours), cmin=0.0, cmax=data.top,
+                         plot_bgcolor=AREA_COLOURS[area],
+                         coloraxis=dict(colorscale=plotly_scale(bar_colours(data, colours)), cmin=low, cmax=high,
+                                        showscale=data.dot_colour != NO_COLOUR,
                                         colorbar=dict(title=dict(text=bar_label(data, colours), side="right"),
                                                       thickness=12)))
     return figure
@@ -718,14 +911,29 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
     timed = [axes for axes, item in zip(panes, data.items) if item.histogram.axes[1] == "T"]
     for axes in timed[1:]:
         axes.sharey(timed[0])  # T the same in XT and YT.
-    norm = matplotlib_norm(colours, data.top)  # One for every plane: their one colour bar.
+    if data.dot_colour == SUMMED:
+        from matplotlib import colors as typed_colors
+
+        norm: Any = cast(Any, typed_colors).Normalize(*data.bar_range)
+    else:
+        norm = matplotlib_norm(colours, data.top)  # One for every plane: their one colour bar.
     mesh: Any = None
+    area = background(result.parameters)
     for axes, item in zip(panes, data.items):
         histogram = item.histogram
         across, up, _ = histogram.axes
-        shown = np.where(item.image.T > 0, item.image.T, np.nan) if colours.scale == LOG else item.image.T
-        mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
-                               norm=norm, shading="flat")
+        axes.set_facecolor(AREA_COLOURS[area])
+        if item.dots is not None:
+            if data.dot_colour == NO_COLOUR:
+                axes.scatter(item.dots.h, item.dots.v, s=DOT_SIZE / 2, marker="s", linewidths=0, rasterized=True,
+                             color=tuple(channel / 255 for channel in DOT_TINTS[area]))
+            else:
+                mesh = axes.scatter(item.dots.h, item.dots.v, c=dot_values(item, data), s=DOT_SIZE / 2, marker="s",
+                                    linewidths=0, rasterized=True, cmap=cmap, norm=norm)
+        else:
+            shown = np.where(item.image.T > 0, item.image.T, np.nan) if colours.scale == LOG else item.image.T
+            mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
+                                   norm=norm, shading="flat")
         axes.set_title(histogram.plane, fontsize=9)
         axes.set_xlabel(axis_label(across), fontsize=8)
         axes.set_ylabel(axis_label(up), fontsize=8)
@@ -737,6 +945,7 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
             mid = middle((histogram.v_edges[0], histogram.v_edges[-1]))
             axes.set_ylim(mid - span / 2, mid + span / 2)
             axes.set_aspect("equal", adjustable="datalim")
-    figure.colorbar(mesh, ax=panes, label=planes_quantity(data))
+    if mesh is not None:
+        figure.colorbar(mesh, ax=panes, label=bar_label(data, colours) if data.dot_colour else planes_quantity(data))
     figure.suptitle(plain_title(result), fontsize=9, wrap=True)
     return figure

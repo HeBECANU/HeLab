@@ -4,8 +4,8 @@ Each shown axis covers the exact shortest range holding the auto-crop share of i
 (``stats.shortest_range``, as the 1D histograms), or the manual bounds set for it. The flattened axis isn't
 cut by auto-crop, so every event of the chosen shots counts; manual bounds set for it limit the events summed
 (a T window on the XY histogram images one cloud). Bins are automatic per axis (Freedman–Diaconis, at most
-``MAX_AUTO_BINS``) or set. The image shown may be filtered (``image_filters``) and its colour range compressed
-(``compress``), as the DLD port's Density images.
+``MAX_AUTO_BINS``) or set (at most ``MAX_BINS``). The image shown may be filtered (``image_filters``) and its
+colour range compressed (``compress``), as the DLD port's Density images.
 
 Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 """
@@ -18,12 +18,13 @@ import numpy as np
 import numpy.typing as npt
 
 from helab.analysis.dataset_view import Events
-from helab.analysis.stats import AXES, MAX_BINS, freedman_diaconis_bins, shortest_range
+from helab.analysis.stats import AXES, freedman_diaconis_bins, shortest_range
 
 # The plane's (horizontal, vertical, summed) axes. Never rotated: XY has X across and Y up; T runs up (a space axis
 # across every plane, so that they can share its scale).
 PLANES = {"XY": ("X", "Y", "T"), "XT": ("X", "T", "Y"), "YT": ("Y", "T", "X")}
-MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image (set by hand: up to ``stats.MAX_BINS``).
+MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image.
+MAX_BINS = 10_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
 Bounds = Optional[tuple[float, float]]
 
 

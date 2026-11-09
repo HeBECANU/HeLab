@@ -68,7 +68,18 @@ over the same range, from 0 to the highest bin of the planes shown:
   events: a T range on the XY histogram images one cloud. An axis left unset (min = max), or with its min
   above its max, covers all its events. Turn on **Sum the whole summed axis** to leave the
   summed axis's bounds out, so that they cut only the two shown axes.
-- **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown; 0 picks the count from the data.
+- **Draw**: **histogram** (the events in bins) or **dots** (each event as a dot, no bins drawn, over the same
+  view range). With dots:
+    - **Dot colour**: **none** (one colour; overlaps look darker), **summed axis** (each dot's own third
+      coordinate: T on XY, Y on XT, X on YT, over its range in that plane, which the plane's title gives) or
+      **local density** (the value of the dot's bin in the image, after any blur, on the colour scale below;
+      the densest dots are drawn on top).
+    - **Max dots**: at most this many dots in each plane (200,000 by default). Beyond it a fixed random sample
+      is drawn, and the plane's title says so. The bins and the local density still count every event.
+    - **Background**: white or black behind the dots (the titles, axes and colour bar stay on white). Black
+      brings out faint dots; uncoloured dots are then white.
+- **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown, up to 10,000; 0 picks the
+  count from the data (at most 1,000).
 - **Blur**: six filters, each in its own section with an **On** switch; its settings show once it's on. They
   run one after another, in increasing **Order** (filters with the same number run in the order listed), and
   each plane's title lists the ones that ran:

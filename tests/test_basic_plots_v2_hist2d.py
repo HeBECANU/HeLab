@@ -27,7 +27,7 @@ from helab.analysis.stats import shortest_range
 from helab.scripts import standard_v2
 from helab.scripts.standard_v2 import histograms_2d
 from helab.scripts.scripts_manager import ScriptsManager
-from helab.scripts.standard_v2.histograms_2d import PlaneCounts, PlaneHistograms
+from helab.scripts.standard_v2.histograms_2d import DENSITY, DOTS, NO_COLOUR, SUMMED, PlaneCounts, PlaneHistograms
 from helab.utils.folder_cache import Dataset
 
 
@@ -201,6 +201,7 @@ def test_bins_are_capped() -> None:
     data = np.column_stack((rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000)))
     item = histogram2d(data, "XY", 1.0)
     assert max(item.counts.shape) <= MAX_AUTO_BINS
+    assert histogram2d(data, "XY", 1.0, bins=(10_000, 20_000)).counts.shape == (10_000, 10_000)
 
 
 # The plot
@@ -213,7 +214,8 @@ def test_one_plot_in_the_package_with_every_plane_on() -> None:
         "XY, XT, YT histograms", "helab.v2.plane_histograms", "1", "Basic plots v2")
     names = [spec.name for spec in PlaneHistograms().parameters("Plot")]
     assert names[names.index("include_outside"):names.index("blur_median")] == [
-        "include_outside", "bins_t", "bins_x", "bins_y", "quantity"] and "range_mode" in names
+        "include_outside", "draw", "dot_colour", "max_dots", "dot_background", "bins_t", "bins_x", "bins_y", "quantity"]
+    assert "range_mode" in names
     assert names[-3:] == ["colour_scale", "gamma", "log_decades"]
     assert [name for name in names if name.startswith("blur_") and name.count("_") == 1] == [
         f"blur_{kind}" for kind in FILTERS]
@@ -291,6 +293,115 @@ def test_every_library_draws_and_updates_in_place(shown: str, backend: str, scal
         assert not script.update(widget, result_of(script, view(range(1, 4)), {**planes, "colour_scale": other}))
         assert not script.update(widget, result_of(script, view(range(1, 4)), {"show_yt": False,
                                                                                  "colour_scale": scale}))
+
+
+# Dots
+
+
+DOT_COLOURS = [NO_COLOUR, SUMMED, DENSITY]
+
+
+@pytest.mark.parametrize("plane", list(PLANES))
+def test_dots_are_the_events_in_the_view_range_coloured_as_chosen(plane: str) -> None:
+    data = view()
+    item = plane_of(plane, data, {"draw": DOTS, "dot_colour": SUMMED})
+    dots, histogram = item.dots, item.histogram
+    assert dots is not None and dots.drawn == dots.inside == histogram.inside  # Under the cap: every event.
+    across, up, summed = (("T", "X", "Y").index(name) for name in PLANES[plane])
+    every = data.events(tuple(data.shots))
+    inside = every[(every[:, across] >= histogram.h_edges[0]) & (every[:, across] <= histogram.h_edges[-1])
+                   & (every[:, up] >= histogram.v_edges[0]) & (every[:, up] <= histogram.v_edges[-1])]
+    assert np.array_equal(dots.h, inside[:, across]) and np.array_equal(dots.v, inside[:, up])
+    assert np.array_equal(dots.values, inside[:, summed])
+    assert dots.span == (inside[:, summed].min(), inside[:, summed].max())
+    # Local density: each dot's bin's value in the image, the densest last.
+    dense = plane_of(plane, data, {"draw": DOTS, "dot_colour": DENSITY, "bins_t": 20, "bins_x": 20, "bins_y": 20})
+    assert dense.dots is not None and np.all(np.diff(dense.dots.values) >= 0)
+    assert dense.dots.values.max() == dense.image.max() and dense.dots.values.min() >= 1
+    plain = plane_of(plane, data, {"draw": DOTS, "dot_colour": NO_COLOUR})
+    assert plain.dots is not None and not len(plain.dots.values) and plain.dots.drawn == histogram.inside
+    assert plane_of(plane, data).dots is None  # The histogram by default.
+
+
+def test_dots_beyond_the_cap_are_a_fixed_sample_and_said() -> None:
+    data = view()
+    first = plane_of("XY", data, {"draw": DOTS, "max_dots": 1_000})
+    again = plane_of("XY", data, {"draw": DOTS, "max_dots": 1_000})
+    assert first.dots is not None and again.dots is not None
+    assert first.dots.drawn == 1_000 < first.dots.inside == first.histogram.inside
+    assert np.array_equal(first.dots.h, again.dots.h)
+    assert "1,000 dots (a sample of" in histograms_2d.plane_title(first)
+    # The density and the bins still count every event.
+    assert first.histogram.inside == plane_of("XY", data).histogram.inside
+
+
+def test_dots_summed_axis_colour_bar_in_units_for_one_plane_else_low_to_high() -> None:
+    one = result_of(PlaneHistograms(), view(), {**only("XY"), "draw": DOTS, "dot_colour": SUMMED}).data
+    assert one.real_summed and one.bar_range == one.items[0].dots.span
+    assert "T (s)" in histograms_2d.bar_label(one, histograms_2d.Colours())
+    three = result_of(PlaneHistograms(), view(), {"draw": DOTS, "dot_colour": SUMMED}).data
+    assert not three.real_summed and three.bar_range == (0.0, 1.0)
+    for item in three.items:
+        values = histograms_2d.dot_values(item, three)
+        assert values.min() == pytest.approx(0.0) and values.max() == pytest.approx(1.0)
+        assert "colour " in histograms_2d.plane_title(item)
+    density = result_of(PlaneHistograms(), view(), {"draw": DOTS}).data
+    assert density.bar_range == (0.0, density.top)
+    script = PlaneHistograms()
+    settings = effective(script.parameters("Plot"), {"draw": DOTS, "dot_colour": SUMMED})
+    assert "dots, summed axis" in script.describe_run("Plot", settings, view())[1]
+
+
+@pytest.mark.parametrize("colour", DOT_COLOURS)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_dots_draw_in_every_library_and_update_in_place(backend: str, colour: str, qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    values = {"draw": DOTS, "dot_colour": colour, "colour_scale": SQRT}
+    widget: Any = script.draw(result_of(script, view(range(1, 3)), values), backend)
+    qtbot.addWidget(widget)
+    if isinstance(widget, MatplotlibPane):
+        widget.canvas.draw()  # type: ignore[no-untyped-call]
+    later = result_of(script, view(range(1, 4)), values)
+    assert script.update(widget, later)
+    if backend == PYQTGRAPH:
+        layout: Any = widget  # (The Matplotlib check above narrowed it.)
+        for panel, item in zip(layout.plane_panels, later.data.items):
+            assert panel.dots is not None and len(panel.dots.data) == item.dots.drawn
+            assert not panel.image.isVisible()
+        assert layout.plane_bar.isVisible() == (colour != NO_COLOUR)
+        # Back to the histogram, or another colouring: drawn anew.
+        assert not script.update(widget, result_of(script, view(range(1, 4)), {"colour_scale": SQRT}))
+        other = SUMMED if colour != SUMMED else DENSITY
+        assert not script.update(widget, result_of(script, view(range(1, 4)), {**values, "dot_colour": other}))
+    if backend == PLOTLY:
+        figure: Any = histograms_2d.planes_plotly(later)
+        assert [trace.type for trace in figure.data] == ["scattergl"] * 3
+        assert figure.layout.coloraxis.showscale == (colour != NO_COLOUR)
+
+
+@pytest.mark.parametrize("colour", [NO_COLOUR, DENSITY])
+def test_dots_on_a_black_or_white_plot_area(colour: str, qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    black = {"draw": DOTS, "dot_colour": colour, "dot_background": "black"}
+    result = result_of(script, view(), black)
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    for panel in widget.plane_panels:
+        assert panel.plot.getViewBox().background.brush().color().name() == "#000000"
+    if colour == NO_COLOUR:
+        assert widget.plane_panels[0].dots.opts["brush"].color().name() == "#ffffff"
+    assert script.update(widget, result_of(script, view(), {**black, "dot_background": "white"}))
+    assert not widget.plane_panels[0].plot.getViewBox().background.isVisible()
+    figure: Any = histograms_2d.planes_plotly(result)
+    assert figure.layout.plot_bgcolor == "#000000" and figure.layout.xaxis.gridcolor == histograms_2d.DARK_GRID
+    white: Any = histograms_2d.planes_plotly(result_of(script, view(), {"draw": DOTS}))
+    assert white.layout.plot_bgcolor == "#ffffff"
+    pane = histograms_2d.planes_matplotlib(result).axes[0]
+    assert pane.get_facecolor()[:3] == (0.0, 0.0, 0.0)
+    # The histogram keeps its white area whatever the setting.
+    assert histograms_2d.background({"draw": "histogram", "dot_background": "black"}) == "white"
+    values = effective(script.parameters("Plot"), black)
+    assert "on black" in script.describe_run("Plot", values, view())[1]
 
 
 def test_pyqtgraph_image_orientation_aspect_and_update(qtbot: QtBot) -> None:
