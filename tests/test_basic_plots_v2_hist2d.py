@@ -497,7 +497,260 @@ def test_compressed_colours_with_real_values_on_the_bar(qtbot: QtBot) -> None:
     assert shown.max() == pytest.approx(1.0) and shown.min() >= 0.0  # Colour positions over plain viridis.
     assert np.allclose(shown, np.sqrt(data.image / peak))
     assert widget.plane_bar.levels() == pytest.approx((0.0, peak))  # The bar reads real values.
-    assert "colours sqrt, values linear" in widget.plane_bar.getAxis("left").labelText
+    assert "colours sqrt, values linear" in widget.legend_label.text
+
+
+@pytest.mark.parametrize("scale,gamma,decades", [(LINEAR, 0.5, 3), (SQRT, 0.5, 3), (LOG, 0.5, 8), (POWER, 0.05, 3)])
+def test_every_planes_colours_match_the_shared_legend(scale: str, gamma: float, decades: int, qtbot: QtBot) -> None:
+    from plotly.colors import sample_colorscale, unlabel_rgb
+
+    script = PlaneHistograms()
+    settings = {"quantity": "rate per shot", "colour_scale": scale, "gamma": gamma, "log_decades": decades}
+    result = result_of(script, view(), settings)
+    data = result.data
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    colours = histograms_2d.Colours.of(result.parameters)
+    fractions = np.concatenate(([0.0], np.geomspace(1e-10, 1.0, 100)))
+    transformed = compress(fractions, scale, gamma, decades)
+    expected = histograms_2d.viridis().map(transformed, mode="byte")
+    groups = histograms_2d.colour_groups(data)
+    assert [[item.histogram.plane for item in group.items] for group in groups] == [["XY"], ["XT", "YT"]]
+    assert len(widget.plane_bars) == 2
+    assert groups[0].top != pytest.approx(groups[1].top)
+    for bar, label, group in zip(widget.plane_bars, widget.bar_labels, groups):
+        found = bar.colorMap().map(fractions, mode="byte")
+        assert np.max(np.abs(found.astype(float) - expected.astype(float))) <= 2
+        assert bar.axis.style["showValues"]
+        assert bar.axis.range == pytest.approx(group.bar_range)
+        assert all(item.histogram.plane in label.text for item in group.items)
+    assert "mm²" in widget.bar_labels[0].text and "mm·ms" in widget.bar_labels[1].text
+    for panel, item in zip(widget.plane_panels, data.items):
+        group = histograms_2d.colour_group(data, item)
+        assert np.allclose(panel.image.image, compress(item.image / group.peak, scale, gamma, decades))
+    # Plotly interpolates RGB between its stops: faint values must agree even across eight decades.
+    figure: Any = histograms_2d.planes_plotly(result)
+    for name, group in zip(("coloraxis", "coloraxis2"), groups):
+        axis = figure.layout[name]
+        stops = axis.colorscale
+        positions = np.array([entry[0] for entry in stops])
+        rgb = np.array([unlabel_rgb(entry[1]) for entry in stops])
+        interpolated = np.column_stack([np.interp(fractions, positions, rgb[:, channel]) for channel in range(3)])
+        target = np.array([unlabel_rgb(value) for value in sample_colorscale("Viridis", transformed.tolist())])
+        assert np.max(np.abs(interpolated - target)) <= 2
+        assert axis.cmax == pytest.approx(group.top)
+        assert axis.colorbar.title.text == histograms_2d.group_label(group, colours).replace(" · ", "<br>").replace(": ", "<br>")
+    for trace, item, name in zip(figure.data, data.items, ("coloraxis", "coloraxis2", "coloraxis2")):
+        assert trace.coloraxis == name and np.array_equal(trace.z, item.image.T)
+    drawn = histograms_2d.planes_matplotlib(result)
+    assert len(drawn.axes) == 5
+    for axes, item in zip(drawn.axes[:3], data.items):
+        mesh = axes.collections[0]
+        group = histograms_2d.colour_group(data, item)
+        assert np.allclose(mesh.norm(fractions * group.top), transformed)
+    for legend, group in zip(drawn.axes[3:], groups):
+        assert legend.get_ylabel() == histograms_2d.group_label(group, colours).replace(" · ", "\n").replace(": ", "\n")
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("draw", ["histogram", DOTS])
+def test_rate_colour_groups_update_with_their_own_ticks(backend: str, draw: str, qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    values = {"quantity": "rate per shot", "draw": draw, "colour_scale": SQRT}
+    first = result_of(script, view(range(1, 3)), values)
+    widget: Any = script.draw(first, backend)
+    qtbot.addWidget(widget)
+    later = result_of(script, view(range(1, 5)), values)
+    bars: list[Any] = []
+    if backend == PYQTGRAPH:
+        bars = list(widget.plane_bars)
+    assert script.update(widget, later)
+    if backend == PYQTGRAPH:
+        assert widget.plane_bars == bars
+        for bar, group in zip(bars, histograms_2d.colour_groups(later.data)):
+            assert bar.levels() == pytest.approx(group.bar_range)
+        for panel, item in zip(widget.plane_panels, later.data.items):
+            group = histograms_2d.colour_group(later.data, item)
+            if draw == DOTS:
+                assert item.dots is not None
+                expected = histograms_2d.dot_brushes(item, later.data, histograms_2d.Colours(SQRT))
+                assert [brush.color().getRgb() for brush in panel.dots.data["brush"]] == [
+                    brush.color().getRgb() for brush in expected]
+            else:
+                assert np.allclose(panel.image.image, np.sqrt(item.image / group.peak))
+        # Counts use one shared numerical range, so this needs a new layout.
+        assert not script.update(widget, result_of(script, view(), {"draw": draw, "colour_scale": SQRT}))
+
+
+@pytest.mark.parametrize("shown", [("XY",), ("XT",), ("YT",), ("XY", "XT"), ("XY", "YT"), ("XT", "YT")])
+def test_rate_legends_follow_the_planes_shown(shown: tuple[str, ...], qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    result = result_of(script, view(), {"quantity": "rate per shot",
+        **{f"show_{plane.lower()}": plane in shown for plane in PLANES}})
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    expected: list[tuple[str, ...]] = [("XY",)] if "XY" in shown else []
+    timed = tuple(plane for plane in shown if plane != "XY")
+    if timed:
+        expected.append(timed)
+    groups = histograms_2d.colour_groups(result.data)
+    assert [tuple(item.histogram.plane for item in group.items) for group in groups] == expected
+    assert len(widget.plane_bars) == len(expected)
+    widget.resize(1000, 500)
+    widget.show()
+    qtbot.waitUntil(lambda: all(panel.plot.getViewBox().height() > 50 for panel in widget.plane_panels))
+    for bar, group in zip(widget.plane_bars, groups):
+        if group.items[0].histogram.plane == "XY":
+            assert bar.sceneBoundingRect().right() <= widget.plane_panels[0].plot.sceneBoundingRect().left()
+        else:
+            assert bar.sceneBoundingRect().left() >= widget.plane_panels[-1].plot.sceneBoundingRect().right()
+    figure: Any = histograms_2d.planes_plotly(result)
+    for trace, item in zip(figure.data, result.data.items):
+        axis = figure.layout[trace.coloraxis]
+        group = histograms_2d.colour_group(result.data, item)
+        assert axis.cmax == pytest.approx(group.top)
+        assert (axis.colorbar.x < 0) == (item.histogram.plane == "XY")
+    drawn = histograms_2d.planes_matplotlib(result)
+    assert len(drawn.axes) == len(shown) + len(expected)
+    drawn.set_size_inches(10, 5)
+    drawn.canvas.draw()
+    for bar_axes, group in zip(drawn.axes[len(shown):], groups):
+        if group.items[0].histogram.plane == "XY":
+            assert bar_axes.get_position().x1 < drawn.axes[0].get_position().x0
+        else:
+            assert bar_axes.get_position().x0 > drawn.axes[len(shown) - 1].get_position().x1
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_toggling_planes_removes_and_restores_their_rate_bars(backend: str, qtbot: QtBot,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    updated_figures: list[Any] = []
+    original_update = PlotlyPane.update_figure
+
+    def capture_update(pane: PlotlyPane, figure: Any) -> None:
+        updated_figures.append(figure)
+        original_update(pane, figure)
+
+    monkeypatch.setattr(PlotlyPane, "update_figure", capture_update)
+    script = PlaneHistograms()
+    widget: Any = None
+    for shown in [("XY", "XT", "YT"), ("XY",), ("XT",), ("YT",), ("XY", "YT"), ("XT", "YT"), (),
+                  ("XY", "XT", "YT")]:
+        result = result_of(script, view(), {"quantity": "rate per shot",
+            **{f"show_{plane.lower()}": plane in shown for plane in PLANES}})
+        updated = widget is not None and script.update(widget, result)
+        if not updated:
+            if widget is not None:
+                widget.close()
+                widget.deleteLater()
+            widget = script.draw(result, backend)
+            qtbot.addWidget(widget)
+        if not shown:
+            assert isinstance(widget, QLabel)  # No plane: no colour bar remains.
+            continue
+        current: Any = widget
+        count = int("XY" in shown) + int(any(plane != "XY" for plane in shown))
+        if backend == PYQTGRAPH:
+            assert len(current.plane_bars) == count
+            assert all(bar.isVisible() for bar in current.plane_bars)
+            assert [panel.axes for panel in current.plane_panels] == [PLANES[plane][:2] for plane in shown]
+        elif backend == MATPLOTLIB:
+            assert len(current.figure.axes) == len(shown) + count
+        elif updated:
+            figure = updated_figures[-1]
+            assert [trace.name for trace in figure.data] == list(shown)
+            axes = [key for key in figure.layout if key.startswith("coloraxis")]
+            assert len(axes) == count
+            assert all(figure.layout[key].showscale for key in axes)
+
+
+@pytest.mark.parametrize("width,height", [(640, 360), (1200, 600)])
+def test_colour_tick_numbers_stay_inside_and_keep_physical_values_after_resize(
+        width: int, height: int, qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    result = result_of(script, view(), {"quantity": "rate per shot", "colour_scale": LOG})
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    widget.resize(width, height)
+    widget.show()
+    qtbot.waitUntil(lambda: all(panel.plot.getViewBox().height() > 50 for panel in widget.plane_panels))
+    widget.grab()  # Exercise the actual axis painter, including text generation and clipping.
+    groups = histograms_2d.colour_groups(result.data)
+    for bar, group in zip(widget.plane_bars, groups):
+        axis = bar.axis
+        assert axis.range == pytest.approx(group.bar_range)
+        assert axis.linkedView() is None
+        assert axis.width() == 0  # Tick text reserves no space outside the gradient.
+        assert axis.label_rects
+        for rect in axis.label_rects:
+            mapped = axis.mapRectToItem(bar.vb, rect)
+            assert bar.vb.boundingRect().adjusted(-1, -1, 1, 1).contains(mapped)
+    widget.resize(width + 80, height + 40)
+    qtbot.wait(20)
+    widget.grab()
+    for bar, group in zip(widget.plane_bars, groups):
+        assert bar.axis.range == pytest.approx(group.bar_range)
+    figure: Any = histograms_2d.planes_plotly(result)
+    assert figure.layout.coloraxis.colorbar.ticklabelposition == "inside"
+    assert figure.layout.coloraxis2.colorbar.ticklabelposition == "inside"
+
+
+@pytest.mark.parametrize("size", [(6.4, 3.6), (12.0, 6.0)])
+@pytest.mark.parametrize("decades", [1, 3])
+def test_matplotlib_major_and_minor_numbers_fit_inside_the_gradient(size: tuple[float, float], decades: int) -> None:
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    result = result_of(PlaneHistograms(), view(), {"quantity": "rate per shot", "colour_scale": LOG,
+                                                 "log_decades": decades})
+    figure = histograms_2d.planes_matplotlib(result)
+    figure.set_size_inches(*size)
+    canvas: Any = FigureCanvasAgg(figure)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    for axes in figure.axes[3:]:
+        bounds = axes.get_window_extent(renderer)
+        labels = [text for text in axes.get_yticklabels(which="both") if text.get_visible() and text.get_text()]
+        assert labels
+        for text in labels:
+            label = text.get_window_extent(renderer)
+            assert label.x0 >= bounds.x0 and label.x1 <= bounds.x1
+
+
+def test_inside_tick_labels_keep_precision_for_a_narrow_summed_time_range(qtbot: QtBot) -> None:
+    t = np.linspace(2.12345678, 2.12345679, 100)
+    events = np.column_stack((t, np.linspace(-0.01, 0.01, 100), np.linspace(-0.01, 0.01, 100)))
+    data = build_view(Dataset("/data/root/narrow", "sig", {1: events}, {}, 0))
+    script = PlaneHistograms()
+    result = result_of(script, data, {**only("XY"), "draw": DOTS, "dot_colour": SUMMED})
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    widget.resize(640, 360)
+    widget.show()
+    qtbot.wait(20)
+    widget.grab()
+    bar = widget.plane_bar
+    assert bar.axis.gradient_width > histograms_2d.BAR_WIDTH
+    assert len(bar.axis.label_rects) >= 2
+    assert bar.axis.range == pytest.approx(result.data.bar_range)
+    for rect in bar.axis.label_rects:
+        assert bar.vb.boundingRect().adjusted(-1, -1, 1, 1).contains(bar.axis.mapRectToItem(bar.vb, rect))
+
+
+@pytest.mark.parametrize("width,height", [(640, 360), (1200, 600)])
+def test_the_full_colour_legend_fits_the_plot(width: int, height: int, qtbot: QtBot) -> None:
+    script = PlaneHistograms()
+    result = result_of(script, view(), {"quantity": "rate per shot", "colour_scale": LOG})
+    widget: Any = script.draw(result, PYQTGRAPH)
+    qtbot.addWidget(widget)
+    widget.resize(width, height)
+    widget.show()
+    label = widget.legend_label
+    qtbot.waitUntil(lambda: widget.sceneRect().contains(label.sceneBoundingRect()))
+    assert "log, 3 decades" in label.text
+    assert "mm²" in widget.bar_labels[0].text and "mm·ms" in widget.bar_labels[1].text
+    for item in [*widget.bar_labels, *widget.plane_bars]:
+        assert widget.sceneRect().contains(item.sceneBoundingRect())
+    qtbot.waitUntil(lambda: all(panel.plot.getViewBox().height() > 50 for panel in widget.plane_panels))
 
 
 def test_one_colour_bar_over_every_plane(qtbot: QtBot) -> None:
@@ -515,13 +768,25 @@ def test_one_colour_bar_over_every_plane(qtbot: QtBot) -> None:
     assert max(float(panel.image.image.max()) for panel in widget.plane_panels) == pytest.approx(1.0)
     assert histograms_2d.planes_quantity(result.data) == "Events per bin"
     rate = result_of(script, view(), {"quantity": "rate per shot"}).data
-    assert "XY per m², XT and YT per m·s" in histograms_2d.planes_quantity(rate)
+    assert "XY per mm², XT and YT per mm·ms" in histograms_2d.planes_quantity(rate)
     xt_yt = result_of(script, view(), {"quantity": "rate per shot", "show_xy": False}).data
-    assert histograms_2d.planes_quantity(xt_yt) == "Events / (m·s) / shot"
+    assert histograms_2d.planes_quantity(xt_yt) == "Events / (mm·ms) / shot"
     figure: Any = histograms_2d.planes_plotly(result)
     assert all(trace.coloraxis == "coloraxis" for trace in figure.data)
     assert figure.layout.coloraxis.cmax == pytest.approx(peak)
     assert len(histograms_2d.planes_matplotlib(result).axes) == 4  # Three images, one bar.
+
+
+@pytest.mark.parametrize("plane", list(PLANES))
+def test_rate_integrates_to_events_per_shot_in_millimetres_and_milliseconds(plane: str) -> None:
+    data = view()
+    item = plane_of(plane, data, {"quantity": "rate per shot"})
+    histogram = item.histogram
+    # Every shown axis converts by 1,000: metres to mm, seconds to ms.
+    widths_h = np.diff(histogram.h_edges) * 1_000
+    widths_v = np.diff(histogram.v_edges) * 1_000
+    assert float((item.image * widths_h[:, None] * widths_v[None, :]).sum()) == pytest.approx(
+        histogram.inside / len(data.shots))
 
 
 def test_blur_rate_per_shot_and_the_whole_summed_axis() -> None:
@@ -536,10 +801,10 @@ def test_blur_rate_per_shot_and_the_whole_summed_axis() -> None:
     capped = plane_of("XY", data, {"bins_x": 8, "bins_y": 8, "blur_gaussian": True, "blur_gaussian_sigma": 50.0})
     assert any("over a quarter" in note and note.startswith("XY: ") for note in capped.notes)
     rate = plane_of("XY", data, {"bins_x": 30, "bins_y": 30, "quantity": "rate per shot"})
-    assert rate.per_shot and np.allclose(rate.image, plain.image / len(data.shots) / bin_area(rate.histogram))
-    assert histograms_2d.quantity_text(rate) == "Events / m² / shot"
+    assert rate.per_shot and np.allclose(rate.image, plain.image / len(data.shots) / (bin_area(rate.histogram) * 1e6))
+    assert histograms_2d.quantity_text(rate) == "Events / mm² / shot"
     xt = plane_of("XT", data, {"quantity": "rate per shot"})
-    assert histograms_2d.quantity_text(xt) == "Events / (m·s) / shot"
+    assert histograms_2d.quantity_text(xt) == "Events / (mm·ms) / shot"
     # Manual bounds on T limit the XY sum, unless the whole summed axis is asked for.
     window = {"range_mode": "manual", "t_min": 2.09, "t_max": 2.11, "x_min": -0.01, "x_max": 0.01,
               "y_min": -0.01, "y_max": 0.01}

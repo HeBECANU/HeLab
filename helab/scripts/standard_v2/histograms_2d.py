@@ -20,8 +20,9 @@ import numpy as np
 import numpy.typing as npt
 import plotly.graph_objs as go
 import pyqtgraph as pg
-from PyQt6.QtCore import QObject, QRectF, QTimer
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import QObject, QPointF, QRectF, QTimer
+from PyQt6.QtGui import QColor, QFontMetricsF
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from helab.analysis.backends import MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane, WrappingLabel, mpl_figure
 from helab.analysis.dataset_view import DatasetView
@@ -202,8 +203,8 @@ def blur_brief(values: Mapping[str, Any]) -> str:
     return "blur " + " → ".join(names[kind] for kind in ordered) if ordered else ""
 COUNTS, PER_SHOT = "counts per bin", "rate per shot"
 QUANTITY = ParameterSpec("quantity", "Show", "choice", COUNTS, choices=(COUNTS, PER_SHOT), group=IMAGE_GROUP,
-                         tip="Counts per bin, or a rate per shot: counts / shots chosen / bin area (per m² for XY; "
-                             "per m per s for XT and YT).")
+                         tip="Counts per bin, or a rate per shot: counts / shots chosen / bin area (per mm² for XY; "
+                             "per mm per ms for XT and YT).")
 COLOUR_GROUP = "Colour"
 SCALE = ParameterSpec("colour_scale", "Colour scale", "choice", LINEAR, choices=SCALES, group=COLOUR_GROUP,
                       tip="Compresses the colour range only: the image's values stay linear and the colour bar "
@@ -288,12 +289,12 @@ class Planes:
 
     @property
     def peak(self) -> float:
-        """The highest bin of the planes shown: the top of their one colour bar."""
+        """The highest bin in this group of planes."""
         return max((item.peak for item in self.items), default=0.0)
 
     @property
     def top(self) -> float:
-        """The colour bar's top (1 when every bin is empty)."""
+        """This group's colour bar top (1 when every bin is empty)."""
         return self.peak if self.peak > 0 else 1.0
 
     @property
@@ -319,6 +320,36 @@ class Planes:
             low, high = dots.span
             return (low, high) if high > low else (low - 0.5, low + 0.5)
         return 0.0, self.top
+
+
+def colour_groups(data: Planes) -> tuple[Planes, ...]:
+    """Planes that can share numerical colour ticks: counts together, rates by physical unit."""
+    if data.dot_colour in (SUMMED, NO_COLOUR) or not any(item.per_shot for item in data.items):
+        return (data,)
+    groups = []
+    for spatial in (True, False):
+        items = tuple(item for item in data.items if (item.histogram.plane == "XY") == spatial)
+        if items:
+            groups.append(Planes(items, data.shots, data.total_shots, data.notes))
+    return tuple(groups)
+
+
+def left_colour_bar(data: Planes) -> bool:
+    """Whether this is XY's rate legend, placed beside the leftmost plane."""
+    return (bool(data.items) and data.items[0].per_shot and data.dot_colour not in (SUMMED, NO_COLOUR)
+            and all(item.histogram.plane == "XY" for item in data.items))
+
+
+def colour_group(data: Planes, item: PlaneCounts) -> Planes:
+    """The numerical colour range used by this plane, including local-density dots."""
+    return next(group for group in colour_groups(data)
+                if any(candidate is item for candidate in group.items))
+
+
+def group_label(data: Planes, colours: Optional[Colours] = None) -> str:
+    """The planes and units belonging to one numerical colour axis."""
+    label = ", ".join(item.histogram.plane for item in data.items) + ": " + planes_quantity(data)
+    return label + (f" · colours {colours.text()}" if colours is not None and colours.text() else "")
 
 
 @dataclass(frozen=True)
@@ -388,23 +419,23 @@ def axis_label(name: str) -> str:
 
 
 def quantity_text(data: PlaneCounts) -> str:
-    """The colour bar's quantity: events per bin, or per area per shot in s and m."""
+    """The colour bar's quantity: events per bin, or per area per shot in ms and mm."""
     blur = " (filtered)" if data.filters else ""
     if not data.per_shot:
         return f"Events per bin{blur}"
     across, up, _ = data.histogram.axes
-    area = "m²" if "T" not in (across, up) else "(m·s)"
+    area = "mm²" if "T" not in (across, up) else "(mm·ms)"
     return f"Events / {area} / shot{blur}"
 
 
 def planes_quantity(data: Planes) -> str:
     """The one colour bar's quantity: each plane's, or with a rate per shot over planes of different units (XY's
-    per m², XT's and YT's per m·s), which unit is whose."""
+    per mm², XT's and YT's per mm·ms), which unit is whose."""
     texts = list(dict.fromkeys(quantity_text(item) for item in data.items))
     if len(texts) == 1:
         return texts[0]
     blur = " (filtered)" if any(item.filters for item in data.items) else ""
-    return f"Events / bin area / shot (XY per m², XT and YT per m·s){blur}"
+    return f"Events / bin area / shot (XY per mm², XT and YT per mm·ms){blur}"
 
 
 def bar_label(data: Planes, colours: Colours) -> str:
@@ -438,7 +469,7 @@ def dot_values(item: PlaneCounts, data: Planes) -> npt.NDArray[np.float64]:
 
 def dot_positions(item: PlaneCounts, data: Planes, colours: Colours) -> npt.NDArray[np.float64]:
     """Each dot's place in the colour map (0…1), as the image's bins (compressed) for the local density."""
-    low, high = data.bar_range
+    low, high = colour_group(data, item).bar_range
     linear = (dot_values(item, data) - low) / (high - low) if high > low else np.zeros(len(dot_values(item, data)))
     shown = bar_colours(data, colours)
     return compress(linear, shown.scale, shown.gamma, shown.decades)
@@ -457,7 +488,7 @@ def viridis() -> Any:
 def bar_map(colours: Colours) -> pg.ColorMap:
     """Viridis resampled so that a linear value shows the colour of its compressed position: the colour bar's
     gradient over its linear axis in real values (the image itself is drawn from ``colour_positions``)."""
-    positions = np.linspace(0.0, 1.0, LUT_SIZE)
+    positions = colour_stops(colours, LUT_SIZE)
     picked = viridis().map(compress(positions, colours.scale, colours.gamma, colours.decades), mode="byte")
     return pg.ColorMap(positions, picked, name=f"{COLOUR_MAP} ({colours.scale})")
 
@@ -482,7 +513,9 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
     image, filters, capped = image_filters.apply(item.counts, blur_steps(values, item))
     per_shot = values.get(QUANTITY.name) == PER_SHOT
     if per_shot and chosen and item.summed:
-        image = image / chosen / bin_area(item)
+        # Bin edges stay in SI units; rates use mm² for XY and mm·ms for XT/YT.
+        area = bin_area(item) * 1e6
+        image = image / chosen / area
     dots = None
     if values.get(DRAW.name) == DOTS:
         check()
@@ -491,10 +524,57 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
     return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped), dots)
 
 
+BAR_WIDTH = 32
+
+
+class InsideColourAxis(pg.AxisItem):  # type: ignore[misc]  # PyQtGraph is untyped.
+    """A colour bar's numerical axis, with legible labels inside the gradient."""
+
+    def __init__(self, orientation: str) -> None:
+        super().__init__(orientation=orientation)
+        self.label_rects: list[QRectF] = []
+        self.gradient_width = BAR_WIDTH
+        # The negative length includes the gradient in AxisItem's painting bounds. drawPicture
+        # shortens the actual marks; text starts three pixels inside that same bounded area.
+        self.setStyle(tickLength=-BAR_WIDTH, tickTextOffset=-BAR_WIDTH + 3, tickAlpha=255,
+                      autoExpandTextSpace=False)
+        self.setWidth(0)
+        self.setPen("k")
+        self.setTickPen("k")
+        self.setTextPen("k")
+        self.unlinkFromView()
+
+    def fit_labels(self, low: float, high: float) -> int:
+        """Keep full tick precision inside the bar, widening only when the values need it."""
+        metrics = QFontMetricsF(QApplication.font())
+        levels = self.tickValues(low, high, max(300.0, self.height()))
+        texts = [text for spacing, values in levels for text in self.tickStrings(values, 1.0, spacing)]
+        width = max(BAR_WIDTH, int(max((metrics.horizontalAdvance(text) for text in texts), default=0.0)) + 8)
+        if width != self.gradient_width:
+            self.gradient_width = width
+            self.setStyle(tickLength=-width, tickTextOffset=-width + 3)
+        return width
+
+    def drawPicture(self, p: Any, axisSpec: Any, tickSpecs: Any, textSpecs: Any) -> None:
+        ticks = []
+        for pen, start, end in tickSpecs:
+            direction = 1 if end.x() > start.x() else -1
+            ticks.append((pen, start, QPointF(start.x() + 2 * direction, end.y())))
+        super().drawPicture(p, axisSpec, ticks, [])
+        bounds = self.mapRectFromParent(self.geometry())
+        self.label_rects = []
+        for rect, flags, text in textSpecs:
+            inside = QRectF(rect)
+            inside.moveTop(max(bounds.top() + 2, min(inside.top(), bounds.bottom() - inside.height() - 2)))
+            self.label_rects.append(inside)
+            p.fillRect(inside.adjusted(-2, 0, 2, 0), QColor(255, 255, 255, 220))
+            p.drawText(inside, int(flags), text)
+
+
 @dataclass
 class PlanePanel:
     """A PyQtGraph drawing's items for one plane: its title, plot and image, and the plane's axes and extent
-    (horizontal, vertical; set by ``fill``). The planes share one colour bar (``plane_bar``)."""
+    (horizontal, vertical; set by ``fill``). Colour bars are shared only by planes with the same physical units."""
     label: Any
     plot: Any
     image: Any
@@ -709,9 +789,11 @@ class PlaneHistograms(DatasetAnalysis):
         widget.setBackground("w")
         widget.title_label = WrappingLabel("")
         count = len(data.items)
-        widget.addItem(widget.title_label, row=0, col=0, colspan=count + 1)
+        groups = colour_groups(data)
+        left = int(any(left_colour_bar(group) for group in groups))
+        widget.addItem(widget.title_label, row=0, col=0, colspan=count + len(colour_groups(data)))
         panels = []
-        for column, item in enumerate(data.items):
+        for column, item in enumerate(data.items, start=left):
             across, up, _ = item.histogram.axes
             label = WrappingLabel("")
             widget.addItem(label, row=1, col=column)
@@ -732,11 +814,43 @@ class PlaneHistograms(DatasetAnalysis):
                 plot.addItem(dots)
             plot.hideButtons()  # (Its auto-range button would break the shared scale.)
             panels.append(PlanePanel(label, plot, image, dots))
-        # One colour bar for every plane (their images over the same range), right of the last.
-        widget.plane_bar = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(bar_colours(data, colours)),
-                                           interactive=False, label=bar_label(data, colours))
-        widget.addItem(widget.plane_bar, row=2, col=count)
-        widget.plane_bar.setVisible(data.dot_colour != NO_COLOUR)
+        groups = colour_groups(data)
+        split = len(groups) > 1
+        if split:
+            widget.setMinimumSize(640, 360)  # Leave room for both numerical axes and the images.
+        widget.plane_bars = []
+        widget.bar_labels = []
+        for index, group_data in enumerate(groups):
+            bar: Any = pg.ColorBarItem(values=(0.0, 1.0), colorMap=bar_map(bar_colours(data, colours)),
+                                  width=BAR_WIDTH, interactive=False, colorMapMenu=False)
+            on_left = left_colour_bar(group_data)
+            side = "left" if on_left else "right"
+            other = bar.getAxis("right" if on_left else "left")
+            other.setStyle(showValues=False)
+            other.setTicks([])
+            other.setWidth(0)
+            axis = InsideColourAxis(side)
+            bar.setAxisItems({side: axis})
+            axis.unlinkFromView()  # setAxisItems links it; ticks must keep the physical value range.
+            bar.axis = axis
+            bar_column = 0 if on_left else count + left
+            bar.inset_column = bar_column
+            if split:
+                unit = "mm²" if group_data.items[0].histogram.plane == "XY" else "mm·ms"
+                heading = "/".join(item.histogram.plane for item in group_data.items)
+                label = WrappingLabel(f"{heading}<br>{unit}", size="7.5pt")
+                document = label.item.document()
+                if document is not None:
+                    document.setDocumentMargin(0)
+                widget.addItem(label, row=1, col=bar_column)
+                widget.bar_labels.append(label)
+            widget.addItem(bar, row=2, col=bar_column)
+            widget.ci.layout.setColumnFixedWidth(bar_column, max(40, BAR_WIDTH + 4))
+            bar.setVisible(data.dot_colour != NO_COLOUR)
+            widget.plane_bars.append(bar)
+        widget.plane_bar = widget.plane_bars[0]
+        widget.legend_label = WrappingLabel("")
+        widget.addItem(widget.legend_label, row=3, col=0, colspan=count + len(groups))
         widget.plane_panels = panels
         widget.plane_layout = planes_layout(result)
         widget.plane_scale = SpaceScale(widget, panels)
@@ -767,11 +881,11 @@ def nothing_text(data: Planes) -> str:
                 else "No events inside the summed axis's bounds (View range)"))
 
 
-def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours, str]:
-    """What a PyQtGraph drawing was built for: its planes, colour scale and dot colouring ("" for images; any
-    other change refills it)."""
+def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours, str, tuple[tuple[str, ...], ...]]:
+    """The planes, colour transform, dot colouring and unit groups a PyQtGraph drawing was built for."""
     data: Planes = result.data
-    return tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters), data.dot_colour
+    return (tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters), data.dot_colour,
+            tuple(tuple(item.histogram.plane for item in group.items) for group in colour_groups(data)))
 
 
 def dot_brushes(item: PlaneCounts, data: Planes, colours: Colours, area: str = WHITE) -> Any:
@@ -800,22 +914,40 @@ def fill(widget: Any, result: AnalysisResult) -> None:
         if item.dots is not None and panel.dots is not None:
             panel.dots.setData(x=item.dots.h, y=item.dots.v, brush=dot_brushes(item, data, colours, area))
         else:
-            panel.image.setImage(colour_positions(item, colours, data.peak), levels=(0.0, 1.0))
+            panel.image.setImage(colour_positions(item, colours, colour_group(data, item).peak), levels=(0.0, 1.0))
         h0, h1 = float(histogram.h_edges[0]), float(histogram.h_edges[-1])
         v0, v1 = float(histogram.v_edges[0]), float(histogram.v_edges[-1])
         panel.image.setRect(QRectF(h0, v0, h1 - h0, v1 - v0))
         panel.axes = (histogram.axes[0], histogram.axes[1])
         panel.extent = ((h0, h1), (v0, v1))
-    widget.plane_bar.setLevels(data.bar_range)
-    widget.plane_bar.getAxis("left").setLabel(bar_label(data, colours))  # (ColorBarItem labels its left axis.)
+    groups = colour_groups(data)
+    for bar, group_data in zip(widget.plane_bars, groups):
+        low, high = group_data.bar_range
+        width = bar.axis.fit_labels(low, high)
+        bar.layout.setColumnFixedWidth(1, width)
+        widget.ci.layout.setColumnFixedWidth(bar.inset_column, max(40, width + 4))
+        bar.setLevels((low, high))
+    widget.legend_label.setText(bar_label(data, colours))
+    widget.legend_label.setVisible(data.dot_colour != NO_COLOUR)
     widget.plane_scale.schedule()  # Fitted to the new images unless zoomed.
 
 
-def plotly_scale(colours: Colours, stops: int = 64) -> list[list[Any]]:
+def colour_stops(colours: Colours, stops: int = LUT_SIZE) -> npt.NDArray[np.float64]:
+    """Sample evenly in colour space, retaining faint logarithmic and power-law values."""
+    positions = np.linspace(0.0, 1.0, stops)
+    if colours.scale == LOG:
+        return np.concatenate(([0.0], 10.0 ** ((positions - 1.0) * colours.decades)))
+    if colours.scale != LINEAR:
+        exponent = colours.gamma if colours.scale == POWER else 0.5
+        return positions ** (1.0 / exponent)
+    return positions
+
+
+def plotly_scale(colours: Colours, stops: int = LUT_SIZE) -> list[list[Any]]:
     """A Plotly colour scale over the bar's linear range showing each value's compressed colour."""
     from plotly.colors import sample_colorscale
 
-    positions = np.linspace(0.0, 1.0, stops)
+    positions = colour_stops(colours, stops)
     picked = sample_colorscale("Viridis", compress(positions, colours.scale, colours.gamma, colours.decades).tolist())
     return [[float(position), colour] for position, colour in zip(positions, picked)]
 
@@ -826,7 +958,7 @@ def axis_suffix(column: int) -> str:
 
 
 def planes_plotly(result: AnalysisResult) -> go.Figure:
-    """The planes side by side, one colour bar (a shared colour axis) right of the last."""
+    """The planes side by side, with a separate colour axis for each physical quantity."""
     from plotly.subplots import make_subplots
 
     data: Planes = result.data
@@ -839,14 +971,18 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
     time_axis: Optional[str] = None
     area = background(result.parameters)
     tint = DOT_TINTS[area]
+    groups = colour_groups(data)
     for column, item in enumerate(data.items, start=1):
         histogram = item.histogram
         across, up, _ = histogram.axes
+        group_index = next(index for index, group in enumerate(groups)
+                           if any(candidate is item for candidate in group.items))
+        colour_axis = "coloraxis" + (str(group_index + 1) if group_index else "")
         centres_h = (histogram.h_edges[:-1] + histogram.h_edges[1:]) / 2
         centres_v = (histogram.v_edges[:-1] + histogram.v_edges[1:]) / 2
         if item.dots is not None:
             coloured = data.dot_colour != NO_COLOUR
-            marker = (dict(size=DOT_SIZE, color=dot_values(item, data), coloraxis="coloraxis") if coloured
+            marker = (dict(size=DOT_SIZE, color=dot_values(item, data), coloraxis=colour_axis) if coloured
                       else dict(size=DOT_SIZE, color="rgba({}, {}, {}, {})".format(*tint[:3], tint[3] / 255)))
             figure.add_trace(go.Scattergl(
                 x=item.dots.h, y=item.dots.v, mode="markers", marker=marker, name=histogram.plane, showlegend=False,
@@ -855,7 +991,7 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
                               + f"<extra>{histogram.plane}</extra>"), row=1, col=column)
         else:
             figure.add_trace(go.Heatmap(
-                z=item.image.T, x=centres_h, y=centres_v, coloraxis="coloraxis", customdata=histogram.counts.T,
+                z=item.image.T, x=centres_h, y=centres_v, coloraxis=colour_axis, customdata=histogram.counts.T,
                 name=histogram.plane,
                 hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
                               f"<extra>{histogram.plane}</extra>"), row=1, col=column)
@@ -875,14 +1011,24 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
     if area == BLACK:
         figure.update_xaxes(gridcolor=DARK_GRID, zerolinecolor=DARK_GRID)
         figure.update_yaxes(gridcolor=DARK_GRID, zerolinecolor=DARK_GRID)
-    low, high = data.bar_range
+    split = len(groups) > 1
+    axes = {}
+    for index, group_data in enumerate(groups):
+        low, high = group_data.bar_range
+        label = (group_label(group_data, colours) if split else bar_label(group_data, colours))
+        label = label.replace(" · ", "<br>").replace(": ", "<br>")
+        on_left = left_colour_bar(group_data)
+        bar: dict[str, Any] = dict(title=dict(text=label, side="right"),
+                                   thickness=24, ticks="inside", ticklabelposition="inside", tickcolor="black",
+                                   tickfont=dict(size=9, color="black", shadow="auto"),
+                                   x=-0.12 if on_left else 1.04, xanchor="right" if on_left else "left")
+        name = "coloraxis" + (str(index + 1) if index else "")
+        axes[name] = dict(colorscale=plotly_scale(bar_colours(data, colours)), cmin=low, cmax=high,
+                          showscale=data.dot_colour != NO_COLOUR, colorbar=bar)
     figure.update_layout(title=dict(text=plain_title(result), x=0.01, font=dict(size=13)), template="plotly_white",
-                         margin=dict(l=60, r=20, t=80, b=50), uirevision="helab.v2.plane_histograms",
-                         plot_bgcolor=AREA_COLOURS[area],
-                         coloraxis=dict(colorscale=plotly_scale(bar_colours(data, colours)), cmin=low, cmax=high,
-                                        showscale=data.dot_colour != NO_COLOUR,
-                                        colorbar=dict(title=dict(text=bar_label(data, colours), side="right"),
-                                                      thickness=12)))
+                         margin=dict(l=160 if any(left_colour_bar(group) for group in groups) else 60,
+                                     r=160, t=80, b=50),
+                         uirevision="helab.v2.plane_histograms", plot_bgcolor=AREA_COLOURS[area], **axes)
     return figure
 
 
@@ -898,6 +1044,31 @@ def matplotlib_norm(colours: Colours, peak: float) -> Any:
     return mpl_colors.PowerNorm(0.5 if colours.scale != POWER else colours.gamma, vmin=0.0, vmax=peak, clip=True)
 
 
+def inset_matplotlib_ticks(colourbar: Any, on_left: bool) -> None:
+    """Keep major and minor numbers inside a gradient wide enough for their actual text."""
+    from matplotlib.transforms import Bbox
+
+    axes = colourbar.ax
+    original_locator = axes.get_axes_locator()
+    axes.set_box_aspect(None)
+    axes.tick_params(which="both", direction="in", pad=-3, labelsize=7)
+
+    def locate(target: Any, renderer: Any) -> Any:
+        bounds = (original_locator(target, renderer) if original_locator is not None
+                  else target.get_position(original=True))
+        # Constrained layout reapplies the default box aspect before each locator call.
+        target.set_box_aspect(None)
+        labels = target.get_yticklabels(which="both")
+        for text in labels:
+            text.set_horizontalalignment("left" if on_left else "right")
+            text.set_bbox(dict(facecolor="white", alpha=0.85, edgecolor="none", pad=1))
+        pixels = max((text.get_window_extent(renderer).width for text in labels if text.get_visible()), default=0)
+        width = max(24.0, pixels + 8.0) / target.figure.bbox.width
+        return Bbox.from_bounds(bounds.x1 - width if on_left else bounds.x0, bounds.y0, width, bounds.height)
+
+    axes.set_axes_locator(locate)
+
+
 def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
     from matplotlib import colormaps
 
@@ -911,15 +1082,22 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
     timed = [axes for axes, item in zip(panes, data.items) if item.histogram.axes[1] == "T"]
     for axes in timed[1:]:
         axes.sharey(timed[0])  # T the same in XT and YT.
-    if data.dot_colour == SUMMED:
-        from matplotlib import colors as typed_colors
+    groups = colour_groups(data)
+    norms: list[Any] = []
+    for group_data in groups:
+        if data.dot_colour == SUMMED:
+            from matplotlib import colors as typed_colors
 
-        norm: Any = cast(Any, typed_colors).Normalize(*data.bar_range)
-    else:
-        norm = matplotlib_norm(colours, data.top)  # One for every plane: their one colour bar.
-    mesh: Any = None
+            norms.append(cast(Any, typed_colors).Normalize(*group_data.bar_range))
+        else:
+            norms.append(matplotlib_norm(colours, group_data.top))
+    meshes: dict[int, Any] = {}
     area = background(result.parameters)
     for axes, item in zip(panes, data.items):
+        group_index = next(index for index, group in enumerate(groups)
+                           if any(candidate is item for candidate in group.items))
+        norm = norms[group_index]
+        mesh: Any = None
         histogram = item.histogram
         across, up, _ = histogram.axes
         axes.set_facecolor(AREA_COLOURS[area])
@@ -934,6 +1112,8 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
             shown = np.where(item.image.T > 0, item.image.T, np.nan) if colours.scale == LOG else item.image.T
             mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
                                    norm=norm, shading="flat")
+        if mesh is not None:
+            meshes[group_index] = mesh
         axes.set_title(histogram.plane, fontsize=9)
         axes.set_xlabel(axis_label(across), fontsize=8)
         axes.set_ylabel(axis_label(up), fontsize=8)
@@ -945,7 +1125,15 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
             mid = middle((histogram.v_edges[0], histogram.v_edges[-1]))
             axes.set_ylim(mid - span / 2, mid + span / 2)
             axes.set_aspect("equal", adjustable="datalim")
-    if mesh is not None:
-        figure.colorbar(mesh, ax=panes, label=bar_label(data, colours) if data.dot_colour else planes_quantity(data))
+    for group_index, mesh in meshes.items():
+        group_data = groups[group_index]
+        group_axes = [axes for axes, item in zip(panes, data.items)
+                      if any(candidate is item for candidate in group_data.items)]
+        label = (group_label(group_data, colours) if len(groups) > 1 else bar_label(data, colours))
+        label = label.replace(" · ", "\n").replace(": ", "\n")
+        on_left = left_colour_bar(group_data)
+        colourbar = figure.colorbar(mesh, ax=group_axes, label=label, aspect=12, pad=0.03,
+                                   location="left" if on_left else "right")
+        inset_matplotlib_ticks(colourbar, on_left)
     figure.suptitle(plain_title(result), fontsize=9, wrap=True)
     return figure
