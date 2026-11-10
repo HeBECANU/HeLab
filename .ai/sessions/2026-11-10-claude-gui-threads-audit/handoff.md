@@ -3,7 +3,37 @@
 Worker (Bolt), 2026-11-10, branch `agent/gui-threads-audit`, from `74d29f9` (the audit). Not pushed (step 4 merges
 `dev/v0.0.9` first). The findings are Sentinel's, in `audit.md` beside this file.
 
-## What was fixed
+## Round 2 (after `9a7d16c`): Tony's answers and the re-review's findings
+
+Tony answered Q~1 – Q~5 in Chat (via CoCo, 2026-11-10: "Q~1 yes add that as an option too in addition to custom
+bin size; Q~2 ok; Q~3 ok; Q~4 ok; Q~5 ok"); Sentinel's re-review of `74d29f9..9a7d16c` (`audit.md`, "Re-review of the
+fixes (step 3)") found GT-24 – GT-30. New commits after `9a7d16c` (nothing before it rewritten), for Sentinel to
+re-read as `9a7d16c..<head>`:
+
+| Item | Commit | What changed (what users see in bold) |
+|---|---|---|
+| Q~5 (GT-1 a) | `ce78608` | **A conversion's end shows "Load anyway…" for a large folder instead of asking**; Live and presets at launch still ask; the user's own click asks. `queue_load`/`load_to_ram_cache(ask_large=False)`, `_quiet_large`, also covering the helper's too-large stop. |
+| Q~4 (GT-9) | `5d58875` | **Load Scripts…, Settings' temp Browse… and the cache's Change… use Qt's own folder dialog, opening in the home folder** (`helab/views/folder_dialog.py`); the converter's profile import/export stay native. Save to folder… (.helab-root) and Debug's save are unchanged (not among Q~4's; a candidate if Tony wants it). |
+| Q~3 (GT-8) | `121577c` | **Quit on both startup boxes** ("Quit ends this HeLab; start it again once the move has finished." / "Quit ends HeLab now; the move is finished at the next start."); the recovery's helper is cancelled and its record stays. A~8 (the recovery's no-progress timeout) is **not done**: the recovery's deletes report no progress, and a heartbeat thread would beat through a hung delete; it needs progress callbacks through `cache_move.recover`/`cleanup`/`_remove_tree`. Kept as A~8. |
+| Q~2 (GT-6) | `2eadccc` | **At start, a script folder whose test import took over 2 s waits for Reload: "takes N s to import"** in the start note (`SLOW_START_SECONDS`); Reload imports it. |
+| Q~1 (GT-4) | `684b027` | **Image › Draw at: screen resolution (default) \| every bin.** At screen resolution an image over 2,048 bins a side is drawn from block means made on the worker (Plotly ≤ 1,000); PyQtGraph `autoDownsample`, Matplotlib `imshow`; ≤ 500,000 dots a plane in PyQtGraph and Matplotlib; the plane's title says how it is drawn; the estimate follows the setting. Every bin draws exactly as before. 8,000²: the means 0.33 s on the worker, colouring 0.003 s on the GUI thread instead of 0.088 s. |
+| GT-24 (Medium) | `012b52a` | Settings › Cache's "Lower the disk cache budget?" (the two budget-job ends that ask) waits for the delivery to return. |
+| GT-25 (Low) | `0cf3c32` | `FolderCache._on_event` is a delivery too (`_event` its body), so guard 2 sees boxes from tests that emit `resultReady` themselves; `test_cache_tab.finish` and one `test_root_gui` test let the event loop turn. |
+| GT-26 (Low) | `385dd97` | `_forget_digests` iterates `list(_READ_DIGESTS)`. |
+| GT-27 (Low) | `b827da4` | The probe says `done`, then `{"kind": "reads"}`; `ci-build.yml`'s packaged-app probe check expects the three lines (a CI file outside this floor's areas, changed because its exact assertion would fail). |
+| GT-28 (Low) | `c1399fb` | `file_manager.show("")` opens nothing. |
+| GT-29 (Info) | none | Left: the lost-bytes count can be off by a racing pump and its note may sit before the backlog; the note already says "around here". An exact count needs a lock on the pump's path, for a cosmetic gain. |
+| GT-30 (Info) | none (doc) | In the doc proposals below. |
+
+Round 2's checks at `c1399fb`, output kept whole here: `fixes2-suite.txt` (`pytest -n 8 --reruns 5 --reruns-delay 1`:
+**9907 passed, 674 skipped, no RERUN, no failure**) and `fixes2-typecheck.txt` (the five type checks, all clean).
+
+Existing tests changed in round 2 (all for the approved behaviour or the new seam): `test_basic_plots_v2_hist2d`
+(the parameter order with `draw_at`; the estimate test at every bin; the legend test reads Matplotlib's raster),
+`test_script_probe` (`done` then `reads`; the CI step's three lines), `test_script_reads`, `test_live_scripts`,
+`test_cache_tab.finish`, `test_root_gui`'s failed-save test.
+
+## What was fixed (round 1)
 
 | Finding | Status | Commit | What changed |
 |---|---|---|---|
@@ -64,7 +94,7 @@ Sentinel's re-read. Each fix commit says which tests fail
 without it (GT-1: 8 of 10 with `outside()` made synchronous; GT-5: 300 derives vs 1; GT-10: 36 lookups vs 8;
 GT-2, GT-3: the audit's own measurements, now tests).
 
-## Questions for Tony
+## Questions for Tony (Q~1 – Q~5 answered "yes"/"ok", built in round 2 above)
 
 - **Q~1 (from the audit, GT-4):** should Basic plots v2 draw its 2D histograms at display resolution (decimated on
   the worker; the saved result and the bins stay as chosen), and cap dots lower (e.g. 500k for PyQtGraph and
@@ -151,6 +181,16 @@ GT-2, GT-3: the audit's own measurements, now tests).
   the loader's digests), `timed_hook` and `SLOW_HOOK_SECONDS`, `DockTabCloser.docks()`.
 - **`.ai/architecture/testing.md`:** `no_modal_in_delivery` (and that a test patching one of its names replaces
   it), `no_file_manager`, the GUI-thread lint and its allow-list.
+- **GT-30 (the re-review), for the app-runtime doc:** a teardown ended by `crash_file.exit_after` exits with code 1
+  and writes every thread's stack to `crash-<pid>.txt`; the next start then says "The previous run crashed: see
+  crash-<pid>.txt". Proposed: keep it. A quit that needed the last resort *is* a hang worth reporting (its stacks are
+  the evidence), and it is rare; the line could name it ("ended by HeLab after its quit hung") if Tony prefers, by
+  writing a marker line into the crash file before arming (a later A~).
+- **Round 2 for the docs:** `plots-and-scripts.md`: Draw at (`DRAW_AT`, `DISPLAY_SIDE`, `PLOTLY_SIDE`, `DRAWN_DOTS`,
+  `PlaneCounts.display`, the estimate's drawn cells), `SLOW_START_SECONDS` and the probe's `reads` line after `done`;
+  `app-runtime-and-ui.md`: the startup boxes' Quit, `folder_dialog.choose_folder`; `testing.md`: guard 2 also through
+  `FolderCache._on_event`; `io-and-browsing.md`: `ask_large` / "Load anyway…" after a conversion. Memory
+  (`results/analysis-plots.md`): Draw at, Tony 2026-11-10.
 - **`roadmaps/known-issues.md`:** close the `test_every_script_and_each_library` "QTabBar … no ID" entry (GT-10,
   `762d56c`); under the 5.68 s stall entry, add GT-23's candidates and that GT-3 now lets the next stall's line
   and stacks reach the log; note GT-2 fixed against "File › Quit sometimes left the process running".
