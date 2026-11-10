@@ -11,6 +11,8 @@ import time
 from PyQt6 import sip
 from PyQt6.QtCore import QObject, QTimer
 
+from helab.utils import app_log
+
 
 def describe(owner: QObject | None) -> str:
     """A watchdog's window as its stall line names it: its class, and its object name when it has one."""
@@ -24,6 +26,7 @@ STALL_SECONDS = 2.0  # Without a beat, once the event loop has beaten once.
 # Before the first beat: the window is still being built and the event loop not yet running, which takes over
 # 2 s on a slow PC (the lab's TDC PC: about 15 s), so only a far longer wait is a stall.
 STARTUP_STALL_SECONDS = 60.0
+LOG_SECONDS = 1.0  # At most this long for each of its log lines (``app_log.log_within``).
 
 
 def thread_stacks() -> str:
@@ -77,11 +80,15 @@ class GUIWatchdog(QObject):
             now = time.monotonic()
             limit = STALL_SECONDS if self.beats else STARTUP_STALL_SECONDS
             if now - self.last_beat > limit and now - last_dump > 30.0:
-                logging.error("GUI stalled for %.2fs (%s); capturing thread stacks", now - self.last_beat, self.where())
+                # (Never held by a console that takes nothing: this thread watches on, GT-3.)
+                app_log.log_within(LOG_SECONDS, logging.ERROR, "GUI stalled for %.2fs (%s); capturing thread stacks",
+                                   now - self.last_beat, self.where())
                 try:
-                    logging.error("GUI stall's thread stacks:\n%s", thread_stacks().rstrip())
-                except (OSError, RuntimeError, ValueError):
-                    logging.exception("Could not dump GUI stall traceback")
+                    stacks = thread_stacks().rstrip()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    app_log.log_within(LOG_SECONDS, logging.ERROR, "Could not dump GUI stall traceback: %r", exc)
+                else:
+                    app_log.log_within(LOG_SECONDS, logging.ERROR, "GUI stall's thread stacks:\n%s", stacks)
                 last_dump = now
 
     def where(self) -> str:

@@ -160,3 +160,32 @@ def test_a_stalls_thread_stacks_go_to_the_log_never_the_console(qtbot: QtBot, ca
         watchdog.stop()
         thread.join(timeout=3)
         delete_now(parent)
+
+
+def test_its_lines_never_wait_on_a_held_console(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """GT-3: each line goes through ``app_log.log_within``, so a console that takes nothing holds a line for at
+    most ``LOG_SECONDS`` and the thread watches on."""
+    from helab.utils import app_log, gui_watchdog
+    monkeypatch.setattr(faulthandler, "dump_traceback", lambda **kwargs: None)
+    said: list[tuple[float, str]] = []
+
+    def log_within(seconds: float, level: int, message: str, *args: object) -> bool:
+        said.append((seconds, message % args))
+        return True
+    monkeypatch.setattr(app_log, "log_within", log_within)
+    parent = QObject()
+    watchdog, thread = started_by(lambda: GUIWatchdog(parent))
+    assert isinstance(watchdog, GUIWatchdog)
+    try:
+        watchdog.beats = 1
+        watchdog.last_beat -= 10
+        deadline = time.monotonic() + 5
+        while len(said) < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert len(said) == 2 and said[0][1].startswith("GUI stalled for 10.")
+        assert said[1][1].startswith("GUI stall's thread stacks:")
+        assert all(seconds == gui_watchdog.LOG_SECONDS == 1.0 for seconds, _ in said)
+    finally:
+        watchdog.stop()
+        thread.join(timeout=3)
+        delete_now(parent)

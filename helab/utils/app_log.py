@@ -99,9 +99,25 @@ def start_log_file(folder: str, level: int = logging.INFO) -> RotatingFileHandle
         return None
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logging.getLogger().addHandler(handler)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    # First: a console that takes nothing (a full pipe, a paused terminal) never keeps a line from the file,
+    # whose handler would otherwise run after the console's (coloredlogs', installed at import; GT-3).
+    root.handlers = [handler, *(other for other in root.handlers if other is not handler)]
     logging.info(f"Logging to {path}")
     return handler
+
+
+def log_within(seconds: float, level: int, message: str, *args: object) -> bool:
+    """Log from a thread of its own, waiting for it at most ``seconds``: a caller that must go on (the GUI
+    watchdog) never waits on a handler that blocks (a console that takes nothing, GT-3). The log file's handler
+    runs first (``start_log_file``), so the line is in the file even when the console holds it. Whether it was
+    logged in time."""
+    writer = threading.Thread(target=logging.log, args=(level, message, *args), name="HeLab-log-within",
+                              daemon=True)
+    writer.start()
+    writer.join(seconds)
+    return not writer.is_alive()
 
 
 def start_crash_file(folder: str, name: str = CRASH_NAME) -> str | None:

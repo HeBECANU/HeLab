@@ -2,11 +2,13 @@
 writes only its own temporary folder, never the app folder."""
 from __future__ import annotations
 
+import io
 import logging
 import os
 from pathlib import Path
 import sys
 import threading
+import time
 from typing import Iterator
 
 import pytest
@@ -122,6 +124,48 @@ def test_the_rotation_test_holds_after_an_info_line_at_warning(tmp_path: Path, m
         test_the_log_file_keeps_tracebacks_and_rotates(tmp_path, monkeypatch)
     finally:
         root.setLevel(level)
+
+
+def test_the_log_file_comes_before_the_console(tmp_path: Path) -> None:
+    """GT-3: coloredlogs' console handler is the root's first (installed at import); a console that takes nothing
+    would keep each line from the file behind it. The file's handler goes first."""
+    root = logging.getLogger()
+    console = logging.StreamHandler(io.StringIO())
+    root.addHandler(console)
+    handler = app_log.start_log_file(str(tmp_path))
+    assert handler is not None
+    try:
+        assert root.handlers[0] is handler and console in root.handlers
+    finally:
+        root.removeHandler(handler)
+        root.removeHandler(console)
+        handler.close()
+
+
+class Held(logging.Handler):
+    """A handler that takes nothing until let go (a console paused by a selection)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.go = threading.Event()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.go.wait(30)
+
+
+def test_a_line_logged_within_a_time_never_waits_on_a_held_handler(tmp_path: Path) -> None:
+    """GT-3: the GUI watchdog logs this way, so a console that takes nothing never stops it watching."""
+    root = logging.getLogger()
+    held = Held()
+    root.addHandler(held)
+    try:
+        started = time.monotonic()
+        assert app_log.log_within(0.2, logging.ERROR, "GUI stalled for %.2fs", 3.0) is False
+        assert time.monotonic() - started < 2.0
+    finally:
+        held.go.set()
+        root.removeHandler(held)
+    assert app_log.log_within(5.0, logging.DEBUG, "not held") is True
 
 
 def test_no_log_file_where_it_cant_be_written(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
