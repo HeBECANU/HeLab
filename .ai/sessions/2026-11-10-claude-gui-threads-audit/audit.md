@@ -3,6 +3,171 @@
 Auditor (Reviewer role), 2026-11-10, branch `agent/gui-threads-audit` at `23730f6`. Read-only on code: nothing in
 `helab/` or `tests/` changed. The brief is `brief.md` in this folder.
 
+## Re-review of the fixes (step 3)
+
+Auditor, 2026-11-10. Only the fix diff was read: `git diff 74d29f9..9a7d16c` (Bolt's 13 commits, `handoff.md`).
+
+- **Open: GT-24 (Medium, new).** A modal question still opens inside a helper's delivery, on a path neither the
+  audit nor the fix listed.
+- **Open, Low (new):** GT-25 (guard 2 sees less than it seems to), GT-26 and GT-27 (from GT-6 (B)'s fix), GT-28
+  (from GT-9's fix).
+- **Info (new):** GT-29, GT-30.
+- **Everything else** in the fix diff is closed, or rightly deferred to a question for Tony or a later item.
+- **No fix adds a hang.**
+
+### Checks, rerun here at `9a7d16c`
+
+- **Full suite:** `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review` gave **9878 passed,
+  674 skipped, no RERUN** (197 s; output in `.ai/temp/rereview/suite.txt`).
+- **Type checks:** all five clean: `mypy helab/ --strict` (244 files), `mypy tests --strict` (240),
+  `pyright helab tests`, and the two win32 runs (`.ai/temp/rereview/types.txt`).
+- **"Fails without the fix", checked by undoing each fix in memory** (`mutants.py`, a pytest plugin; the checkout
+  is untouched):
+
+  | Mutant | Fix undone | Result |
+  |---|---|---|
+  | `gt1` | `outside()` runs its function at once | 8 of 10 in `test_modal_outside_delivery.py` fail, as claimed |
+  | `gt5` | the old per-child re-derive | both tests in `test_cache_removed_derive.py` fail |
+  | `gt6` | a probe's reads never fresh | `test_fresh_reads_spare_the_gui_threads_reads…` fails |
+  | `gt10` | the old walk per tab | `test_a_fit_finds_the_areas_docks_once…` fails |
+  | none | (baseline) | 56 passed |
+
+- **GT-2 and GT-3 against the pre-fix `helab/`** (`git archive 74d29f9`):
+  - GT-2: the new test's blocked-stderr child timed out at 30 s on the old code, and exits 7 in 1.3 s on the new.
+  - GT-3: the held-write child crashes on the old tee (it has no file queue); my step-1 run measured 3.008 s there.
+    It takes 0.000 s on the new code.
+- **A sweep with FolderCache's dispatcher marked as a delivery** (`GT_MUTANT=fcmark`, full suite). Guard 2 then also
+  sees helper events that tests emit themselves:
+  - result: 2 failed, 9883 passed;
+  - both failures are `test_root_gui.py::test_a_save_that_fails_says_why_and_can_be_tried_again`, whose warning is
+    now rightly deferred (it asserts it at once);
+  - no other box was found, but tests stub most confirm hooks (GT-25).
+- **Existing tests:** only adapted, none weakened.
+  - `test_cache_switch`'s Windows half moved to a new test that runs on every OS.
+  - `test_accessible_names`' walk runs a pending dock fit first, as the debounced design means.
+  - The others take the new arguments, or check through `file_manager` instead of `openUrl`.
+
+### Status of each finding
+
+| Finding | Status | Note |
+|---|---|---|
+| GT-1 (High) | **Closed** for (a)–(e) (`41c4b39`); the class stays open through GT-24 | See the first table below |
+| GT-2 (High) | **Closed** (`531d35e`) | See the first table below |
+| GT-3 (Medium) | **Closed** (`e5aaa9a`) | See the first table below; cosmetic leftovers in GT-29 |
+| GT-4 (Medium) | Rightly deferred (Q~1) | Every remedy changes the picture |
+| GT-5 (Medium) | **Closed** (`63d1d5f`) | See the second table below |
+| GT-6 (Medium) | **Partly closed** (`c2b1d5b`, option (B)); the rest deferred (A~1, Q~2) | See the second table below |
+| GT-7 (Medium) | (a) **closed** (`8db0b2a`); (b) rightly deferred (A~2, M~1) | See the second table below |
+| GT-8 (Medium) | Rightly deferred (Q~3, A~8) | A Quit button is visible to users |
+| GT-9 (Medium) | `openUrl` **closed** (`542376d`); dialogs deferred (Q~4) | See the second table below |
+| GT-10 (Low) | **Closed** (`762d56c`) | See the second table below |
+| GT-11, GT-12, GT-13, GT-15 (Low) | Deferred (A~3 – A~6) | Fine for Low |
+| GT-14 (Low) | **Closed** (`bbc2eea`) | See the second table below |
+| GT-17 (Info) / guard 4 | **Closed** (`bf490d1`, `13cc77c`) | See the second table below |
+| GT-16, GT-18 – GT-23 (Info) | Unchanged | |
+| Guard 1 (`e8121a1`) | Done, honest | See the second table below |
+| Guard 2 (`41c4b39`) | Done; narrower than the audit said | GT-25 |
+| Guard 3 | Deferred (A~7) | |
+
+The three High and Medium closures, and what I checked in each:
+
+| Finding | What I checked |
+|---|---|
+| GT-1 | **Deferral:** `delivering("io")` wraps all of `_tick`, so `_dispatch`, `_apply_pauses` and every emit are inside. `outside()` uses `singleShot(0)`, never inside the tick, and each deferred function re-checks its object (closed window, `sip.isdeleted`, CacheMover's `running`/`moving`/`_cancelled`). |
+| GT-1 | **Order:** the cache move's `move_check` now runs after that tick's later events. The check's `done` doesn't end the mover, and `_checked` returns if the move ended, so nothing is lost. |
+| GT-1 | **The large-folder question:** asked once per folder. It is dropped after a Cancel or a change of selection, and re-asked through `queue_load` outside any delivery. |
+| GT-2 | **(a):** the note thread is joined at most `NOTE_SECONDS`, then `os._exit`. |
+| GT-2 | **(b):** `crash_file.exit_after` arms faulthandler's C timer at GRACE + NOTE + 2 = 4 s. Only `main` calls it; its tests run in child processes, so pytest's own `faulthandler_timeout` timer is never replaced. `end()` keeps the armed file open. |
+| GT-3 | **The tee:** the pump only `put_nowait`s, so it never waits on the file. The writer keeps chunk order. `stop` waits at most 2 s each for the queue, the writer and the lock. |
+| GT-3 | **The log:** the file's handler is now first. The watchdog's lines go through `log_within`, joined 1 s; at most 3 lingering threads per 30 s while a handler stays blocked. |
+
+The rest:
+
+| Finding | What I checked |
+|---|---|
+| GT-5 | `_rederive` is equivalent to the old walk: deepest first, so each folder is derived after all its descendants, each once. Only touched folders, and ancestors whose status changed, are marked changed. `one_activity` nests and emits once, even on an exception. |
+| GT-6 | Option (B) spares the listing, `isdir`, the stats and the hash reads. A script's hash is now the hash of the very bytes its import ran (`_READ_DIGESTS`), which is better. **Still on the GUI thread:** the import's own open and read of each script and helper file (A~1), and `isfile` of helpers known only from earlier sessions. New issues in GT-26 and GT-27. |
+| GT-7 | (a): only the cache folder's own drive is asked, with `GetDriveTypeW`; a UNC path counts as remote. |
+| GT-9 | No local `openUrl` is left (the bundled manual's `file://` and web pages stay). Edge case in GT-28. |
+| GT-10 | The direct-children lookup is safe: HeLab never sets `GroupedDragging`, so docks stay children of the area. |
+| GT-14 | The deferred SIGTERM close, and the checks after Settings' and Restore's `exec()`. |
+| GT-17 / guard 4 | `timed_hook` wraps render, update, draw and every `_hook`, and logs even when the hook raises. |
+| Guard 1 | Scope: `helab/views` and `helab/models`, direct calls only, as its docstring says. Each of the 15 entries names its finding and whether that is still open. Stale entries fail. |
+
+### GT-24 · Medium · new · Settings › Cache's "Lower the disk cache budget?" opens inside a helper's delivery
+
+- **Where:** `helab/views/CacheTab.py:640-690` `_on_done` is connected to `FolderCache.cacheAdminDone`. That signal
+  is emitted in `FolderCache._on_admin_event` (`folder_cache.py:4170`), inside `IOService._tick` → `resultReady` →
+  `_on_event`. From `_on_done`:
+  - `:659`: store-v4's trim plan has arrived;
+  - `:675`: the helper found more cached than the tab saw (`recorded: False`).
+  - Both call `_ask_trim` → `self.confirm` → `_confirm` → `box.exec()` (`:611`).
+- **Effect:** GT-1's, for as long as the box is open. The user started it (Save in Settings, which closes as it
+  saves), so the box appears a moment later, on its own. While it is open no helper's events flow, then there is a
+  burst of false timeouts.
+- **Confirmed** by `experiments/rereview/test_gt24_budget_box.py`. It keeps CacheTab's real `_confirm` and delivers
+  the budget job's answer inside `gui_delivery.delivering("io")`, as `_tick` does. Guard 2 then records
+  `QMessageBox.exec while delivering 'io'` with `_ask_trim` on the stack.
+- **Why it was missed:** the tests stub `tab.confirm` and emit `resultReady` themselves (GT-25).
+- **Fix:** run `_on_done`'s two questions through `gui_delivery.outside`. The budget job is already done, so nothing
+  waits on the answer. Add a test that keeps the real `_confirm`.
+
+### GT-25 · Low · new · Guard 2 sees only deliveries that go through `IOService._tick`, and tests mostly don't
+
+- **Delivery:** most GUI tests deliver helper events by emitting `service.resultReady` themselves (for example
+  `test_cache_tab.finish`), not through `_tick`, so `gui_delivery.current()` is None and guard 2 checks nothing.
+- **Stubs:** many tests also replace the hook that would open the box: `CacheTab.confirm`,
+  `FolderExplorer.confirm_large`, `report_flag_failure`, `FolderInfoWindow.ask_clear`, `RootDuplicatesWindow.choose_keep`.
+- **Effect:** the audit's claim that guard 2 "would have caught GT-1 (b)–(e) in their existing tests" was too
+  strong. It catches a box only in the tests written for it (`test_modal_outside_delivery.py`). GT-24 passed the
+  whole suite.
+- **Fix, cheap:**
+  - Mark `FolderCache._on_event` as a delivery too, beside `_tick`. Every helper event goes through it, so tests
+    that emit directly are covered. The `fcmark` sweep shows it costs 2 tests a `waitUntil`.
+  - Keep the real confirm in one test per result-driven question.
+
+### GT-26 · Low · new (GT-6 (B)) · `_READ_DIGESTS` is iterated on the GUI thread while the worker may write it
+
+- **Where:** `scripts_manager.load_directory`'s
+  `for path in [path for path in _READ_DIGESTS if _inside(...)]`.
+- **The race:** `_SourceOnlyLoader.get_code` adds to the dict on whichever thread imports. A Reload waits only for
+  runs of the reloaded folders' scripts (`script_tree._busy`), so another folder's `compute` importing a helper
+  lazily can add a key mid-iteration.
+- **Effect:** `RuntimeError: dictionary changed size during iteration`. That folder's Reload then fails ("Error
+  loading scripts", logged).
+- **Likelihood:** rare (it needs a lazy import of a helper during the Reload).
+- **Confirmed** by reading.
+- **Fix:** iterate a snapshot (`list(_READ_DIGESTS)`, one C call under the GIL) or take a lock.
+
+### GT-27 · Low · new (GT-6 (B)) · The probe's reads count against its 10 s import limit
+
+- **Where:** `helab/scripts/probe.py` takes `manager.folder_reads(folder)` (a listing, a stat per file, a hash for
+  any file without a digest) *before* it says `done`. `FolderProbes` kills a probe whose `done` is not in by
+  `PROBE_SECONDS` after `ready` (`script_tree.py:340`).
+- **Effect:** a folder on a slow share whose import took close to 10 s can now fail its test import, with the
+  message "its import didn't finish within 10 s", though the import did finish. The extra cost is about one stat
+  per file, nothing on a local disk.
+- **Confirmed** by reading.
+- **Fix:** say `done` first and the reads in a following line, used if they come within a short wait. Or skip the
+  reads when the limit is near.
+
+### GT-28 · Low · new (GT-9, Windows) · `file_manager.show("")` opens Explorer at HeLab's working folder
+
+- **Where:** `open_command` passes `os.path.normpath(path)`, and `normpath("")` is `"."`.
+- **Effect:** Settings › Cache's Open, with the disk cache off (`store_options()` is `{}`, so the path is `""`), and
+  Settings' temp and cache Open buttons with an empty field, open the current folder instead of nothing.
+  `openUrl("")` did nothing.
+- **Fix:** `show` returns False for an empty path.
+
+### Info
+
+- **GT-29** (GT-3): the console tee's `lost` counter is added to by both pumps without a lock, so a count can be off.
+  The note "N bytes … lost around here" is written before the queued backlog, though the lost bytes came after it.
+  Both cosmetic.
+- **GT-30** (GT-2): a teardown ended by `exit_after` exits with code 1 and writes the stacks to the crash file. The
+  next start then says "The previous run crashed: see crash-<pid>.txt". That is truthful, and the doc change
+  should say so.
+
 ## Summary
 
 | Severity | Count | Findings |
@@ -497,3 +662,8 @@ Recommended: (2) and (4) with the High/Medium fixes, (1) next, (3) when convenie
   `dock_fit_scaling.py` (GT-10): run from the checkout's root. The Qt ones need `QT_QPA_PLATFORM=offscreen`.
 - `experiments/{main,plots,explorer}/`: the area readers' timing scripts (synthetic data). The `test_gt_*.py` ones
   run as `PYTHONPATH=tests python -m pytest -p conftest <file> -s`.
+- Re-review (step 3): `mutants.py`, a pytest plugin that undoes one fix in memory (`GT_MUTANT=gt1|gt5|gt6|gt10`) or
+  marks FolderCache's dispatcher as a delivery (`fcmark`). Run it as
+  `GT_MUTANT=<name> PYTHONPATH=.ai/sessions/2026-11-10-claude-gui-threads-audit pytest -p mutants <tests>`.
+  `experiments/rereview/test_gt24_budget_box.py` shows GT-24; run it as
+  `PYTHONPATH=tests python -m pytest -p conftest <file>`.
