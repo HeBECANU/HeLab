@@ -3,6 +3,89 @@
 Auditor (Reviewer role), 2026-11-10, branch `agent/gui-threads-audit` at `23730f6`. Read-only on code: nothing in
 `helab/` or `tests/` changed. The brief is `brief.md` in this folder.
 
+## Re-review 2 (round 2 of the fixes)
+
+Auditor, 2026-11-10. Only the fix diff was read: `git diff 9a7d16c..8a9f32e`, my own `c06e3fc` skipped. That is
+Bolt's ten commits (Tony's Q~1 – Q~5, and GT-24 – GT-28) and `handoff.md`'s "Round 2".
+
+- **Open findings: none.**
+- **No new hang or bug found.**
+- Every round-1 re-review finding is closed, apart from GT-29 (Info), which is left by agreement. GT-30 is in the
+  handoff's doc proposals.
+
+### Checks, rerun here at `8a9f32e`
+
+- **Full suite:** `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review` gave **9907 passed,
+  674 skipped, no RERUN** (207 s; `.ai/temp/rereview2/suite.txt`).
+- **Type checks:** all five clean: mypy strict (244 files), mypy tests (242), pyright, and both win32 runs
+  (`.ai/temp/rereview2/types.txt`).
+- **Without the fix, the new tests fail** (`mutants.py`, now with `gt24`, `gt25` and `gt26`; the baseline passes):
+
+  | Mutant | Fix undone | What fails |
+  |---|---|---|
+  | `gt24` | CacheTab sees no delivery | `test_the_budget_question_waits_for_the_delivery_with_the_real_box` |
+  | `gt25` | `FolderCache._on_event` unmarked | `test_every_helper_event_through_folder_cache_is_a_delivery` |
+  | `gt26` | the old iteration over the dict | `test_forgetting_a_folders_digests_survives_a_digest_added_meanwhile` |
+
+- **GT-27 and the packaged app:**
+  - `.github/workflows/ci-build.yml` changes by one line: the probe check's expected kinds, now
+    `["ready", "done", "reads"]`. Nothing else in the workflow changed.
+  - I built the app (`pyinstaller HeLab.spec --clean -y`, macOS) and ran that step's script on it. Exit 0; events
+    `ready` (offscreen), `done` (`loaded: true`), and `reads` (the folder's one file); `seen: {"frozen": true, "gui": false}`.
+  - The build and dist folders were removed afterwards.
+  - Windows and Linux runs are CI's.
+- **Q~1: "every bin draws exactly as before", checked.** `experiments/rereview2/test_every_bin_same.py` draws six
+  cases with `9a7d16c`'s code (before Draw at) and with the new code at Draw at = every bin, and
+  `compare_every_bin.py` compares them:
+  - the cases: wide 5,000 × 10 XY, automatic bins on all planes, 3,000 × 2,500 XT, log-scale YT, density dots, and
+    one-colour dots;
+  - in each library: PyQtGraph's image arrays, autoDownsample, labels, dot positions and brushes; Plotly's whole
+    figure JSON; Matplotlib's collection arrays, coordinates, offsets, titles and kinds;
+  - result: **101 arrays compared, 0 differ**. A control against the new default (screen resolution) differs in
+    50, so the comparison would see a change.
+
+### Status of each item
+
+| Item | Status | What I checked |
+|---|---|---|
+| Q~5 (GT-1 (a)), `ce78608` | **Closed**: a conversion's end opens no box at all | `_quiet_large` is set only by `ask_large=False` (`_passed`) and cleared by the user's next explicit load. It also covers the helper's too-large stop. Live and presets still ask, outside the delivery (round 1). |
+| Q~4 (GT-9's dialogs), `5d58875` | **Closed** for Load Scripts…, the temp folder's Browse… and the cache's Change… | Each uses `folder_dialog.choose_folder` (`DontUseNativeDialog`, from home). The converter's import/export, Save to folder… and Debug's save stay native, and the allow-list names each as still open. Whether Qt's own dialog stays quick beside a dead mapped drive is M~2's to confirm on a lab PC. |
+| Q~3 (GT-8), `121577c` | **Closed** (Quit on both boxes); A~8's timeout rightly deferred, as reasoned | See the first table below. |
+| Q~2 (GT-6, at start), `2eadccc` | **Closed** | A passed probe's `seconds` over 2 s leaves the folder for Reload, and its reads are dropped. The rest of GT-6 (the import's own reads at Reload) stays A~1. |
+| Q~1 (GT-4), `684b027` | **Closed** at the default; "every bin" is unchanged, by design and as checked above | See the first table below. |
+| GT-24 (Medium), `012b52a` | **Closed** | See the second table below. |
+| GT-25 (Low), `0cf3c32` | **Closed** | See the second table below. |
+| GT-26 (Low), `385dd97` | **Closed** | `list(_READ_DIGESTS)` is one C call. |
+| GT-27 (Low), `b827da4` | **Closed** | See the second table below. |
+| GT-28 (Low), `c1399fb` | **Closed** | An empty or blank path launches nothing. |
+| GT-29 (Info) | Left, agreed | Cosmetic. |
+| GT-30 (Info) | In the handoff's doc proposals | Keeping exit code 1 and the "previous run crashed" line is reasonable. |
+
+The two largest items in detail:
+
+| Item | What I checked |
+|---|---|
+| Q~3 | **The wait:** `cache_locks.startup` holds nothing while it waits, so `SystemExit` there is safe. |
+| Q~3 | **Quit during the recovery:** it cancels the helper and leaves the record. If the reaper's kill lost the race with the exit, the orphaned helper still holds `move.lock`, so the next start waits, now with Quit. |
+| Q~3 | **A box closed because its wait ended:** it blocks its signals first, so it isn't taken for a Quit. |
+| Q~1 | **The drawn image:** `block_mean` and `block_edges` are right for a last block smaller than the rest. The bins are regular (`np.histogram2d` with a count and a range), so `imshow` places cells as `pcolormesh` did. The colour bar's top follows the drawn image. |
+| Q~1 | **The disk cache:** 2D histograms aren't saved there (`cache_supported` is the default False), so `display` needs no codec type. |
+
+The round-1 re-review's findings in detail:
+
+| Item | What I checked |
+|---|---|
+| GT-24 | `asks` matches exactly the two `_on_done` branches that ask; every other end stays synchronous. The deferred re-call re-checks the tab and its cache, and the job has ended, so nothing waits. |
+| GT-25 | The mark also covers IOService's synchronous `queued` and `cancelled` emits from clicks. That only defers there, and only makes guard 2 stricter. The two harness changes (`processEvents`, `waitUntil`) take the turn the app now takes; nothing is weakened. |
+| GT-27 | `done` comes first, then `reads`. FolderProbes takes `reads` only after `done`, and again at the probe's exit (`_finished` → `_read`). A slow `reads` only delays the exit (PROBE_EXIT_SECONDS) and passes without reads. |
+
+### Info (new)
+
+- **GT-31** (GT-27): on a slow share, the probe's stats after `done` can take longer than `PROBE_EXIT_SECONDS`.
+  The probe is then ended with the warning "finished but its process didn't exit within N s". That is true but
+  misleading now that the process is busy with the reads. It still passes, so this is cosmetic. Rewording that
+  warning when `done` came but `reads` didn't would make it exact.
+
 ## Re-review of the fixes (step 3)
 
 Auditor, 2026-11-10. Only the fix diff was read: `git diff 74d29f9..9a7d16c` (Bolt's 13 commits, `handoff.md`).
@@ -667,3 +750,6 @@ Recommended: (2) and (4) with the High/Medium fixes, (1) next, (3) when convenie
   `GT_MUTANT=<name> PYTHONPATH=.ai/sessions/2026-11-10-claude-gui-threads-audit pytest -p mutants <tests>`.
   `experiments/rereview/test_gt24_budget_box.py` shows GT-24; run it as
   `PYTHONPATH=tests python -m pytest -p conftest <file>`.
+- Re-review 2: `experiments/rereview2/test_every_bin_same.py` and `compare_every_bin.py` show that Q~1's "every bin"
+  draws as before. Copy the test into a checkout's `tests/` (or run it with `-p conftest` from this one), with
+  `GT_OUT` set, and `GT_EVERY=1` for the new code; then run `python compare_every_bin.py BEFORE.npz AFTER.npz`.
