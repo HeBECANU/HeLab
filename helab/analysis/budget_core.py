@@ -14,6 +14,7 @@ import numpy as np
 
 from helab.analysis.dataset_view import DatasetView, Events, fingerprints_of, read_only
 from helab.utils import txy_sources
+from helab.utils.number_format import byte_size
 from helab.utils.ram_buffers import Buffers, buffers
 
 if TYPE_CHECKING:
@@ -25,6 +26,22 @@ REARM_SHARE = 0.70  # ...and again only after usage has dropped below this
 RELEASE_SHARE = 0.80  # plots are released, least recently viewed first, until under it
 # A plot a reload drew in the last this many seconds goes after the others (no ping-pong).
 RELOAD_GRACE = 10.0
+# A plot whose estimated memory (``DatasetAnalysis.estimated_bytes``, or what its run found) reaches this share of the
+# budget says so: its settings page as the settings change (Undo, Cancel), its notes once run. It still runs.
+ESTIMATE_WARN_SHARE = 0.50
+ESTIMATE_PREFIX = "Estimated memory"  # (How the warning starts, wherever it shows.)
+
+
+def estimate_over(estimate: int, budget: int) -> bool:
+    """Whether ``estimate`` bytes reach ``ESTIMATE_WARN_SHARE`` of a ``budget`` of bytes; never when either is
+    unknown (0)."""
+    return budget > 0 and estimate > 0 and estimate >= ESTIMATE_WARN_SHARE * budget
+
+
+def estimate_text(estimate: int, budget: int) -> str:
+    """The warning: "Estimated memory 2.4 GiB: 60 % of the RAM budget (4.0 GiB)"."""
+    return (f"{ESTIMATE_PREFIX} {byte_size(estimate, 'ram')}: {100 * estimate / budget:.0f} % of the RAM budget "
+            f"({byte_size(budget, 'ram')})")
 
 _view_buffers: weakref.WeakKeyDictionary[DatasetView, Buffers] = weakref.WeakKeyDictionary()
 

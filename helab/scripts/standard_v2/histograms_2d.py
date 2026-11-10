@@ -24,13 +24,14 @@ from PyQt6.QtCore import QObject, QPointF, QRectF, QTimer
 from PyQt6.QtGui import QColor, QFontMetricsF
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from helab.analysis.budget_core import ESTIMATE_PREFIX, estimate_over, estimate_text
 from helab.analysis.backends import MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane, WrappingLabel, mpl_figure
 from helab.analysis.dataset_view import DatasetView
 from helab.analysis.empty import empty_pane, empty_text
 from helab.analysis import image_filters
 from helab.analysis.display_units import si_text
 from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, Histogram2D,
-                                        bin_area, compress, histogram2d, scale_text)
+                                        bin_area, compress, estimated_bytes, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import Kind, ParameterSpec, Value
 from helab.analysis.results import AnalysisContext, AnalysisResult
@@ -758,6 +759,12 @@ class PlaneHistograms(DatasetAnalysis):
     def minimum_size(self, action_name: str) -> tuple[int, int]:
         return 480, 280  # Up to three images side by side, one colour bar, under a title.
 
+    def estimated_bytes(self, action_name: str, values: Mapping[str, Any]) -> int:
+        """The planes on, at their set bins, an automatic axis counted at its most (``MAX_AUTO_BINS``)."""
+        bins = {axis: min(int(values.get(BINS[axis].name, 0)), MAX_BINS) or MAX_AUTO_BINS for axis in AXES}
+        sizes = [bins[PLANES[plane][0]] * bins[PLANES[plane][1]] for plane in shown_planes(values)]
+        return estimated_bytes(sizes, bool(values.get(f"blur_{image_filters.ADAPTIVE}")))
+
     def compute(self, action_name: str, context: AnalysisContext) -> Any:
         values = context.parameters
         shots = select_shots(context.view, values)
@@ -767,7 +774,18 @@ class PlaneHistograms(DatasetAnalysis):
             context.check()
             items.append(plane_counts(events, plane, values, len(shots), context.check))
         warnings = tuple(f"{axis}: min > max, using full extent" for axis in reversed_axes(values))
+        # The memory its bins take (as they came out: automatic ones known now), against the RAM budget.
+        estimate = estimated_bytes([item.histogram.counts.size for item in items],
+                                   bool(values.get(f"blur_{image_filters.ADAPTIVE}")))
+        if estimate_over(estimate, context.ram_budget):
+            warnings += (estimate_text(estimate, context.ram_budget),)
         return Planes(tuple(items), shots, len(context.view.shots), warnings)
+
+    def describe_result(self, action_name: str, result: AnalysisResult) -> str:
+        """The memory warning, for the dock's settings line and Plot info."""
+        data = result.data
+        notes = data.notes if isinstance(data, Planes) else ()
+        return " · ".join(f"⚠ {note}" for note in notes if note.startswith(ESTIMATE_PREFIX))
 
     def backends(self, action_name: str) -> Sequence[str]:
         return (PYQTGRAPH, PLOTLY, MATPLOTLIB)

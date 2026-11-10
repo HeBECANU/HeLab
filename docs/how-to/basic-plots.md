@@ -82,7 +82,11 @@ colour have none.) The settings:
     - **Background**: white or black behind the dots (the titles, axes and colour bar stay on white). Black
       brings out faint dots; uncoloured dots are then white.
 - **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown, up to 20,000; 0 picks the
-  count from the data (at most 1,000).
+  count from the data (at most 1,000). Fine bins take a lot of memory (20,000 × 20,000 is about 6 GB a
+  plane). When the memory the settings would take reaches half of HeLab's RAM budget (Settings › Cache), a
+  line above **Rerun with these settings** says so as you change them, with **Undo** (puts back the
+  settings as they were before it) and **Cancel** (stops the run in flight). If you press neither, the plot
+  still runs, and its title says so too.
 - **Blur**: six filters, each in its own section with an **On** switch; its settings show once it's on. They
   run one after another, in increasing **Order** (filters with the same number run in the order listed), and
   each plane's title lists the ones that ran:

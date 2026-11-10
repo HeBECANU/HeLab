@@ -16,7 +16,8 @@ from pytestqt.qtbot import QtBot
 from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane
 from helab.analysis.dataset_view import DatasetView, build_view
 from helab.analysis.identity import file_hash
-from helab.analysis import image_filters
+from helab.analysis import histogram2d as histogram2d_module, image_filters, result_cache
+from helab.analysis.runner import AnalysisRunner
 from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
                                         histogram2d, scale_text)
 from helab.analysis.image_filters import ADAPTIVE, BOX, DENOISE, FILTERS, GAUSSIAN, MEDIAN, UNITS, Step
@@ -266,6 +267,66 @@ def test_bins_are_capped() -> None:
     assert histogram2d(data, "XY", 1.0, bins=(30_000, 1)).counts.shape == (20_000, 1)
     assert histogram2d(data, "XY", 1.0, bins=(1, 20_000)).counts.shape == (1, 20_000)
     assert all(spec.limits == (0, 20_000) for spec in histograms_2d.BINS.values())  # (The spin boxes.)
+
+
+def test_the_estimate_comes_from_the_settings_alone() -> None:
+    """Every plane's counts and image held (16 B a bin), and the largest plane's moment: colouring (32 B a bin) or
+    the adaptive KDE (64); an automatic axis counted at its most (1,000 bins)."""
+    script = PlaneHistograms()
+
+    def estimate(values: dict[str, Any]) -> int:
+        return script.estimated_bytes("Plot", effective(script.parameters("Plot"), values))
+    assert estimate({}) == 16 * 3 * 1_000_000 + 32 * 1_000_000
+    big = {"bins_x": 20_000, "bins_y": 20_000, "bins_t": 20_000}
+    assert estimate(big) == 16 * 3 * 400_000_000 + 32 * 400_000_000  # 32 GB
+    assert estimate({**big, "blur_adaptive": True}) == 16 * 3 * 400_000_000 + 64 * 400_000_000
+    assert estimate({**only("XY"), "bins_x": 20_000}) == (16 + 32) * 20_000 * 1_000
+    assert estimate({name: False for name in ("show_xy", "show_xt", "show_yt")}) == 0
+    assert histogram2d_module.estimated_bytes([]) == 0
+
+
+def run_with_budget(budget: int, values: dict[str, Any] | None = None) -> AnalysisResult:
+    script = PlaneHistograms()
+    context = AnalysisContext("a1", "Plot", view(), effective(script.parameters("Plot"), values or {}),
+                              script.get_metadata().identity(), ram_budget=budget)
+    return AnalysisResult.of(context, "completed", script.compute("Plot", context))
+
+
+def test_the_run_notes_its_memory_against_the_budget() -> None:
+    """From the bins the run made: 100 × 100 a plane, three planes: 16 × 30,000 + 32 × 10,000 = 800,000 bytes."""
+    values = {"bins_x": 100, "bins_y": 100, "bins_t": 100}
+    over = run_with_budget(1_000_000, values)  # 80 %
+    note = "Estimated memory 781 KiB: 80 % of the RAM budget (977 KiB)"
+    assert over.data.notes == (note,)
+    assert f"⚠ {note}" in histograms_2d.plain_title(over)
+    assert PlaneHistograms().describe_result("Plot", over) == f"⚠ {note}"  # (The dock's line and Plot info.)
+    for budget in (2_000_000, 0):  # 40 %, and unknown.
+        under = run_with_budget(budget, values)
+        assert under.data.notes == () and PlaneHistograms().describe_result("Plot", under) == ""
+
+
+def test_the_budget_never_enters_a_results_identity() -> None:
+    """A change of budget leaves saved results and presets as they are: the same reuse key, lookup key, family
+    and digest, and no budget on the result."""
+    values = {"bins_x": 100, "bins_y": 100, "bins_t": 100}
+    small, large = run_with_budget(1_000_000, values), run_with_budget(1 << 40, values)
+    assert small.data.notes != large.data.notes  # (Only the result's notes differ.)
+    assert small.reuse_key() == large.reuse_key()
+    assert not hasattr(small, "ram_budget")
+    script = PlaneHistograms()
+    contexts = [AnalysisContext("a1", "Plot", view(), effective(script.parameters("Plot"), values),
+                                script.get_metadata().identity(), ram_budget=budget) for budget in (1, 1 << 40)]
+    assert result_cache.lookup_key(contexts[0]) == result_cache.lookup_key(contexts[1])
+    assert result_cache.family_key(contexts[0]) == result_cache.family_key(contexts[1])
+    assert result_cache.digest(result_cache.lookup_key(contexts[0])) == result_cache.digest(
+        result_cache.lookup_key(contexts[1]))
+    runner = AnalysisRunner()
+    try:
+        prepared = runner.prepare(script, script.get_metadata(), "Plot", view(), values, ram_budget=5 * 1024)
+        assert prepared.ram_budget == 5 * 1024
+        assert runner.prepare(script, script.get_metadata(), "Plot", view(), values).ram_budget == 0
+    finally:
+        runner.stop()
 
 
 # The plot

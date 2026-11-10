@@ -194,6 +194,18 @@ class DatasetAnalysis(HelabAnalysisScript):
         results only (as ``result_record``). Default: nothing."""
         return ""
 
+    def estimated_bytes(self, action_name: str, values: Mapping[str, Any]) -> int:
+        """The most memory a run with these parameter ``values`` would take, in bytes, estimated from
+        the values alone (no data); 0 for no estimate (the default).
+
+        When it reaches half of HeLab's RAM budget, the plot's settings page says so as the settings
+        change, with Undo (the settings as they were while under it) and Cancel (the run in flight);
+        the run still goes ahead. A run gets the budget as ``AnalysisContext.ram_budget``, to say so in
+        its own notes. Called on the GUI thread as the settings change: keep it quick. It is never
+        part of a result or its reuse key. One that raises is logged and counts as 0.
+        """
+        return 0
+
     def parameter_warnings(self, action_name: str, values: Mapping[str, Any]) -> List[str]:
         """Settings the run could not follow as given, and what it did instead (e.g. "X: min >
         max, using full extent"), for the dock's source line, its record and the settings tab."""
