@@ -81,7 +81,7 @@ colour have none.) The settings:
       is drawn, and the plane's title says so. The bins and the local density still count every event.
     - **Background**: white or black behind the dots (the titles, axes and colour bar stay on white). Black
       brings out faint dots; uncoloured dots are then white.
-- **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown, up to 10,000; 0 picks the
+- **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown, up to 20,000; 0 picks the
   count from the data (at most 1,000).
 - **Blur**: six filters, each in its own section with an **On** switch; its settings show once it's on. They
   run one after another, in increasing **Order** (filters with the same number run in the order listed), and

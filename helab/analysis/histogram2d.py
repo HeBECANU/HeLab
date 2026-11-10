@@ -24,7 +24,7 @@ from helab.analysis.stats import AXES, freedman_diaconis_bins, shortest_range
 # across every plane, so that they can share its scale).
 PLANES = {"XY": ("X", "Y", "T"), "XT": ("X", "T", "Y"), "YT": ("Y", "T", "X")}
 MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image.
-MAX_BINS = 10_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
+MAX_BINS = 20_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
 Bounds = Optional[tuple[float, float]]
 
 

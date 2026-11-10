@@ -17,7 +17,7 @@ from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, Mat
 from helab.analysis.dataset_view import DatasetView, build_view
 from helab.analysis.identity import file_hash
 from helab.analysis import image_filters
-from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
+from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
                                         histogram2d, scale_text)
 from helab.analysis.image_filters import ADAPTIVE, BOX, DENOISE, FILTERS, GAUSSIAN, MEDIAN, UNITS, Step
 from helab.analysis.panes import PlotlyPane
@@ -261,7 +261,11 @@ def test_bins_are_capped() -> None:
     data = np.column_stack((rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000)))
     item = histogram2d(data, "XY", 1.0)
     assert max(item.counts.shape) <= MAX_AUTO_BINS
-    assert histogram2d(data, "XY", 1.0, bins=(10_000, 20_000)).counts.shape == (10_000, 10_000)
+    # At most MAX_BINS an axis (one bin up, so that the test never holds gigabytes).
+    assert MAX_BINS == 20_000
+    assert histogram2d(data, "XY", 1.0, bins=(30_000, 1)).counts.shape == (20_000, 1)
+    assert histogram2d(data, "XY", 1.0, bins=(1, 20_000)).counts.shape == (1, 20_000)
+    assert all(spec.limits == (0, 20_000) for spec in histograms_2d.BINS.values())  # (The spin boxes.)
 
 
 # The plot
