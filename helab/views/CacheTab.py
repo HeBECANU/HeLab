@@ -13,6 +13,7 @@ import re
 import time
 from typing import Any, Callable, Mapping
 
+from PyQt6 import sip
 from PyQt6.QtCore import QSettings, Qt, pyqtSignal
 from PyQt6.QtGui import QValidator
 from PyQt6.QtWidgets import (
@@ -28,7 +29,7 @@ from helab.utils.constants import (
     read_disk_budget, cache_dir_refused, read_live_autosave, read_plot_auto_reload, read_ram_budget_steps, ram_step_bytes, ram_step_range,
     total_ram,
 )
-from helab.utils import file_manager, folder_cache
+from helab.utils import file_manager, folder_cache, gui_delivery
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size, byte_unit
 from helab.utils.settings_defaults import CACHE_POLICY_SETTING, RESULT_REUSE_SETTING, read_setting
@@ -648,6 +649,16 @@ class CacheTab(QWidget):
             self._update()
 
     def _on_done(self, owner: str, action: str, message: str) -> None:
+        asks = bool(owner) and owner == self._budget_job and not message and (
+            self._trim_plan is not None if self._planning is not None else self._too_full is not None)
+        if asks and gui_delivery.current() is not None:
+            # This end asks "Lower the disk cache budget?": not inside the helper's delivery, whose nested loop
+            # would stop every helper's events until answered (GT-24). The budget job has ended; nothing waits.
+            def later() -> None:
+                if not sip.isdeleted(self) and self.cache is not None:
+                    self._on_done(owner, action, message)
+            gui_delivery.outside(later)
+            return
         if owner == self._inventory_owner:
             self._inventory_owner = ""
             if message:

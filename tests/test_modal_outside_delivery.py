@@ -251,3 +251,35 @@ def test_a_marker_saved_by_hand_warns_once_the_delivery_returns(
         assert "it is read only" in warned[0][1][2] and "the helper stopped" in warned[1][1][2]
     finally:
         service.shutdown()
+
+
+def test_the_budget_question_waits_for_the_delivery_with_the_real_box(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """GT-24 (the re-review): Settings › Cache's "Lower the disk cache budget?" was asked from the budget job's end,
+    inside the helper's delivery. With CacheTab's real ``_confirm`` (its box), it opens once that has returned."""
+    from test_cache_tab import GB, admin_request, frozen_cache, inventory, make_tab
+    service, cache = frozen_cache(monkeypatch)
+    shown = recording(monkeypatch, "exec")
+    try:
+        tab, _ = make_tab(qtbot, cache, tmp_path)
+        tab.confirm = tab._confirm  # (The real box, as in the app.)
+        request = admin_request(service, "inventory")
+        service.resultReady.emit(request, {"kind": "inventory", "inventory": inventory()})
+        service.resultReady.emit(request, {"kind": "done"})
+        service.pending.remove(request)
+        tab.disk_budget.setValue(4.0)
+        assert tab.apply_budget() is None
+        request = admin_request(service, "budget")
+        with gui_delivery.delivering("io"):  # (As ``IOService._tick`` delivers it.)
+            for event in ({"kind": "admin_result", "action": "budget", "budget": 4 * GB, "recorded": False,
+                           "usage": 5 * GB, "next_deadline": None}, {"kind": "done"}):
+                service.resultReady.emit(request, event)
+            assert not shown
+        service.pending.remove(request)
+        qtbot.waitUntil(lambda: bool(shown))
+        assert [during for during, _ in shown] == [None]
+        assert "Budget not lowered" in tab.message  # (Its box closed without Lower: nothing saved.)
+    finally:
+        service.shutdown()
+
