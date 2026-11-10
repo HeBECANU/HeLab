@@ -192,8 +192,31 @@ def test_close_event_main_window(main_window: HelabMainWindow, qtbot: QtBot) -> 
 def test_handle_exit_main_window(main_window: HelabMainWindow, qtbot: QtBot) -> None:
     with patch.object(main_window, 'close') as mock_close:
         main_window.handle_exit(signal.SIGINT, None)
+        assert not mock_close.called  # (Once the event loop turns: never inside whatever the signal interrupted.)
+        qtbot.waitUntil(lambda: mock_close.called)
         mock_close.assert_called_once()
 
+
+
+def test_settings_closed_by_a_quit_meanwhile_starts_nothing_after(
+    main_window: HelabMainWindow, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GT-14: the window closed while Settings was open (an update's quit, a signal ending the nested loop): what
+    follows Settings (applying it, which may submit to a new IOService after shutdown) doesn't run."""
+    from PyQt6.QtWidgets import QDialog
+
+    def closed_meanwhile(dialog: SettingsDialog) -> int:
+        main_window._closing = True
+        return int(QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(SettingsDialog, "exec", closed_meanwhile)
+    monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: None))
+    applied: list[object] = []
+    monkeypatch.setattr(main_window, "apply_load_mode", applied.append)
+    try:
+        main_window.show_settings_dialog()
+        assert applied == []
+    finally:
+        main_window._closing = False
 
 
 def test_mismatched_folders_show_in_the_status_bar_and_load_from_the_current_tab(

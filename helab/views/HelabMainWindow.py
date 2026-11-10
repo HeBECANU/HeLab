@@ -1051,7 +1051,7 @@ class HelabMainWindow(QMainWindow):
         restore = box.addButton("Quit and restore", QMessageBox.ButtonRole.AcceptRole)
         identify_buttons(box, "restore_previous")
         box.exec()
-        if box.clickedButton() is restore:
+        if box.clickedButton() is restore and not self._closing:  # (Closed meanwhile: nothing starts, GT-14.)
             self.update_launcher.start(asked)
 
     def restore_previous_version(self) -> None:
@@ -1287,6 +1287,8 @@ class HelabMainWindow(QMainWindow):
         if root and roots is not None:
             roots.select_root(root)
         self.settings_dialog.exec()
+        if self._closing:
+            return  # (Closed meanwhile, e.g. for an update: nothing more starts, GT-14.)
         self._set_root_window_modality(Qt.WindowModality.NonModal)  # Review… from Settings made it modal.
         settings = app_settings()
         self.apply_load_mode(read_load_mode(settings))
@@ -2532,6 +2534,7 @@ class HelabMainWindow(QMainWindow):
         QTimer.singleShot(0, self.close)
 
     def handle_exit(self, signum: int, frame: Optional[types.FrameType]) -> None:
-        # self.closeEvent(None)
+        # A Python signal handler runs between any two bytecodes of the GUI thread, IOService's ``_tick`` too: the
+        # close waits for the event loop (GT-14).
         logging.info("handle_exit: called")
-        self.close()
+        QTimer.singleShot(0, self.close)
