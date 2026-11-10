@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pytest
 from pytestqt.qtbot import QtBot
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QCoreApplication, QSettings
 from PyQt6.QtWidgets import QDialog, QMessageBox, QWidget
 
 from helab.io_ops.admin import cache_admin
@@ -45,9 +45,12 @@ def admin_request(service: IOService, action: str) -> IORequest:
 
 
 def finish(service: IOService, request: IORequest, *events: dict[str, Any]) -> None:
+    """The helper's events, then the event loop's next turn: what a result asks (the budget question) waits for
+    its delivery to return (GT-24)."""
     for event in (*events, {"kind": "done"}):
         service.resultReady.emit(request, event)
     service.pending.remove(request)
+    QCoreApplication.processEvents()
 
 
 def inventory(usage: int = 3 * GB, **changes: Any) -> dict[str, Any]:

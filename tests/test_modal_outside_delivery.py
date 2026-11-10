@@ -283,3 +283,15 @@ def test_the_budget_question_waits_for_the_delivery_with_the_real_box(
     finally:
         service.shutdown()
 
+
+def test_every_helper_event_through_folder_cache_is_a_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GT-25: tests (and FolderCache's own replays) emit ``resultReady`` themselves, outside ``IOService._tick``;
+    FolderCache's handler marks each event, so guard 2 sees a box opened from any of its signals."""
+    service, cache = frozen(monkeypatch)
+    seen: list[str | None] = []
+    monkeypatch.setattr(cache, "_event", lambda producer, event: seen.append(gui_delivery.current()))
+    try:
+        service.resultReady.emit(IORequest("owner", 0, "/nowhere", "list", {}, 60.0), {"kind": "queued"})
+        assert seen == ["io"] and gui_delivery.current() is None
+    finally:
+        service.shutdown()

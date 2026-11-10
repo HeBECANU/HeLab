@@ -414,7 +414,8 @@ def test_a_save_that_fails_says_why_and_can_be_tried_again(
         patched.setattr(os, "open", refuse)  # (Only the helper, run here, opens files meanwhile.)
         manual.write(str(target))
         run_save(qtbot, manual.cache, str(target))
-    assert warnings == [f"Couldn't save {target / '.helab-root'}: {error}"]
+    # (Once the helper's delivery has returned: GT-1, GT-25.)
+    qtbot.waitUntil(lambda: warnings == [f"Couldn't save {target / '.helab-root'}: {error}"])
     assert not (target / ".helab-root").exists() and manual.save.isEnabled()
     assert manual.intro.text().startswith("HeLab can't write")
 
