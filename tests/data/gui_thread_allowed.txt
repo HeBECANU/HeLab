@@ -1,0 +1,20 @@
+# Calls in HeLab's GUI modules that can block, each allowed with why (tests/test_gui_thread_calls.py).
+# module:function:call  # reason
+# Native file dialogs: the user's own choice; Windows' or macOS's sidebar can stall on a dead share (GT-9, Tony's call).
+helab/views/ConverterTab.py:ConverterTab.export_selected:QFileDialog.getSaveFileName  # user-chosen export; native dialog (GT-9, open)
+helab/views/ConverterTab.py:ConverterTab.import_file:QFileDialog.getOpenFileName  # user-chosen import; native dialog (GT-9, open)
+helab/views/DataRootDialogs.py:ManualMarkerDialog.save_to_folder:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
+helab/views/HelabMainWindow.py:HelabMainWindow._runner_file_path:QFileDialog.getSaveFileName  # Debug menu; native dialog (GT-9, open)
+helab/views/SettingsDialog.py:SettingsDialog.browse_dir_temps:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
+helab/views/SettingsDialog.py:SettingsDialog.change_cache_folder:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
+helab/views/plots/script_tree.py:TreePanelWidget._on_load_directory:QFileDialog.getExistingDirectory  # Load Scripts…; native dialog (GT-9, open)
+# The mount table (cached 10 s; on macOS/Linux the kernel's, never waits; Windows' redirector unconfirmed: GT-7 (b), M~1).
+helab/views/explorer_convert.py:ExplorerConverter._offer_answered:cache_location.share_of  # cached mount table, lexical path (GT-7 b)
+helab/views/explorer_convert.py:ExplorerConverter.clicked:cache_location.share_of  # cached mount table, lexical path (GT-7 b)
+helab/views/explorer_convert.py:ExplorerConverter.offered:cache_location.share_of  # cached mount table, on Folder details' 100 ms refresh (GT-7 b)
+helab/views/explorer_convert.py:share_to_confirm:cache_location.share_of  # cached mount table, lexical path (GT-7 b)
+helab/views/explorer_live.py:LiveController._set_write_beside:cache_location.share_of  # cached mount table, on the user's toggle (GT-7 b)
+helab/views/plots/script_tree.py:on_network:cache_paths.current_mounts  # mount table on a script folder's load, never the folder (GT-7 b)
+# Other.
+helab/views/plots/script_tree.py:FolderProbes._ended:shutil.rmtree  # the probe's own small temp folder (local)
+helab/views/quit_watch.py:exit_soon.watch:time.sleep  # the quit watch's own daemon thread, never the GUI thread
