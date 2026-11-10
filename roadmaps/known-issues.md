@@ -234,7 +234,14 @@ How to use it:
   125345114056), passed on retry. **Cause** (Vault, 2026-11-03, from that log): a plot dock area's tab bar gets
   its ID in `PlotWorkspace.fit` (`dock.py`, `identify_tabs`), which a debounced timer (`_fit_soon`) runs, and the
   walk ran before the timer fired ("GUI stalled for 2.30s" in that test the same second). `dock.py` is
-  unchanged since 0.0.7a1. Fix: name the tab bar when docks tabify, or let the walk run pending fits first.
+  unchanged since 0.0.7a1. Fix: name the tab bar when docks tabify, or let the walk run pending fits first. Again on
+  Windows: Ground CI 42765698387 (Tests 3/3, job 129661620696, `70df9e6`, 2026-11-10), "Basic Plots › Plot T, X, Y
+  histograms: QTabBar … no ID", passed on rerun.
+- [ ] `test_raw_fill.py::test_files_not_settled_wait_and_a_fill_yields` reran once on Windows, Ground CI 42765698387
+  (Tests 1/3, job 129661620867, `70df9e6`, 2026-11-10): `assert (4, 0) == (3, 1)` at line 118, the shot written
+  with the current time saved instead of waiting; passed on rerun. First sighting. Likely the runner: the test
+  writes `d4.txt` with `mtime=time.time()` and expects it unsettled under a 5 s settle time, so a fill that
+  starts over 5 s later finds it settled. Unchecked; a fix would date it in the future or patch the clock.
 - [ ] `test_gui_responsiveness.py::test_timeout_retry_releases_dead_helper_slot_while_artifact_reader_is_blocked[2]`:
   `waitUntil timed out in 3000 milliseconds` at line 292 (the `finally`'s wait for the killed fake
   helpers to exit after `service.shutdown()`), on Windows CI run 40803552596 (`agent/txy-ship`) and
