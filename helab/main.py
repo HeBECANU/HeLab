@@ -109,11 +109,14 @@ def _start_cache() -> str:
     from helab.utils.cache_locks import startup
     settings = app_settings()
     waiting: list[QMessageBox] = []
+    quitting: list[bool] = []
 
     def wait() -> None:
+        if quitting:
+            raise SystemExit(0)  # (Quit: nothing is held between these waits; the move goes on in the other HeLab.)
         if not waiting:
-            box = QMessageBox(QMessageBox.Icon.Information, "HeLab", "Another HeLab is moving the cache…",
-                              QMessageBox.StandardButton.NoButton)
+            box = startup_box("Another HeLab is moving the cache…",
+                              "Quit ends this HeLab; start it again once the move has finished.", quitting)
             box.show()
             waiting.append(box)
         QApplication.processEvents()
@@ -130,12 +133,25 @@ def _start_cache() -> str:
         return message
     message, instance = startup(app_folder(), recover, wait)
     for box in waiting:
+        box.blockSignals(True)  # (Closed because the move ended: not a Quit.)
         box.close()
     app = QApplication.instance()
     assert app is not None  # (main() makes it before starting the cache.)
     app.aboutToQuit.connect(instance.unlock)
     _INSTANCE_LOCK.append(instance)
     return message
+
+
+def startup_box(text: str, informative: str, quitting: list[bool]) -> QMessageBox:
+    """A box shown while startup waits (no event loop yet), with Quit (Q~3, Tony 2026-11-10: it had no button and
+    no limit): Quit, or closing the box, appends to ``quitting``, which the waiting code checks."""
+    from helab.utils.accessible import identify_buttons
+    box = QMessageBox(QMessageBox.Icon.Information, "HeLab", text, QMessageBox.StandardButton.NoButton)
+    box.setInformativeText(informative)
+    box.addButton("Quit", QMessageBox.ButtonRole.RejectRole)
+    identify_buttons(box, "startup_wait")
+    box.finished.connect(lambda _result: quitting.append(True))
+    return box
 
 
 def _recover_in_helper(settings: QSettings, token: str) -> tuple[str, bool]:
@@ -165,13 +181,22 @@ def _recover_in_helper(settings: QSettings, token: str) -> tuple[str, bool]:
             loop.quit()
     service.resultReady.connect(event)
     move = {"action": "recover", "app_dir": app_dir, "settings": settings_spec(settings), "token": token}
+    quitting: list[bool] = []
     if service.submit("startup-recovery", 0, app_dir, "cache_move", {"move": move}, timeout=math.inf):
-        box = QMessageBox(QMessageBox.Icon.Information, "HeLab", "Finishing an interrupted cache move…",
-                          QMessageBox.StandardButton.NoButton)
+        box = startup_box("Finishing an interrupted cache move…",
+                          "Quit ends HeLab now; the move is finished at the next start.", quitting)
+        box.finished.connect(loop.quit)
         box.show()
         loop.exec()
-        box.close()
+        if not quitting:
+            box.blockSignals(True)  # (Closed because the helper answered: not a Quit.)
+            box.close()
     service.resultReady.disconnect(event)
+    if quitting:
+        # The record stays: the next start recovers the move again (each step is safe to redo after a stop).
+        service.cancel("startup-recovery")
+        logging.warning("Quit while an interrupted cache move was being finished; the next start finishes it")
+        raise SystemExit(0)
     return str(result[0]), bool(result[1])  # Not usable unless the helper said so.
 
 
