@@ -422,7 +422,7 @@ def test_a_probes_import_time_is_kept_for_its_folder(qtbot: QtBot, tmp_path: Pat
     owner = QObject()
     probes = FolderProbes(owner)
     item = _Probe(str(tmp_path), response=str(tmp_path / "response.jsonl"))
-    Path(item.response).write_text(json.dumps({"kind": "done", "loaded": True, "seconds": 2.5, "reads": None}) + "\n")
+    Path(item.response).write_text(json.dumps({"kind": "done", "loaded": True, "seconds": 2.5}) + "\n")
     probes._read(item)
     probes._ended(item, None)
     assert probes.import_seconds(str(tmp_path)) == 2.5

@@ -330,9 +330,10 @@ class FolderProbes(QObject):
                 item.ready, item.application = time.monotonic(), str(event.get("application", ""))
             elif isinstance(event, dict) and event.get("kind") == probe.DONE and not item.done:
                 item.done, item.done_at = True, time.monotonic()
-                item.reads = FolderReads.from_json(event.get("reads"))
                 seconds = event.get("seconds")
                 item.seconds = float(seconds) if isinstance(seconds, (int, float)) else None
+            elif isinstance(event, dict) and event.get("kind") == probe.READS and item.done:
+                item.reads = FolderReads.from_json(event.get("reads"))  # (After ``done``: GT-27.)
 
     @pyqtSlot()
     def _poll(self) -> None:

@@ -152,10 +152,13 @@ def test_the_probes_answer_is_kept_for_the_import_that_follows_once(qtbot: Any, 
     probes = FolderProbes(owner)
     for failure in (None, ProbeFailure("its import didn't finish within 10 s")):
         item = _Probe(str(folder), response=str(tmp_path / "response.jsonl"))
-        Path(item.response).write_text(json.dumps({"kind": "done", "loaded": True, "seconds": 0.1,
-                                                   "reads": reads.to_json()}) + "\n")
+        Path(item.response).write_text(json.dumps({"kind": "done", "loaded": True, "seconds": 0.1}) + "\n")
         probes._read(item)
-        assert item.done and item.reads == reads
+        assert item.done and item.reads is None  # (The reads follow ``done``: GT-27.)
+        with open(item.response, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"kind": "reads", "reads": reads.to_json()}) + "\n")
+        probes._read(item)
+        assert item.reads == reads
         probes._ended(item, failure)
         if failure is None:
             assert probes.take_reads(str(folder)) == reads and probes.take_reads(str(folder)) is None

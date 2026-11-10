@@ -236,7 +236,7 @@ jobs:
           seen = json.loads((folder / "seen.json").read_text())
           print("exit", done.returncode, "events", events, "seen", seen)
           assert done.returncode == 0, done.returncode
-          assert [event["kind"] for event in events] == ["ready", "done"], events
+          assert [event["kind"] for event in events] == ["ready", "done", "reads"], events
           assert events[0]["application"] == "offscreen", events[0]
           assert seen == {"frozen": True, "gui": False}, seen
           EOF
