@@ -21,6 +21,10 @@ How to use it:
   console (why, with nobody at the PC, is unknown); the pipe full, the dump waited holding the GIL and every
   thread stopped. Fixed so it can't recur (stacks to the log through a regular file; the tee never waits
   on its terminal), but **the first 5.68 s's cause is unknown**: the next stall's stacks will be in the log.
+  The GUI threads audit (block 73, merged `0930096`; GT-23) lists candidates: the mount table read every 10 s while a
+  raw-only share folder is shown (GT-7 (b), A73.2); a held console-file write (GT-3, fixed: the tee writes its
+  file from a thread, and the watchdog's lines reach the log within 1 s); `low_hits_threshold` (A73.4); a display
+  or monitor power change re-laying-out every window (speculative). M73.3 checks the next one.
   The same logs showed Python's own console output (the log at DEBUG) lost on a Windows console once the tee
   started (fixed with it), and a false stall dump at every start (the watchdog armed before the event loop ran;
   fixed: 60 s before its first beat). Earlier stalls there (2026-11-06, 2.6 s and 3.5 s) came as Live loaded a
@@ -131,7 +135,9 @@ How to use it:
     when the click landed before the menu opened; cause still unknown (perhaps a click that quit
     nothing, after which the runner started a second HeLab). Since Smoke ready (`4ad8ac5`) a HeLab
     whose windows have closed ends within 1 s (`quit_watch`), and the quit window shows what quitting
-    waits for; a click that quits nothing isn't covered.
+    waits for; a click that quits nothing isn't covered. The quit watch could itself wait on logging's lock
+    before its exit: fixed in `531d35e` (GT-2, merged `0930096`: it logs from a thread, at most 1 s, and
+    `crash_file.exit_after` ends a hung teardown).
   - Saving an arrangement preset kept plot 19's unsaved Log Y. Possibly intended; Tony to judge.
 
 ## Tests and CI
@@ -226,17 +232,6 @@ How to use it:
   `test_accessible_names` deaths are not the empty-argument cause: no such fixture ran on those workers before
   them (Quick Fixes 9), so the SIGTRAP stays open. (The `[values2-Plotly-TxyHistograms]` abort once listed here
   was that cause: Fixed below.)
-- [ ] `test_accessible_names.py::test_every_script_and_each_library`: "Controls without an accessible
-  name: Basic plots v1 › Plot T, X, Y histograms: QTabBar < QMainWindow < QSplitter < HelabMainWindow: no
-  ID", Windows CI 41086378298 (Tests 1/2, job 124168617741, gw0, `dev/v0.0.7` `9de3e19`, 2026-10-31);
-  passed on rerun. Not a worker crash: likely a dock tab bar Qt makes when docks tabify, walked before
-  `identify` names it. Again: `agent/caching-v2` CI 41465454700 (`ee4df2b`, Windows Tests 1/2, job
-  125345114056), passed on retry. **Cause** (Vault, 2026-11-03, from that log): a plot dock area's tab bar gets
-  its ID in `PlotWorkspace.fit` (`dock.py`, `identify_tabs`), which a debounced timer (`_fit_soon`) runs, and the
-  walk ran before the timer fired ("GUI stalled for 2.30s" in that test the same second). `dock.py` is
-  unchanged since 0.0.7a1. Fix: name the tab bar when docks tabify, or let the walk run pending fits first. Again on
-  Windows: Ground CI 42765698387 (Tests 3/3, job 129661620696, `70df9e6`, 2026-11-10), "Basic Plots › Plot T, X, Y
-  histograms: QTabBar … no ID", passed on rerun.
 - [ ] `test_raw_fill.py::test_files_not_settled_wait_and_a_fill_yields` reran once on Windows, Ground CI 42765698387
   (Tests 1/3, job 129661620867, `70df9e6`, 2026-11-10): `assert (4, 0) == (3, 1)` at line 118, the shot written
   with the current time saved instead of waiting; passed on rerun. First sighting. Likely the runner: the test
@@ -498,6 +493,11 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.9` (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their release-notes lines are in
 TonyXTYan/HeLab#11):
 
+- [x] `test_accessible_names.py::test_every_script_and_each_library`: "Basic plots › Plot T, X, Y histograms:
+  QTabBar < QMainWindow < QSplitter < HelabMainWindow: no ID" (Windows CI 41086378298, 41465454700, Ground CI
+  42765698387). Cause: the walk ran before the debounced dock fit that names the tab bar, late behind a stall in
+  that same fit. Fixed in `762d56c` (GUI threads audit, GT-10: `DockTabCloser.fit` maps the area's docks once, and
+  the walk runs pending fits first; merged `0930096`).
 - [x] **Auto-load pause state carried across tests** (test isolation; Ground CI 41981742368 and `agent/folder-info`
   42001112700, RERUNs of `test_text_length.py`'s long-name test): `test_result_lifecycle`, `test_result_cache_plots` and
   `test_result_cache_review` patch a tiny disk budget and left the app-wide `FolderCache` paused (ten such tests in a

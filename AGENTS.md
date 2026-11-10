@@ -151,6 +151,11 @@ Each rule names the area file with the detail.
   only (`SnapshotFileSystemModel`).
 - Never let the GUI thread wait on cancellation, deadlines or a helper. Queues and concurrency
   stay bounded and requests deduplicated.
+- No dialog, box or menu is `exec()`ed inside a delivery (IOService's `_tick`, a plot's run end):
+  code a result reaches opens it through `gui_delivery.outside` (conftest's `no_modal_in_delivery`).
+  Local folders and files open with `file_manager.show` (detached), never `QDesktopServices.openUrl`.
+  A call that can block in `helab/views` or `helab/models` is listed, with its reason, in
+  `tests/data/gui_thread_allowed.txt` (`tests/test_gui_thread_calls.py`).
 - A helper holds its slot **until its exit is confirmed** by the reaper's exit flag; never free
   a slot on message delivery. A retry never runs beside the attempt it replaces.
 - Timeouts measure time **without progress** (helpers send heartbeats).

@@ -40,6 +40,29 @@ since the v0.0.7a1 tidy-up):
   converted TXY: "ok", left for caching v2.
 - **At most three floors at once** (Tony in Chat, 2026-11-02, with the go for caching v2's stage 2; via Side).
 
+## GUI threads audit (block 73; [handoff](sessions/2026-11-10-claude-gui-threads-audit/handoff.md))
+
+Built on `agent/gui-threads-audit`, merged `0930096`. Tony in Chat, 2026-11-10: "Q~1 yes add that as an option too in
+addition to custom bin size; Q~2 ok; Q~3 ok; Q~4 ok; Q~5 ok".
+
+- **Q73.1** (decided) GT-4, drawing the 2D histograms: an option beside the bins, Image › Draw at: screen
+  resolution (default; images over 2,048 bins a side drawn from block means made on the worker, Plotly over 1,000;
+  at most 500,000 dots a plane in PyQtGraph and Matplotlib; the plane's title says so) | every bin (as before).
+  The saved result and the bins stay as chosen.
+- **Q73.2** (decided) GT-6: at start, a script folder whose test import took over 2 s waits for Reload, with
+  "takes N s to import" in the start note.
+- **Q73.3** (decided) GT-8: Quit on both startup boxes of a cache move (the move stays for the next start); the
+  recovery's no-progress timeout comes with the move helper's heartbeats (A73.8).
+- **Q73.4** (decided) GT-9: Qt's own folder dialog, opening in the home folder, for Load Scripts…, Settings' temp
+  Browse… and the cache's Change…; the converter's profile import and export stay native. Save to folder…
+  (.helab-root) and Debug's save are unchanged: they could follow if Tony wants.
+- **Q73.5** (decided) GT-1 (a): a large folder whose load a conversion's end asks for shows "Load anyway…"
+  instead of a box; Live and presets at launch still ask, and so does the user's own click.
+- **Q73.6** (open; GT-30) A quit that hung and was ended by HeLab's last resort exits with code 1 and the next start
+  says "The previous run crashed: see crash-<pid>.txt". (a) keep it (a hung quit is worth reporting; its stacks
+  are the evidence); (b) say "ended by HeLab after its quit hung" instead, from a marker line in the crash file.
+  Proposed: (a).
+
 ## Bug review of f844c0f..0de469b (block 72; [handoff](sessions/2026-11-10-claude-review-0de469b/handoff.md))
 
 Built on `review/v0.0.9-0de469b`, merged `fc58b51`.

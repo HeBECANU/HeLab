@@ -404,6 +404,19 @@ and M42.1 on a lab PC with the switch on (one Live session).
 - [ ] **M72.2 A Windows console's UTF-8** (RV-5): on a lab PC, start HeLab from PowerShell or cmd and make a long
   log line with "σ", "→" or "·" (e.g. a blur note at DEBUG): the console shows them, and keeps printing.
 
+## The GUI thread audit (added 2026-11-10, block 73)
+
+- [ ] **M73.1 A dead mapped drive at start** (GT-7, Windows lab PC): with a mapped drive whose server is off,
+  start HeLab (expect no wait now), then select a raw-only folder: does the GUI stall, and for how long (A73.2)?
+- [ ] **M73.2 Dialogs beside a dead drive** (GT-9, Q73.4, Windows lab PC): with the same drive, Settings › General
+  › Browse… (now Qt's own dialog, in the home folder) and Open in File Manager on a folder of it: HeLab stays
+  responsive even if Explorer hangs.
+- [ ] **M73.3 After a long Live session on the TDC PC** (GT-1, GT-3): no burst of "timed out" helper retries after
+  a box was left open; any "GUI stalled" line reaches the log file with its stacks (for the 5.68 s stall).
+- [ ] **M73.4 Draw at** (Q73.1): in the XY, XT, YT histograms with bins over 2,048 a side, Image › Draw at: screen
+  resolution looks the same at screen size as every bin, zoomed in shows the block means, the plane's title says
+  how it is drawn; every bin draws as before. Also Plotly (over 1,000) and Matplotlib.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything

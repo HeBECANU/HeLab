@@ -571,6 +571,37 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
 - [ ] **A72.4 Align `blur_brief`'s and `blur_steps`' default Order** (A~4, Probe's Info; harmless): next time
   `histograms_2d.py` is touched.
 
+## GUI threads audit (block 73; [handoff](sessions/2026-11-10-claude-gui-threads-audit/handoff.md))
+
+- [ ] **A73.1 A script folder's code from memory** (A~1, GT-6 (A)): the probe returns each `.py` file's and helper
+  module's bytes (bounded, e.g. 8 MB in all) through a file in its temp folder; during `load_directory` a temporary
+  meta-path finder serves the folder's modules from them (`__file__` the real path; linecache gets the source), so
+  the GUI thread reads nothing of a share at Reload. Data files a script reads at import still come from disk.
+- [ ] **A73.2 Mounts from helpers** (A~2, GT-7 (b)): `share_of`'s mount table (Folder details' refresh, Live's
+  convert tick, the share question) is read on the GUI thread every 10 s on Windows. Proposed: helpers report
+  mounts (`mounts_seen` in `events.py`), `FolderCache` keeps them; after M73.1 shows whether those calls wait.
+- [ ] **A73.3 `RamBudget.check` in O(plots × shots)** (A~3, GT-11): each plot's buffers taken once per check, with
+  holder counts.
+- [ ] **A73.4 Fewer derives and activity updates** (A~4, GT-12): coalesce `activityChanged` with `one_activity()`
+  or a dirty flag; running tallies on parents instead of `_derive` over all children per child event; cache
+  `txy_sources.empty_helab_shots`/`origins_of` per dataset (11 ms per 100 ms at 100,000 shots); cache
+  `explorer_live.low_hits_threshold()` until the setting changes (needs a per-test reset); refresh only the shown
+  tab's summary.
+- [ ] **A73.5 Profiles, trace and cache-move clean-ups off the GUI thread** (A~5, GT-13): keep the profile library
+  in memory; `delete_io_traces` into `trace_check`'s helper; the cache move's `undo_rename` and
+  `cache_move.cleanup` into a helper.
+- [ ] **A73.6 `build_info` keeps commit and branch when only `git status` times out** (A~6, GT-15), and logs it
+  (today a timeout quietly turns updates off for the session).
+- [ ] **A73.7 A suite-wide stall report** (A~7, guard 3): the audit's `stall_probe.py` into conftest, reported like
+  RERUNs (over 1 s listed with stacks; fail only over 5 s).
+- [ ] **A73.8 The cache move's heartbeats** (A~8, GT-8, Q73.3): progress from the move helper while it copies and
+  deletes (through `cache_move.recover`/`cleanup`/`_remove_tree`), then a no-progress timeout for the startup
+  recovery.
+- [ ] **A73.9 The GUI-thread lint, wider** (A~9, guard 1): the GUI-side `helab/utils` modules (needs per-function
+  scoping: IOService and the watchdog wait on their own threads), and `open`/`os.stat` with a longer allow-list.
+- [ ] **A73.10 A modal in a delivery, logged in the app** (A~10, GT-1): a warning with its stack when a box opens
+  inside a delivery; today only the suite catches it.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

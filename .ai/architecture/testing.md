@@ -31,6 +31,8 @@ harmless with no listeners); a test that shows an `ActivityWindow` hides or clos
 
 **App updates' default repository** (`ba22460`): `helab.updates.settings` reads this checkout's `git config` (`build_info.upstream_repository`, read only) to choose the default repository, so a test that depends on it patches `build_info.upstream_repository` and clears `settings._upstream` (CI's branch tracks `TonyXTYan/HeLab`). No test runs the updater against this checkout, its remotes or the network (`HELAB_UPDATER_TEST_ROOT`).
 
+**GUI-thread guards** (block 73; landed `0930096`): `conftest.no_modal_in_delivery` (autouse) makes `exec()` and the static helpers of QDialog, QMessageBox, QMenu, QInputDialog, QFileDialog, QColorDialog and QFontDialog raise while a delivery runs (`gui_delivery.current()`), and fails the test at teardown even if HeLab's code caught it; a test that patches one of those names itself replaces the check for that name, and a test that emits `resultReady` itself is covered too (`FolderCache._on_event` is a delivery). `conftest.no_file_manager` (autouse) records `file_manager.launch` calls instead of opening a file manager. `tests/test_gui_thread_calls.py` scans `helab/views` and `helab/models` (AST, direct calls) for calls that wait, list or copy folders, start processes, open sockets or databases, read mount tables, import code chosen at run time, run a nested event loop or open a native file dialog; each hit is in `tests/data/gui_thread_allowed.txt` with its reason, and a stale entry fails too. Wider scope is A73.9; a suite-wide stall report A73.7.
+
 ## Windows
 
 Windows: if pytest crashes during cleanup with `WinError 5` for
