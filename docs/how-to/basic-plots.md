@@ -59,8 +59,11 @@ This plot bins the chosen shots' events in up to three planes, side by side, and
 over them: XY sums T, XT and YT sum Y or X. XY has X across and Y up; XT and YT have X or Y across and T up. Every space axis
 shown has the same scale, so a cloud is as wide in XT as in XY, and zooming or panning one plane moves the others
 with it (X shared by XY and XT, Y by XY and YT, T by XT and YT).
-The planes share one set of settings and one colour bar, right of the last plane. Each image is coloured
-over the same range, from 0 to the highest bin of the planes shown:
+The planes share one set of settings. With counts per bin they share one colour bar, right of the last plane,
+over the same range: from 0 to the highest bin of the planes shown. A rate per shot is per mm² in XY but per mm·ms
+in XT and YT, so then XY has its own colour bar, left of the planes, and XT and YT share one on the right, each
+from 0 to the highest bin of its own planes. (Dots coloured by the summed axis have one bar for it; dots without
+colour have none.) The settings:
 
 - **Planes**: turn XY, XT and YT on or off. Only the planes that are on are computed.
 - **View range.** With **auto-crop**, each shown axis covers the shortest range holding the share of events
@@ -99,8 +102,8 @@ over the same range, from 0 to the highest bin of the planes shown:
   The two Gaussians and the box commute: their order among themselves changes nothing. The median, denoise
   and the adaptive KDE don't, so where they sit in the order matters. A σ is at most a quarter of the
   image's side on each axis, and the plot says when it was capped.
-- **Show**: counts per bin, or a rate per shot (counts per shot per bin area: per m² for XY, per m·s for XT and
-  YT).
+- **Show**: counts per bin, or a rate per shot (counts per shot per bin area: events / mm² / shot for XY,
+  events / (mm·ms) / shot for XT and YT, whatever units the axes show).
 - **Colour scale**: linear, sqrt, log (spanning **Decades** below the maximum) or power γ. Only the colours
   are compressed: the colour bar still reads the real values.
 
