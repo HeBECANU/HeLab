@@ -434,6 +434,9 @@ class DockTabCloser(QObject):
         layout = self.area.layout()
         if layout is not None:
             layout.activate()  # Qt makes or reuses the tab bars as it lays the docks out.
+        # The area's docks by address, found once (GT-10: a walk of the whole area per tab was quadratic, and runs
+        # on every tab switch: 137 ms at 80 docks, seconds in a loaded CI test).
+        docks = self.docks()
         for bar in self.area.findChildren(QTabBar, options=Qt.FindChildOption.FindDirectChildrenOnly):
             if not bar.property("helabClosable"):
                 bar.setProperty("helabClosable", True)
@@ -444,14 +447,20 @@ class DockTabCloser(QObject):
                 # tab's × went dead, 0.0.6a1-0.0.7a1).
                 bar.tabCloseRequested.connect(self._tab_close_requested)
                 bar.tabMoved.connect(self.schedule_fit)
-            self.identify_tabs(bar)
+            self.identify_tabs(bar, docks)
 
-    def identify_tabs(self, bar: QTabBar) -> None:
+    def docks(self) -> dict[int, QDockWidget]:
+        """The area's docks (its own: Qt makes each one added its child), by address (``address_of``)."""
+        return {address_of(dock): dock
+                for dock in self.area.findChildren(QDockWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)}
+
+    def identify_tabs(self, bar: QTabBar, docks: Optional[dict[int, QDockWidget]] = None) -> None:
         """IDs and names for a tab bar of plots and its close buttons: "Close plot tab: <title>",
         ``close_plot_tab_<the plot's number>`` (helab/utils/accessible.py). Qt makes and retires these
         bars as plots are tabbed, so no ID stays with a bar: it is ``plot_tabs_<its first tab's plot
         number>``, unique while shown; the close buttons' IDs are the stable ones."""
-        plots = [dock.plot_id if isinstance(dock := self.dock_at(bar, index), AnalysisDock) else ""
+        docks = self.docks() if docks is None else docks
+        plots = [dock.plot_id if isinstance(dock := self.dock_at(bar, index, docks), AnalysisDock) else ""
                  for index in range(bar.count())]
         if plots and plots[0]:
             identify(bar, f"plot_tabs_{plots[0]}", "Plot tabs")
@@ -474,12 +483,10 @@ class DockTabCloser(QObject):
         if dock is not None:
             dock.close()
 
-    def dock_at(self, bar: QTabBar, index: int) -> Optional[QDockWidget]:
-        """The dock of tab ``index`` (None if Qt ever stops keeping it as the tab data)."""
-        address = bar.tabData(index)
-        for dock in self.area.findChildren(QDockWidget):
-            if address_of(dock) == address:
-                return dock
-        return None
+    def dock_at(self, bar: QTabBar, index: int,
+                docks: Optional[dict[int, QDockWidget]] = None) -> Optional[QDockWidget]:
+        """The dock of tab ``index`` (None if Qt ever stops keeping it as the tab data); ``docks``: the area's,
+        found once by the caller (``docks``)."""
+        return (self.docks() if docks is None else docks).get(bar.tabData(index))
 
 

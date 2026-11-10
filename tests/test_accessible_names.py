@@ -181,6 +181,13 @@ class Walk:
 
     def __call__(self, window: QWidget, label: str = "") -> None:
         name = label or type(window).__name__
+        # A plot area's tab bars get their IDs in a fit its debounce timer runs: one still pending (a GUI stall
+        # delayed it) runs now, or the walk finds a bar Qt just made without its ID (the Windows CI flake, GT-10).
+        from helab.views.plots.dock import DockTabCloser
+        for closer in window.findChildren(DockTabCloser):
+            if closer._fit_soon.isActive():
+                closer._fit_soon.stop()
+                closer.fit()
         self.missing += [f"{name}: {line}" for line in unnamed(window)]
         self.seen |= {type(window), *(type(child) for child in window.findChildren(QWidget))}
 
