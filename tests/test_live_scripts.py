@@ -352,9 +352,9 @@ def test_a_load_that_never_ended_skips_the_remembered_folders_at_the_next_start(
     qtbot.addWidget(scripts)
     load = scripts.script_manager.add_folder
 
-    def spying(folder_: str) -> bool:
+    def spying(folder_: str, *reads: Any) -> bool:  # (``reads``: its test import's, GT-6.)
         seen.append(loading_marker())
-        return load(folder_)
+        return load(folder_, *reads)
 
     monkeypatch.setattr(scripts.script_manager, "add_folder", spying)
     scripts.add_folder(str(tmp_path))
@@ -449,9 +449,9 @@ def imports_seen(monkeypatch: pytest.MonkeyPatch, scripts: TreePanelWidget) -> L
     manager = scripts.script_manager
     add = manager.add_folder
 
-    def adding(folder_: str) -> bool:
+    def adding(folder_: str, *reads: Any) -> bool:  # (``reads``: its test import's, GT-6.)
         seen.append(scripts._busy({folder_}))
-        return add(folder_)
+        return add(folder_, *reads)
     monkeypatch.setattr(manager, "add_folder", adding)
     return seen
 

@@ -11,7 +11,9 @@ makes a Qt object at import behaves as in the app; without the ``offscreen`` pla
 the ``ready`` line). The answer goes to ``RESPONSE_FILE`` as JSON lines, never stdout (a windowed frozen app
 may have no standard streams): ``{"kind": "ready", "application": …}`` once it is about to import the
 folder (the time limit counts from here, so the probe's own start doesn't), then ``{"kind": "done",
-"loaded": …, "seconds": …}``. Then it ends at once (``os._exit``), so a script's atexit hook or thread
+"loaded": …, "seconds": …, "reads": …}``: ``reads`` is what HeLab's own import would read of the folder again
+(``scripts_manager.FolderReads``: its ``.py`` names, each file's size, time and SHA-256, never its bytes; null
+when it couldn't be listed or holds too many files), so the GUI thread doesn't (GT-6). Then it ends at once (``os._exit``), so a script's atexit hook or thread
 can't hold it open. A file that raises at import isn't a failure here: the manager keeps its error, and
 HeLab's real import lists it. The GUI side: ``helab/views/plots/script_tree.py`` (``FolderProbes``).
 
@@ -86,8 +88,11 @@ def main(argv: List[str]) -> int:
         from helab.scripts.scripts_manager import ScriptsManager
         _say(handle, kind=READY, application=ran, pid=os.getpid())
         started = time.monotonic()
-        loaded = ScriptsManager().add_folder(folder)
-        _say(handle, kind=DONE, loaded=loaded, seconds=round(time.monotonic() - started, 3))
+        manager = ScriptsManager()
+        loaded = manager.add_folder(folder)
+        seconds = round(time.monotonic() - started, 3)
+        reads = manager.folder_reads(folder) if loaded else None
+        _say(handle, kind=DONE, loaded=loaded, seconds=seconds, reads=reads.to_json() if reads is not None else None)
     # Never torn down: ~QCoreApplication waits for the global QThreadPool, so a script that started an endless
     # task at import would hold the probe open after ``done`` (review FU-1). Kept referenced until ``os._exit``,
     # which ends the process at once.

@@ -26,7 +26,7 @@ from helab.analysis.presets import SavedPlot, ScriptRef, waiting_view
 from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.scripts import dld, probe, standard, standard_v2
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
-from helab.scripts.scripts_manager import LoadError, ScriptsManager
+from helab.scripts.scripts_manager import FolderReads, LoadError, ScriptsManager
 from helab.utils import activity
 from helab.utils.accessible import id_part, identify, identify_buttons
 from helab.utils.colours import AMBER
@@ -207,6 +207,7 @@ class _Probe:
     done_at: float = 0.0  # monotonic: when ``done`` was read.
     lingered: bool = False  # Killed for not exiting after ``done`` (still passed).
     application: str = ""  # What the probe ran its import under (``probe.OFFSCREEN``, or none and why).
+    reads: Optional[FolderReads] = None  # What its import read of the folder (``done``'s), for HeLab's own.
     killed: str = ""  # Why it was killed ("": it wasn't).
 
 
@@ -229,12 +230,19 @@ class FolderProbes(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(PROBE_POLL_MS)
         self._timer.timeout.connect(self._poll)
+        # Each passed folder's latest reads (``take_reads``): normcase folder -> its probe's.
+        self._reads: Dict[str, FolderReads] = {}
         application = QCoreApplication.instance()
         if application is not None:
             application.aboutToQuit.connect(self.stop)
 
     def busy(self) -> bool:
         return bool(self._queue or self._running)
+
+    def take_reads(self, folder: str) -> Optional[FolderReads]:
+        """What the last passed probe of ``folder`` read of it (once; None if none): the import that follows
+        uses them while they are fresh, instead of reading the folder again on the GUI thread (GT-6)."""
+        return self._reads.pop(os.path.normcase(folder), None)
 
     def activity(self) -> List[Tuple[str, str, Optional[float]]]:
         """Each probe running or queued (the Activity window): its folder, "importing", "starting" (its
@@ -311,6 +319,7 @@ class FolderProbes(QObject):
                 item.ready, item.application = time.monotonic(), str(event.get("application", ""))
             elif isinstance(event, dict) and event.get("kind") == probe.DONE and not item.done:
                 item.done, item.done_at = True, time.monotonic()
+                item.reads = FolderReads.from_json(event.get("reads"))
 
     @pyqtSlot()
     def _poll(self) -> None:
@@ -391,6 +400,10 @@ class FolderProbes(QObject):
             if not sip.isdeleted(item.process):
                 item.process.deleteLater()
         shutil.rmtree(item.output, ignore_errors=True)
+        if failure is None and item.reads is not None:
+            self._reads[os.path.normcase(item.folder)] = item.reads
+        else:
+            self._reads.pop(os.path.normcase(item.folder), None)
         for round_ in list(self._rounds):
             answers, waiting, answer = round_
             if item.folder in waiting:
@@ -747,8 +760,10 @@ class TreePanelWidget(QWidget):
         own = stuck is None
         if own:
             self._mark(folder)
+        # (Its test import's reads, while fresh: the folder isn't listed, statted or hashed here again, GT-6.)
+        reads = self._probes.take_reads(folder)
         try:
-            loaded = self.script_manager.add_folder(folder)
+            loaded = self.script_manager.add_folder(folder, reads)
         except Exception:  # (Never expected: the manager keeps each file's failure. It stays listed.)
             logging.exception("Error loading scripts from %s", folder)
             loaded = False
@@ -760,7 +775,7 @@ class TreePanelWidget(QWidget):
             self._remote.add(folder)  # (Never watched: auto-reload stats only local folders.)
         else:
             self._remote.discard(folder)
-        self._stamps[folder] = self._stamp_of(folder)
+        self._stamps[folder] = self._stamp_of(folder, reads)
         self._stamped_at[folder] = time.time_ns()
         return loaded
 
@@ -782,9 +797,12 @@ class TreePanelWidget(QWidget):
         except OSError:
             logging.exception("The script loading marker couldn't be removed")
 
-    def _stamp_of(self, folder: str) -> Dict[str, Tuple[int, int]]:
+    def _stamp_of(self, folder: str, reads: Optional[FolderReads] = None) -> Dict[str, Tuple[int, int]]:
+        """Each watched file's (size, mtime); ``reads``: the folder's test import's, used while fresh."""
         manager = self.script_manager
-        return {file: (size, mtime) for file, size, mtime in manager.stamp(manager.watched_files(folder))}
+        fresh = reads if reads is not None and reads.fresh(folder) else None
+        return {file: (size, mtime)
+                for file, size, mtime in manager.stamp(manager.watched_files(folder, fresh), fresh)}
 
     def add_folder(self, folder: str) -> None:
         """Load Scripts…: a new folder is loaded and remembered; one loaded already reloads (its plots
