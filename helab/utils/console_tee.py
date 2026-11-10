@@ -33,6 +33,7 @@ CONSOLE_NAME = "console-{pid}.txt"
 CAP = 20 * 1000 * 1000  # bytes, before the file is rotated once
 OFF_ENV = "HELAB_NO_CONSOLE_FILE"
 TERMINAL_CHUNKS = 256  # held for a slow terminal before its output is dropped (each up to 64 KiB)
+LOGGING_LOCK_SECONDS = 2.0  # waited for logging's lock to list its handlers (then listed without it)
 # (Windows: a console's raw stream, which writes UTF-8 bytes as text; absent elsewhere.)
 _WINDOWS_CONSOLE_IO = cast(Callable[..., Any] | None, getattr(io, "_WindowsConsoleIO", None))
 
@@ -216,14 +217,22 @@ class ConsoleTee:
 
 
 def _swap_handler_streams(old: TextIO, new: TextIO) -> None:
-    """Logging handlers writing to ``old`` write to ``new`` (``coloredlogs``' console handler holds the
-    ``sys.stderr`` it was installed with)."""
-    loggers = [logging.getLogger(), *(logger for logger in logging.Logger.manager.loggerDict.values()
-                                      if isinstance(logger, logging.Logger))]
-    for logger in loggers:
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and handler.stream is old:
-                handler.setStream(new)
+    """Logging handlers writing to ``old`` write to ``new``: a ``StreamHandler`` holds the stream it was built
+    with (``coloredlogs``' handler reads ``sys.stderr`` at each record, so it follows by itself). The handlers
+    are listed under logging's own lock, as it changes them (another thread may add a logger meanwhile), and
+    swapped after it (``setStream`` flushes)."""
+    lock = cast("threading.RLock | None", getattr(logging, "_lock", None))
+    taken = lock.acquire(timeout=LOGGING_LOCK_SECONDS) if lock is not None else False
+    try:  # (Not taken in time: listed without it rather than wait, at exit too.)
+        loggers = [logging.getLogger(), *(logger for logger in list(logging.Logger.manager.loggerDict.values())
+                                          if isinstance(logger, logging.Logger))]
+        handlers = [handler for logger in loggers for handler in list(logger.handlers)]
+    finally:
+        if taken and lock is not None:
+            lock.release()
+    for handler in handlers:
+        if isinstance(handler, logging.StreamHandler) and handler.stream is old:
+            handler.setStream(new)
 
 
 def start(folder: str) -> ConsoleTee | None:

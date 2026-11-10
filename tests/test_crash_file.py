@@ -284,6 +284,49 @@ def test_a_console_gets_a_replacement_for_bytes_left_incomplete_at_the_end() -> 
         os.close(piped_read)
 
 
+def test_handler_streams_are_swapped_after_loggings_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handlers are listed under logging's lock (another thread adding a logger meanwhile changed the dict
+    while it was walked), waiting for it at most ``LOGGING_LOCK_SECONDS``."""
+    import io
+
+    old, new = io.StringIO(), io.StringIO()
+    handler = logging.StreamHandler(old)
+    logger = logging.getLogger("helab.test.console-tee-swap")
+    logger.addHandler(handler)
+    lock = cast(Any, logging)._lock
+    try:
+        lock.acquire()
+        swapper = threading.Thread(target=console_tee._swap_handler_streams, args=(old, new), daemon=True)
+        try:
+            swapper.start()
+            time.sleep(0.3)
+            assert swapper.is_alive() and handler.stream is old  # (Waiting for the lock.)
+        finally:
+            lock.release()
+        swapper.join(timeout=10)
+        assert not swapper.is_alive() and handler.stream is new
+        monkeypatch.setattr(console_tee, "LOGGING_LOCK_SECONDS", 0.05)
+        held = threading.Event()
+        done = threading.Event()
+
+        def hold() -> None:
+            with lock:
+                held.set()
+                done.wait(10)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        try:
+            assert held.wait(10)
+            console_tee._swap_handler_streams(new, old)  # (The lock held elsewhere: done without it, at once.)
+            assert handler.stream is old
+        finally:
+            done.set()
+            holder.join(timeout=10)
+    finally:
+        logger.removeHandler(handler)
+
+
 def test_the_console_file_is_off_under_the_test_suite(tmp_path: Path) -> None:
     assert os.environ.get(console_tee.OFF_ENV)  # (conftest)
     assert console_tee.start(str(tmp_path)) is None and not list(tmp_path.glob("console-*"))
