@@ -79,7 +79,8 @@ over the same range, from 0 to the highest bin of the planes shown:
     - **Background**: white or black behind the dots (the titles, axes and colour bar stay on white). Black
       brings out faint dots; uncoloured dots are then white.
 - **T bins**, **X bins** and **Y bins**: each axis's bins wherever it is shown, up to 10,000; 0 picks the
-  count from the data (at most 1,000).
+  count from the data (at most 1,000). A plane holds at most 16,000,000 bins (4,000 × 4,000), for memory:
+  over that, both its axes' bins are scaled down in proportion, and the plane's title says so.
 - **Blur**: six filters, each in its own section with an **On** switch; its settings show once it's on. They
   run one after another, in increasing **Order** (filters with the same number run in the order listed), and
   each plane's title lists the ones that ran:
