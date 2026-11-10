@@ -510,7 +510,7 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
                        (int(values[BINS[across].name]), int(values[BINS[up].name])),
                        (bounds[0], bounds[1], bounds[2]), check)
     check()
-    image, filters, capped = image_filters.apply(item.counts, blur_steps(values, item))
+    image, filters, capped = image_filters.apply(item.counts, blur_steps(values, item), check)
     per_shot = values.get(QUANTITY.name) == PER_SHOT
     if per_shot and chosen and item.summed:
         # Bin edges stay in SI units; rates use mm² for XY and mm·ms for XT/YT.

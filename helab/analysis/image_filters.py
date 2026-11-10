@@ -19,12 +19,13 @@ Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, cast
+from typing import Callable, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
 
 Image = npt.NDArray[np.float64]
+Check = Callable[[], None]  # Raises to cancel (the analysis runner's).
 
 MEDIAN, DENOISE, ADAPTIVE, GAUSSIAN, UNITS, BOX = "median", "denoise", "adaptive", "gaussian", "units", "box"
 FILTERS = (MEDIAN, DENOISE, ADAPTIVE, GAUSSIAN, UNITS, BOX)
@@ -73,21 +74,36 @@ def gaussian(image: Image, sigma: tuple[float, float]) -> Image:
     return cast(Image, gaussian_filter(image, sigma=sigma, mode="reflect"))
 
 
-def adaptive(image: Image, sigma: tuple[float, float], alpha: float) -> Image:
-    """Abramson's adaptive KDE on the bins (sample point: each bin's content spread with its own σ)."""
+def levels(factor: Image) -> Image:
+    """Each bin's σ step (0 … ``LEVELS`` - 1, as floats) for its σ ``factor`` (¼ … 4): the nearest step on the
+    log-spaced ladder, worked out directly in ``factor``'s own memory (not one image per step)."""
+    level = np.log(factor, out=factor)
+    level += np.log(ADAPTIVE_RANGE)
+    level /= 2 * np.log(ADAPTIVE_RANGE) / (LEVELS - 1)
+    np.rint(level, out=level)
+    return cast(Image, np.clip(level, 0, LEVELS - 1, out=level))
+
+
+def adaptive(image: Image, sigma: tuple[float, float], alpha: float, check: Check = lambda: None) -> Image:
+    """Abramson's adaptive KDE on the bins (sample point: each bin's content spread with its own σ). ``check`` is
+    called before each σ step."""
     occupied = image > 0
     if not occupied.any() or alpha <= 0:
         return gaussian(image, sigma)
     pilot = gaussian(image, sigma)
     scale = float(np.exp(np.mean(np.log(np.maximum(pilot[occupied], 1e-300)))))
-    with np.errstate(divide="ignore"):
-        factor = np.where(pilot > 0, (np.maximum(pilot, 1e-300) / scale) ** -alpha, ADAPTIVE_RANGE)
-    factor = np.clip(factor, 1 / ADAPTIVE_RANGE, ADAPTIVE_RANGE)
+    factor = np.maximum(pilot, 1e-300)  # (Worked in place: a few images' memory at most.)
+    factor /= scale
+    with np.errstate(divide="ignore", over="ignore"):
+        np.power(factor, -alpha, out=factor)
+    factor[pilot <= 0] = ADAPTIVE_RANGE
+    del pilot
+    level = levels(np.clip(factor, 1 / ADAPTIVE_RANGE, ADAPTIVE_RANGE, out=factor))
     ladder = np.geomspace(1 / ADAPTIVE_RANGE, ADAPTIVE_RANGE, LEVELS)
-    level = np.abs(np.log(factor)[..., None] - np.log(ladder)).argmin(axis=-1)
     caps = (limit(image.shape[0]), limit(image.shape[1]))
     out = np.zeros_like(image)
     for index, times in enumerate(ladder):
+        check()
         chosen = occupied & (level == index)
         if chosen.any():
             out += gaussian(np.where(chosen, image, 0.0),
@@ -105,8 +121,9 @@ def denoise(image: Image, sigma: tuple[float, float]) -> Image:
     return back * (total / found) if found > 0 else back
 
 
-def run(step: Step, image: Image) -> tuple[Image, str]:
-    """``image`` through ``step``, and a note when a setting was capped ("" when not)."""
+def run(step: Step, image: Image, check: Check = lambda: None) -> tuple[Image, str]:
+    """``image`` through ``step``, and a note when a setting was capped ("" when not). ``check`` raises to cancel
+    (between the adaptive KDE's σ steps)."""
     from scipy.ndimage import median_filter, uniform_filter
 
     if step.kind in (MEDIAN, BOX):
@@ -123,20 +140,22 @@ def run(step: Step, image: Image) -> tuple[Image, str]:
     if step.kind == DENOISE:
         return denoise(image, sigma), note
     if step.kind == ADAPTIVE:
-        return adaptive(image, sigma, step.alpha), note
+        return adaptive(image, sigma, step.alpha, check), note
     return gaussian(image, sigma), note
 
 
-def apply(counts: npt.NDArray[np.int64] | Image, steps: Sequence[Step]
+def apply(counts: npt.NDArray[np.int64] | Image, steps: Sequence[Step], check: Check = lambda: None
           ) -> tuple[Image, tuple[str, ...], tuple[str, ...]]:
     """``counts`` through ``steps`` in their order: the image, the steps' texts in that order, and notes on
-    settings capped. No step: the counts as they are (a copy)."""
+    settings capped. No step: the counts as they are (a copy). ``check`` (the runner's) raises to cancel: it is
+    called before each step and between the adaptive KDE's σ steps."""
     image = np.asarray(counts, dtype=np.float64).copy()
     texts, notes = [], []
     if not image.size:
         return image, (), ()
     for step in chain(steps):
-        image, note = run(step, image)
+        check()
+        image, note = run(step, image, check)
         texts.append(step.text)
         if note:
             notes.append(note)

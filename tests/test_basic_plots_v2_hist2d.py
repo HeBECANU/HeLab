@@ -22,7 +22,7 @@ from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWE
 from helab.analysis.image_filters import ADAPTIVE, BOX, DENOISE, FILTERS, GAUSSIAN, MEDIAN, UNITS, Step
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import effective
-from helab.analysis.results import AnalysisContext, AnalysisResult
+from helab.analysis.results import AnalysisContext, AnalysisResult, Cancelled
 from helab.analysis.stats import shortest_range
 from helab.scripts import standard_v2
 from helab.scripts.standard_v2 import histograms_2d
@@ -160,6 +160,66 @@ def test_the_adaptive_kde_smooths_faint_regions_more_than_bright_ones() -> None:
     assert adapted[floor].std() < plain[floor].std()  # ...and the faint floor smoothed more.
     flat = image_filters.apply(counts, [step(ADAPTIVE, sigma=(2.0, 2.0), alpha=0.0)])[0]
     assert np.allclose(flat, plain)  # α 0: a plain Gaussian.
+
+
+def test_the_adaptive_kde_picks_the_nearest_sigma_step() -> None:
+    """Each bin's σ step is the ladder's nearest (on a log scale), as the broadcast over every step found it."""
+    rng = np.random.default_rng(4)
+    factor = np.exp(rng.uniform(np.log(1 / image_filters.ADAPTIVE_RANGE), np.log(image_filters.ADAPTIVE_RANGE),
+                                (300, 200)))
+    ladder = np.geomspace(1 / image_filters.ADAPTIVE_RANGE, image_filters.ADAPTIVE_RANGE, image_filters.LEVELS)
+    nearest = np.abs(np.log(factor)[..., None] - np.log(ladder)).argmin(axis=-1)
+    assert np.array_equal(image_filters.levels(factor.copy()), nearest)
+    assert image_filters.levels(ladder.copy()).tolist() == list(range(image_filters.LEVELS))
+
+
+def test_the_adaptive_kde_needs_a_few_images_of_memory() -> None:
+    """Not one image per σ step (the broadcast over the 9 steps peaked at about 20 images)."""
+    import tracemalloc
+
+    rng = np.random.default_rng(5)
+    counts = rng.poisson(rng.uniform(0.0, 3.0, (600, 600))).astype(np.float64)
+    tracemalloc.start()
+    try:
+        image_filters.apply(counts, [step(ADAPTIVE, sigma=(2.0, 2.0), alpha=0.5)])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 12 * counts.nbytes  # (About 8 here: scipy's Gaussian alone takes 4.)
+
+
+def test_the_filters_can_be_cancelled_between_steps_and_sigma_steps() -> None:
+    calls: list[int] = []
+
+    def check() -> None:
+        calls.append(1)
+        if len(calls) == 4:
+            raise InterruptedError
+
+    with pytest.raises(InterruptedError):
+        image_filters.apply(spot(), [step(GAUSSIAN, sigma=(1.0, 1.0)), step(ADAPTIVE, sigma=(2.0, 2.0))], check)
+    # Before the Gaussian, before the adaptive KDE, then before each of its σ steps: cancelled at the second.
+    assert len(calls) == 4
+    calls.clear()
+    image_filters.apply(spot(), [step(GAUSSIAN, sigma=(1.0, 1.0)), step(MEDIAN, size=3)], lambda: calls.append(1))
+    assert len(calls) == 2
+
+
+def test_the_plot_cancels_inside_the_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run's check reaches the filters: a cancel during the adaptive KDE stops the plot there."""
+    script = PlaneHistograms()
+    context = AnalysisContext("a1", "Plot", view(),
+                              effective(script.parameters("Plot"), {**only("XY"), "blur_adaptive": True}),
+                              script.get_metadata().identity())
+    gaussian = image_filters.gaussian
+
+    def cancelling(image: Any, sigma: tuple[float, float]) -> Any:
+        context.cancel_event.set()  # (Cancelled during the pilot blur: the next σ step's check stops it.)
+        return gaussian(image, sigma)
+
+    monkeypatch.setattr(image_filters, "gaussian", cancelling)
+    with pytest.raises(Cancelled):
+        script.compute("Plot", context)
 
 
 def test_denoise_flattens_poisson_noise() -> None:
