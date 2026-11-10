@@ -265,17 +265,21 @@ def test_a_script_leaving_a_thread_pool_task_running_doesnt_hold_its_probe(
     assert not any("didn't exit" in record.getMessage() for record in caplog.records)
 
 
+@pytest.mark.parametrize("reads_said", [True, False])
 def test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads(
-        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        reads_said: bool) -> None:
     """FU-1: whatever holds a probe open after ``done``, it is killed ``PROBE_EXIT_SECONDS`` later and its
-    folder still passes (it finished), so no round waits on it."""
+    folder still passes (it finished), so no round waits on it. Its ``reads`` not said yet, the warning says it
+    was still reading the folder (a slow share: GT-31)."""
     monkeypatch.setattr(script_tree, "PROBE_EXIT_SECONDS", 1.0)
+    reads = "    handle.write(json.dumps({'kind': 'reads', 'reads': None}) + '\\n')\n" if reads_said else ""
     monkeypatch.setattr(probe, "command", python_command(
         "import json, sys, time\n"
         "with open(sys.argv[2], 'a') as handle:\n"
         "    handle.write(json.dumps({'kind': 'ready', 'application': 'offscreen'}) + '\\n')\n"
         "    handle.write(json.dumps({'kind': 'done', 'loaded': True, 'seconds': 0}) + '\\n')\n"
-        "time.sleep(120)\n"))
+        + reads + "time.sleep(120)\n"))
     write_script(tmp_path, "lab_probe_f", "one")
     scripts = TreePanelWidget()
     qtbot.addWidget(scripts)
@@ -283,7 +287,9 @@ def test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads
         scripts.add_folder(str(tmp_path))
         qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=30_000)
     assert scripts.error_items() == [] and not scripts._probes.busy()
-    assert any("finished but its process didn't exit within 1 s" in record.getMessage() for record in caplog.records)
+    said = ("finished but its process didn't exit within 1 s" if reads_said
+            else "finished but was still reading the folder after 1 s")
+    assert any(said in record.getMessage() for record in caplog.records)
 
 
 def test_without_the_offscreen_plugin_the_probe_runs_without_an_application(

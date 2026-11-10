@@ -213,6 +213,7 @@ class _Probe:
     application: str = ""  # What the probe ran its import under (``probe.OFFSCREEN``, or none and why).
     reads: Optional[FolderReads] = None  # What its import read of the folder (``done``'s), for HeLab's own.
     seconds: Optional[float] = None  # How long its import took (``done``'s).
+    reads_said: bool = False  # Its ``reads`` line came (after ``done``; its reads may still be None).
     killed: str = ""  # Why it was killed ("": it wasn't).
 
 
@@ -334,6 +335,7 @@ class FolderProbes(QObject):
                 item.seconds = float(seconds) if isinstance(seconds, (int, float)) else None
             elif isinstance(event, dict) and event.get("kind") == probe.READS and item.done:
                 item.reads = FolderReads.from_json(event.get("reads"))  # (After ``done``: GT-27.)
+                item.reads_said = True
 
     @pyqtSlot()
     def _poll(self) -> None:
@@ -344,8 +346,13 @@ class FolderProbes(QObject):
                 continue
             if item.done:
                 if now - item.done_at > PROBE_EXIT_SECONDS:
-                    logging.warning("Script folder %s: HeLab's test import finished but its process didn't exit "
-                                    "within %g s; ended", item.folder, PROBE_EXIT_SECONDS)
+                    if item.reads_said:
+                        logging.warning("Script folder %s: HeLab's test import finished but its process didn't "
+                                        "exit within %g s; ended", item.folder, PROBE_EXIT_SECONDS)
+                    else:  # (Still listing and statting the folder for HeLab's import, a slow share: GT-31.)
+                        logging.warning("Script folder %s: HeLab's test import finished but was still reading the "
+                                        "folder after %g s; ended (HeLab's import reads it itself)", item.folder,
+                                        PROBE_EXIT_SECONDS)
                     item.lingered = True
                     item.process.kill()  # (Passed all the same: ``finished`` answers.)
                 continue
