@@ -74,6 +74,10 @@ that branch.
   from, releases to choose; a compiled build checks and shows releases only (Q65.3). Landed `ba22460` (the App Updates floor, Relay + Reviewer
   Sentry; Q68.1–Q68.12; M68.1–M68.3 for Tony); the frozen self-update stays below (A68.1).
 
+- [x] Plane projections (Tony, 2026-11-10, terminal; [plan](plane-projections.md)): a Basic plots v2 plot of the
+  events' velocities in 3D with up to four planes at any angle (XY, XT, YT the presets), each plane's histogram of
+  the events flattened onto it beside it; Plotly and Matplotlib. Built on `dev/v0.0.9`; M71.1 for Tony.
+
 **Focus beyond these: Tony to choose** (candidates under Near term).
 
 **Carried over from v0.0.8:**

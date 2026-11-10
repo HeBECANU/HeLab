@@ -939,3 +939,12 @@ tested offscreen only. Check on native macOS (and once on a Windows lab PC):
 - [ ] Observe hover-menu tests in CI: real timers have approximately 200 ms of
   slack and may flake on slow machines. If a failure is reproducible, add a
   concrete test-reliability item to `roadmaps/known-issues.md` with logs (A1.6).
+
+## Plane projections (added 2026-11-10, block 71)
+
+- [ ] **M71.1 Plane projections on a real halo** (`roadmaps/plane-projections.md`): open a halo folder whose
+  arrival is saved (Release time plot › Use for this folder…), then Basic Plots › v2 › Plane projections. The 3D
+  view turns with the mouse and shows the XY, XT and YT planes through the halo, and the three histograms below
+  match the XY, XT, YT histograms plot's shapes (in mm/s). Turn on Plane 4 and set a thickness of a few mm/s: its
+  histogram is the halo's ring, and changing α, θ and ψ moves the plane in 3D. Switch to Matplotlib (Drawing ›
+  Library): the same, unturned. With Live on, a new shot keeps the 3D camera where you left it.

@@ -239,7 +239,7 @@ store-v3 for one release (Q50.14).
 - Matplotlib uses `matplotlib.figure.Figure`, never `pyplot`. A PyQtGraph log axis takes
   `PlotDataItem`s. Avoid PyVista and VisPy.
 - The DLD port shows T in ms and X/Y in mm with "," grouping whatever the locale; Basic plots v1
-  keeps s and m with SI prefixes. Never rotate XY.
+  keeps s and m with SI prefixes. Never rotate XY (one exception: Plane projections' custom planes, Tony 2026-11-10).
 - The script-facing API's public names have Google-style docstrings: ruff's D1 checks the modules
   `ruff.toml` lists (`ruff check`, CI's Docs job), and a module the manual's API reference renders is
   added there. Docstrings are public text: no person's name, internal ID or `.ai/`/`roadmaps/` path.

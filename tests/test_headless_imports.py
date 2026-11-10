@@ -36,7 +36,7 @@ PURE = (
         "bec", "bec_readout", "bootstrap", "budget_core", "constant_layers", "correlations",
         "dataset_view", "display_units", "estimates", "fits", "follow", "histogram2d", "hotspots", "identity",
         "image_filters",
-        "masks", "orders", "parameters", "peaks", "physics", "presets", "profiles", "release", "result_cache",
+        "masks", "orders", "parameters", "peaks", "physics", "planes", "presets", "profiles", "release", "result_cache",
         "result_codec", "result_types", "results", "runner_core", "selection", "shot_axis", "spectrum", "stats",
         "trends", "velocity")),
 )
