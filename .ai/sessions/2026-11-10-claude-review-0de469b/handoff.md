@@ -78,6 +78,14 @@ None open: RV-1's were decided (above). CoCo asked Tony whether "20k" meant 20,0
   density images, Correlations) could declare `estimated_bytes` too.
 - **A~2:** the 2D histograms' arrays count toward the RAM budget only once drawn (`RamBudget`, plots' buffers); the
   warning is the only check before.
+- **A~3 (Probe's re-review, Info):** the estimate assumes PyQtGraph's colouring. With Plotly, Plotly 7 also
+  base64-encodes `z` and `customdata` (about 2 × 8 B a bin, plus a third for the encoding) and QtWebEngine holds its
+  own copy, so a 20,000² plane takes several GB more than the warning says (still the right order to warn about). If
+  Plotly is used with fine bins, `PlaneHistograms.estimated_bytes` could add a per-library term (Drawing › Library is
+  not among the analysis values today, so it would need the backend passed in).
+- **A~4 (Probe's re-review, Info):** `blur_brief` defaults a missing Order to 0, while `blur_steps` defaults it to
+  the filter's place + 1. Harmless (a run's values always hold every parameter); align the two defaults when
+  `histograms_2d.py` is next touched.
 
 ## Checks on a real screen
 
