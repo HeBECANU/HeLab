@@ -164,10 +164,10 @@ How to use it:
 - [ ] `test_quit_confirms.py::test_the_watch_ends_a_process_left_running_with_its_exit_code` reran once on Windows,
   Ground CI 42621021439 (Tests 2/3, job 129172975176, `0de469b`, 2026-11-09): `assert [] == [3]` at line 37, the
   quit watch (`quit_watch.exit_soon`, grace 0.05 s) hadn't called its exit within the test's 5 s `join`; passed on
-  rerun. First sighting. Between the sleep and the exit the watch only logs a warning with every thread's stack and
-  flushes the root logger's handlers, so a handler that blocks (one a test left behind) would hold it; the same
-  range changed the console tee's handling of logging handlers (`96df3ed`). Unchecked; the bug review of
-  `f844c0f..0de469b` was asked to look.
+  rerun. First sighting. The bug review of `f844c0f..0de469b` (RV-7) found it slow, not blocked: the worker's
+  own thread dump shows the watch inside `still_running()`'s `traceback.format_stack` (its "still running"
+  warning came 8 s after the test started), and no console-tee thread alive; conftest turns the tee off in test
+  processes, and the tests that start one do it in child processes. Proposed: the test's `join(5)` → `join(30)`.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
