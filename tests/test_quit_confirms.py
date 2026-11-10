@@ -52,6 +52,81 @@ def test_a_process_with_a_thread_still_running_ends_within_the_grace() -> None:
     assert "lingering (daemon=False)" in done.stderr
 
 
+BLOCKED_STDERR = r"""
+import fcntl, logging, os, sys, time
+read, write = os.pipe()
+os.dup2(write, 2)  # (A console that takes nothing: fd 2 back at a paused terminal once the tee stops.)
+flags = fcntl.fcntl(2, fcntl.F_GETFL)
+fcntl.fcntl(2, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+try:
+    while True:
+        os.write(2, b"x" * 4096)
+except BlockingIOError:
+    pass
+fcntl.fcntl(2, fcntl.F_SETFL, flags)  # (Blocking again, as a console's handle is.)
+logging.getLogger().addHandler(logging.StreamHandler(sys.stderr))  # (As coloredlogs' handler.)
+from helab.views import quit_watch
+quit_watch.exit_soon(7, 0.2)
+time.sleep(60)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fills a pipe with fcntl's non-blocking writes")
+def test_the_watch_ends_the_process_even_when_stderr_takes_nothing() -> None:
+    """GT-2 (a): the watch's log line blocks in the console's handler; the exit doesn't wait for it."""
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, "-c", BLOCKED_STDERR], cwd=CHECKOUT, timeout=40,
+                          env={**os.environ, "PYTHONPATH": str(CHECKOUT)})
+    assert done.returncode == 7
+    assert time.monotonic() - started < 20  # (The interpreter's start included; 60 s before the fix.)
+
+
+STUCK_TEARDOWN = r"""
+import gc, os, sys, time
+folder = sys.argv[1]
+for kind in ("CACHES", "TEMPS"):
+    os.environ[f"HELAB_DIR_{kind}_OVERRIDE"] = folder
+os.environ["HELAB_APP_DIR_OVERRIDE"] = folder
+from helab.utils import crash_file
+from helab.views import quit_watch
+print(crash_file.start(folder), flush=True)
+
+class Stuck:
+    def __del__(self) -> None:
+        # (A destructor stuck in Python's last collection. Busy, not ``time.sleep``: on Windows a sleep this late in
+        # finalization fails at once, "WinError 6: The handle is invalid", and nothing would be stuck.)
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            pass
+
+gc.disable()
+stuck = Stuck()
+stuck.cycle = stuck  # (Freed only by the collection at the interpreter's end.)
+del stuck
+quit_watch.exit_soon(3, 0.2)
+crash_file.exit_after(1.5)
+sys.exit(3)
+"""
+
+
+def test_a_teardown_stuck_where_the_watch_cant_run_is_ended_from_the_crash_files_timer(tmp_path: Path) -> None:
+    """GT-2 (b): in Python's teardown daemon threads no longer run, the watch's neither; faulthandler's
+    timer (``crash_file.exit_after``, armed by ``main`` beside the watch) writes every stack and ends it."""
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, "-c", STUCK_TEARDOWN, str(tmp_path)], cwd=CHECKOUT, timeout=40,
+                          capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(CHECKOUT)})
+    assert time.monotonic() - started < 25, done.stderr  # (60 s without the timer.)
+    assert done.returncode == 1, done.stderr
+    crash = Path(done.stdout.strip().splitlines()[0]).read_text()
+    assert "__del__" in crash, crash
+
+
+def test_main_arms_the_last_resort_beside_the_watch() -> None:
+    main = (CHECKOUT / "helab" / "main.py").read_text()
+    assert main.index("quit_watch.exit_soon(code)") < main.index("crash_file.exit_after(") < main.index(
+        "sys.exit(code)")
+
+
 def test_quitting_with_nothing_to_save_closes_within_a_second(qtbot: QtBot) -> None:
     from helab.views.HelabMainWindow import HelabMainWindow
     window = HelabMainWindow()

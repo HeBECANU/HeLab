@@ -196,6 +196,7 @@ def test_a_terminal_that_takes_nothing_never_stops_the_pump(tmp_path: Path) -> N
     chunk = b"x" * 65536
     pump_read, pump_write = os.pipe()
     pump = threading.Thread(target=tee._pump, args=(pump_read, terminal), daemon=True)
+    tee._writer.start()  # (The file's writer, as ``start`` starts it.)
     pump.start()
     try:
         count = console_tee.TERMINAL_CHUNKS + 40
@@ -206,6 +207,8 @@ def test_a_terminal_that_takes_nothing_never_stops_the_pump(tmp_path: Path) -> N
         os.close(pump_write)
         pump.join(timeout=20)
         assert not pump.is_alive()  # It read to the end, the terminal stuck all along.
+        tee._chunks.put(None)
+        tee._writer.join(timeout=20)
         assert path.stat().st_size == count * len(chunk)
         assert terminal.dropped > 0 and terminal.thread.is_alive()
     finally:
@@ -346,6 +349,62 @@ def test_the_console_file_rotates_once_at_its_cap_and_is_tidied_with_the_logs(tm
     assert console_tee.CAP == 20 * 1000 * 1000
     found = {Path(file.path).name: file.pid for file in app_log.scan_logs(str(tmp_path))}
     assert found == {"console-404.txt": 404, "console-404.txt.1": 404}
+
+
+HELD_FILE_CHILD = r"""
+import logging, os, sys, time
+sys.path.insert(0, sys.argv[1])
+from helab.utils import console_tee
+report = os.fdopen(os.dup(1), "w", buffering=1)
+tee = console_tee.ConsoleTee(os.path.join(sys.argv[2], "console-held.txt"))
+real_write, held = tee.write, [False]
+
+def held_write(chunk: bytes) -> None:
+    if not held[0]:
+        held[0] = True
+        time.sleep(3)  # (A file write held up: a busy disk, an antivirus scan of the file.)
+    real_write(chunk)
+tee.write = held_write
+tee.start()
+logger = logging.getLogger("held")
+logger.addHandler(logging.StreamHandler(sys.stderr))  # (As coloredlogs' handler, first in the app.)
+logger.propagate = False
+worst = 0.0
+for _ in range(2000):  # (200 kB: past any pipe's buffer.)
+    started = time.monotonic()
+    logger.warning("x" * 99)
+    worst = max(worst, time.monotonic() - started)
+while tee._chunks.qsize():  # (The file's writer catching up: stop waits only 2 s for it.)
+    time.sleep(0.05)
+time.sleep(0.2)
+tee.stop()
+print(f"{worst:.3f}", file=report)
+"""
+
+
+def test_a_held_up_file_write_never_holds_a_log_line(tmp_path: Path) -> None:
+    """GT-3: the pump wrote each chunk to the file before reading the next, so a file write held 3 s filled the
+    pipe and every thread's logging waited 3 s in it (the watchdog's stall line too). The file has its own writer."""
+    result = subprocess.run([sys.executable, "-c", HELD_FILE_CHILD, str(ROOT), str(tmp_path)], capture_output=True,
+                            text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert float(result.stdout.strip()) < 1.0, result.stdout  # (3.0 s before.)
+    assert (tmp_path / "console-held.txt").read_text().count("x" * 99) == 2000  # (Every line kept.)
+
+
+def test_what_the_files_writer_couldnt_hold_is_noted_where_it_was(tmp_path: Path) -> None:
+    tee = console_tee.ConsoleTee(str(tmp_path / "console-405.txt"))
+    tee._chunks.put(b"before")
+    tee._chunks.put(None)
+    tee._write_file()
+    tee.lost = 70_000  # (While the queue was full.)
+    tee._chunks.put(b"after")
+    tee._chunks.put(None)
+    tee._write_file()
+    tee.stop()
+    assert (tmp_path / "console-405.txt").read_bytes() == (
+        b"before\n[console file: 70,000 bytes of output lost around here: its writes were held up]\nafter")
+    assert console_tee.FILE_CHUNKS == 1024
 
 
 # Qt's messages in the log.

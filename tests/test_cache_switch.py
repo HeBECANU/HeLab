@@ -232,6 +232,12 @@ def test_synced_and_network_cache_folders_are_refused(monkeypatch: pytest.Monkey
     assert cache_location_problem(str(home / "OneDrive - ANU" / "c")) == "in a synced folder (OneDrive - ANU)"
     assert cache_location_problem(str(home / "Dropbox" / "c")) == "in a synced folder (Dropbox)"
     assert cache_location_problem(str(tmp_path)) == ""
+    if sys.platform == "win32":
+        # The mount table below is psutil's, which Windows no longer asks (GT-7 (a): it asked every drive's
+        # volume); the folder's own drive is asked by type instead, tested on every OS by
+        # test_windows_asks_only_the_cache_folders_own_drive.
+        assert cache_location_problem(r"\\server\share\caches") == "on a network drive"
+        return
     mounts = [SimpleNamespace(mountpoint="/", fstype="apfs", opts="rw,local"),
               SimpleNamespace(mountpoint=str(tmp_path / "share"), fstype="smbfs", opts="rw,nosuid"),
               SimpleNamespace(mountpoint=str(tmp_path / "drive"), fstype="NTFS", opts="rw,remote")]
@@ -239,14 +245,34 @@ def test_synced_and_network_cache_folders_are_refused(monkeypatch: pytest.Monkey
     assert cache_location_problem(str(tmp_path / "share" / "caches")) == "on a network drive (smbfs)"
     assert cache_location_problem(str(tmp_path / "share-2" / "caches")) == ""
     assert cache_location_problem(str(tmp_path / "drive" / "caches")) == "on a network drive (ntfs)"
-    if sys.platform == "win32":
-        assert cache_location_problem(r"\\server\share\caches") == "on a network drive"
 
     def broken(all: bool = False) -> Any:
         raise OSError("no mount table")
     monkeypatch.setattr("psutil.disk_partitions", broken)
     assert cache_location_problem(str(tmp_path)) == ""  # Unknown is allowed.
     assert cache_location.NETWORK_FILESYSTEMS >= {"smbfs", "afpfs", "nfs", "webdav", "cifs"}
+
+
+def test_windows_asks_only_the_cache_folders_own_drive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GT-7 (a): ``psutil.disk_partitions(all=True)`` asked every drive's volume on Windows, a mapped one whose
+    server is gone too, at import and at start. Only the folder's drive is asked now, by its type."""
+    import ctypes
+    asked: list[str] = []
+
+    def drive_type(root: str) -> int:
+        asked.append(root)
+        return {"O:\\": cache_location.DRIVE_REMOTE}.get(root, 3)  # (3: a fixed drive.)
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(GetDriveTypeW=drive_type)),
+                        raising=False)
+
+    def every_drive(all: bool = False) -> Any:
+        raise AssertionError("every drive's volume asked")
+    monkeypatch.setattr("psutil.disk_partitions", every_drive)
+    monkeypatch.setattr(cache_location, "sys", SimpleNamespace(platform="win32"))
+    assert cache_location._filesystem(r"O:\HeLab\caches") == ("", True)
+    assert cache_location._filesystem(r"C:\Users\lab\AppData\Local\HeLab") == ("", False)
+    assert cache_location._filesystem(r"\\server\share\caches") == ("", True)
+    assert asked == ["O:\\", "C:\\"]
 
 
 def test_unsafe_saved_cache_folder_is_replaced_for_this_session(monkeypatch: pytest.MonkeyPatch,

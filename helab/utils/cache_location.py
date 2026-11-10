@@ -6,6 +6,7 @@ and sync clients can move files to the cloud or create conflicts under the datab
 """
 from __future__ import annotations
 
+import ntpath
 import os
 import sys
 from typing import Iterable
@@ -38,6 +39,8 @@ def _synced(parts: list[str]) -> str:
 
 def _filesystem(path: str) -> tuple[str, bool]:
     """The filesystem type of the volume holding ``path``, and whether the OS calls it remote."""
+    if sys.platform == "win32":
+        return _windows_filesystem(path)
     import psutil
 
     def normalize(value: str) -> str:
@@ -51,6 +54,20 @@ def _filesystem(path: str) -> tuple[str, bool]:
         if inside and len(mount) > best[0]:
             best = (len(mount), partition.fstype.lower(), "remote" in partition.opts.split(","))
     return best[1], best[2]
+
+
+DRIVE_REMOTE = 4  # (``GetDriveTypeW``: a mapped network drive.)
+
+
+def _windows_filesystem(path: str) -> tuple[str, bool]:
+    """Windows: whether ``path``'s own drive is a network drive, by its type alone (its file system's name
+    isn't asked). ``psutil.disk_partitions(all=True)`` asked every drive's volume, a mapped one whose server
+    is gone too, at import and at start, before HeLab's window exists (GT-7)."""
+    import ctypes
+    drive = ntpath.splitdrive(path)[0]
+    if not drive or drive.startswith(("\\\\", "//")):
+        return "", bool(drive)
+    return "", getattr(ctypes, "windll").kernel32.GetDriveTypeW(drive + "\\") == DRIVE_REMOTE
 
 
 def cache_location_problem(path: str) -> str:

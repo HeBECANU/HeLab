@@ -12,7 +12,7 @@ Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, cast
+from typing import Any, Callable, Optional, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -92,13 +92,59 @@ def _bins(values: npt.NDArray[np.float64], lower: float, upper: float, bins: int
     return min(freedman_diaconis_bins(values, lower, upper), MAX_AUTO_BINS)
 
 
-def estimated_bytes(plane_bins: Sequence[int], adaptive: bool = False) -> int:
+def estimated_bytes(plane_bins: Sequence[int], adaptive: bool = False, drawn: Sequence[int] | None = None,
+                    filtered: bool = True) -> int:
     """The most memory planes of ``plane_bins`` bins each take at once (bytes): every plane's counts and image
-    held, and the largest plane's moment (colouring, or the adaptive KDE when on), as planes run one at a time."""
+    held, and the largest plane's moment (colouring, or the adaptive KDE when on), as planes run one at a time.
+    ``drawn``: each plane's cells drawn at screen resolution (``display_shape``; None: every bin): a plane drawn
+    smaller holds its display image too, and is coloured at that size; its filters (``filtered``: any may be on)
+    still run on every bin."""
     if not plane_bins:
         return 0
-    moment = ADAPTIVE_BYTES_PER_BIN if adaptive else MOMENT_BYTES_PER_BIN
-    return HELD_BYTES_PER_BIN * sum(plane_bins) + moment * max(plane_bins)
+    drawn = list(plane_bins) if drawn is None else list(drawn)
+    shown = sum(DISPLAY_BYTES_PER_CELL * cells for bins, cells in zip(plane_bins, drawn) if cells < bins)
+    moment = max(ADAPTIVE_BYTES_PER_BIN * max(plane_bins) if adaptive else 0,
+                 MOMENT_BYTES_PER_BIN * max(plane_bins) if filtered else 0, MOMENT_BYTES_PER_BIN * max(drawn))
+    return HELD_BYTES_PER_BIN * sum(plane_bins) + shown + moment
+
+
+# Drawn at screen resolution (Q~1, Tony 2026-11-10; GT-4 of the GUI-thread audit): an image is drawn from the mean of
+# whole blocks of bins, at most DISPLAY_SIDE a side (Plotly's at most PLOTLY_SIDE), made on the worker; the bins
+# and the counts stay as chosen.
+DISPLAY_SIDE = 2048
+PLOTLY_SIDE = 1000
+DISPLAY_BYTES_PER_CELL = 4  # float32
+
+
+def display_factors(shape: tuple[int, int], side: int = DISPLAY_SIDE) -> tuple[int, int]:
+    """How many bins of each axis one drawn cell takes (1: every bin), so neither side passes ``side``."""
+    return (max(1, -(-shape[0] // side)), max(1, -(-shape[1] // side)))
+
+
+def display_shape(shape: tuple[int, int], side: int = DISPLAY_SIDE) -> tuple[int, int]:
+    """The drawn image's shape for an image of ``shape``."""
+    factors = display_factors(shape, side)
+    return (-(-shape[0] // factors[0]), -(-shape[1] // factors[1]))
+
+
+def block_mean(image: npt.NDArray[np.floating[Any]], factors: tuple[int, int]) -> npt.NDArray[np.float32]:
+    """``image`` reduced to the mean of each block of ``factors`` bins (the last block of an axis may be smaller):
+    values keep their units (per bin, or a rate)."""
+    if factors == (1, 1):
+        return np.asarray(image, dtype=np.float32)
+    rows, columns = image.shape
+    starts = (np.arange(0, rows, factors[0]), np.arange(0, columns, factors[1]))
+    sums = np.add.reduceat(np.add.reduceat(np.asarray(image, dtype=np.float64), starts[0], axis=0), starts[1], axis=1)
+    sizes = (np.diff(np.append(starts[0], rows)).astype(np.float64),
+             np.diff(np.append(starts[1], columns)).astype(np.float64))
+    means: npt.NDArray[np.float32] = (sums / np.multiply.outer(sizes[0], sizes[1])).astype(np.float32)
+    return means
+
+
+def block_edges(edges: npt.NDArray[np.float64], factor: int) -> npt.NDArray[np.float64]:
+    """The drawn cells' edges: every ``factor``-th bin edge, and the last."""
+    picked = edges[::factor]
+    return picked if (len(edges) - 1) % factor == 0 else np.append(picked, edges[-1])
 
 
 def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] = (0, 0),

@@ -3,11 +3,12 @@
 Run from source, HeLab sometimes prints errors to its terminal that its log never sees: a traceback
 printed by a library, a C++ warning, NumPy's. ``ConsoleTee`` catches them at the file-descriptor
 level, so C-level writes are caught too: file descriptors 1 and 2 are each pointed at a pipe, and a
-daemon thread per pipe writes every chunk to the file, then hands it to its terminal's own writer thread
-(``_Terminal``), so a terminal that stops taking output (a PowerShell window paused by a selection) never
-stops the pump: a full pipe would block every writer, ``faulthandler`` too, which writes holding the GIL and
-so froze the whole process (the TDC PC, 2026-11-09). What a stuck terminal can't take is dropped there,
-never from the file. On Windows, Python's own ``sys.stdout``/``sys.stderr`` on a console write to the
+daemon thread per pipe hands every chunk to the file's writer thread and to its terminal's own writer thread
+(``_Terminal``), so neither a terminal that stops taking output (a PowerShell window paused by a selection)
+nor a file write held up (a busy disk, an antivirus scan of the file: GT-3) stops the pump: a full pipe would
+block every writer, every thread's logging and ``faulthandler`` too, which writes holding the GIL and so froze
+the whole process (the TDC PC, 2026-11-09). What a stuck terminal can't take is dropped there; the file's
+writer holds ``FILE_CHUNKS`` chunks, and past them says in the file how much it lost. On Windows, Python's own ``sys.stdout``/``sys.stderr`` on a console write to the
 console's handle, not through the descriptor, so they are pointed at the new descriptors too (with the
 logging handlers that write to them), or the file would never see them. At ``CAP`` bytes
 the file is renamed ``console-<pid>.txt.1`` (replacing the one before) and a new one started, so the
@@ -33,6 +34,7 @@ CONSOLE_NAME = "console-{pid}.txt"
 CAP = 20 * 1000 * 1000  # bytes, before the file is rotated once
 OFF_ENV = "HELAB_NO_CONSOLE_FILE"
 TERMINAL_CHUNKS = 256  # held for a slow terminal before its output is dropped (each up to 64 KiB)
+FILE_CHUNKS = 1024  # held while the file's write is held up (each up to 64 KiB) before any is lost
 LOGGING_LOCK_SECONDS = 2.0  # waited for logging's lock to list its handlers (then listed without it)
 # (Windows: a console's raw stream, which writes UTF-8 bytes as text; absent elsewhere.)
 _WINDOWS_CONSOLE_IO = cast(Callable[..., Any] | None, getattr(io, "_WindowsConsoleIO", None))
@@ -116,8 +118,13 @@ class ConsoleTee:
         self._lock = threading.Lock()
         self._ends: list[tuple[int, int | None, threading.Thread, _Terminal | None]] = []  # (fd, its original, ...)
         self._rebound: list[tuple[str, TextIO, TextIO]] = []  # (sys's name, the stream it had, the new one)
+        # The pumps' chunks for the file, written by ``_writer`` (None: stop).
+        self._chunks: queue.Queue[bytes | None] = queue.Queue(FILE_CHUNKS)
+        self.lost = 0  # bytes the file's writer couldn't hold, not yet noted in the file
+        self._writer = threading.Thread(target=self._write_file, name="console-tee-file", daemon=True)
 
     def start(self) -> None:
+        self._writer.start()
         for fd in (1, 2):
             try:
                 original: int | None = os.dup(fd)
@@ -158,10 +165,25 @@ class ConsoleTee:
                 break
             if not chunk:
                 break
-            self.write(chunk)
+            try:
+                self._chunks.put_nowait(chunk)
+            except queue.Full:
+                self.lost += len(chunk)
             if terminal is not None:
                 terminal.put(chunk)
         os.close(read)
+
+    def _write_file(self) -> None:
+        """The pumps' chunks to the file, in order, until ``stop``; what it couldn't hold said where it was."""
+        while True:
+            chunk = self._chunks.get()
+            if chunk is None:
+                return
+            lost, self.lost = self.lost, 0
+            if lost:
+                self.write(f"\n[console file: {lost:,} bytes of output lost around here: its writes were held up]\n"
+                           .encode())
+            self.write(chunk)
 
     def write(self, chunk: bytes) -> None:
         """Add ``chunk`` to the file; past ``cap`` bytes, the file is rotated first (``.1``)."""
@@ -207,8 +229,18 @@ class ConsoleTee:
             if original is not None:
                 os.close(original)
         self._ends = []
-        with self._lock:
+        if self._writer.is_alive():
+            try:
+                self._chunks.put(None, timeout=2.0)
+            except queue.Full:
+                pass
+            self._writer.join(timeout=2.0)
+        if not self._lock.acquire(timeout=2.0):
+            return  # (A file write still held up: left to the process's end.)
+        try:
             self._file.close()
+        finally:
+            self._lock.release()
         try:
             if os.path.getsize(self.path) == 0:
                 os.remove(self.path)

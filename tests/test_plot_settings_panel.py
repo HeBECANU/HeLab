@@ -9,7 +9,7 @@ from typing import Iterator, List, Optional, cast
 import pytest
 from pytestqt.qtbot import QtBot
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QPoint, Qt
+from PyQt6.QtCore import QEvent, QObject, QPoint, Qt
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QDockWidget, QLabel, QLineEdit, QMainWindow, QTabBar, QVBoxLayout, QWidget
 import pyqtgraph as pg
@@ -242,6 +242,32 @@ def test_tab_target_rule(plots: Plots, qtbot: QtBot) -> None:
 
 def closable_bars(area: QMainWindow, tabs: int) -> List[QTabBar]:
     return [bar for bar in area.findChildren(QTabBar) if bar.count() == tabs and bar.tabsClosable()]
+
+
+def test_a_fit_finds_the_areas_docks_once_however_many_tabs(plots: Plots, qtbot: QtBot,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """GT-10: each tab's dock was found by a walk of the whole area, so a fit (on every tab switch, move or
+    title change) was quadratic in plots: 137 ms at 80 docks here, 0.6-2.3 s in a loaded CI test."""
+    from helab.views.plots import dock as dock_module
+    closer = DockTabCloser(plots.area)
+    docks = [plots.add() for _ in range(8)]
+    for dock in docks:
+        closer.watch(dock)
+    plots.show(qtbot)
+    for dock in docks[1:]:
+        plots.area.tabifyDockWidget(docks[0], dock)
+    qtbot.waitUntil(lambda: bool(closable_bars(plots.area, 8)))
+    looked: List[object] = []
+    address_of = dock_module.address_of
+
+    def counting(dock: QObject) -> int:
+        looked.append(dock)
+        return address_of(dock)
+    monkeypatch.setattr(dock_module, "address_of", counting)
+    closer.fit()
+    assert len(looked) == 8  # (Once per dock; 8 x 8 before.)
+    bar = closable_bars(plots.area, 8)[0]
+    assert [closer.dock_at(bar, index) for index in range(8)] == docks
 
 
 def test_tab_close_buttons_match_docks_by_identity(plots: Plots, qtbot: QtBot) -> None:

@@ -2,6 +2,7 @@
 and Settings page, follows Live, and is released and reloaded for the RAM budget."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -9,7 +10,7 @@ import re
 import time
 from dataclasses import replace
 from datetime import datetime
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
 from PyQt6 import sip
@@ -40,7 +41,7 @@ from helab.utils.constants import QDOCKWIDGET_STYLESHEET
 from helab.utils.folder_cache import Dataset, FolderCache, get_folder_cache, store_options
 from helab.utils.io_service import IORequest, get_io_service
 from helab.utils.number_format import byte_size
-from helab.utils import txy_sources
+from helab.utils import gui_delivery, txy_sources
 from helab.utils.ram_buffers import Buffers, arrays_in, buffers
 from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRuns
 from helab.views.plots.dock import AnalysisDock, release_figures
@@ -101,6 +102,24 @@ def flags(text: str, listed: Sequence[str] = ()) -> List[str]:
         text = text.replace(f"⚠ {warning}", "")
     return WARNING_MARK.findall(text)
 
+
+# A script's hook on the GUI thread (``render``, ``update``, ``draw``, ``describe_*``, ``estimated_bytes``…) taking
+# longer than this is logged with its name: HeLab's window waits for it (GT-17).
+SLOW_HOOK_SECONDS = 0.5
+
+
+@contextlib.contextmanager
+def timed_hook(plot: str, script: object, hook: str) -> Iterator[None]:
+    """Log a warning naming ``plot``, its script's class and ``hook`` if the code inside takes over
+    ``SLOW_HOOK_SECONDS`` (it runs on the GUI thread)."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        took = time.monotonic() - started
+        if took > SLOW_HOOK_SECONDS:
+            logging.warning("%s: %s.%s took %.2f s on the GUI thread (HeLab's window waited for it)", plot,
+                            type(script).__qualname__, hook, took)
 
 class LinkedAnalysisInstance(QObject):
     """Manages a linked pair of dock widget and its page in the Settings panel.
@@ -704,6 +723,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
         # A slot (no PyQt proxy object): closing disconnects it at once, not at a later deletion.
         if self.is_closed or result.job_id != self.job_id:
             return
+        # Its render and update don't open a modal box (``gui_delivery.outside``, GT-1).
+        with gui_delivery.delivering("analysis"):
+            self._ended(result)
+
+    def _ended(self, result: AnalysisResult) -> None:
         if self._cached_link is not None:
             self._cached_link.finished(result)  # Saves a completed result packed for the disk cache.
         if result.packed is not None:
@@ -789,12 +813,15 @@ class AnalysisInstance(LinkedAnalysisInstance):
         if (self.shown is None or self.released is not None or drawn is None or sip.isdeleted(drawn)
                 or self._drawn_with != self.backend()):
             return None
-        return drawn if self.script.update(drawn, result) else None
+        with timed_hook(self.name, self.script, "update"):
+            updated = self.script.update(drawn, result)
+        return drawn if updated else None
 
     def _draw(self, result: AnalysisResult) -> QWidget:
         """``result``'s plot drawn anew, with the library chosen."""
         backend = self.backend()
-        content = self.script.draw(result, backend) if backend else self.script.render(result)
+        with timed_hook(self.name, self.script, f"draw ({backend})" if backend else "render"):
+            content = self.script.draw(result, backend) if backend else self.script.render(result)
         self._drawn_with = backend
         return content
 
@@ -863,7 +890,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
         """The script's ``name`` hook for this action, or ``fallback`` if it raises (logged): these run
         in Qt slots, where an exception from a user's script would abort the app."""
         try:
-            return getattr(self.script, name)(self.action, *args)
+            with timed_hook(self.name, self.script, name):
+                return getattr(self.script, name)(self.action, *args)
         except Exception:
             logging.exception("%s of %s failed", name, self.name)
             return fallback

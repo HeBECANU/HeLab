@@ -192,8 +192,31 @@ def test_close_event_main_window(main_window: HelabMainWindow, qtbot: QtBot) -> 
 def test_handle_exit_main_window(main_window: HelabMainWindow, qtbot: QtBot) -> None:
     with patch.object(main_window, 'close') as mock_close:
         main_window.handle_exit(signal.SIGINT, None)
+        assert not mock_close.called  # (Once the event loop turns: never inside whatever the signal interrupted.)
+        qtbot.waitUntil(lambda: mock_close.called)
         mock_close.assert_called_once()
 
+
+
+def test_settings_closed_by_a_quit_meanwhile_starts_nothing_after(
+    main_window: HelabMainWindow, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GT-14: the window closed while Settings was open (an update's quit, a signal ending the nested loop): what
+    follows Settings (applying it, which may submit to a new IOService after shutdown) doesn't run."""
+    from PyQt6.QtWidgets import QDialog
+
+    def closed_meanwhile(dialog: SettingsDialog) -> int:
+        main_window._closing = True
+        return int(QDialog.DialogCode.Rejected)
+    monkeypatch.setattr(SettingsDialog, "exec", closed_meanwhile)
+    monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: None))
+    applied: list[object] = []
+    monkeypatch.setattr(main_window, "apply_load_mode", applied.append)
+    try:
+        main_window.show_settings_dialog()
+        assert applied == []
+    finally:
+        main_window._closing = False
 
 
 def test_mismatched_folders_show_in_the_status_bar_and_load_from_the_current_tab(
@@ -610,26 +633,19 @@ def test_window_icon_is_found_from_any_launch_folder(
     window.close()
 
 
-def test_help_menu_shows_the_log_folder(main_window: HelabMainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_help_menu_shows_the_log_folder(main_window: HelabMainWindow,
+                                        no_file_manager: list[tuple[str, list[str]]]) -> None:
     """Help › Show log folder reveals the app folder's logs folder (this test's own), detached; the
     window doesn't tidy old logs until ``main`` starts it."""
-    from PyQt6.QtCore import QUrl
-    from PyQt6.QtGui import QDesktopServices
-    from helab.utils import app_log
+    from helab.utils import app_log, file_manager
     from helab.utils.constants import app_folder
-    opened: list[QUrl] = []
-
-    def open_url(url: QUrl) -> bool:
-        opened.append(url)
-        return True
-    monkeypatch.setattr(QDesktopServices, "openUrl", open_url)
     help_menu = next(item.menu() for item in main_window.menu_bar.actions() if item.text() == "Help")
     assert isinstance(help_menu, QMenu)
     action = next(a for a in help_menu.actions() if a.text() == "Show log folder")
     assert not main_window.old_logs.threads
     action.trigger()
     folder = app_log.log_folder(app_folder())
-    assert [url.toLocalFile() for url in opened] == [QUrl.fromLocalFile(folder).toLocalFile()]
+    assert no_file_manager == [file_manager.open_command(folder)]  # (A detached process: GT-9.)
     assert Path(folder).is_dir() and Path(folder).parent == Path(app_folder())
 
 

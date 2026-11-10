@@ -2,12 +2,13 @@
 import logging
 from typing import Optional, Dict, Any
 
-from PyQt6.QtGui import QCloseEvent, QDesktopServices
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, QLineEdit, QLabel, QTabWidget, \
-    QWidget, QComboBox, QFormLayout, QScrollArea, QSpinBox, QFileDialog, QSpacerItem, QDoubleSpinBox, QMessageBox
-from PyQt6.QtCore import QSettings, QUrl
+    QWidget, QComboBox, QFormLayout, QScrollArea, QSpinBox, QSpacerItem, QDoubleSpinBox, QMessageBox
+from PyQt6.QtCore import QSettings
 
-from helab.utils import app_log, folder_cache
+from helab.utils import app_log, file_manager, folder_cache
+from helab.views.folder_dialog import choose_folder
 from helab.utils.settle_time import DEFAULT_SETTLE_SECONDS, MAX_SETTLE_SECONDS, MIN_SETTLE_SECONDS, settle_seconds
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.folder_cache import FolderCache
@@ -171,8 +172,8 @@ class SettingsDialog(QDialog):
         self.dir_temps_browse_btn.clicked.connect(self.browse_dir_temps)
         self.dir_caches_browse_btn.clicked.connect(self.change_cache_folder)
         self.dir_caches_browse_btn.setEnabled(self.cache is not None and bool(folder_cache.store_options()))
-        self.dir_temps_open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.dir_temps_edit.text())))
-        self.dir_caches_open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.dir_caches_edit.text())))
+        self.dir_temps_open_btn.clicked.connect(lambda: file_manager.show(self.dir_temps_edit.text()))
+        self.dir_caches_open_btn.clicked.connect(lambda: file_manager.show(self.dir_caches_edit.text()))
         # Reset shows the persistent default; it is saved (and created on next launch) with Save.
         self.dir_temps_reset_btn.clicked.connect(lambda: self.dir_temps_edit.setText(default_app_dir("temps")))
 
@@ -316,7 +317,7 @@ class SettingsDialog(QDialog):
         super().done(a0)
 
     def browse_dir_temps(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Choose the temp folder")
+        folder = choose_folder(self, "Choose the temp folder")
         if folder:
             self.dir_temps_edit.setText(folder)
 
@@ -328,7 +329,7 @@ class SettingsDialog(QDialog):
         mover = cache_mover(self.cache, self.settings)
         if mover.running:
             return
-        folder = folder or QFileDialog.getExistingDirectory(self, "Move the disk cache to an empty folder")
+        folder = folder or choose_folder(self, "Move the disk cache to an empty folder")
         if not folder:
             return
         if self.mover is None:

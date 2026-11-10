@@ -10,12 +10,11 @@ import sys
 from datetime import datetime
 from typing import Any, Callable
 
-from PyQt6.QtCore import QPoint, QProcess, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QPoint, QProcess, Qt, pyqtSignal
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QLabel, QLineEdit, QMenu, QMessageBox,
                              QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from helab.utils import folder_cache
+from helab.utils import file_manager, folder_cache
 from helab.utils.accessible import identify, identify_buttons
 from helab.views.wrap_row import WrapRow
 from helab.views.gaps import CELL_PADDING_STYLE
@@ -95,7 +94,7 @@ class DataRootsTab(QWidget):
         # Replaceable in tests: launching the file manager (never waited for), and a message box.
         self.launch: Callable[[str, list[str]], bool] = lambda program, arguments: QProcess.startDetached(
             program, arguments)[0]
-        self.open_folder: Callable[[str], bool] = lambda folder: QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        self.open_folder: Callable[[str], bool] = file_manager.show
         self.alert: Callable[[str], None] = self._alert
         layout = QVBoxLayout(self)
         layout.setSpacing(2)

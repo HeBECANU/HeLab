@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from PyQt6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
 from helab.io_ops import stores
@@ -584,3 +585,50 @@ def test_the_dialog_enables_load_anyway_only_once_understood(qtbot: QtBot) -> No
     assert not dialog.load_button.isEnabled()
     dialog.understood.setChecked(True)
     assert dialog.load_button.isEnabled()
+
+
+def test_a_conversions_end_shows_load_anyway_and_asks_nothing(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Q~5 (Tony, 2026-11-10): a conversion ending, maybe minutes after the click, on a large folder opens no box
+    with nobody there: "Load anyway…" shows, from what memory knows or from the helper's stop. The user's own
+    Load anyway… asks, as ever."""
+    service, cache = frozen(monkeypatch)
+    root = str(tmp_path)
+    explorer, asked, answers = make_explorer(qtbot, service, cache, root, {"big": 20_000, "small": 5_000})
+    big, small = os.path.join(root, "big"), os.path.join(root, "small")
+    try:
+        select(qtbot, explorer, big)
+        assert explorer.queue_load(big, ask_large=False) is False
+        QApplication.processEvents()
+        assert not asked and ("load", big) not in cache.jobs and explorer.large_state(big) == (20_000, False)
+        assert explorer.retry_button.text() == "Load anyway…"
+        # Not known large before: the helper's stop doesn't ask either.
+        select(qtbot, explorer, small)
+        cache.cancel(explorer.model.owner)
+        assert explorer.queue_load(small, ask_large=False)
+        request = request_for(service, "load", small)
+        assert request.payload["deliberate"] is True
+        stop(service, request, 20_000)
+        QApplication.processEvents()
+        assert not asked and explorer.large_state(small) == (20_000, False)
+        # The user's Load anyway… asks.
+        answers.append(True)
+        explorer.retry_button.click()
+        assert asked == [(small, 20_000)]
+    finally:
+        explorer.close_cleanup()
+        service.shutdown()
+
+
+def test_the_conversions_end_is_what_asks_for_the_quiet_load() -> None:
+    from types import SimpleNamespace
+    from helab.views.explorer_convert import ExplorerConverter, FolderConversion
+    loads: list[tuple[str, bool]] = []
+    explorer = SimpleNamespace(selected_path_globally="/run", refresh_folder=lambda path: None,
+                               queue_load=lambda path, ask_large=True: loads.append((path, ask_large)))
+    converter = SimpleNamespace(explorer=explorer, _report=lambda conversion, outcome: None)
+    conversion = FolderConversion("/run", "cache", 0.0)
+    conversion.passes, conversion.converted, conversion.waiting = 2, 3, 0
+    ExplorerConverter._passed(converter, conversion)  # type: ignore[arg-type]
+    assert loads == [("/run", False)]

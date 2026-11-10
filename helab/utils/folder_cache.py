@@ -19,7 +19,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 
 from helab.analysis.constant_layers import clean_layer, folder_layer
 from helab.utils.ram_buffers import Buffers, dataset_buffers
-from helab.utils import app_log, file_kinds, large_folder, store_v4, txy_sources
+from helab.utils import app_log, file_kinds, gui_delivery, large_folder, store_v4, txy_sources
 from helab.utils.cache_store import APPROVAL_SHARE, KINDS, store_root
 from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.constants import (
@@ -4328,6 +4328,12 @@ class FolderCache(QObject):
                 QTimer.singleShot(0, lambda: self._start_deferred(path))
 
     def _on_event(self, producer: IORequest, event: dict[str, Any]) -> None:
+        # Every helper event passes here: a delivery (``gui_delivery``), whether ``IOService._tick`` or a test
+        # emitted it, so guard 2 sees a box opened from any of FolderCache's result signals (GT-25).
+        with gui_delivery.delivering("io"):
+            self._event(producer, event)
+
+    def _event(self, producer: IORequest, event: dict[str, Any]) -> None:
         if event["kind"] == "txy_unmarked":
             mark = (str(event["root"]), str(event["folder"]))
             self.txy_unmarked[mark] = max(self.txy_unmarked.get(mark, 0.0), float(event["at"]))

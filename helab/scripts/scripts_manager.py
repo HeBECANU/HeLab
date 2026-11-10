@@ -125,6 +125,61 @@ def _source_file(module: object) -> str:
 
 # The user's script folders (and below), whose modules import from source alone (``_SourceOnlyLoader``).
 _SOURCE_ONLY: set[str] = set()
+# The SHA-256 of each source ``_SourceOnlyLoader`` read (normcase path): the code that ran, hashed without
+# another read of its file (GT-6). Written by whichever thread imports (a helper imported in ``compute`` too).
+_READ_DIGESTS: Dict[str, str] = {}
+# A folder's test import's reads (``FolderReads``) are used for its import this long after they were taken;
+# older, or missing, the import reads the folder as before.
+READS_SECONDS = 10.0
+READ_FILES = 2000  # A folder with more files than this answers no reads (the answer stays small).
+
+
+@dataclass(frozen=True)
+class FolderReads:
+    """What a folder's test import read (``helab.scripts.probe``), so the GUI's import of it right after doesn't
+    list, stat and hash the folder again on the GUI thread (GT-6): its ``.py`` names, and for those and its helper
+    modules' files (normcase path) their size, modification time (ns) and SHA-256. No file's bytes."""
+    folder: str
+    taken_at: float  # time.time()
+    names: Tuple[str, ...]
+    files: Dict[str, Tuple[int, int, str]]
+
+    def to_json(self) -> Dict[str, Any]:
+        return {"folder": self.folder, "taken_at": self.taken_at, "names": list(self.names),
+                "files": {path: list(entry) for path, entry in self.files.items()}}
+
+    @staticmethod
+    def from_json(value: object) -> Optional["FolderReads"]:
+        """The reads in a probe's answer, None if absent or malformed."""
+        try:
+            assert isinstance(value, dict)
+            names, files = value["names"], value["files"]
+            assert isinstance(names, list) and isinstance(files, dict) and len(files) <= READ_FILES
+            return FolderReads(str(value["folder"]), float(value["taken_at"]), tuple(str(name) for name in names),
+                               {str(path): (int(entry[0]), int(entry[1]), str(entry[2]))
+                                for path, entry in files.items()})
+        except (AssertionError, KeyError, TypeError, ValueError, IndexError):
+            return None
+
+    def fresh(self, directory: str) -> bool:
+        """Whether these are ``directory``'s, taken within ``READS_SECONDS``."""
+        age = time.time() - self.taken_at
+        return _same(self.folder, directory) and -1.0 <= age <= READS_SECONDS
+
+    def entry(self, path: str) -> Optional[Tuple[int, int, str]]:
+        return self.files.get(os.path.normcase(_normal(path)))
+
+
+def _forget_digests(directory: str) -> None:
+    """Drop ``directory``'s recorded digests (its files import again). Iterates a copy (one C call under the GIL):
+    another folder's ``compute`` may import a helper, adding a digest from the worker thread, meanwhile (GT-26)."""
+    folder = os.path.normcase(directory)
+    for path in [path for path in list(_READ_DIGESTS) if _inside(path, folder)]:
+        _READ_DIGESTS.pop(path, None)
+
+
+def _fresh(reads: Optional[FolderReads], directory: str) -> Optional[FolderReads]:
+    return reads if reads is not None and reads.fresh(directory) else None
 _PROTECTED = _protected_roots()
 
 
@@ -136,7 +191,9 @@ class _SourceOnlyLoader(importlib.machinery.SourceFileLoader):
 
     def get_code(self, fullname: str) -> Any:
         path = self.get_filename(fullname)
-        return self.source_to_code(self.get_data(path), path)
+        data = self.get_data(path)
+        _READ_DIGESTS[os.path.normcase(_normal(path))] = hashlib.sha256(data).hexdigest()
+        return self.source_to_code(data, path)
 
 
 def _source_only_finder(path: str) -> importlib.machinery.FileFinder:
@@ -212,6 +269,8 @@ class ScriptsManager:
         # Every class loaded from a user folder, this load's and earlier ones' while alive -> its folder.
         self._class_folders: "weakref.WeakKeyDictionary[type, str]" = weakref.WeakKeyDictionary()
         self._protected = _PROTECTED
+        # While ``load_directory`` loads a file: its folder's fresh test-import reads (``FolderReads``), or None.
+        self._reads: Optional[FolderReads] = None
 
     # The user's folders (live scripts)
 
@@ -262,23 +321,37 @@ class ScriptsManager:
                 found[name] = file
         return found
 
-    def watched_files(self, directory: str) -> List[str]:
-        """The files whose change reloads ``directory``: its ``.py`` files and its helper modules'."""
+    def watched_files(self, directory: str, reads: Optional[FolderReads] = None) -> List[str]:
+        """The files whose change reloads ``directory``: its ``.py`` files and its helper modules'. ``reads``:
+        its test import's, used instead of listing it while fresh."""
         directory = _normal(directory)
-        try:
-            names = os.listdir(directory)
-        except OSError:
-            names = []
+        fresh = _fresh(reads, directory)
+        if fresh is not None:
+            names: List[str] = list(fresh.names)
+        else:
+            try:
+                names = os.listdir(directory)
+            except OSError:
+                names = []
         files = {os.path.join(directory, name) for name in names if name.endswith(".py")}
         known = self._helper_files.get(os.path.normcase(directory), {})
         return sorted(files | set(self.helper_modules(directory).values())
-                      | {file for file in known.values() if os.path.isfile(file)})
+                      | {file for file in known.values() if self._is_file(file, fresh)})
 
     @staticmethod
-    def stamp(files: List[str]) -> Stamp:
-        """Each file's (path, size, modification time in ns); one that can't be statted is left out."""
+    def _is_file(path: str, reads: Optional[FolderReads]) -> bool:
+        return (reads is not None and reads.entry(path) is not None) or os.path.isfile(path)
+
+    @staticmethod
+    def stamp(files: List[str], reads: Optional[FolderReads] = None) -> Stamp:
+        """Each file's (path, size, modification time in ns); one that can't be statted is left out. ``reads``:
+        a folder's test import's, whose stats are used for its files (caller checks they're fresh)."""
         stamps = []
         for file in files:
+            entry = reads.entry(file) if reads is not None else None
+            if entry is not None:
+                stamps.append((file, entry[0], entry[1]))
+                continue
             try:
                 status = os.stat(file)
             except OSError:
@@ -286,12 +359,35 @@ class ScriptsManager:
             stamps.append((file, status.st_size, status.st_mtime_ns))
         return tuple(stamps)
 
-    def add_folder(self, directory: str) -> bool:
-        """Record a user folder and load it. A folder that isn't there (or can't be listed) is recorded with
-        an error ("folder not found"; it loads on a later ``reload`` once it is back). Whether it loaded."""
+    def folder_reads(self, directory: str) -> Optional[FolderReads]:
+        """What the GUI's import of ``directory`` would read again, from this (the test import's) process:
+        ``FolderReads``; None if it can't be listed or has over ``READ_FILES`` files."""
         directory = _normal(directory)
         try:
-            self.load_directory(directory)
+            names = sorted(name for name in os.listdir(directory) if name.endswith(".py"))
+        except OSError:
+            return None
+        paths = [os.path.join(directory, name) for name in names] + self._know_helpers(directory)
+        if len(paths) > READ_FILES:
+            return None
+        taken_at = time.time()  # (Before the stats: the reads are as old as their oldest.)
+        files: Dict[str, Tuple[int, int, str]] = {}
+        for path in paths:
+            try:
+                status = os.stat(path)
+            except OSError:
+                continue
+            digest = _READ_DIGESTS.get(os.path.normcase(_normal(path))) or file_hash(path)
+            files[os.path.normcase(_normal(path))] = (status.st_size, status.st_mtime_ns, digest)
+        return FolderReads(directory, taken_at, tuple(names), files)
+
+    def add_folder(self, directory: str, reads: Optional[FolderReads] = None) -> bool:
+        """Record a user folder and load it. A folder that isn't there (or can't be listed) is recorded with
+        an error ("folder not found"; it loads on a later ``reload`` once it is back). Whether it loaded.
+        ``reads``: its test import's (``FolderReads``), used while fresh."""
+        directory = _normal(directory)
+        try:
+            self.load_directory(directory, reads)
         except (ValueError, OSError) as error:
             if not any(_same(folder, directory) for folder in self._folders):
                 self._folders.append(directory)
@@ -330,7 +426,7 @@ class ScriptsManager:
         sys.path[:] = [entry for entry in sys.path
                        if not (isinstance(entry, str) and entry and _same(_normal(entry), directory))]
 
-    def load_directory(self, directory: str) -> None:
+    def load_directory(self, directory: str, reads: Optional[FolderReads] = None) -> None:
         """Load all Python files from a directory that contain valid analysis scripts.
 
         This method:
@@ -346,12 +442,15 @@ class ScriptsManager:
 
         Args:
             directory: Path to directory containing Python script files
+            reads: Its test import's reads, taken in another process (``FolderReads``): while fresh, the folder
+                isn't listed, statted or hashed here again (GT-6); missing or stale, it is, as before.
 
         Raises:
             ValueError: If directory doesn't exist
             ScriptLoadError: If script loading fails
         """
-        if not os.path.isdir(directory):
+        fresh = _fresh(reads, _normal(directory))
+        if fresh is None and not os.path.isdir(directory):
             raise ValueError(f"Not a directory: {directory}")
 
         # Normalize so re-loading the same directory via a differently
@@ -364,19 +463,21 @@ class ScriptsManager:
         # imported since the last load, lazily in a run too, are known helpers from now on: L4).
         self._clear_directory_scripts(directory)
         self._clear_errors(directory)
-        self._know_helpers(directory)
+        self._know_helpers(directory, fresh)
         self._unload_helpers(directory)
         _source_only(directory)
+        _forget_digests(directory)
         invalidate_caches()  # (A helper file added since the last import is found.)
         if not any(isinstance(entry, str) and entry and _same(_normal(entry), directory) for entry in sys.path):
             sys.path.append(directory)
 
         failed: Dict[str, str] = {}  # Logged once the folder's helper modules are known (they aren't failures).
-        for filename in sorted(os.listdir(directory)):
+        for filename in sorted(fresh.names if fresh is not None else os.listdir(directory)):
             if not filename.endswith('.py'):
                 continue
 
             file_path = os.path.join(directory, filename)
+            self._reads = fresh
             try:
                 self._load_script_file(file_path)
             except ScriptLoadError as e:
@@ -386,29 +487,39 @@ class ScriptsManager:
             except Exception as e:
                 logging.error(f"Unexpected error loading {file_path}: {e}")
                 self._errors[file_path] = LoadError(file_path, f"{type(e).__name__}: {e}", traceback.format_exc())
+            finally:
+                self._reads = None
         # A file without scripts that the folder's scripts import (now or before) is a helper module, not a failure.
-        helpers = {os.path.normcase(file) for file in self._know_helpers(directory)}
+        helpers = {os.path.normcase(file) for file in self._know_helpers(directory, fresh)}
         for path, error in list(self._errors.items()):
             if os.path.normcase(path) in helpers and error.message == NO_SCRIPT:
                 del self._errors[path]
         for path, message in failed.items():
             if path in self._errors:
                 logging.warning(f"Failed to load script {path}: {message}")
-        self._fold_helper_hashes(directory)
+        self._fold_helper_hashes(directory, fresh)
 
-    def _know_helpers(self, directory: str) -> List[str]:
+    def _know_helpers(self, directory: str, reads: Optional[FolderReads] = None) -> List[str]:
         """The folder's known helper files that are still there: those imported now, and those seen imported
         before (a helper a script imports only in ``compute`` is known once a run imported it)."""
         known = self._helper_files.setdefault(os.path.normcase(directory), {})
         for file in self.helper_modules(directory).values():
             known[os.path.normcase(file)] = file
-        return sorted(file for file in known.values() if os.path.isfile(file))
+        return sorted(file for file in known.values() if self._is_file(file, reads))
 
-    def _fold_helper_hashes(self, directory: str) -> None:
+    @staticmethod
+    def _digest(path: str, reads: Optional[FolderReads]) -> str:
+        """``path``'s SHA-256: with fresh reads, from what this import read or the test import's; else read now."""
+        if reads is None:
+            return file_hash(path)
+        entry = reads.entry(path)
+        return _READ_DIGESTS.get(os.path.normcase(_normal(path))) or (entry[2] if entry else "") or file_hash(path)
+
+    def _fold_helper_hashes(self, directory: str, reads: Optional[FolderReads] = None) -> None:
         """D1: when the folder's files imported helper modules (now, or seen before: L4), each of its scripts'
         ``file_hash`` is the hash of its file's hash and every helper's (its path in the folder, and hash)."""
-        helpers = sorted((os.path.relpath(file, directory).replace(os.sep, "/"), file_hash(file))
-                         for file in self._know_helpers(directory))
+        helpers = sorted((os.path.relpath(file, directory).replace(os.sep, "/"), self._digest(file, reads))
+                         for file in self._know_helpers(directory, reads))
         if not helpers:
             return
         for script_id in self.script_ids(directory):
@@ -444,10 +555,12 @@ class ScriptsManager:
                 del self._metadata[script_id]
 
     def _load_script_file(self, file_path: str) -> None:
-        """Load and validate a single script file"""
+        """Load and validate a single script file (``_reads``: its folder's fresh test-import reads, if any)."""
+        reads = self._reads
         try:
-            # Hashed before it runs: the hash identifies the code that made a result.
-            digest = file_hash(file_path)
+            # Hashed before it runs: the hash identifies the code that made a result. (With fresh reads, from
+            # the bytes its import read, below: no read of its own.)
+            digest = file_hash(file_path) if reads is None else ""
             # Import the module
             name = f"helab.scripts.dynamic.{os.path.basename(file_path)}"
             spec = importlib.util.spec_from_file_location(name, file_path, loader=_SourceOnlyLoader(name, file_path))
@@ -457,7 +570,7 @@ class ScriptsManager:
             module = importlib.util.module_from_spec(spec)
             with _importing(name, module):
                 spec.loader.exec_module(module)
-            self._register_module(module, file_path, digest)
+            self._register_module(module, file_path, digest or self._digest(file_path, reads))
         except (Exception, SystemExit) as e:
             # SystemExit too: a script that exits at import (sys.exit, argparse on HeLab's argv)
             # fails alone, never Load Scripts… or HeLab.

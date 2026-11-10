@@ -17,6 +17,7 @@ outlives the Settings dialog that started it.
 """
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import os
@@ -25,11 +26,11 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
-from PyQt6.QtCore import QObject, QSettings, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6 import sip
+from PyQt6.QtCore import QObject, QSettings, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QAbstractButton, QMessageBox, QProgressDialog, QPushButton, QWidget
 
-from helab.utils import activity, cache_move
+from helab.utils import activity, cache_move, file_manager, gui_delivery
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.cache_locks import FileLock, lock_for_move
 from helab.utils.cache_setting import write_cache_setting
@@ -162,7 +163,8 @@ class CacheMover(QObject):
         kind = event["kind"]
         action = request.payload["move"]["action"]
         if kind == "move_check":
-            self._checked(event)
+            # Its question waits until this delivery has returned (GT-1).
+            gui_delivery.outside(functools.partial(self._checked, event))
         elif kind == "move_progress":
             if self.progress is not None and event["total"]:
                 self.progress.setValue(int(1000 * event["done"] / event["total"]))
@@ -214,6 +216,8 @@ class CacheMover(QObject):
         return True
 
     def _checked(self, event: dict[str, Any]) -> None:
+        if not self.running or self.moving or self._cancelled:
+            return  # (Ended meanwhile.)
         if event["problem"]:
             self._finish(False, "Can't move the disk cache here", event["problem"], [self.target])
             return
@@ -373,12 +377,18 @@ class CacheMover(QObject):
     # Dialogs
 
     def _confirm(self, text: str) -> bool:
-        return QMessageBox.question(self.window, "Move the disk cache?", text,
+        window = None if self.window is None or sip.isdeleted(self.window) else self.window
+        return QMessageBox.question(window, "Move the disk cache?", text,
                                     QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
                                     ) == QMessageBox.StandardButton.Ok
 
     def _report(self, title: str, text: str, folders: list[str]) -> None:
-        box = QMessageBox(QMessageBox.Icon.Warning, title, text, parent=self.window)
+        # (Often from a helper's result: shown once its delivery has returned, GT-1.)
+        gui_delivery.outside(functools.partial(self._show_report, title, text, folders))
+
+    def _show_report(self, title: str, text: str, folders: list[str]) -> None:
+        window = None if self.window is None or sip.isdeleted(self.window) else self.window
+        box = QMessageBox(QMessageBox.Icon.Warning, title, text, parent=window)
         buttons: list[tuple[QAbstractButton | None, str]] = []
         for folder in folders:
             label = SHOW if len(folders) == 1 else f"{SHOW}: {os.path.basename(folder.rstrip(os.sep)) or folder}"
@@ -389,7 +399,7 @@ class CacheMover(QObject):
         clicked = box.clickedButton()
         chosen = next((folder for button, folder in buttons if clicked is not None and button is clicked), "")
         if chosen:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(_existing(chosen)))
+            file_manager.show(_existing(chosen))
 
 
 def _existing(path: str) -> str:

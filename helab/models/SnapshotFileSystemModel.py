@@ -5,8 +5,10 @@ processes. Native icons are supplied by a separate helper and held in memory.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime
+import heapq
 import logging
 import math
 import os
@@ -132,6 +134,9 @@ class SnapshotFileSystemModel(QAbstractItemModel):
         self.nodes: dict[str, FolderNode] = {}
         self.view: QTreeView | None = None
         self.closed = False
+        # Inside ``one_activity`` (a depth), and whether a row changed meanwhile.
+        self._holding_activity = 0
+        self._activity_held = False
         self._refresh_sequence = 0
         self._refresh_paths: set[str] = set()
         self._refresh_submitting = False
@@ -622,7 +627,10 @@ class SnapshotFileSystemModel(QAbstractItemModel):
 
     def changed(self, node: FolderNode) -> None:
         self.dataChanged.emit(self.path_index(node.path), self.path_index(node.path, 6))
-        self.activityChanged.emit()
+        if self._holding_activity:
+            self._activity_held = True  # (Said once, at ``one_activity``'s end.)
+        else:
+            self.activityChanged.emit()
 
     def request_folder_icons(self, paths: list[str]) -> bool:
         """Called after viewport changes, never by data() or other render queries."""
@@ -1020,6 +1028,7 @@ class SnapshotFileSystemModel(QAbstractItemModel):
         if self.closed:
             return
         nodes = list(self.nodes.values()) if paths is None else [self.nodes[p] for p in paths if p in self.nodes]
+        touched: list[FolderNode] = []
         for node in nodes:
             changed = False
             if "summaries" in kinds and node.cached_report:
@@ -1032,8 +1041,48 @@ class SnapshotFileSystemModel(QAbstractItemModel):
                 node.subtree_saved = None
                 changed = True
             if changed:
-                self._update_ancestors(node)
+                touched.append(node)
+        with self.one_activity():
+            self._rederive(touched)
+
+    def _rederive(self, touched: list[FolderNode]) -> None:
+        """``touched`` changed: re-derive each, its parent, and further ancestors while that changes what they
+        show (as ``_update_ancestors`` for one), deepest first, so each folder is derived once however many of
+        its subfolders changed (GT-5: once per child was O(n²), 17.5 s at 8,000 subfolders)."""
+        depths: dict[int, int] = {}
+
+        def depth(node: FolderNode) -> int:
+            if id(node) not in depths:
+                depths[id(node)] = 0 if node.parent is None else depth(node.parent) + 1
+            return depths[id(node)]
+        own = {id(node) for node in touched}
+        queued = set(own)
+        heap = [(-depth(node), index, node) for index, node in enumerate(touched)]
+        heapq.heapify(heap)
+        count = len(heap)
+        while heap:
+            _, _, node = heapq.heappop(heap)
+            derived = self._derive(node)
+            if derived or id(node) in own:
                 self.changed(node)
+            parent = node.parent
+            if parent is not None and id(parent) not in queued and (derived or id(node) in own):
+                queued.add(id(parent))
+                heapq.heappush(heap, (-depth(parent), count, parent))
+                count += 1
+
+    @contextlib.contextmanager
+    def one_activity(self) -> Iterator[None]:
+        """``activityChanged`` once at the end for all the rows changed inside, not once a row: each rebuilds the
+        tab's summary (GT-5, GT-12)."""
+        self._holding_activity += 1
+        try:
+            yield
+        finally:
+            self._holding_activity -= 1
+            if not self._holding_activity and self._activity_held:
+                self._activity_held = False
+                self.activityChanged.emit()
 
     def _saved_refreshed(self, path: str) -> None:
         """A toolbar relisting will supply this path's saved status anew."""

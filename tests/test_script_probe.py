@@ -7,6 +7,7 @@ The probe really runs here (a subprocess per folder); the other live-scripts tes
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -83,12 +84,22 @@ def test_the_probe_answers_ready_then_done_and_a_file_that_raises_isnt_its_failu
     response = tmp_path / "response.jsonl"
     program, arguments = probe.command(str(folder), str(response))
     assert arguments[:3] == ["-P", "-m", "helab.scripts.probe"]  # (A source run; the frozen app's is below.)
-    ready, done = run_probe([program, *arguments], response)
+    ready, done, after = run_probe([program, *arguments], response)
     assert ready["kind"] == probe.READY and ready["application"] == probe.OFFSCREEN
     assert done["kind"] == probe.DONE and done["loaded"] is True
     missing = tmp_path / "missing.jsonl"
     assert run_probe([sys.executable, "-P", "-m", "helab.scripts.probe", str(tmp_path / "gone"), str(missing)],
-                     missing)[1] == {"kind": probe.DONE, "loaded": False, "seconds": pytest.approx(0, abs=5)}
+                     missing)[1:] == [{"kind": probe.DONE, "loaded": False, "seconds": pytest.approx(0, abs=5)},
+                                      {"kind": probe.READS, "reads": None}]  # (Nothing read: GT-6.)
+    # What HeLab's own import would read again (GT-6): names, and each file's size, time and hash, no bytes; said
+    # after ``done``, so never within the import's time limit (GT-27).
+    assert after["kind"] == probe.READS and "reads" not in done
+    reads = after["reads"]
+    assert reads["names"] == sorted(path.name for path in folder.glob("*.py")) and "raises.py" in reads["names"]
+    script = folder / "live.py"
+    entry = reads["files"][os.path.normcase(str(script.resolve()))]
+    assert entry == [script.stat().st_size, script.stat().st_mtime_ns, hashlib.sha256(script.read_bytes()).hexdigest()]
+    assert all(len(entry) == 3 for entry in reads["files"].values())
 
 
 def test_the_frozen_apps_dispatch_runs_the_probe_before_any_gui_import(tmp_path: Path) -> None:
@@ -100,7 +111,7 @@ def test_the_frozen_apps_dispatch_runs_the_probe_before_any_gui_import(tmp_path:
     response = tmp_path / "response.jsonl"
     events = run_probe([sys.executable, "-P", str(ROOT / "helab" / "main.py"), probe.FROZEN_ARGUMENT, str(folder),
                         str(response)], response)
-    assert [event["kind"] for event in events] == [probe.READY, probe.DONE]
+    assert [event["kind"] for event in events] == [probe.READY, probe.DONE, probe.READS]
     [record] = [json.loads(line) for line in (folder / "imported.jsonl").read_text().splitlines()]
     assert record["gui"] is False and record["pid"] == events[0]["pid"]
 
@@ -211,6 +222,7 @@ def test_the_packaged_app_is_checked_to_probe_under_an_offscreen_application() -
     step = text[text.index("- name: Check the script folder probe in the packaged app"):]
     step = step[:step.index("\n      - name: ", 1)]
     assert '"--helab-script-probe"' in step and 'events[0]["application"] == "offscreen"' in step
+    assert '== ["ready", "done", "reads"]' in step  # (The reads follow ``done``: GT-27.)
     assert 'seen == {"frozen": True, "gui": False}' in step and "if:" not in step.split("run:")[0]
 
 
@@ -253,17 +265,21 @@ def test_a_script_leaving_a_thread_pool_task_running_doesnt_hold_its_probe(
     assert not any("didn't exit" in record.getMessage() for record in caplog.records)
 
 
+@pytest.mark.parametrize("reads_said", [True, False])
 def test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads(
-        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        reads_said: bool) -> None:
     """FU-1: whatever holds a probe open after ``done``, it is killed ``PROBE_EXIT_SECONDS`` later and its
-    folder still passes (it finished), so no round waits on it."""
+    folder still passes (it finished), so no round waits on it. Its ``reads`` not said yet, the warning says it
+    was still reading the folder (a slow share: GT-31)."""
     monkeypatch.setattr(script_tree, "PROBE_EXIT_SECONDS", 1.0)
+    reads = "    handle.write(json.dumps({'kind': 'reads', 'reads': None}) + '\\n')\n" if reads_said else ""
     monkeypatch.setattr(probe, "command", python_command(
         "import json, sys, time\n"
         "with open(sys.argv[2], 'a') as handle:\n"
         "    handle.write(json.dumps({'kind': 'ready', 'application': 'offscreen'}) + '\\n')\n"
         "    handle.write(json.dumps({'kind': 'done', 'loaded': True, 'seconds': 0}) + '\\n')\n"
-        "time.sleep(120)\n"))
+        + reads + "time.sleep(120)\n"))
     write_script(tmp_path, "lab_probe_f", "one")
     scripts = TreePanelWidget()
     qtbot.addWidget(scripts)
@@ -271,7 +287,9 @@ def test_a_probe_that_answers_done_but_doesnt_exit_is_ended_and_its_folder_loads
         scripts.add_folder(str(tmp_path))
         qtbot.waitUntil(lambda: "Lab" in scripts.groups, timeout=30_000)
     assert scripts.error_items() == [] and not scripts._probes.busy()
-    assert any("finished but its process didn't exit within 1 s" in record.getMessage() for record in caplog.records)
+    said = ("finished but its process didn't exit within 1 s" if reads_said
+            else "finished but was still reading the folder after 1 s")
+    assert any(said in record.getMessage() for record in caplog.records)
 
 
 def test_without_the_offscreen_plugin_the_probe_runs_without_an_application(

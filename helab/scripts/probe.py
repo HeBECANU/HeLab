@@ -11,7 +11,11 @@ makes a Qt object at import behaves as in the app; without the ``offscreen`` pla
 the ``ready`` line). The answer goes to ``RESPONSE_FILE`` as JSON lines, never stdout (a windowed frozen app
 may have no standard streams): ``{"kind": "ready", "application": …}`` once it is about to import the
 folder (the time limit counts from here, so the probe's own start doesn't), then ``{"kind": "done",
-"loaded": …, "seconds": …}``. Then it ends at once (``os._exit``), so a script's atexit hook or thread
+"loaded": …, "seconds": …}``, then ``{"kind": "reads", "reads": …}``: what HeLab's own import would read of the
+folder again (``scripts_manager.FolderReads``: its ``.py`` names, each file's size, time and SHA-256, never its
+bytes; null when it couldn't be listed or holds too many files), so the GUI thread doesn't (GT-6). It follows
+``done``, so it never counts against the import's time limit (GT-27); it is used if it comes before the probe
+exits. Then it ends at once (``os._exit``), so a script's atexit hook or thread
 can't hold it open. A file that raises at import isn't a failure here: the manager keeps its error, and
 HeLab's real import lists it. The GUI side: ``helab/views/plots/script_tree.py`` (``FolderProbes``).
 
@@ -28,6 +32,7 @@ from typing import Any, List, Optional, TextIO
 
 READY = "ready"
 DONE = "done"
+READS = "reads"
 # The frozen app's argument (helab/main.py dispatches it before any GUI import).
 FROZEN_ARGUMENT = "--helab-script-probe"
 # The probe's QApplication's program name (never an empty argv: QtWebEngine needs one).
@@ -86,8 +91,12 @@ def main(argv: List[str]) -> int:
         from helab.scripts.scripts_manager import ScriptsManager
         _say(handle, kind=READY, application=ran, pid=os.getpid())
         started = time.monotonic()
-        loaded = ScriptsManager().add_folder(folder)
+        manager = ScriptsManager()
+        loaded = manager.add_folder(folder)
         _say(handle, kind=DONE, loaded=loaded, seconds=round(time.monotonic() - started, 3))
+        # (After ``done``: the time limit is met; a slow share's stats only delay the exit, PROBE_EXIT_SECONDS.)
+        reads = manager.folder_reads(folder) if loaded else None
+        _say(handle, kind=READS, reads=reads.to_json() if reads is not None else None)
     # Never torn down: ~QCoreApplication waits for the global QThreadPool, so a script that started an endless
     # task at import would hold the probe open after ``done`` (review FU-1). Kept referenced until ``os._exit``,
     # which ends the process at once.
