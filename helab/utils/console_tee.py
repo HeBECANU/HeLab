@@ -20,6 +20,7 @@ Off where ``OFF_ENV`` is set (the test suite's conftest sets it, so test runs pr
 """
 from __future__ import annotations
 
+import codecs
 import io
 import logging
 import os
@@ -43,19 +44,26 @@ def writes_past_its_descriptor(stream: TextIO) -> bool:
     return _WINDOWS_CONSOLE_IO is not None and isinstance(raw, cast(type, _WINDOWS_CONSOLE_IO))
 
 
-class _Terminal:
-    """Writes chunks to the original terminal on its own thread; ``put`` never waits."""
+def _console(fd: int) -> Any:
+    """A Windows console's raw stream on ``fd`` (UTF-8 written as text, as Python writes to a console); None
+    elsewhere, or for a pipe or a file (written as bytes)."""
+    if _WINDOWS_CONSOLE_IO is None:
+        return None
+    try:
+        return _WINDOWS_CONSOLE_IO(fd, "w", closefd=False)
+    except (OSError, ValueError):
+        return None
 
-    def __init__(self, fd: int) -> None:
+
+class _Terminal:
+    """Writes chunks to the original terminal on its own thread; ``put`` never waits. ``console``: the
+    terminal's console stream (tests give a stand-in), by default ``_console(fd)``."""
+
+    def __init__(self, fd: int, console: Any = None) -> None:
         self.fd = fd
         self.dropped = 0  # bytes the terminal didn't take in time
         self.chunks: queue.Queue[bytes | None] = queue.Queue(TERMINAL_CHUNKS)
-        self.console: Any = None
-        if _WINDOWS_CONSOLE_IO is not None:  # (UTF-8 written as text, as Python writes to a console.)
-            try:
-                self.console = _WINDOWS_CONSOLE_IO(fd, "w", closefd=False)
-            except (OSError, ValueError):  # (Not a console: a pipe or a file, written as bytes.)
-                pass
+        self.console: Any = console if console is not None else _console(fd)
         self.thread = threading.Thread(target=self._run, name=f"console-tee-terminal-{fd}", daemon=True)
         self.thread.start()
 
@@ -66,14 +74,26 @@ class _Terminal:
             self.dropped += len(chunk)
 
     def _run(self) -> None:
-        while (chunk := self.chunks.get()) is not None:
+        # A console takes whole UTF-8 characters only, and the pump's reads end anywhere: a character split
+        # across two reads waits here for its rest (an invalid byte becomes U+FFFD; one left at the end too).
+        decoder = codecs.getincrementaldecoder("utf-8")("replace") if self.console is not None else None
+        while True:
+            chunk = self.chunks.get()
+            data = chunk if chunk is not None else b""
+            if decoder is not None:
+                data = decoder.decode(data, final=chunk is None).encode("utf-8")
             try:
-                view = memoryview(chunk)
-                while view:
-                    written = self.console.write(view) if self.console is not None else os.write(self.fd, view)
-                    view = view[written or len(view):]
+                self._write(data)
             except (OSError, ValueError):
                 return  # (The terminal went: the file still gets it.)
+            if chunk is None:
+                return
+
+    def _write(self, data: bytes) -> None:
+        view = memoryview(data)
+        while view:
+            written = self.console.write(view) if self.console is not None else os.write(self.fd, view)
+            view = view[written or len(view):]  # (Nothing taken: dropped, rather than tried for ever.)
 
     def close(self, timeout: float) -> None:
         """Let it write what it holds, for up to ``timeout`` seconds."""
