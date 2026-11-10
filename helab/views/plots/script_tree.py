@@ -71,6 +71,9 @@ PROBES_AT_ONCE = 2
 PROBE_POLL_MS = 100  # How often a running probe's answers are read (only while one runs).
 # Whether folders are test-imported first: tests that aren't about it turn it off (folders then import at once).
 PROBING = True
+# At start, a folder whose test import took longer than this is left for Reload (Q~2, Tony 2026-11-10): HeLab's own
+# import, on the GUI thread, would take about as long at every start (GT-6).
+SLOW_START_SECONDS = 2.0
 PROBED_NOTE = ("HeLab first test-imports each script folder in a separate process, so a script that hangs or "
                "crashes at import can't stop HeLab.")
 # File systems that are network shares (as ``cache_paths``' mounts name them).
@@ -209,6 +212,7 @@ class _Probe:
     lingered: bool = False  # Killed for not exiting after ``done`` (still passed).
     application: str = ""  # What the probe ran its import under (``probe.OFFSCREEN``, or none and why).
     reads: Optional[FolderReads] = None  # What its import read of the folder (``done``'s), for HeLab's own.
+    seconds: Optional[float] = None  # How long its import took (``done``'s).
     killed: str = ""  # Why it was killed ("": it wasn't).
 
 
@@ -233,12 +237,18 @@ class FolderProbes(QObject):
         self._timer.timeout.connect(self._poll)
         # Each passed folder's latest reads (``take_reads``): normcase folder -> its probe's.
         self._reads: Dict[str, FolderReads] = {}
+        # Each passed folder's latest import time in its probe (``import_seconds``): normcase folder -> seconds.
+        self._seconds: Dict[str, float] = {}
         application = QCoreApplication.instance()
         if application is not None:
             application.aboutToQuit.connect(self.stop)
 
     def busy(self) -> bool:
         return bool(self._queue or self._running)
+
+    def import_seconds(self, folder: str) -> Optional[float]:
+        """How long the last passed probe of ``folder`` took to import it (None if unknown)."""
+        return self._seconds.get(os.path.normcase(folder))
 
     def take_reads(self, folder: str) -> Optional[FolderReads]:
         """What the last passed probe of ``folder`` read of it (once; None if none): the import that follows
@@ -321,6 +331,8 @@ class FolderProbes(QObject):
             elif isinstance(event, dict) and event.get("kind") == probe.DONE and not item.done:
                 item.done, item.done_at = True, time.monotonic()
                 item.reads = FolderReads.from_json(event.get("reads"))
+                seconds = event.get("seconds")
+                item.seconds = float(seconds) if isinstance(seconds, (int, float)) else None
 
     @pyqtSlot()
     def _poll(self) -> None:
@@ -405,6 +417,10 @@ class FolderProbes(QObject):
             self._reads[os.path.normcase(item.folder)] = item.reads
         else:
             self._reads.pop(os.path.normcase(item.folder), None)
+        if failure is None and item.seconds is not None:
+            self._seconds[os.path.normcase(item.folder)] = item.seconds
+        else:
+            self._seconds.pop(os.path.normcase(item.folder), None)
         for round_ in list(self._rounds):
             answers, waiting, answer = round_
             if item.folder in waiting:
@@ -661,12 +677,21 @@ class TreePanelWidget(QWidget):
 
     def _restored(self, chosen: List[str], answers: Dict[str, Optional[ProbeFailure]]) -> None:
         """The start's folders tested: those whose test import finished load, in the remembered order; the
-        others wait for Reload with the reason (Q49.3 (b))."""
+        others wait for Reload with the reason (Q49.3 (b)), as does one whose test import took over
+        ``SLOW_START_SECONDS`` (Q~2): "takes N s to import"."""
         for folder in chosen:
             if not self._is_remembered(folder):
                 continue  # (Removed from the list while it was tested.)
             failure = answers.get(folder)
-            if failure is None:
+            seconds = self._probes.import_seconds(folder)
+            if failure is None and seconds is not None and seconds > SLOW_START_SECONDS:
+                # Its import would hold the window about as long, at every start (Q~2, Tony 2026-11-10): Reload.
+                self._probe_failed.discard(folder)
+                self._probes.take_reads(folder)  # (Not used: stale by the Reload.)
+                self._skipped[folder] = f"takes {seconds:.1f} s to import"
+                logging.warning("Script folder %s not loaded at start: its import took %.1f s in HeLab's test "
+                                "import (over %g s)", folder, seconds, SLOW_START_SECONDS)
+            elif failure is None:
                 self._probe_failed.discard(folder)
                 self._load_folder(folder)
             else:

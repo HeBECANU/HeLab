@@ -18,7 +18,7 @@ import pytest
 from typing import Iterator
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QEvent, Qt
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt
 from PyQt6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
@@ -392,6 +392,41 @@ def test_a_remembered_folder_on_a_share_waits_for_reload_and_is_never_watched(
     scripts.reload_scripts()  # The user's word: loaded.
     assert "Lab" in scripts.groups and scripts.start_note.isHidden()
     assert scripts.watched() == []  # Never watched.
+
+
+def test_a_remembered_folder_slow_to_import_waits_for_reload_at_start(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Q~2 (Tony, 2026-11-10; GT-6): a folder whose test import took over ``SLOW_START_SECONDS`` isn't imported at
+    start (its import on the GUI thread would take about as long, at every start): "takes N s to import", until
+    Reload, which imports it however long it takes."""
+    write_script(tmp_path, "lab_live_slow", "one")
+    app_settings().setValue(SCRIPT_FOLDERS_SETTING, json.dumps([str(tmp_path)]))
+    scripts = TreePanelWidget()
+    qtbot.addWidget(scripts)
+    rounds = fake_probes(monkeypatch, scripts)
+    assert script_tree.SLOW_START_SECONDS == 2.0
+    scripts.restore_folders()
+    folders, answer = rounds[0]
+    scripts._probes._seconds[os.path.normcase(str(tmp_path))] = 3.42  # (What its probe's ``done`` said.)
+    answer({folder_: None for folder_ in folders})
+    assert scripts.script_manager.folders() == [] and "Lab" not in scripts.groups
+    assert "takes 3.4 s to import" in scripts.start_note.text()
+    scripts.reload_scripts()  # The user's word: imported.
+    folders, answer = rounds[1]
+    answer({folder_: None for folder_ in folders})
+    assert "Lab" in scripts.groups and scripts.start_note.isHidden()
+
+
+def test_a_probes_import_time_is_kept_for_its_folder(qtbot: QtBot, tmp_path: Path) -> None:
+    from helab.views.plots.script_tree import FolderProbes, _Probe
+    owner = QObject()
+    probes = FolderProbes(owner)
+    item = _Probe(str(tmp_path), response=str(tmp_path / "response.jsonl"))
+    Path(item.response).write_text(json.dumps({"kind": "done", "loaded": True, "seconds": 2.5, "reads": None}) + "\n")
+    probes._read(item)
+    probes._ended(item, None)
+    assert probes.import_seconds(str(tmp_path)) == 2.5
+    owner.deleteLater()
 
 
 def test_on_network_reads_the_mount_table_only(monkeypatch: pytest.MonkeyPatch) -> None:
