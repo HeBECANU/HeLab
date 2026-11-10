@@ -162,3 +162,23 @@ def test_the_probes_answer_is_kept_for_the_import_that_follows_once(qtbot: Any, 
         else:
             assert probes.take_reads(str(folder)) is None
     owner.deleteLater()
+
+
+def test_forgetting_a_folders_digests_survives_a_digest_added_meanwhile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GT-26 (the re-review): another folder's ``compute`` can import a helper, adding a digest from the worker
+    thread, while a Reload drops this folder's. Here that write lands mid-iteration, from the per-key check: the
+    clearing iterates a copy, so it neither raises nor loses the new digest."""
+    digests = scripts_manager._READ_DIGESTS
+    monkeypatch.setattr(scripts_manager, "_READ_DIGESTS", {os.path.normcase(f"/a/s{index}.py"): "x" for index in range(5)})
+    inside = scripts_manager._inside
+    added: List[str] = []
+
+    def writing(path: str, folder: str) -> bool:
+        if not added:
+            added.append(os.path.normcase("/b/helper.py"))
+            scripts_manager._READ_DIGESTS[added[0]] = "y"  # (As the worker's import would, meanwhile.)
+        return inside(path, folder)
+    monkeypatch.setattr(scripts_manager, "_inside", writing)
+    scripts_manager._forget_digests(os.path.normcase("/a"))
+    assert scripts_manager._READ_DIGESTS == {added[0]: "y"}
+    assert digests is not scripts_manager._READ_DIGESTS

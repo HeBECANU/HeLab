@@ -170,6 +170,14 @@ class FolderReads:
         return self.files.get(os.path.normcase(_normal(path)))
 
 
+def _forget_digests(directory: str) -> None:
+    """Drop ``directory``'s recorded digests (its files import again). Iterates a copy (one C call under the GIL):
+    another folder's ``compute`` may import a helper, adding a digest from the worker thread, meanwhile (GT-26)."""
+    folder = os.path.normcase(directory)
+    for path in [path for path in list(_READ_DIGESTS) if _inside(path, folder)]:
+        _READ_DIGESTS.pop(path, None)
+
+
 def _fresh(reads: Optional[FolderReads], directory: str) -> Optional[FolderReads]:
     return reads if reads is not None and reads.fresh(directory) else None
 _PROTECTED = _protected_roots()
@@ -458,8 +466,7 @@ class ScriptsManager:
         self._know_helpers(directory, fresh)
         self._unload_helpers(directory)
         _source_only(directory)
-        for path in [path for path in _READ_DIGESTS if _inside(path, os.path.normcase(directory))]:
-            del _READ_DIGESTS[path]
+        _forget_digests(directory)
         invalidate_caches()  # (A helper file added since the last import is found.)
         if not any(isinstance(entry, str) and entry and _same(_normal(entry), directory) for entry in sys.path):
             sys.path.append(directory)
