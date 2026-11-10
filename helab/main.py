@@ -78,7 +78,7 @@ from PyQt6.QtGui import QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from helab.resources.icons import IconsInitUtil
-from helab.utils import app_log, console_tee
+from helab.utils import app_log, console_tee, crash_file
 from helab.utils.constants import (
     APP_BUILD_INFO, APP_COMMIT_HASH, APP_VERSION, app_folder, read_log_keep, record_cache_folder, start_cache_dir)
 from helab.utils.settings_store import app_settings
@@ -267,6 +267,8 @@ def main() -> None:
 
     code = app.exec()
     quit_watch.exit_soon(code)  # Never left running without windows (helab/views/quit_watch.py).
+    # And where its thread can't run (a teardown stuck in Python's last collection): ended from C (GT-2).
+    crash_file.exit_after(quit_watch.GRACE + quit_watch.NOTE_SECONDS + 2.0)
     sys.exit(code)
 
 

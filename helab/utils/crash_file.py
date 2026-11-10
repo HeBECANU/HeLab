@@ -20,6 +20,8 @@ HELPER_CRASH_NAME = "helper-crash-{pid}.txt"
 HELPER_DIR_ENV = "HELAB_HELPER_CRASH_DIR"
 
 _crash: tuple[IO[str], str] | None = None
+# The file ``exit_after``'s timer writes to: kept open to the process's end once armed.
+_armed: IO[str] | None = None
 
 
 def start(folder: str, name: str = CRASH_NAME) -> str:
@@ -37,6 +39,20 @@ def start(folder: str, name: str = CRASH_NAME) -> str:
     return path
 
 
+def exit_after(seconds: float) -> bool:
+    """Quit's last resort (``helab.views.quit_watch``): if this process still runs ``seconds`` from now,
+    every thread's stack goes to the crash file and the process ends, with exit code 1. The timer is
+    ``faulthandler``'s own C thread, which outlives Python's teardown, where a daemon thread (the quit watch)
+    no longer runs (GT-2). False without a crash file. The file then stays open to the process's end, and
+    stays even while empty (the startup tidy removes empty ones)."""
+    global _armed
+    if _crash is None:
+        return False
+    _armed = _crash[0]
+    faulthandler.dump_traceback_later(seconds, exit=True, file=_armed)
+    return True
+
+
 def end() -> None:
     """At a clean exit: stop writing crash stacks to the file, and remove it if nothing was written."""
     global _crash
@@ -45,6 +61,8 @@ def end() -> None:
     file, path = _crash
     _crash = None
     faulthandler.disable()
+    if file is _armed:
+        return  # (Its last resort may still write during teardown.)
     try:
         file.close()
         if os.path.getsize(path) == 0:
