@@ -108,3 +108,4 @@ number.
 | 69 | 2026-11-09 | Assistant (claude), Ground | floating plots as ordinary windows (Tony in the terminal) | dev/v0.0.9 | M69.1 |
 | 70 | 2026-11-09 | Assistant (claude), Ground | the TDC PC's overnight hang: stall stacks and the console tee (Tony in the terminal; `96df3ed`) | dev/v0.0.9 | M70.1 |
 | 71 | 2026-11-10 | Assistant (claude), Ground | Plane projections (Tony in the terminal; `roadmaps/plane-projections.md`) | dev/v0.0.9 | M71.1 |
+| 72 | 2026-11-10 | Probe (review), Mender (fixes) (claude), floor Review 0de469b; merged by CoCo | bug review of dev/v0.0.9 `f844c0f..0de469b` (`sessions/2026-11-10-claude-review-0de469b/`) | review/v0.0.9-0de469b | Probe's RV-1–RV-7 fixed on the floor (RV-1 as Tony decided → Q72.1); Mender's Q~1, Q~2 (the cap) moot; A~1→A72.1, A~2→A72.2, A~3→A72.3, A~4→A72.4; M~1→M72.1, M~2→M72.2; RERUNs → known-issues; merged `fc58b51` (floor CI 42763258498; merged by CoCo at Tony's go in Chat) |

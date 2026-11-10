@@ -558,6 +558,19 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
 - [ ] **A68.2 CI marks for every commit in the update window** (A~3): the commit list shows CI only for the (at most
   5) commits looked at; the rest show none.
 
+## Bug review of f844c0f..0de469b (block 72; [handoff](sessions/2026-11-10-claude-review-0de469b/handoff.md))
+
+- [ ] **A72.1 More memory estimates** (A~1): only the XY, XT, YT histograms declare
+  `DatasetAnalysis.estimated_bytes`; other plots with large set grids (the DLD port's density images,
+  Correlations, Plane projections) could too.
+- [ ] **A72.2 The 2D histograms in the RAM budget before drawing** (A~2): their arrays count toward the budget only
+  once drawn (`RamBudget`, plots' buffers); the warning is the only check before.
+- [ ] **A72.3 Plotly's copies in the estimate** (A~3, Probe's Info): the estimate assumes PyQtGraph's colouring;
+  Plotly base64-encodes `z` and `customdata` and QtWebEngine holds its own copy, several GB more at 20,000²; would
+  need the library passed to `estimated_bytes` (Drawing › Library isn't an analysis value).
+- [ ] **A72.4 Align `blur_brief`'s and `blur_steps`' default Order** (A~4, Probe's Info; harmless): next time
+  `histograms_2d.py` is touched.
+
 ## Not AI work (stays in MANUAL_TODO)
 
 These need a real share, lab hardware or a person in the lab:

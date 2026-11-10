@@ -40,6 +40,15 @@ since the v0.0.7a1 tidy-up):
   converted TXY: "ok", left for caching v2.
 - **At most three floors at once** (Tony in Chat, 2026-11-02, with the go for caching v2's stage 2; via Side).
 
+## Bug review of f844c0f..0de469b (block 72; [handoff](sessions/2026-11-10-claude-review-0de469b/handoff.md))
+
+Built on `review/v0.0.9-0de469b`, merged `fc58b51`.
+
+- **Q72.1** (decided, Tony in Chat, 2026-11-10) RV-1, the XY, XT, YT histograms' memory: no cap on a plane's total
+  bins ("I want to keep [the] bin limit as it runs just fine on my computer"); "20k upper limit" per axis
+  (`histogram2d.MAX_BINS` 20,000); and a warning once a plot's estimated memory reaches 50 % of HeLab's RAM budget,
+  which "also offers an cancel/undo button": the plot settings row with Undo and Cancel, the plot still running.
+
 ## Activity window (block 62; [plan](../roadmaps/activity-window.md))
 
 - **Q62.1** "Activity", from Window › Activity and a click on the status bar's counts (Tony, 2026-11-04: "ok").

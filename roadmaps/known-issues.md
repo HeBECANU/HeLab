@@ -167,7 +167,16 @@ How to use it:
   rerun. First sighting. The bug review of `f844c0f..0de469b` (RV-7) found it slow, not blocked: the worker's
   own thread dump shows the watch inside `still_running()`'s `traceback.format_stack` (its "still running"
   warning came 8 s after the test started), and no console-tee thread alive; conftest turns the tee off in test
-  processes, and the tests that start one do it in child processes. Proposed: the test's `join(5)` → `join(30)`.
+  processes, and the tests that start one do it in child processes. Fixed in `bfe4009` (`join(30)`; merged
+  `fc58b51`): close once a few Windows CI runs pass without it.
+- [ ] `test_updates_updater.py::test_a_moved_tag_is_refused` passed the 100 s `faulthandler_timeout` in a local full
+  run on Ground (`fc58b51`, `-n 12`, 2026-11-10): "Timeout (0:01:40)!" with the test in `subprocess`'s
+  `_execute_child`, starting `git` (`_git`, line 79, from `detach_at_tag`); it then passed, no RERUN. A `git` start
+  that took over 100 s under load; first sighting, cause unchecked.
+- [ ] `test_updates_launch.py::test_a_helab_the_updater_started_shows_that_updates_outcome_on_this_start` reran once
+  on Windows, `review/v0.0.9-0de469b` CI 42757504516 (Tests 3/3, job 129635247309, `58abfdb`, 2026-11-10):
+  `waitUntil timed out in 15000 milliseconds` at line 234 (the "updated to …" notice); passed on rerun. First
+  sighting; that branch doesn't touch App updates. Cause unchecked.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -441,7 +450,9 @@ How to use it:
   reran once on macOS CI (run 40260284152): `'completed' == 'cancelled'`. Cause unknown
   ([audit](../.ai/sessions/2026-10-28-claude-v0.0.6-checks/audit.md) #23, 2026-10-28). Again in a local full
   run on Ground (Quick Fixes 8, 2026-11-01, Rivet's handoff). Again on Ubuntu: Ground CI 41567847672 (Tests 1/3,
-  job 125693660872, `5878bd2`, 2026-11-03), the same `'completed' == 'cancelled'`, passed on rerun.
+  job 125693660872, `5878bd2`, 2026-11-03), the same `'completed' == 'cancelled'`, passed on rerun. Again on macOS:
+  `review/v0.0.9-0de469b` CI 42757504516 (Tests 1/3, job 129635247356, `58abfdb`, 2026-11-10), passed on rerun (that
+  branch made `AnalysisInstance.job_id` a property whose setter only enables the memory row's Cancel).
 - [ ] `test_analysis_gui.py::test_scatter_from_the_panel` (a Dash/web-view plot) reran in local
   full runs on 2026-10-20 (`dld-d7` and `refactor-prep` handoffs); it passed on retry and alone.
   Cause unknown (audit #16, 2026-10-28).

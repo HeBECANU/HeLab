@@ -35,6 +35,13 @@ First plots (2026-10-19, `.ai/sessions/2026-10-19-claude-dataset-view-plots/`). 
 
 - Floating plot settings (Tony, 2026-10-19/20; landed 2026-10-20): a floating plot's settings move into its window on the right, collapsed by default, with a draggable splitter; "Settings are in this plot's window" with Show plot window (which also opens the section); the page moves only when a drag ends.
 
+## The 2D histograms' memory (2026-11-10)
+
+After the bug review's RV-1 (10,000² bins a plane held 1.6 GB, 4.8 GB for three), Tony kept the per-axis limit
+uncapped ("it runs just fine on my computer"), raised it to 20,000 ("20k upper limit"), and asked for a warning at
+50 % of HeLab's RAM budget that "also offers an cancel/undo button" (Q72.1): the plot settings row, the plot still
+running.
+
 ## Plane projections (2026-11-10)
 
 Tony asked for planes drawn in the 3D scatter with the hits flattened onto each, XY/XT/YT as special cases.

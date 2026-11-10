@@ -393,6 +393,17 @@ and M42.1 on a lab PC with the switch on (one Live session).
   console catches up. If HeLab ever stalls again, its thread stacks are in `helab-<pid>.log` after
   "GUI stall's thread stacks:": send them over.
 
+## The 2D histograms' memory warning and the console's UTF-8 (added 2026-11-10, block 72)
+
+- [ ] **M72.1 The memory warning** (Q72.1): in the XY, XT, YT histograms with the RAM budget at its default, raise
+  X, Y and T bins until the amber line above **Rerun with these settings** appears ("⚠ Estimated memory … of the
+  RAM budget …") as you type, before any run. **Undo** puts the bins back and the line goes; set them again,
+  press Rerun, then **Cancel**: the run stops. Leave it running: the plot draws and its title says the same; the
+  log has one warning per change. With Show › rate per shot and only XY on, switching Show between counts and rate
+  per shot moves XY's colour bar between right and left (RV-3).
+- [ ] **M72.2 A Windows console's UTF-8** (RV-5): on a lab PC, start HeLab from PowerShell or cmd and make a long
+  log line with "σ", "→" or "·" (e.g. a blur note at DEBUG): the console shows them, and keeps printing.
+
 ## Post-2025 plates, in the lab (added 2026-10-29, block 25)
 
 - [ ] **M25.2 TDC input 7:** what is connected, is it enabled, at what threshold, and did anything
