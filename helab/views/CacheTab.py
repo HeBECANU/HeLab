@@ -13,8 +13,8 @@ import re
 import time
 from typing import Any, Callable, Mapping
 
-from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QValidator
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtGui import QValidator
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
     QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
@@ -28,7 +28,7 @@ from helab.utils.constants import (
     read_disk_budget, cache_dir_refused, read_live_autosave, read_plot_auto_reload, read_ram_budget_steps, ram_step_bytes, ram_step_range,
     total_ram,
 )
-from helab.utils import folder_cache
+from helab.utils import file_manager, folder_cache
 from helab.utils.folder_cache import FolderCache
 from helab.utils.number_format import byte_size, byte_unit
 from helab.utils.settings_defaults import CACHE_POLICY_SETTING, RESULT_REUSE_SETTING, read_setting
@@ -269,8 +269,7 @@ class CacheTab(QWidget):
         self.location_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         location.addWidget(self.location_label, 1)
         self.open_button = QPushButton("Open")
-        self.open_button.clicked.connect(lambda: QDesktopServices.openUrl(
-            QUrl.fromLocalFile(str(folder_cache.store_options().get("directory", "")))))
+        self.open_button.clicked.connect(lambda: file_manager.show(str(folder_cache.store_options().get("directory", ""))))
         location.addWidget(self.open_button)
         self.show_location(refresh=False)
         layout.addLayout(location)

@@ -27,11 +27,10 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from PyQt6 import sip
-from PyQt6.QtCore import QObject, QSettings, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QObject, QSettings, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QAbstractButton, QMessageBox, QProgressDialog, QPushButton, QWidget
 
-from helab.utils import activity, cache_move, gui_delivery
+from helab.utils import activity, cache_move, file_manager, gui_delivery
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.cache_locks import FileLock, lock_for_move
 from helab.utils.cache_setting import write_cache_setting
@@ -400,7 +399,7 @@ class CacheMover(QObject):
         clicked = box.clickedButton()
         chosen = next((folder for button, folder in buttons if clicked is not None and button is clicked), "")
         if chosen:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(_existing(chosen)))
+            file_manager.show(_existing(chosen))
 
 
 def _existing(path: str) -> str:

@@ -610,26 +610,19 @@ def test_window_icon_is_found_from_any_launch_folder(
     window.close()
 
 
-def test_help_menu_shows_the_log_folder(main_window: HelabMainWindow, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_help_menu_shows_the_log_folder(main_window: HelabMainWindow,
+                                        no_file_manager: list[tuple[str, list[str]]]) -> None:
     """Help › Show log folder reveals the app folder's logs folder (this test's own), detached; the
     window doesn't tidy old logs until ``main`` starts it."""
-    from PyQt6.QtCore import QUrl
-    from PyQt6.QtGui import QDesktopServices
-    from helab.utils import app_log
+    from helab.utils import app_log, file_manager
     from helab.utils.constants import app_folder
-    opened: list[QUrl] = []
-
-    def open_url(url: QUrl) -> bool:
-        opened.append(url)
-        return True
-    monkeypatch.setattr(QDesktopServices, "openUrl", open_url)
     help_menu = next(item.menu() for item in main_window.menu_bar.actions() if item.text() == "Help")
     assert isinstance(help_menu, QMenu)
     action = next(a for a in help_menu.actions() if a.text() == "Show log folder")
     assert not main_window.old_logs.threads
     action.trigger()
     folder = app_log.log_folder(app_folder())
-    assert [url.toLocalFile() for url in opened] == [QUrl.fromLocalFile(folder).toLocalFile()]
+    assert no_file_manager == [file_manager.open_command(folder)]  # (A detached process: GT-9.)
     assert Path(folder).is_dir() and Path(folder).parent == Path(app_folder())
 
 

@@ -14,7 +14,7 @@ from helab.utils.io_service import IORequest, delete_io_traces, get_io_service, 
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, get_folder_cache, set_disk_budget, store_options
 from helab.utils.gui_watchdog import GUIWatchdog
 from helab.utils.lab_parameters import read_lab_constants
-from helab.utils import activity, app_log, events, gui_delivery, user_manual
+from helab.utils import activity, app_log, events, file_manager, gui_delivery, user_manual
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -1244,17 +1244,15 @@ class HelabMainWindow(QMainWindow):
         return box.clickedButton() is delete
 
     def _show_io_trace_folder(self) -> None:
-        from PyQt6.QtGui import QDesktopServices
         folder = io_trace_folder(DIR_TEMPS)
         os.makedirs(folder, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        file_manager.show(folder)
 
     def _show_log_folder(self) -> None:
         """Help › Show log folder: the app folder's ``logs``, where each HeLab writes its log."""
-        from PyQt6.QtGui import QDesktopServices
         folder = app_log.log_folder(app_folder())
         os.makedirs(folder, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        file_manager.show(folder)
 
     def _on_drive_result(self, request: IORequest, event: dict[str, Any]) -> None:
         if self._closing or request.owner != self._drive_owner or event["kind"] != "drives":
@@ -1420,9 +1418,8 @@ class HelabMainWindow(QMainWindow):
 
     def _activity_open_log(self) -> None:
         """Activity's Open log: this session's log file, in the system's viewer (HeLab doesn't read it)."""
-        from PyQt6.QtGui import QDesktopServices
         path = os.path.join(app_log.log_folder(app_folder()), app_log.LOG_NAME.format(pid=os.getpid()))
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path if os.path.exists(path) else os.path.dirname(path)))
+        file_manager.show(path if os.path.exists(path) else os.path.dirname(path))
 
     def show_memory_usage_window(self) -> None:
         self.memory_usage_window = MemoryUsageWindow()

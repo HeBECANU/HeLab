@@ -15,8 +15,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from PyQt6.QtCore import QSettings, Qt, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTreeWidget, QTreeWidgetItem,
@@ -26,7 +25,7 @@ from PyQt6.QtWidgets import (
 from helab.convert.profile import (BUILTIN_PROFILES, CANDIDATE_HANDLING, DEFAULT_PROFILE, PLATE_SWAPS, POSITION_FORMULAS,
                                    UNCALIBRATED, DetectorProfile, ProfileError, file_tag)
 from helab.convert.user_profiles import ProfileLibrary, Unreadable, check_name, duplicate
-from helab.utils import txy_sources
+from helab.utils import file_manager, txy_sources
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.colours import AMBER
 from helab.utils.constants import (
@@ -489,7 +488,7 @@ class ConverterTab(QWidget):
 
     def show_folder(self) -> None:
         os.makedirs(self.library.folder, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(self.library.folder))
+        file_manager.show(self.library.folder)
 
     def _save(self, profile: DetectorProfile, *, replace: bool = False, select: str = "") -> None:
         try:

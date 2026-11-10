@@ -13,8 +13,8 @@ from typing import Any, Callable, Iterator, Mapping
 import numpy as np
 import numpy.typing as npt
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import (QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen,
+from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import (QColor, QCursor, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen,
                          QResizeEvent)
 from PyQt6.QtWidgets import (QApplication, QMessageBox, QHBoxLayout, QLineEdit, QMenu, QPushButton, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QTreeView, QInputDialog,
                              QStyle, QToolButton, QVBoxLayout, QWidget, QSizePolicy)
@@ -23,7 +23,7 @@ from helab.models.StatusReport import StatusReport
 from helab.resources.icons import CHECK_COLOR, LOAD_COLOR, StatusIcons
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.io_service import IORequest
-from helab.utils import gui_delivery, large_folder, txy_sources
+from helab.utils import file_manager, gui_delivery, large_folder, txy_sources
 from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.colours import AMBER as AMBER  # Shared; the views import it from here too.
 from helab.utils import folder_cache
@@ -2374,7 +2374,8 @@ class FolderExplorer(QWidget):
         menu = QMenu(self)
         offline = self.model.cache.offline
         menu.addAction("Open folder", lambda: self.open_to_path(path))
-        reveal = menu.addAction("Open in File Manager", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+        # (Detached: the shell's open on a share that went away would stall here, GT-9.)
+        reveal = menu.addAction("Open in File Manager", lambda: file_manager.show(path))
         if reveal and offline:
             reveal.setEnabled(False)  # A file manager would read the folder (and wake its share).
             reveal.setToolTip(OFFLINE_TOOLTIP)

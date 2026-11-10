@@ -671,3 +671,17 @@ def no_modal_in_delivery(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]
             monkeypatch.setattr(cls, name, staticmethod(guarded(f"{class_name}.{name}", getattr(cls, name))))
     yield made
     assert not made, "A modal loop opened inside a result's delivery:\n" + "\n".join(made)
+
+
+@pytest.fixture(autouse=True)
+def no_file_manager(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list[str]]]:
+    """No test opens a real file manager (``helab.utils.file_manager.launch``, GT-9): each launch is recorded
+    here instead (the fixture's list) and said to have started."""
+    from helab.utils import file_manager
+    launched: list[tuple[str, list[str]]] = []
+
+    def launch(program: str, arguments: list[str]) -> bool:
+        launched.append((program, list(arguments)))
+        return True
+    monkeypatch.setattr(file_manager, "launch", launch)
+    return launched
