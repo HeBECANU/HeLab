@@ -271,11 +271,12 @@ def test_bins_are_capped() -> None:
 
 def test_the_estimate_comes_from_the_settings_alone() -> None:
     """Every plane's counts and image held (16 B a bin), and the largest plane's moment: colouring (32 B a bin) or
-    the adaptive KDE (64); an automatic axis counted at its most (1,000 bins)."""
+    the adaptive KDE (64); an automatic axis counted at its most (1,000 bins). Every bin drawn here (Draw at, Q~1:
+    at screen resolution, ``test_basic_plots_v2_draw_at.py``)."""
     script = PlaneHistograms()
 
     def estimate(values: dict[str, Any]) -> int:
-        return script.estimated_bytes("Plot", effective(script.parameters("Plot"), values))
+        return script.estimated_bytes("Plot", effective(script.parameters("Plot"), {"draw_at": "every bin", **values}))
     assert estimate({}) == 16 * 3 * 1_000_000 + 32 * 1_000_000
     big = {"bins_x": 20_000, "bins_y": 20_000, "bins_t": 20_000}
     assert estimate(big) == 16 * 3 * 400_000_000 + 32 * 400_000_000  # 32 GB
@@ -339,7 +340,8 @@ def test_one_plot_in_the_package_with_every_plane_on() -> None:
         "XY, XT, YT histograms", "helab.v2.plane_histograms", "1", "Basic plots v2")
     names = [spec.name for spec in PlaneHistograms().parameters("Plot")]
     assert names[names.index("include_outside"):names.index("blur_median")] == [
-        "include_outside", "draw", "dot_colour", "max_dots", "dot_background", "bins_t", "bins_x", "bins_y", "quantity"]
+        "include_outside", "draw", "dot_colour", "max_dots", "dot_background", "bins_t", "bins_x", "bins_y", "draw_at",
+        "quantity"]
     assert "range_mode" in names
     assert names[-3:] == ["colour_scale", "gamma", "log_decades"]
     assert [name for name in names if name.startswith("blur_") and name.count("_") == 1] == [
@@ -670,7 +672,7 @@ def test_every_planes_colours_match_the_shared_legend(scale: str, gamma: float, 
     drawn = histograms_2d.planes_matplotlib(result)
     assert len(drawn.axes) == 5
     for axes, item in zip(drawn.axes[:3], data.items):
-        mesh = axes.collections[0]
+        mesh = axes.images[0]  # (At screen resolution, the default: one raster, Q~1.)
         group = histograms_2d.colour_group(data, item)
         assert np.allclose(mesh.norm(fractions * group.top), transformed)
     for legend, group in zip(drawn.axes[3:], groups):

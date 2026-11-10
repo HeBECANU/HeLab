@@ -30,8 +30,9 @@ from helab.analysis.dataset_view import DatasetView
 from helab.analysis.empty import empty_pane, empty_text
 from helab.analysis import image_filters
 from helab.analysis.display_units import si_text
-from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, Histogram2D,
-                                        bin_area, compress, estimated_bytes, histogram2d, scale_text)
+from helab.analysis.histogram2d import (DISPLAY_SIDE, LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, PLOTLY_SIDE, POWER,
+                                        SCALES, Histogram2D, bin_area, block_edges, block_mean, compress,
+                                        display_factors, display_shape, estimated_bytes, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import Kind, ParameterSpec, Value
 from helab.analysis.results import AnalysisContext, AnalysisResult
@@ -62,6 +63,15 @@ BINS = {axis: ParameterSpec(
     f"bins_{axis.lower()}", f"{axis} bins (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
     tip=f"Bins on {axis} wherever it is shown. 0 = automatic (Freedman–Diaconis on {axis} in each plane, at most "
         f"{MAX_AUTO_BINS:,}; set by hand, at most {MAX_BINS:,}).") for axis in AXES}
+SCREEN, EVERY_BIN = "screen resolution", "every bin"
+DRAWN_DOTS = 500_000  # At most this many dots a plane drawn at screen resolution (PyQtGraph and Matplotlib).
+DRAW_AT = ParameterSpec(
+    "draw_at", "Draw at", "choice", SCREEN, choices=(SCREEN, EVERY_BIN), group=IMAGE_GROUP,
+    tip=f"Screen resolution: an image of more than {DISPLAY_SIDE:,} bins a side is drawn from the mean of blocks of "
+        f"bins, at most {DISPLAY_SIDE:,} a side (Plotly {PLOTLY_SIDE:,}), and at most {DRAWN_DOTS:,} dots a plane "
+        "are drawn in PyQtGraph and Matplotlib; the plane's title says so. The bins, counts and filters stay as set. "
+        "Every bin: each bin and dot drawn, which at the largest bins can take seconds and gigabytes, the window "
+        "waiting.")
 HISTOGRAM, DOTS = "histogram", "dots"
 DRAW = ParameterSpec(
     "draw", "Draw", "choice", HISTOGRAM, choices=(HISTOGRAM, DOTS), group=IMAGE_GROUP,
@@ -264,6 +274,36 @@ def plane_dots(events: npt.NDArray[np.float64], item: Histogram2D, image: npt.ND
     return Dots(h, v, colour, np.asarray(values, dtype=np.float64), len(inside), span)
 
 
+def at_screen(values: Mapping[str, Any]) -> bool:
+    """Whether the plot is drawn at screen resolution (Draw at, Q~1)."""
+    return bool(values.get(DRAW_AT.name, SCREEN) != EVERY_BIN)
+
+
+@dataclass(frozen=True)
+class Display:
+    """A plane's image as drawn at screen resolution (Q~1): the mean of each block of ``factors`` bins
+    (``block_mean``, float32), and those blocks' edges. Made on the worker, by ``compute``."""
+    image: npt.NDArray[np.float32]
+    h_edges: npt.NDArray[np.float64]
+    v_edges: npt.NDArray[np.float64]
+    factors: tuple[int, int]
+
+
+def display_of(image: npt.NDArray[np.floating[Any]], h_edges: npt.NDArray[np.float64],
+               v_edges: npt.NDArray[np.float64], side: int) -> Optional[Display]:
+    """``image`` drawn at most ``side`` a side, or None when it is that small already."""
+    factors = display_factors((int(image.shape[0]), int(image.shape[1])), side)
+    if factors == (1, 1):
+        return None
+    return Display(block_mean(image, factors), block_edges(h_edges, factors[0]), block_edges(v_edges, factors[1]),
+                   factors)
+
+
+def display_note(display: Display) -> str:
+    rows, columns = display.image.shape
+    return f"drawn at {rows:,} × {columns:,}, each the mean of {display.factors[0]:,} × {display.factors[1]:,} bins"
+
+
 @dataclass(frozen=True)
 class PlaneCounts:
     """A plane's counts (``histogram``) and the image shown (``image``: filtered, per shot if chosen)."""
@@ -273,10 +313,18 @@ class PlaneCounts:
     filters: tuple[str, ...] = ()  # the filters run, in their order (``image_filters.Step.text``)
     notes: tuple[str, ...] = ()  # settings not followed as given
     dots: Optional[Dots] = None  # drawn as dots (Draw › dots) instead of the image
+    display: Optional[Display] = None  # the image as drawn at screen resolution, when smaller than ``image``
+
+    @property
+    def shown(self) -> npt.NDArray[np.floating[Any]]:
+        """The image drawn: ``display``'s, else ``image``."""
+        return self.display.image if self.display is not None else self.image
 
     @property
     def peak(self) -> float:
-        return float(self.image.max()) if self.image.size else 0.0
+        """The highest value drawn (the colour bar's top)."""
+        shown = self.shown
+        return float(shown.max()) if shown.size else 0.0
 
 
 @dataclass(frozen=True)
@@ -376,8 +424,9 @@ def bins_text(item: Histogram2D) -> str:
     return f"{across:,} × {up:,} bins ({how})"
 
 
-def plane_title(data: PlaneCounts) -> str:
-    """What a plane's image shows, for its own title (the shots are in the plot's)."""
+def plane_title(data: PlaneCounts, drawn: Optional[str] = None) -> str:
+    """What a plane's image shows, for its own title (the shots are in the plot's). ``drawn``: how it is drawn when
+    not every bin or dot is (default: ``display``'s note)."""
     item = data.histogram
     summed = item.axes[2]
     flattened = (f"{summed} summed over {range_text(AXES.index(summed), *item.flattened)}" if item.flattened
@@ -398,7 +447,25 @@ def plane_title(data: PlaneCounts) -> str:
         parts.append(f"{item.outside:,} outside the range")
     if data.filters:
         parts.append("blur " + " → ".join(data.filters))
+    if drawn is None and data.display is not None:
+        drawn = display_note(data.display)
+    if drawn:
+        parts.append(drawn)
     return " · ".join(parts)
+
+
+def dot_pick(item: PlaneCounts, screen: bool) -> npt.NDArray[np.intp]:
+    """The dots drawn in PyQtGraph and Matplotlib: at most ``DRAWN_DOTS`` at screen resolution (a fixed sample, in
+    their order: the densest stay on top), else all."""
+    count = item.dots.drawn if item.dots is not None else 0
+    return display_sample(count, DRAWN_DOTS) if screen else np.arange(count)
+
+
+def dots_note(item: PlaneCounts, screen: bool) -> Optional[str]:
+    """The title's note when PyQtGraph or Matplotlib draws fewer dots than the plane has (None: all drawn)."""
+    if item.dots is None or not screen or item.dots.drawn <= DRAWN_DOTS:
+        return None
+    return f"{DRAWN_DOTS:,} of them drawn (screen resolution)"
 
 
 def notes(data: PlaneCounts) -> list[str]:
@@ -477,8 +544,10 @@ def dot_positions(item: PlaneCounts, data: Planes, colours: Colours) -> npt.NDAr
 
 
 def colour_positions(item: PlaneCounts, colours: Colours, peak: float) -> npt.NDArray[np.float64]:
-    """Each bin's place in the colour map (0…1): its value over the planes' peak (``Planes.peak``), compressed."""
-    return compress(item.image / peak if peak > 0 else np.zeros_like(item.image), colours.scale, colours.gamma,
+    """Each drawn cell's place in the colour map (0…1): its value over the planes' peak (``Planes.peak``),
+    compressed."""
+    shown = np.asarray(item.shown, dtype=np.float64)
+    return compress(shown / peak if peak > 0 else np.zeros_like(shown), colours.scale, colours.gamma,
                     colours.decades)
 
 
@@ -522,7 +591,13 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
         check()
         dots = plane_dots(events, item, image, str(values.get(DOT_COLOUR.name, DENSITY)),
                           int(values.get(MAX_DOTS.name, MAX_DOTS.default)))
-    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped), dots)
+    display = None
+    if dots is None and at_screen(values):
+        # Drawn at screen resolution: the mean of blocks of bins, here on the worker (Q~1; GT-4: colouring every bin
+        # of a 20,000² image on the GUI thread took seconds and gigabytes).
+        check()
+        display = display_of(image, item.h_edges, item.v_edges, DISPLAY_SIDE)
+    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped), dots, display)
 
 
 BAR_WIDTH = 32
@@ -731,7 +806,7 @@ class PlaneHistograms(DatasetAnalysis):
 
     def parameters(self, action_name: str) -> List[ParameterSpec]:
         return [*SHOT_SPECS, *SHOW.values(), *RANGE, OUTSIDE, DRAW, DOT_COLOUR, MAX_DOTS, BACKGROUND,
-                *BINS.values(), QUANTITY,
+                *BINS.values(), DRAW_AT, QUANTITY,
                 *BLUR_SPECS, SCALE, GAMMA, DECADES]
 
     def describe_run(self, action_name: str, values: Mapping[str, Any], view: DatasetView) -> tuple[str, str]:
@@ -747,7 +822,7 @@ class PlaneHistograms(DatasetAnalysis):
         dots += " on black" if dots and background(values) == BLACK else ""
         settings = (", ".join(planes) if len(planes) < len(PLANES) else "", shots_brief(values),
                     range_brief(values), f"whole {summed}" if manual(values) and values.get(OUTSIDE.name) else "",
-                    dots, bins_part, blur_brief(values),
+                    dots, bins_part, "" if at_screen(values) else "every bin drawn", blur_brief(values),
                     "per shot" if values.get(QUANTITY.name) == PER_SHOT else "",
                     f"colours {colours.text()}" if colours.text() else "")
         return selection_text(view, values), " · ".join(part for part in settings if part)
@@ -760,10 +835,12 @@ class PlaneHistograms(DatasetAnalysis):
         return 480, 280  # Up to three images side by side, one colour bar, under a title.
 
     def estimated_bytes(self, action_name: str, values: Mapping[str, Any]) -> int:
-        """The planes on, at their set bins, an automatic axis counted at its most (``MAX_AUTO_BINS``)."""
+        """The planes on, at their set bins, an automatic axis counted at its most (``MAX_AUTO_BINS``); drawn at
+        screen resolution or every bin (Draw at, Q~1)."""
         bins = {axis: min(int(values.get(BINS[axis].name, 0)), MAX_BINS) or MAX_AUTO_BINS for axis in AXES}
-        sizes = [bins[PLANES[plane][0]] * bins[PLANES[plane][1]] for plane in shown_planes(values)]
-        return estimated_bytes(sizes, bool(values.get(f"blur_{image_filters.ADAPTIVE}")))
+        shapes = [(bins[PLANES[plane][0]], bins[PLANES[plane][1]]) for plane in shown_planes(values)]
+        return estimated_bytes([across * up for across, up in shapes], bool(values.get(f"blur_{image_filters.ADAPTIVE}")),
+                               drawn_cells(values, shapes), any(values.get(f"blur_{kind}") for kind in image_filters.FILTERS))
 
     def compute(self, action_name: str, context: AnalysisContext) -> Any:
         values = context.parameters
@@ -775,8 +852,10 @@ class PlaneHistograms(DatasetAnalysis):
             items.append(plane_counts(events, plane, values, len(shots), context.check))
         warnings = tuple(f"{axis}: min > max, using full extent" for axis in reversed_axes(values))
         # The memory its bins take (as they came out: automatic ones known now), against the RAM budget.
+        shapes = [(int(item.histogram.counts.shape[0]), int(item.histogram.counts.shape[1])) for item in items]
         estimate = estimated_bytes([item.histogram.counts.size for item in items],
-                                   bool(values.get(f"blur_{image_filters.ADAPTIVE}")))
+                                   bool(values.get(f"blur_{image_filters.ADAPTIVE}")), drawn_cells(values, shapes),
+                                   any(values.get(f"blur_{kind}") for kind in image_filters.FILTERS))
         if estimate_over(estimate, context.ram_budget):
             warnings += (estimate_text(estimate, context.ram_budget),)
         return Planes(tuple(items), shots, len(context.view.shots), warnings)
@@ -822,7 +901,8 @@ class PlaneHistograms(DatasetAnalysis):
                 plot.setAspectLocked(True)  # Both lengths: equal scales.
             # image[across, up], as the counts are; drawn from each bin's compressed colour position over plain
             # viridis (exact at any depth), the bar a legend in real values, never attached to the images.
-            image = pg.ImageItem(axisOrder="col-major")
+            # (At screen resolution PyQtGraph also averages what the screen can't show: autoDownsample, Q~1.)
+            image = pg.ImageItem(axisOrder="col-major", autoDownsample=at_screen(result.parameters))
             image.setLookupTable(viridis().getLookupTable(nPts=LUT_SIZE, alpha=False))
             plot.addItem(image)
             dots = None
@@ -889,6 +969,14 @@ class PlaneHistograms(DatasetAnalysis):
                 or matplotlib_update(widget, lambda figure: planes_matplotlib(result, figure)))
 
 
+def drawn_cells(values: Mapping[str, Any], shapes: Sequence[tuple[int, int]]) -> list[int]:
+    """Each plane's cells drawn: every bin, or at screen resolution (Draw at, Q~1). Dots count every bin, as
+    before: their local density reads the whole image."""
+    if values.get(DRAW.name) == DOTS or not at_screen(values):
+        return [across * up for across, up in shapes]
+    return [rows * columns for rows, columns in (display_shape(shape) for shape in shapes)]
+
+
 def nothing_text(data: Planes) -> str:
     """Why there is nothing to draw ("" when there is)."""
     if not data.items:
@@ -900,41 +988,46 @@ def nothing_text(data: Planes) -> str:
 
 
 def planes_layout(result: AnalysisResult
-                  ) -> tuple[tuple[str, ...], Colours, str, tuple[tuple[str, ...], ...], tuple[bool, ...]]:
-    """The planes, colour transform, dot colouring, unit groups and colour bar sides (left for XY's rate) a
-    PyQtGraph drawing was built for."""
+                  ) -> tuple[tuple[str, ...], Colours, str, tuple[tuple[str, ...], ...], tuple[bool, ...], bool]:
+    """The planes, colour transform, dot colouring, unit groups, colour bar sides (left for XY's rate) and whether
+    at screen resolution (its images' ``autoDownsample``) a PyQtGraph drawing was built for."""
     data: Planes = result.data
     groups = colour_groups(data)
     return (tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters), data.dot_colour,
             tuple(tuple(item.histogram.plane for item in group.items) for group in groups),
-            tuple(left_colour_bar(group) for group in groups))
+            tuple(left_colour_bar(group) for group in groups), at_screen(result.parameters))
 
 
-def dot_brushes(item: PlaneCounts, data: Planes, colours: Colours, area: str = WHITE) -> Any:
+def dot_brushes(item: PlaneCounts, data: Planes, colours: Colours, area: str = WHITE,
+                picked: Optional[npt.NDArray[np.intp]] = None) -> Any:
     """The dots' brushes in PyQtGraph: viridis at each one's colour position (in ``LUT_SIZE`` steps), or one
-    tint for the ``area``'s background."""
+    tint for the ``area``'s background. ``picked``: the dots drawn (default all)."""
     if data.dot_colour == NO_COLOUR:
         return pg.mkBrush(*DOT_TINTS[area])
     table = [pg.mkBrush(*colour) for colour in viridis().getLookupTable(nPts=LUT_SIZE, alpha=False)]
-    steps = np.rint(dot_positions(item, data, colours) * (LUT_SIZE - 1)).astype(np.intp)
+    positions = dot_positions(item, data, colours)
+    steps = np.rint((positions if picked is None else positions[picked]) * (LUT_SIZE - 1)).astype(np.intp)
     return [table[step] for step in steps]
 
 
-def panel_title(item: PlaneCounts) -> str:
-    return f"<b>{item.histogram.plane}</b> · {plane_title(item)}{notes_html(notes(item))}"
+def panel_title(item: PlaneCounts, screen: bool = False) -> str:
+    return f"<b>{item.histogram.plane}</b> · {plane_title(item, dots_note(item, screen))}{notes_html(notes(item))}"
 
 
 def fill(widget: Any, result: AnalysisResult) -> None:
     data: Planes = result.data
     colours = Colours.of(result.parameters)
     area = background(result.parameters)
+    screen = at_screen(result.parameters)
     widget.title_label.setText(planes_title(data) + notes_html([f"⚠ {note}" for note in data.notes]))
     for panel, item in zip(widget.plane_panels, data.items):
         histogram = item.histogram
-        panel.label.setText(panel_title(item))
+        panel.label.setText(panel_title(item, screen))
         panel.plot.getViewBox().setBackgroundColor(AREA_COLOURS[area] if area == BLACK else None)
         if item.dots is not None and panel.dots is not None:
-            panel.dots.setData(x=item.dots.h, y=item.dots.v, brush=dot_brushes(item, data, colours, area))
+            picked = dot_pick(item, screen)
+            panel.dots.setData(x=item.dots.h[picked], y=item.dots.v[picked],
+                               brush=dot_brushes(item, data, colours, area, picked))
         else:
             panel.image.setImage(colour_positions(item, colours, colour_group(data, item).peak), levels=(0.0, 1.0))
         h0, h1 = float(histogram.h_edges[0]), float(histogram.h_edges[-1])
@@ -979,6 +1072,24 @@ def axis_suffix(column: int) -> str:
     return "" if column == 1 else str(column)
 
 
+def plotly_image(item: PlaneCounts, screen: bool) -> tuple[npt.NDArray[np.floating[Any]], Optional[Display]]:
+    """The image Plotly draws and how it was reduced (None: every bin): at screen resolution at most
+    ``PLOTLY_SIDE`` a side (its JSON grows with every cell), from the worker's display image; else every bin."""
+    if not screen:
+        return item.image, None
+    source = item.display
+    image = source.image if source is not None else item.image
+    h_edges = source.h_edges if source is not None else item.histogram.h_edges
+    v_edges = source.v_edges if source is not None else item.histogram.v_edges
+    further = display_of(image, h_edges, v_edges, PLOTLY_SIDE)
+    if further is None:
+        return image, source
+    if source is None:
+        return further.image, further
+    factors = (source.factors[0] * further.factors[0], source.factors[1] * further.factors[1])
+    return further.image, Display(further.image, further.h_edges, further.v_edges, factors)
+
+
 def planes_plotly(result: AnalysisResult) -> go.Figure:
     """The planes side by side, with a separate colour axis for each physical quantity."""
     from plotly.subplots import make_subplots
@@ -986,22 +1097,26 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
     data: Planes = result.data
     colours = Colours.of(result.parameters)
     count = len(data.items)
-    titles = [f"{item.histogram.plane} · {plane_title(item)}"
-              + "".join(f" · {note}" for note in notes(item)) for item in data.items]
+    screen = at_screen(result.parameters)
+    drawn = [plotly_image(item, screen) for item in data.items]
+    titles = [f"{item.histogram.plane} · {plane_title(item, display_note(display) if display is not None else '')}"
+              + "".join(f" · {note}" for note in notes(item)) for item, (_, display) in zip(data.items, drawn)]
     figure = make_subplots(rows=1, cols=count, subplot_titles=titles,
                            horizontal_spacing=0.07 if count > 1 else 0.02)
     time_axis: Optional[str] = None
     area = background(result.parameters)
     tint = DOT_TINTS[area]
     groups = colour_groups(data)
-    for column, item in enumerate(data.items, start=1):
+    for column, (item, (image, display)) in enumerate(zip(data.items, drawn), start=1):
         histogram = item.histogram
         across, up, _ = histogram.axes
         group_index = next(index for index, group in enumerate(groups)
                            if any(candidate is item for candidate in group.items))
         colour_axis = "coloraxis" + (str(group_index + 1) if group_index else "")
-        centres_h = (histogram.h_edges[:-1] + histogram.h_edges[1:]) / 2
-        centres_v = (histogram.v_edges[:-1] + histogram.v_edges[1:]) / 2
+        h_edges, v_edges = ((display.h_edges, display.v_edges) if display is not None
+                            else (histogram.h_edges, histogram.v_edges))
+        centres_h = (h_edges[:-1] + h_edges[1:]) / 2
+        centres_v = (v_edges[:-1] + v_edges[1:]) / 2
         if item.dots is not None:
             coloured = data.dot_colour != NO_COLOUR
             marker = (dict(size=DOT_SIZE, color=dot_values(item, data), coloraxis=colour_axis) if coloured
@@ -1011,11 +1126,17 @@ def planes_plotly(result: AnalysisResult) -> go.Figure:
                 hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}" + ("<br>%{marker.color:.4g}" if coloured
                                                                              else "")
                               + f"<extra>{histogram.plane}</extra>"), row=1, col=column)
-        else:
+        elif display is None:
             figure.add_trace(go.Heatmap(
-                z=item.image.T, x=centres_h, y=centres_v, coloraxis=colour_axis, customdata=histogram.counts.T,
+                z=image.T, x=centres_h, y=centres_v, coloraxis=colour_axis, customdata=histogram.counts.T,
                 name=histogram.plane,
                 hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{customdata:,}} events · %{{z:.4g}}"
+                              f"<extra>{histogram.plane}</extra>"), row=1, col=column)
+        else:  # (A block's mean: no one bin's events to show.)
+            blocks = f"{display.factors[0]:,} × {display.factors[1]:,} bins"
+            figure.add_trace(go.Heatmap(
+                z=image.T, x=centres_h, y=centres_v, coloraxis=colour_axis, name=histogram.plane,
+                hovertemplate=f"{across} %{{x:.6g}}<br>{up} %{{y:.6g}}<br>%{{z:.4g}} (the mean of {blocks})"
                               f"<extra>{histogram.plane}</extra>"), row=1, col=column)
         figure.update_xaxes(title_text=axis_label(across), row=1, col=column)
         figure.update_yaxes(title_text=axis_label(up), row=1, col=column)
@@ -1115,6 +1236,7 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
             norms.append(matplotlib_norm(colours, group_data.top))
     meshes: dict[int, Any] = {}
     area = background(result.parameters)
+    screen = at_screen(result.parameters)
     for axes, item in zip(panes, data.items):
         group_index = next(index for index, group in enumerate(groups)
                            if any(candidate is item for candidate in group.items))
@@ -1123,20 +1245,33 @@ def planes_matplotlib(result: AnalysisResult, figure: Any = None) -> Any:
         histogram = item.histogram
         across, up, _ = histogram.axes
         axes.set_facecolor(AREA_COLOURS[area])
+        drawn: Optional[str] = None
         if item.dots is not None:
+            picked = dot_pick(item, screen)
+            drawn = dots_note(item, screen)
             if data.dot_colour == NO_COLOUR:
-                axes.scatter(item.dots.h, item.dots.v, s=DOT_SIZE / 2, marker="s", linewidths=0, rasterized=True,
-                             color=tuple(channel / 255 for channel in DOT_TINTS[area]))
+                axes.scatter(item.dots.h[picked], item.dots.v[picked], s=DOT_SIZE / 2, marker="s", linewidths=0,
+                             rasterized=True, color=tuple(channel / 255 for channel in DOT_TINTS[area]))
             else:
-                mesh = axes.scatter(item.dots.h, item.dots.v, c=dot_values(item, data), s=DOT_SIZE / 2, marker="s",
-                                    linewidths=0, rasterized=True, cmap=cmap, norm=norm)
+                mesh = axes.scatter(item.dots.h[picked], item.dots.v[picked], c=dot_values(item, data)[picked],
+                                    s=DOT_SIZE / 2, marker="s", linewidths=0, rasterized=True, cmap=cmap, norm=norm)
         else:
-            shown = np.where(item.image.T > 0, item.image.T, np.nan) if colours.scale == LOG else item.image.T
-            mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
-                                   norm=norm, shading="flat")
+            image = item.shown.T
+            shown = np.where(image > 0, image, np.nan) if colours.scale == LOG else image
+            if screen:
+                # One raster at screen resolution (Q~1: pcolormesh drew a quad a bin, 1.9 s at 4,000²); the bins are
+                # regular, so it is the same picture where the screen shows every cell.
+                h_edges, v_edges = ((item.display.h_edges, item.display.v_edges) if item.display is not None
+                                    else (histogram.h_edges, histogram.v_edges))
+                mesh = axes.imshow(shown, origin="lower", extent=(h_edges[0], h_edges[-1], v_edges[0], v_edges[-1]),
+                                   aspect="auto", interpolation="nearest", cmap=cmap, norm=norm)
+                drawn = display_note(item.display) if item.display is not None else None
+            else:
+                mesh = axes.pcolormesh(histogram.h_edges, histogram.v_edges, shown, cmap=cmap,
+                                       norm=norm, shading="flat")
         if mesh is not None:
             meshes[group_index] = mesh
-        axes.set_title(histogram.plane, fontsize=9)
+        axes.set_title(histogram.plane + (f" · {drawn}" if drawn else ""), fontsize=9)
         axes.set_xlabel(axis_label(across), fontsize=8)
         axes.set_ylabel(axis_label(up), fontsize=8)
         axes.tick_params(labelsize=7)
