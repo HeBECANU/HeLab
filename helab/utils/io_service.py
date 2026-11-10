@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterator, Mapping, TYPE_CHECKING
 
 from PyQt6.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
 
-from helab.utils import activity, app_log, crash_file
+from helab.utils import activity, app_log, crash_file, gui_delivery
 from helab.utils.constants import MAX_SIMULTANEOUS_IO, app_folder
 from helab.utils.time_format import duration
 
@@ -1089,6 +1089,12 @@ class IOService(QObject):
         self.activityChanged.emit()
 
     def _tick(self) -> None:
+        # Slots must not open a modal box here (``gui_delivery.outside``): its nested loop would stop this
+        # timer, and so every helper's events, until it is answered (GT-1).
+        with gui_delivery.delivering("io"):
+            self._drain()
+
+    def _drain(self) -> None:
         start = time.monotonic()
         for _ in range(64):
             if time.monotonic() - start > 0.008:

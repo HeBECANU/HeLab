@@ -624,3 +624,50 @@ def no_modal_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError(f"a modal warning would wait here: {title}: {text}")
 
     monkeypatch.setattr(presets, "warning_box", fail)
+
+
+# A dialog's, box's or menu's own nested loop (GT-1): names by class, the static helpers as static.
+MODAL_CALLS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("QDialog", ("exec",), ()),
+    ("QMessageBox", ("exec",), ("about", "aboutQt", "critical", "information", "question", "warning")),
+    ("QMenu", ("exec",), ()),
+    ("QInputDialog", ("exec",), ("getDouble", "getInt", "getItem", "getMultiLineText", "getText")),
+    ("QFileDialog", ("exec",), ("getExistingDirectory", "getExistingDirectoryUrl", "getOpenFileName",
+                                "getOpenFileNames", "getOpenFileUrl", "getOpenFileUrls", "getSaveFileName",
+                                "getSaveFileUrl")),
+    ("QColorDialog", ("exec",), ("getColor",)),
+    ("QFontDialog", ("exec",), ("getFont",)),
+)
+
+
+@pytest.fixture(autouse=True)
+def no_modal_in_delivery(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """No dialog, box or menu ``exec()`` while IOService or the analysis runner delivers results
+    (``helab.utils.gui_delivery``, GT-1): its nested loop would stop every helper's events until answered.
+    Such a call raises (so the test doesn't wait on it), and the test fails at teardown even if HeLab's code
+    caught that (a test of the guard itself clears the list it yields). Code reached from a delivery opens its
+    box through ``gui_delivery.outside``. A test that
+    patches one of these names itself replaces this check for that name."""
+    from PyQt6 import QtWidgets
+    from helab.utils import gui_delivery
+    made: list[str] = []
+
+    def guarded(name: str, call: Callable[..., Any]) -> Callable[..., Any]:
+        def run(*args: Any, **kwargs: Any) -> Any:
+            source = gui_delivery.current()
+            if source is not None:
+                ours = [frame for frame in traceback.extract_stack()[:-1] if "site-packages" not in frame.filename]
+                made.append(f"{name} while delivering {source!r} results, from:\n"
+                            + "".join(traceback.format_list(ours[-6:])))
+                raise AssertionError(f"{name} opened while delivering {source!r} results (GT-1)")
+            return call(*args, **kwargs)
+        return run
+
+    for class_name, methods, statics in MODAL_CALLS:
+        cls = getattr(QtWidgets, class_name)
+        for name in methods:
+            monkeypatch.setattr(cls, name, guarded(f"{class_name}.{name}", getattr(cls, name)))
+        for name in statics:
+            monkeypatch.setattr(cls, name, staticmethod(guarded(f"{class_name}.{name}", getattr(cls, name))))
+    yield made
+    assert not made, "A modal loop opened inside a result's delivery:\n" + "\n".join(made)

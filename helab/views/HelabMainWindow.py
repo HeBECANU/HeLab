@@ -1,3 +1,4 @@
+import functools
 import gc
 import json
 import logging
@@ -13,7 +14,7 @@ from helab.utils.io_service import IORequest, delete_io_traces, get_io_service, 
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, get_folder_cache, set_disk_budget, store_options
 from helab.utils.gui_watchdog import GUIWatchdog
 from helab.utils.lab_parameters import read_lab_constants
-from helab.utils import activity, app_log, events, user_manual
+from helab.utils import activity, app_log, events, gui_delivery, user_manual
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -1197,6 +1198,12 @@ class HelabMainWindow(QMainWindow):
                 or event["kind"] not in ("trace_folder", "error")):
             return
         self._trace_check = None
+        # Its questions and notes wait until this delivery has returned (GT-1).
+        gui_delivery.outside(functools.partial(self._trace_checked, event))
+
+    def _trace_checked(self, event: dict[str, Any]) -> None:
+        if self._closing:
+            return
         if event["kind"] == "error":
             self._refuse_io_trace(f"HeLab couldn't check its temp folder {DIR_TEMPS}: {event.get('message', '')}")
             return

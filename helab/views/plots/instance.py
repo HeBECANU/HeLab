@@ -40,7 +40,7 @@ from helab.utils.constants import QDOCKWIDGET_STYLESHEET
 from helab.utils.folder_cache import Dataset, FolderCache, get_folder_cache, store_options
 from helab.utils.io_service import IORequest, get_io_service
 from helab.utils.number_format import byte_size
-from helab.utils import txy_sources
+from helab.utils import gui_delivery, txy_sources
 from helab.utils.ram_buffers import Buffers, arrays_in, buffers
 from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRuns
 from helab.views.plots.dock import AnalysisDock, release_figures
@@ -704,6 +704,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
         # A slot (no PyQt proxy object): closing disconnects it at once, not at a later deletion.
         if self.is_closed or result.job_id != self.job_id:
             return
+        # Its render and update don't open a modal box (``gui_delivery.outside``, GT-1).
+        with gui_delivery.delivering("analysis"):
+            self._ended(result)
+
+    def _ended(self, result: AnalysisResult) -> None:
         if self._cached_link is not None:
             self._cached_link.finished(result)  # Saves a completed result packed for the disk cache.
         if result.packed is not None:

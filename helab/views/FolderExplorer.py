@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 import numpy as np
 import numpy.typing as npt
+from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QMargins, QObject, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRect, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (QColor, QCursor, QDesktopServices, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen,
                          QResizeEvent)
@@ -22,7 +23,7 @@ from helab.models.StatusReport import StatusReport
 from helab.resources.icons import CHECK_COLOR, LOAD_COLOR, StatusIcons
 from helab.utils.accessible import identify, identify_buttons
 from helab.utils.io_service import IORequest
-from helab.utils import large_folder, txy_sources
+from helab.utils import gui_delivery, large_folder, txy_sources
 from helab.utils.store_v4 import DIRNAME as STORE_V4_DIRNAME
 from helab.utils.colours import AMBER as AMBER  # Shared; the views import it from here too.
 from helab.utils import folder_cache
@@ -269,6 +270,8 @@ class FolderExplorer(QWidget):
         self._allowing: str | None = None
         # Bumped by Cancel: a large-folder question scheduled before it is dropped.
         self._cancel_count = 0
+        # Folders whose large-folder question waits for a helper's or a job's delivery to return (GT-1).
+        self._large_asks: set[str] = set()
         # The latest helper stop for being large, per folder: (estimate, when, what was in RAM).
         self._large_stops: dict[str, tuple[int, float, tuple[str, int, int] | None]] = {}
         # Replaceable in tests; None asks with LargeFolderDialog. (Not a bound method: that
@@ -1064,7 +1067,11 @@ class FolderExplorer(QWidget):
         if not verdict or estimate is None:
             self._set_large(path, None)
             return False
-        if verdict == "large" and explicit and (self.confirm_large or self._confirm_large)(path, estimate):
+        if verdict == "large" and explicit and gui_delivery.current() is not None:
+            # Asked for from a helper's result (a conversion's end, Live at launch): the question waits until
+            # that delivery has returned, or its modal loop would stop every helper's I/O (GT-1).
+            self._ask_large_later(path)
+        elif verdict == "large" and explicit and (self.confirm_large or self._confirm_large)(path, estimate):
             self._allowing = path
             self._set_large(path, None)
             return False
@@ -1101,6 +1108,19 @@ class FolderExplorer(QWidget):
         folder, else queued like any explicit load. Its old cached data is replaced by the result."""
         self.model.cache.answer_mismatches([path], "load")
         self.queue_load(path)
+
+    def _ask_large_later(self, path: str) -> None:
+        if path in self._large_asks:
+            return
+        self._large_asks.add(path)
+        cancels, selected = self._cancel_count, path == self.selected_path_globally
+
+        def ask() -> None:
+            self._large_asks.discard(path)
+            if (not self.closed and cancels == self._cancel_count
+                    and selected == (path == self.selected_path_globally)):
+                self.queue_load(path)
+        gui_delivery.outside(ask)
 
     def _confirm_large(self, path: str, estimate: int) -> bool:
         from helab.views.LargeFolderDialog import confirm_large
@@ -2590,7 +2610,7 @@ class FolderExplorer(QWidget):
         if self.report_flag_failure is not None:
             self.report_flag_failure(path, text)
         else:
-            QMessageBox.warning(self, "Folder constants not saved", text)
+            self._warn_outside("Folder constants not saved", text)
 
     def _ask_remove_cached(self, path: str, size: int | None) -> bool:
         name = os.path.basename(path.rstrip(os.sep)) or path
@@ -2659,7 +2679,14 @@ class FolderExplorer(QWidget):
         if self.report_flag_failure is not None:
             self.report_flag_failure(path, text)
         else:
-            QMessageBox.warning(self, "Folder setting not saved", text)
+            self._warn_outside("Folder setting not saved", text)
+
+    def _warn_outside(self, title: str, text: str) -> None:
+        """A warning about a helper's result, shown once its delivery has returned (GT-1)."""
+        def warn() -> None:
+            if not self.closed and not sip.isdeleted(self):
+                QMessageBox.warning(self, title, text)
+        gui_delivery.outside(warn)
 
     def reveal(self, path: str) -> None:
         """Show ``path`` (e.g. a load's folder): select its row if this tab has it, else open it."""

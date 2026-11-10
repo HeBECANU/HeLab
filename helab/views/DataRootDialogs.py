@@ -7,11 +7,13 @@ import os
 import sys
 from typing import Any
 
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (QAbstractButton, QApplication, QDialog, QDialogButtonBox, QFileDialog, QLabel,
                              QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
+from helab.utils import gui_delivery
 from helab.utils.accessible import identify
 from helab.utils.folder_cache import OFFLINE_TOOLTIP, PLACE_ROOT_ACTION, FolderCache, marker_path
 from helab.utils.io_service import IORequest
@@ -230,14 +232,18 @@ class ManualMarkerDialog(QDialog):
         elif kind == "marker_save_exists":
             self._exists = True
         elif kind == "marker_save_refused":
-            QMessageBox.warning(self, MANUAL_TITLE, f"Couldn't save {file}: {event.get('reason', '')}")
+            self._warn(f"Couldn't save {file}: {event.get('reason', '')}")
         elif kind in ("error", "cancelled"):
-            QMessageBox.warning(self, MANUAL_TITLE, f"Couldn't save {file}: {event.get('message', 'stopped')}")
+            self._warn(f"Couldn't save {file}: {event.get('message', 'stopped')}")
         if kind in ("done", "error", "cancelled"):
             self.save.setEnabled(True)
             if self._exists:
                 # Asked once the save has ended, so Yes saves again rather than joining it.
                 QTimer.singleShot(0, self._ask_replace)
+
+    def _warn(self, text: str) -> None:
+        """Shown once the helper's delivery has returned (GT-1)."""
+        gui_delivery.outside(lambda: sip.isdeleted(self) or QMessageBox.warning(self, MANUAL_TITLE, text))
 
     def _ask_replace(self) -> None:
         self._exists = False
