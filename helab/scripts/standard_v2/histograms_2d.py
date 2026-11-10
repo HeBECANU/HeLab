@@ -881,11 +881,15 @@ def nothing_text(data: Planes) -> str:
                 else "No events inside the summed axis's bounds (View range)"))
 
 
-def planes_layout(result: AnalysisResult) -> tuple[tuple[str, ...], Colours, str, tuple[tuple[str, ...], ...]]:
-    """The planes, colour transform, dot colouring and unit groups a PyQtGraph drawing was built for."""
+def planes_layout(result: AnalysisResult
+                  ) -> tuple[tuple[str, ...], Colours, str, tuple[tuple[str, ...], ...], tuple[bool, ...]]:
+    """The planes, colour transform, dot colouring, unit groups and colour bar sides (left for XY's rate) a
+    PyQtGraph drawing was built for."""
     data: Planes = result.data
+    groups = colour_groups(data)
     return (tuple(item.histogram.plane for item in data.items), Colours.of(result.parameters), data.dot_colour,
-            tuple(tuple(item.histogram.plane for item in group.items) for group in colour_groups(data)))
+            tuple(tuple(item.histogram.plane for item in group.items) for group in groups),
+            tuple(left_colour_bar(group) for group in groups))
 
 
 def dot_brushes(item: PlaneCounts, data: Planes, colours: Colours, area: str = WHITE) -> Any:

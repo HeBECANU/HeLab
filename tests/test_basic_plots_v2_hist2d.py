@@ -681,6 +681,23 @@ def test_rate_legends_follow_the_planes_shown(shown: tuple[str, ...], qtbot: QtB
             assert bar_axes.get_position().x0 > drawn.axes[len(shown) - 1].get_position().x1
 
 
+@pytest.mark.parametrize("draw", ["histogram", DOTS])
+def test_xy_alone_redraws_its_bar_on_its_side_when_show_changes(draw: str, qtbot: QtBot) -> None:
+    """XY alone: its counts bar on the right, its rate bar on the left. A change of Show between them is the
+    same planes and groups, but another side, so PyQtGraph draws it anew rather than filling the old bar."""
+    script = PlaneHistograms()
+    values = {**only("XY"), "draw": draw}
+    counts = result_of(script, view(), values)
+    rate = result_of(script, view(), {**values, "quantity": "rate per shot"})
+    for first, second in ((counts, rate), (rate, counts)):
+        widget: Any = script.draw(first, PYQTGRAPH)
+        qtbot.addWidget(widget)
+        fresh: Any = script.draw(second, PYQTGRAPH)
+        qtbot.addWidget(fresh)
+        assert fresh.plane_bar.inset_column != widget.plane_bar.inset_column
+        assert not script.update(widget, second)  # (Drawn anew, its bar where a fresh drawing puts it.)
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_toggling_planes_removes_and_restores_their_rate_bars(backend: str, qtbot: QtBot,
                                                              monkeypatch: pytest.MonkeyPatch) -> None:
