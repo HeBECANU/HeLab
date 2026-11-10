@@ -4,15 +4,13 @@ Each shown axis covers the exact shortest range holding the auto-crop share of i
 (``stats.shortest_range``, as the 1D histograms), or the manual bounds set for it. The flattened axis isn't
 cut by auto-crop, so every event of the chosen shots counts; manual bounds set for it limit the events summed
 (a T window on the XY histogram images one cloud). Bins are automatic per axis (Freedman–Diaconis, at most
-``MAX_AUTO_BINS``) or set (at most ``MAX_BINS``; a plane over ``MAX_PLANE_BINS`` in all has both axes' bins scaled
-down in proportion, and says so). The image shown may be filtered (``image_filters``) and its
+``MAX_AUTO_BINS``) or set (at most ``MAX_BINS``). The image shown may be filtered (``image_filters``) and its
 colour range compressed (``compress``), as the DLD port's Density images.
 
 Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Callable, Optional, cast
 
@@ -27,9 +25,6 @@ from helab.analysis.stats import AXES, freedman_diaconis_bins, shortest_range
 PLANES = {"XY": ("X", "Y", "T"), "XT": ("X", "T", "Y"), "YT": ("Y", "T", "X")}
 MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image.
 MAX_BINS = 10_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
-# Bins in one plane at most (4,000²): its counts and image, their copies while filtered and drawn, all scale with it
-# (10,000² would hold 1.6 GB a plane). Set bins over it are scaled down on both axes in proportion (``plane_bins``).
-MAX_PLANE_BINS = 16_000_000
 Bounds = Optional[tuple[float, float]]
 
 
@@ -46,8 +41,6 @@ class Histogram2D:
         total: The events of the chosen shots.
         summed: Those inside the flattened axis's bounds (all when it has none).
         flattened: The flattened axis's manual bounds, None when every event counts.
-        wanted: The bins asked for (horizontal, vertical) when they were over ``MAX_PLANE_BINS`` and scaled down,
-            else None.
     """
 
     plane: str
@@ -58,7 +51,6 @@ class Histogram2D:
     total: int
     summed: int
     flattened: Bounds = None
-    wanted: Optional[tuple[int, int]] = None
 
     @property
     def axes(self) -> tuple[str, str, str]:
@@ -76,15 +68,6 @@ class Histogram2D:
         """The summed events outside the shown ranges."""
         return self.summed - self.inside
 
-    @property
-    def capped(self) -> str:
-        """A note when the bins asked for were over ``MAX_PLANE_BINS`` ("" when not)."""
-        if self.wanted is None:
-            return ""
-        across, up = self.counts.shape
-        return (f"bins capped for memory: {self.wanted[0]:,} × {self.wanted[1]:,} is over {MAX_PLANE_BINS:,} a "
-                f"plane, {across:,} × {up:,} used")
-
 
 def _range(values: npt.NDArray[np.float64], keep: float, bounds: Bounds) -> tuple[float, float]:
     lower, upper = bounds if bounds is not None else shortest_range(values, keep)
@@ -101,22 +84,12 @@ def _bins(values: npt.NDArray[np.float64], lower: float, upper: float, bins: int
     return min(freedman_diaconis_bins(values, lower, upper), MAX_AUTO_BINS)
 
 
-def plane_bins(across: int, up: int) -> tuple[int, int]:
-    """The bins used for ``across`` × ``up`` asked for: the same, or both scaled down in proportion to at most
-    ``MAX_PLANE_BINS`` in all."""
-    if across * up <= MAX_PLANE_BINS:
-        return across, up
-    scaled = max(1, math.isqrt(MAX_PLANE_BINS * across // up))
-    return scaled, max(1, min(math.isqrt(MAX_PLANE_BINS * up // across), MAX_PLANE_BINS // scaled))
-
-
 def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] = (0, 0),
                 bounds: tuple[Bounds, Bounds, Bounds] = (None, None, None),
                 check: Callable[[], None] = lambda: None) -> Histogram2D:
     """``events`` (n × 3: T, X, Y) binned in ``plane``, the third axis summed. ``keep``: the auto-crop share of
     each shown axis without ``bounds`` (by axis T, X, Y); a bound on the summed axis limits the events summed.
-    ``bins``: per shown axis, 0 for automatic; a plane over ``MAX_PLANE_BINS`` in all is scaled down
-    (``plane_bins``, ``Histogram2D.capped``). ``check`` raises to cancel (the runner's)."""
+    ``bins``: per shown axis, 0 for automatic. ``check`` raises to cancel (the runner's)."""
     horizontal, vertical, summed = (AXES.index(name) for name in PLANES[plane])
     total = len(events)
     limit = bounds[summed]
@@ -131,11 +104,9 @@ def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] =
     check()
     h_bins = _bins(h_values, *h_range, bins[0])
     v_bins = _bins(v_values, *v_range, bins[1])
-    used = plane_bins(h_bins, v_bins)
-    wanted = (h_bins, v_bins) if used != (h_bins, v_bins) else None
-    counts, h_edges, v_edges = np.histogram2d(h_values, v_values, bins=used, range=(h_range, v_range))
+    counts, h_edges, v_edges = np.histogram2d(h_values, v_values, bins=(h_bins, v_bins), range=(h_range, v_range))
     return Histogram2D(plane, counts.astype(np.int64), h_edges, v_edges, (bins[0] <= 0, bins[1] <= 0), total,
-                       len(events), limit, wanted)
+                       len(events), limit)
 
 
 # The image shown (as the DLD port's Density images): counts, optionally blurred and per shot, its colour range

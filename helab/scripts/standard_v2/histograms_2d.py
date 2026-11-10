@@ -29,8 +29,8 @@ from helab.analysis.dataset_view import DatasetView
 from helab.analysis.empty import empty_pane, empty_text
 from helab.analysis import image_filters
 from helab.analysis.display_units import si_text
-from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, MAX_PLANE_BINS, PLANES, POWER, SCALES,
-                                        Histogram2D, bin_area, compress, histogram2d, scale_text)
+from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, Histogram2D,
+                                        bin_area, compress, histogram2d, scale_text)
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import Kind, ParameterSpec, Value
 from helab.analysis.results import AnalysisContext, AnalysisResult
@@ -60,8 +60,7 @@ IMAGE_GROUP = "Image"
 BINS = {axis: ParameterSpec(
     f"bins_{axis.lower()}", f"{axis} bins (0 = auto)", "int", 0, (0, MAX_BINS), group=IMAGE_GROUP,
     tip=f"Bins on {axis} wherever it is shown. 0 = automatic (Freedman–Diaconis on {axis} in each plane, at most "
-        f"{MAX_AUTO_BINS:,}; set by hand, at most {MAX_BINS:,}). A plane holds at most {MAX_PLANE_BINS:,} bins: "
-        f"over that, both its axes' bins are scaled down in proportion, and its title says so.") for axis in AXES}
+        f"{MAX_AUTO_BINS:,}; set by hand, at most {MAX_BINS:,}).") for axis in AXES}
 HISTOGRAM, DOTS = "histogram", "dots"
 DRAW = ParameterSpec(
     "draw", "Draw", "choice", HISTOGRAM, choices=(HISTOGRAM, DOTS), group=IMAGE_GROUP,
@@ -522,8 +521,7 @@ def plane_counts(events: npt.NDArray[np.float64], plane: str, values: Mapping[st
         check()
         dots = plane_dots(events, item, image, str(values.get(DOT_COLOUR.name, DENSITY)),
                           int(values.get(MAX_DOTS.name, MAX_DOTS.default)))
-    notes = (item.capped, *capped) if item.capped else capped
-    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in notes), dots)
+    return PlaneCounts(item, image, per_shot, filters, tuple(f"{plane}: {note}" for note in capped), dots)
 
 
 BAR_WIDTH = 32

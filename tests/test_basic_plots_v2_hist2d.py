@@ -5,7 +5,6 @@ image options (Tony's choice): blur filters, each on by itself, chained in the o
 every library, in place."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,7 +16,7 @@ from pytestqt.qtbot import QtBot
 from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane
 from helab.analysis.dataset_view import DatasetView, build_view
 from helab.analysis.identity import file_hash
-from helab.analysis import histogram2d as histogram2d_module, image_filters
+from helab.analysis import image_filters
 from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
                                         histogram2d, scale_text)
 from helab.analysis.image_filters import ADAPTIVE, BOX, DENOISE, FILTERS, GAUSSIAN, MEDIAN, UNITS, Step
@@ -30,9 +29,6 @@ from helab.scripts.standard_v2 import histograms_2d
 from helab.scripts.scripts_manager import ScriptsManager
 from helab.scripts.standard_v2.histograms_2d import DENSITY, DOTS, NO_COLOUR, SUMMED, PlaneCounts, PlaneHistograms
 from helab.utils.folder_cache import Dataset
-
-
-CHECKOUT = Path(__file__).resolve().parent.parent
 
 
 def only(plane: str) -> dict[str, Any]:
@@ -265,30 +261,7 @@ def test_bins_are_capped() -> None:
     data = np.column_stack((rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000)))
     item = histogram2d(data, "XY", 1.0)
     assert max(item.counts.shape) <= MAX_AUTO_BINS
-    assert histogram2d(data, "XY", 1.0, bins=(10_000, 1_000)).counts.shape == (10_000, 1_000)  # (Under the cap.)
-    capped = histogram2d(data, "XY", 1.0, bins=(10_000, 20_000))  # 10,000 an axis, then the plane's cap.
-    assert capped.counts.shape == (4_000, 4_000) and capped.wanted == (10_000, 10_000)
-    assert capped.capped == "bins capped for memory: 10,000 × 10,000 is over 16,000,000 a plane, 4,000 × 4,000 used"
-
-
-@pytest.mark.parametrize("bins", [(10_000, 10_000), (10_000, 2_000), (1_700, 10_000), (4_001, 4_000), (3_999, 4_003)])
-def test_a_plane_over_its_bins_cap_is_scaled_down_in_proportion(bins: tuple[int, int]) -> None:
-    across, up = histogram2d_module.plane_bins(*bins)
-    assert across * up <= histogram2d_module.MAX_PLANE_BINS and across <= bins[0] and up <= bins[1]
-    assert across * up > 0.99 * histogram2d_module.MAX_PLANE_BINS  # (Scaled no further than the cap needs.)
-    assert across / up == pytest.approx(bins[0] / bins[1], rel=1e-3)
-    assert histogram2d_module.plane_bins(4_000, 4_000) == (4_000, 4_000)
-    assert histogram2d_module.plane_bins(10_000, 1_600) == (10_000, 1_600)
-
-
-def test_the_plot_says_when_a_plane_was_capped() -> None:
-    values = {"bins_x": 10_000, "bins_y": 10_000, "bins_t": 100}
-    xy, xt = (plane_of(plane, view(), values) for plane in ("XY", "XT"))
-    assert xy.histogram.counts.shape == xy.image.shape == (4_000, 4_000)
-    assert xy.notes == ("XY: " + xy.histogram.capped,) and "XY: bins capped" in histograms_2d.panel_title(xy)
-    assert xt.histogram.counts.shape == (10_000, 100) and xt.notes == ()  # (Under the cap: as set.)
-    manual = (CHECKOUT / "docs" / "how-to" / "basic-plots.md").read_text(encoding="utf-8")
-    assert f"at most {histogram2d_module.MAX_PLANE_BINS:,} bins" in manual
+    assert histogram2d(data, "XY", 1.0, bins=(10_000, 20_000)).counts.shape == (10_000, 10_000)
 
 
 # The plot
