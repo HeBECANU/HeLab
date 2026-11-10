@@ -64,20 +64,21 @@ class AnalysisRunner(QObject):
     def submit(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                view: DatasetView, values: Optional[Mapping[str, Any]] = None,
                constants: Optional[Mapping[str, Mapping[str, float]]] = None, owner: str = "",
-               live: bool = False) -> AnalysisContext:
+               live: bool = False, ram_budget: int = 0) -> AnalysisContext:
         """Queue ``action`` on ``view`` (GUI thread; ``AnalysisQueue.submit``). Raises
         ``RuntimeError`` while the runner is stopping (until its worker has exited)."""
-        context = self.core.prepare(script, metadata, action, view, values, constants, owner=owner, live=live)
+        context = self.core.prepare(script, metadata, action, view, values, constants, owner=owner, live=live,
+                                    ram_budget=ram_budget)
         self.enqueue(script, context)
         return context
 
     def prepare(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                 view: DatasetView, values: Optional[Mapping[str, Any]] = None,
                 constants: Optional[Mapping[str, Mapping[str, float]]] = None, owner: str = "",
-                live: bool = False, to_cache: bool = False) -> AnalysisContext:
+                live: bool = False, to_cache: bool = False, ram_budget: int = 0) -> AnalysisContext:
         """A run's context without queuing it (``AnalysisQueue.prepare``): ``enqueue`` runs it."""
         return self.core.prepare(script, metadata, action, view, values, constants, owner=owner, live=live,
-                                 to_cache=to_cache)
+                                 to_cache=to_cache, ram_budget=ram_budget)
 
     def enqueue(self, script: DatasetAnalysis, context: AnalysisContext) -> None:
         """Queue a prepared run (``AnalysisQueue.enqueue``); ``RuntimeError`` while stopping."""

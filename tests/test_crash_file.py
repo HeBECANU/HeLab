@@ -222,6 +222,111 @@ def test_a_terminal_that_takes_nothing_never_stops_the_pump(tmp_path: Path) -> N
     assert not terminal.thread.is_alive()
 
 
+class WholeCharacterConsole:
+    """A stand-in for a Windows console's raw stream: ``write`` takes UTF-8 bytes up to the last whole character
+    and says how many it took (as ``_WindowsConsoleIO.write``), so an incomplete tail isn't taken."""
+
+    def __init__(self) -> None:
+        self.text = ""
+
+    def write(self, data: Any) -> int:
+        raw = bytes(data)
+        taken = len(raw)
+        for back in range(1, min(4, len(raw)) + 1):
+            byte = raw[-back]
+            if byte & 0xC0 != 0x80:  # (The last lead or ASCII byte: is its character whole?)
+                length = 1 if byte < 0x80 else 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
+                taken = len(raw) - back if length > back else len(raw)
+                break
+        self.text += raw[:taken].decode("utf-8", "replace")
+        return taken
+
+
+@pytest.mark.parametrize("split", range(1, len("σ → · é 𝛼".encode("utf-8"))))
+def test_a_character_split_across_two_reads_reaches_a_console_whole(split: int) -> None:
+    """The pump's reads end wherever the pipe's contents do: on a console, a character split across two of them
+    is written whole once its rest comes (it was lost or garbled)."""
+    text = "σ → · é 𝛼"
+    data = text.encode("utf-8")
+    read, write = os.pipe()
+    console = WholeCharacterConsole()
+    terminal = console_tee._Terminal(write, console)
+    try:
+        terminal.put(data[:split])
+        terminal.put(data[split:])
+        terminal.close(timeout=20)
+        assert not terminal.thread.is_alive() and console.text == text
+    finally:
+        os.close(write)
+        os.close(read)
+
+
+def test_a_console_gets_a_replacement_for_bytes_left_incomplete_at_the_end() -> None:
+    read, write = os.pipe()
+    console = WholeCharacterConsole()
+    terminal = console_tee._Terminal(write, console)
+    try:
+        terminal.put("ok σ".encode("utf-8")[:-1])  # (Its last character never completed.)
+        terminal.close(timeout=20)
+        assert not terminal.thread.is_alive() and console.text == "ok �"
+    finally:
+        os.close(write)
+        os.close(read)
+    piped_read, piped_write = os.pipe()  # (Not a console: the bytes go on as they are.)
+    terminal = console_tee._Terminal(piped_write)
+    try:
+        terminal.put("σ".encode("utf-8")[:1])
+        terminal.put("σ".encode("utf-8")[1:])
+        terminal.close(timeout=20)
+        assert os.read(piped_read, 16) == "σ".encode("utf-8")
+    finally:
+        os.close(piped_write)
+        os.close(piped_read)
+
+
+def test_handler_streams_are_swapped_after_loggings_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handlers are listed under logging's lock (another thread adding a logger meanwhile changed the dict
+    while it was walked), waiting for it at most ``LOGGING_LOCK_SECONDS``."""
+    import io
+
+    old, new = io.StringIO(), io.StringIO()
+    handler = logging.StreamHandler(old)
+    logger = logging.getLogger("helab.test.console-tee-swap")
+    logger.addHandler(handler)
+    lock = cast(Any, logging)._lock
+    try:
+        lock.acquire()
+        swapper = threading.Thread(target=console_tee._swap_handler_streams, args=(old, new), daemon=True)
+        try:
+            swapper.start()
+            time.sleep(0.3)
+            assert swapper.is_alive() and handler.stream is old  # (Waiting for the lock.)
+        finally:
+            lock.release()
+        swapper.join(timeout=10)
+        assert not swapper.is_alive() and handler.stream is new
+        monkeypatch.setattr(console_tee, "LOGGING_LOCK_SECONDS", 0.05)
+        held = threading.Event()
+        done = threading.Event()
+
+        def hold() -> None:
+            with lock:
+                held.set()
+                done.wait(10)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        try:
+            assert held.wait(10)
+            console_tee._swap_handler_streams(new, old)  # (The lock held elsewhere: done without it, at once.)
+            assert handler.stream is old
+        finally:
+            done.set()
+            holder.join(timeout=10)
+    finally:
+        logger.removeHandler(handler)
+
+
 def test_the_console_file_is_off_under_the_test_suite(tmp_path: Path) -> None:
     assert os.environ.get(console_tee.OFF_ENV)  # (conftest)
     assert console_tee.start(str(tmp_path)) is None and not list(tmp_path.glob("console-*"))

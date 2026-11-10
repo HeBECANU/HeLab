@@ -90,16 +90,17 @@ class AnalysisQueue:
     def submit(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                view: DatasetView, values: Optional[Mapping[str, Any]] = None,
                constants: Optional[Mapping[str, Mapping[str, float]]] = None, owner: str = "",
-               live: bool = False) -> AnalysisContext:
+               live: bool = False, ram_budget: int = 0) -> AnalysisContext:
         """``prepare`` the run and ``enqueue`` it (GUI thread)."""
-        context = self.prepare(script, metadata, action, view, values, constants, owner=owner, live=live)
+        context = self.prepare(script, metadata, action, view, values, constants, owner=owner, live=live,
+                               ram_budget=ram_budget)
         self.enqueue(script, context)
         return context
 
     def prepare(self, script: DatasetAnalysis, metadata: ScriptMetadata, action: str,
                 view: DatasetView, values: Optional[Mapping[str, Any]] = None,
                 constants: Optional[Mapping[str, Mapping[str, float]]] = None, owner: str = "",
-                live: bool = False, to_cache: bool = False) -> AnalysisContext:
+                live: bool = False, to_cache: bool = False, ram_budget: int = 0) -> AnalysisContext:
         """Queue ``action`` on ``view`` with ``values`` validated against its declared parameters,
         and the lab and folder layers of the constants taken now (``constants``: {"lab": …,
         "folder": …}; GUI thread). An analysis that uses constants gets them resolved with its own
@@ -107,7 +108,8 @@ class AnalysisQueue:
         The run's coverage is the shots the script says it uses (all of them if it can't say).
         ``owner``: the plot asking (``AnalysisContext.owner``); ``live``: a rerun following Live
         (``AnalysisContext.live``); ``to_cache``: pack its completed result for the disk cache
-        (``AnalysisContext.to_cache``). Queues nothing: ``enqueue`` runs it (a plot may first find
+        (``AnalysisContext.to_cache``); ``ram_budget``: HeLab's RAM budget in bytes, 0 unknown
+        (``AnalysisContext.ram_budget``). Queues nothing: ``enqueue`` runs it (a plot may first find
         its result in the disk cache, result caching R2)."""
         parameters = effective(script.parameters(action), values)
         try:
@@ -133,7 +135,7 @@ class AnalysisQueue:
                                   unused=unused_parameters(script.parameters(action), parameters),
                                   coverage=coverage, constants=layers, resolved_constants=resolved,
                                   constant_keys=keys if resolved is not None else (), owner=owner, live=live,
-                                  to_cache=to_cache)
+                                  to_cache=to_cache, ram_budget=max(0, int(ram_budget)))
         return context
 
     def enqueue(self, script: DatasetAnalysis, context: AnalysisContext) -> None:

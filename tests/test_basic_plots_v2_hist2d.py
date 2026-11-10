@@ -16,13 +16,14 @@ from pytestqt.qtbot import QtBot
 from helab.analysis.backends import BACKENDS, MATPLOTLIB, PLOTLY, PYQTGRAPH, MatplotlibPane
 from helab.analysis.dataset_view import DatasetView, build_view
 from helab.analysis.identity import file_hash
-from helab.analysis import image_filters
-from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
+from helab.analysis import histogram2d as histogram2d_module, image_filters, result_cache
+from helab.analysis.runner import AnalysisRunner
+from helab.analysis.histogram2d import (LINEAR, LOG, MAX_AUTO_BINS, MAX_BINS, PLANES, POWER, SCALES, SQRT, bin_area, compress,
                                         histogram2d, scale_text)
 from helab.analysis.image_filters import ADAPTIVE, BOX, DENOISE, FILTERS, GAUSSIAN, MEDIAN, UNITS, Step
 from helab.analysis.panes import PlotlyPane
 from helab.analysis.parameters import effective
-from helab.analysis.results import AnalysisContext, AnalysisResult
+from helab.analysis.results import AnalysisContext, AnalysisResult, Cancelled
 from helab.analysis.stats import shortest_range
 from helab.scripts import standard_v2
 from helab.scripts.standard_v2 import histograms_2d
@@ -162,6 +163,66 @@ def test_the_adaptive_kde_smooths_faint_regions_more_than_bright_ones() -> None:
     assert np.allclose(flat, plain)  # α 0: a plain Gaussian.
 
 
+def test_the_adaptive_kde_picks_the_nearest_sigma_step() -> None:
+    """Each bin's σ step is the ladder's nearest (on a log scale), as the broadcast over every step found it."""
+    rng = np.random.default_rng(4)
+    factor = np.exp(rng.uniform(np.log(1 / image_filters.ADAPTIVE_RANGE), np.log(image_filters.ADAPTIVE_RANGE),
+                                (300, 200)))
+    ladder = np.geomspace(1 / image_filters.ADAPTIVE_RANGE, image_filters.ADAPTIVE_RANGE, image_filters.LEVELS)
+    nearest = np.abs(np.log(factor)[..., None] - np.log(ladder)).argmin(axis=-1)
+    assert np.array_equal(image_filters.levels(factor.copy()), nearest)
+    assert image_filters.levels(ladder.copy()).tolist() == list(range(image_filters.LEVELS))
+
+
+def test_the_adaptive_kde_needs_a_few_images_of_memory() -> None:
+    """Not one image per σ step (the broadcast over the 9 steps peaked at about 20 images)."""
+    import tracemalloc
+
+    rng = np.random.default_rng(5)
+    counts = rng.poisson(rng.uniform(0.0, 3.0, (600, 600))).astype(np.float64)
+    tracemalloc.start()
+    try:
+        image_filters.apply(counts, [step(ADAPTIVE, sigma=(2.0, 2.0), alpha=0.5)])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 12 * counts.nbytes  # (About 8 here: scipy's Gaussian alone takes 4.)
+
+
+def test_the_filters_can_be_cancelled_between_steps_and_sigma_steps() -> None:
+    calls: list[int] = []
+
+    def check() -> None:
+        calls.append(1)
+        if len(calls) == 4:
+            raise InterruptedError
+
+    with pytest.raises(InterruptedError):
+        image_filters.apply(spot(), [step(GAUSSIAN, sigma=(1.0, 1.0)), step(ADAPTIVE, sigma=(2.0, 2.0))], check)
+    # Before the Gaussian, before the adaptive KDE, then before each of its σ steps: cancelled at the second.
+    assert len(calls) == 4
+    calls.clear()
+    image_filters.apply(spot(), [step(GAUSSIAN, sigma=(1.0, 1.0)), step(MEDIAN, size=3)], lambda: calls.append(1))
+    assert len(calls) == 2
+
+
+def test_the_plot_cancels_inside_the_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run's check reaches the filters: a cancel during the adaptive KDE stops the plot there."""
+    script = PlaneHistograms()
+    context = AnalysisContext("a1", "Plot", view(),
+                              effective(script.parameters("Plot"), {**only("XY"), "blur_adaptive": True}),
+                              script.get_metadata().identity())
+    gaussian = image_filters.gaussian
+
+    def cancelling(image: Any, sigma: tuple[float, float]) -> Any:
+        context.cancel_event.set()  # (Cancelled during the pilot blur: the next σ step's check stops it.)
+        return gaussian(image, sigma)
+
+    monkeypatch.setattr(image_filters, "gaussian", cancelling)
+    with pytest.raises(Cancelled):
+        script.compute("Plot", context)
+
+
 def test_denoise_flattens_poisson_noise() -> None:
     rng = np.random.default_rng(2)
     counts = rng.poisson(4.0, (60, 60)).astype(np.float64)
@@ -201,7 +262,71 @@ def test_bins_are_capped() -> None:
     data = np.column_stack((rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000), rng.uniform(0, 1, 200_000)))
     item = histogram2d(data, "XY", 1.0)
     assert max(item.counts.shape) <= MAX_AUTO_BINS
-    assert histogram2d(data, "XY", 1.0, bins=(10_000, 20_000)).counts.shape == (10_000, 10_000)
+    # At most MAX_BINS an axis (one bin up, so that the test never holds gigabytes).
+    assert MAX_BINS == 20_000
+    assert histogram2d(data, "XY", 1.0, bins=(30_000, 1)).counts.shape == (20_000, 1)
+    assert histogram2d(data, "XY", 1.0, bins=(1, 20_000)).counts.shape == (1, 20_000)
+    assert all(spec.limits == (0, 20_000) for spec in histograms_2d.BINS.values())  # (The spin boxes.)
+
+
+def test_the_estimate_comes_from_the_settings_alone() -> None:
+    """Every plane's counts and image held (16 B a bin), and the largest plane's moment: colouring (32 B a bin) or
+    the adaptive KDE (64); an automatic axis counted at its most (1,000 bins)."""
+    script = PlaneHistograms()
+
+    def estimate(values: dict[str, Any]) -> int:
+        return script.estimated_bytes("Plot", effective(script.parameters("Plot"), values))
+    assert estimate({}) == 16 * 3 * 1_000_000 + 32 * 1_000_000
+    big = {"bins_x": 20_000, "bins_y": 20_000, "bins_t": 20_000}
+    assert estimate(big) == 16 * 3 * 400_000_000 + 32 * 400_000_000  # 32 GB
+    assert estimate({**big, "blur_adaptive": True}) == 16 * 3 * 400_000_000 + 64 * 400_000_000
+    assert estimate({**only("XY"), "bins_x": 20_000}) == (16 + 32) * 20_000 * 1_000
+    assert estimate({name: False for name in ("show_xy", "show_xt", "show_yt")}) == 0
+    assert histogram2d_module.estimated_bytes([]) == 0
+
+
+def run_with_budget(budget: int, values: dict[str, Any] | None = None) -> AnalysisResult:
+    script = PlaneHistograms()
+    context = AnalysisContext("a1", "Plot", view(), effective(script.parameters("Plot"), values or {}),
+                              script.get_metadata().identity(), ram_budget=budget)
+    return AnalysisResult.of(context, "completed", script.compute("Plot", context))
+
+
+def test_the_run_notes_its_memory_against_the_budget() -> None:
+    """From the bins the run made: 100 × 100 a plane, three planes: 16 × 30,000 + 32 × 10,000 = 800,000 bytes."""
+    values = {"bins_x": 100, "bins_y": 100, "bins_t": 100}
+    over = run_with_budget(1_000_000, values)  # 80 %
+    note = "Estimated memory 781 KiB: 80 % of the RAM budget (977 KiB)"
+    assert over.data.notes == (note,)
+    assert f"⚠ {note}" in histograms_2d.plain_title(over)
+    assert PlaneHistograms().describe_result("Plot", over) == f"⚠ {note}"  # (The dock's line and Plot info.)
+    for budget in (2_000_000, 0):  # 40 %, and unknown.
+        under = run_with_budget(budget, values)
+        assert under.data.notes == () and PlaneHistograms().describe_result("Plot", under) == ""
+
+
+def test_the_budget_never_enters_a_results_identity() -> None:
+    """A change of budget leaves saved results and presets as they are: the same reuse key, lookup key, family
+    and digest, and no budget on the result."""
+    values = {"bins_x": 100, "bins_y": 100, "bins_t": 100}
+    small, large = run_with_budget(1_000_000, values), run_with_budget(1 << 40, values)
+    assert small.data.notes != large.data.notes  # (Only the result's notes differ.)
+    assert small.reuse_key() == large.reuse_key()
+    assert not hasattr(small, "ram_budget")
+    script = PlaneHistograms()
+    contexts = [AnalysisContext("a1", "Plot", view(), effective(script.parameters("Plot"), values),
+                                script.get_metadata().identity(), ram_budget=budget) for budget in (1, 1 << 40)]
+    assert result_cache.lookup_key(contexts[0]) == result_cache.lookup_key(contexts[1])
+    assert result_cache.family_key(contexts[0]) == result_cache.family_key(contexts[1])
+    assert result_cache.digest(result_cache.lookup_key(contexts[0])) == result_cache.digest(
+        result_cache.lookup_key(contexts[1]))
+    runner = AnalysisRunner()
+    try:
+        prepared = runner.prepare(script, script.get_metadata(), "Plot", view(), values, ram_budget=5 * 1024)
+        assert prepared.ram_budget == 5 * 1024
+        assert runner.prepare(script, script.get_metadata(), "Plot", view(), values).ram_budget == 0
+    finally:
+        runner.stop()
 
 
 # The plot
@@ -619,6 +744,23 @@ def test_rate_legends_follow_the_planes_shown(shown: tuple[str, ...], qtbot: QtB
             assert bar_axes.get_position().x1 < drawn.axes[0].get_position().x0
         else:
             assert bar_axes.get_position().x0 > drawn.axes[len(shown) - 1].get_position().x1
+
+
+@pytest.mark.parametrize("draw", ["histogram", DOTS])
+def test_xy_alone_redraws_its_bar_on_its_side_when_show_changes(draw: str, qtbot: QtBot) -> None:
+    """XY alone: its counts bar on the right, its rate bar on the left. A change of Show between them is the
+    same planes and groups, but another side, so PyQtGraph draws it anew rather than filling the old bar."""
+    script = PlaneHistograms()
+    values = {**only("XY"), "draw": draw}
+    counts = result_of(script, view(), values)
+    rate = result_of(script, view(), {**values, "quantity": "rate per shot"})
+    for first, second in ((counts, rate), (rate, counts)):
+        widget: Any = script.draw(first, PYQTGRAPH)
+        qtbot.addWidget(widget)
+        fresh: Any = script.draw(second, PYQTGRAPH)
+        qtbot.addWidget(fresh)
+        assert fresh.plane_bar.inset_column != widget.plane_bar.inset_column
+        assert not script.update(widget, second)  # (Drawn anew, its bar where a fresh drawing puts it.)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

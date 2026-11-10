@@ -254,7 +254,7 @@ def script_button(window: QWidget, name: str) -> QPushButton:
 @covers("HelabMainWindow", "FolderTabWidget", "FolderExplorer", "FolderDetailsPanel", "LoadBar", "CentralHint",
         "ClickableLabel", "ElidedLabel", "HoverMenuToolButton", "TreePanelWidget", "PlotSettingsPanel", "PresetBar",
         "TxySourceRow", "ElidedButton", "AnalysisDock", "FloatingSettings", "SettingsToggle", "ReleasedPlot", "PlotPicture",
-        "PlotInfo")
+        "PlotInfo", "MemoryRow")
 def test_the_main_window_with_a_folder_and_plots(qtbot: QtBot, tmp_path: Path) -> None:
     """The main window empty, then with a synthetic folder loaded, two plots tabbed together, one
     released (its picture and Reload) and one floating (its own settings section)."""

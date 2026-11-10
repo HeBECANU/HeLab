@@ -1,0 +1,10 @@
+== mypy helab/ --strict
+Success: no issues found in 239 source files
+== mypy tests --strict
+Success: no issues found in 232 source files
+== pyright helab tests
+0 errors, 0 warnings, 0 informations
+== mypy helab/ --strict --platform win32
+Success: no issues found in 239 source files
+== pyright --pythonplatform Windows helab tests
+0 errors, 0 warnings, 0 informations

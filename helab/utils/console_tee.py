@@ -20,6 +20,7 @@ Off where ``OFF_ENV`` is set (the test suite's conftest sets it, so test runs pr
 """
 from __future__ import annotations
 
+import codecs
 import io
 import logging
 import os
@@ -32,6 +33,7 @@ CONSOLE_NAME = "console-{pid}.txt"
 CAP = 20 * 1000 * 1000  # bytes, before the file is rotated once
 OFF_ENV = "HELAB_NO_CONSOLE_FILE"
 TERMINAL_CHUNKS = 256  # held for a slow terminal before its output is dropped (each up to 64 KiB)
+LOGGING_LOCK_SECONDS = 2.0  # waited for logging's lock to list its handlers (then listed without it)
 # (Windows: a console's raw stream, which writes UTF-8 bytes as text; absent elsewhere.)
 _WINDOWS_CONSOLE_IO = cast(Callable[..., Any] | None, getattr(io, "_WindowsConsoleIO", None))
 
@@ -43,19 +45,26 @@ def writes_past_its_descriptor(stream: TextIO) -> bool:
     return _WINDOWS_CONSOLE_IO is not None and isinstance(raw, cast(type, _WINDOWS_CONSOLE_IO))
 
 
-class _Terminal:
-    """Writes chunks to the original terminal on its own thread; ``put`` never waits."""
+def _console(fd: int) -> Any:
+    """A Windows console's raw stream on ``fd`` (UTF-8 written as text, as Python writes to a console); None
+    elsewhere, or for a pipe or a file (written as bytes)."""
+    if _WINDOWS_CONSOLE_IO is None:
+        return None
+    try:
+        return _WINDOWS_CONSOLE_IO(fd, "w", closefd=False)
+    except (OSError, ValueError):
+        return None
 
-    def __init__(self, fd: int) -> None:
+
+class _Terminal:
+    """Writes chunks to the original terminal on its own thread; ``put`` never waits. ``console``: the
+    terminal's console stream (tests give a stand-in), by default ``_console(fd)``."""
+
+    def __init__(self, fd: int, console: Any = None) -> None:
         self.fd = fd
         self.dropped = 0  # bytes the terminal didn't take in time
         self.chunks: queue.Queue[bytes | None] = queue.Queue(TERMINAL_CHUNKS)
-        self.console: Any = None
-        if _WINDOWS_CONSOLE_IO is not None:  # (UTF-8 written as text, as Python writes to a console.)
-            try:
-                self.console = _WINDOWS_CONSOLE_IO(fd, "w", closefd=False)
-            except (OSError, ValueError):  # (Not a console: a pipe or a file, written as bytes.)
-                pass
+        self.console: Any = console if console is not None else _console(fd)
         self.thread = threading.Thread(target=self._run, name=f"console-tee-terminal-{fd}", daemon=True)
         self.thread.start()
 
@@ -66,14 +75,26 @@ class _Terminal:
             self.dropped += len(chunk)
 
     def _run(self) -> None:
-        while (chunk := self.chunks.get()) is not None:
+        # A console takes whole UTF-8 characters only, and the pump's reads end anywhere: a character split
+        # across two reads waits here for its rest (an invalid byte becomes U+FFFD; one left at the end too).
+        decoder = codecs.getincrementaldecoder("utf-8")("replace") if self.console is not None else None
+        while True:
+            chunk = self.chunks.get()
+            data = chunk if chunk is not None else b""
+            if decoder is not None:
+                data = decoder.decode(data, final=chunk is None).encode("utf-8")
             try:
-                view = memoryview(chunk)
-                while view:
-                    written = self.console.write(view) if self.console is not None else os.write(self.fd, view)
-                    view = view[written or len(view):]
+                self._write(data)
             except (OSError, ValueError):
                 return  # (The terminal went: the file still gets it.)
+            if chunk is None:
+                return
+
+    def _write(self, data: bytes) -> None:
+        view = memoryview(data)
+        while view:
+            written = self.console.write(view) if self.console is not None else os.write(self.fd, view)
+            view = view[written or len(view):]  # (Nothing taken: dropped, rather than tried for ever.)
 
     def close(self, timeout: float) -> None:
         """Let it write what it holds, for up to ``timeout`` seconds."""
@@ -196,14 +217,22 @@ class ConsoleTee:
 
 
 def _swap_handler_streams(old: TextIO, new: TextIO) -> None:
-    """Logging handlers writing to ``old`` write to ``new`` (``coloredlogs``' console handler holds the
-    ``sys.stderr`` it was installed with)."""
-    loggers = [logging.getLogger(), *(logger for logger in logging.Logger.manager.loggerDict.values()
-                                      if isinstance(logger, logging.Logger))]
-    for logger in loggers:
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and handler.stream is old:
-                handler.setStream(new)
+    """Logging handlers writing to ``old`` write to ``new``: a ``StreamHandler`` holds the stream it was built
+    with (``coloredlogs``' handler reads ``sys.stderr`` at each record, so it follows by itself). The handlers
+    are listed under logging's own lock, as it changes them (another thread may add a logger meanwhile), and
+    swapped after it (``setStream`` flushes)."""
+    lock = cast("threading.RLock | None", getattr(logging, "_lock", None))
+    taken = lock.acquire(timeout=LOGGING_LOCK_SECONDS) if lock is not None else False
+    try:  # (Not taken in time: listed without it rather than wait, at exit too.)
+        loggers = [logging.getLogger(), *(logger for logger in list(logging.Logger.manager.loggerDict.values())
+                                          if isinstance(logger, logging.Logger))]
+        handlers = [handler for logger in loggers for handler in list(logger.handlers)]
+    finally:
+        if taken and lock is not None:
+            lock.release()
+    for handler in handlers:
+        if isinstance(handler, logging.StreamHandler) and handler.stream is old:
+            handler.setStream(new)
 
 
 def start(folder: str) -> ConsoleTee | None:

@@ -161,6 +161,13 @@ How to use it:
   2026-11-04): `assert (692.18 - 691.02) < 1.0`, quitting took 1.15 s; passed on rerun. All four on Windows Tests
   2/3 since store-v4 went on.
   Again on Windows: Ground CI 42031225750 (Tests 2/3, job 127257995304, `90d8d9b`, 2026-11-06), passed on rerun.
+- [ ] `test_quit_confirms.py::test_the_watch_ends_a_process_left_running_with_its_exit_code` reran once on Windows,
+  Ground CI 42621021439 (Tests 2/3, job 129172975176, `0de469b`, 2026-11-09): `assert [] == [3]` at line 37, the
+  quit watch (`quit_watch.exit_soon`, grace 0.05 s) hadn't called its exit within the test's 5 s `join`; passed on
+  rerun. First sighting. The bug review of `f844c0f..0de469b` (RV-7) found it slow, not blocked: the worker's
+  own thread dump shows the watch inside `still_running()`'s `traceback.format_stack` (its "still running"
+  warning came 8 s after the test started), and no console-tee thread alive; conftest turns the tee off in test
+  processes, and the tests that start one do it in child processes. Proposed: the test's `join(5)` → `join(30)`.
 - [ ] `test_presets_window.py::test_a_live_off_preset_turns_live_off_in_a_real_tab` reran once on Ubuntu, Ground
   CI 41597667363 (Tests 3/3, job 125788785411, `413b2a0`, 2026-11-03): `waitUntil timed out in 30000 milliseconds`;
   passed on rerun. That job ran runner image ubuntu-26.04 20261021.618. Cause unchecked.
@@ -184,6 +191,8 @@ How to use it:
   Again on Ubuntu CI, `agent/folder-info` 41998150471 (Tests 3/3, job 127146449450, `4dd31db`, 2026-11-05), passed on
   rerun.
   Again on Ubuntu: Ground CI 42031225750 (Tests 3/3, job 127257995388, `90d8d9b`).
+  Again on macOS: Ground CI 42486811905 (Converter backends, job 128750416374, `61f5832`, 2026-11-08), `assert -2 ==
+  0` from `wait(20)`; passed on rerun.
 - [ ] `test_live_plots.py::test_each_plot_keeps_its_scripts_minimum_size[Scatter3D]` reran once on
   Windows CI (run 40808815122, `agent/txy-followups` `ec1338a`, group 1/2), no reason in the log (a
   worker crash?); passed on retry. Also a macOS local worker crash (gw2, `agent/txy-index` `0f69731`,
@@ -282,6 +291,8 @@ How to use it:
   (`d3b4931`, 2026-11-03); `agent/txy-priority` CI 41587970080 (Windows Tests 1/3, job 125757887948,
   `bf3fb85`, 2026-11-03); Ground CI 41660788301 (Windows Tests 1/3, job 126003261482, `3ab75b2`,
   2026-11-03); Ground CI 41752079691 (Windows Tests 1/3, job 126319407975, `ec308ac`, 2026-11-04).
+  Again: Ground CI 42581846388 (Windows Tests 1/3, job 129042255589, `5570c94`, 2026-11-09), the same collection
+  error in pathlib `lstat`.
 - [ ] `test_io_lanes.py::test_tab_switch_moves_work_to_background_and_requeued_load_reuses_ram_shots`:
   `KeyError: 'memory'` at line 262 (the requeued load's payload had no RAM shots), macOS Tests (3/3) on
   Ground CI 41660788301 (job 126003261256, `3ab75b2`, 2026-11-03); passed on rerun. Likely cause, not

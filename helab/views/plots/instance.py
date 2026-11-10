@@ -22,7 +22,8 @@ from helab.analysis.constant_layers import (changed_keys, describe_constants, so
                                            without_constants)
 from helab.analysis.physics import TABLE, ResolvedConstants
 from helab.analysis.budget import RamBudget
-from helab.analysis.budget_core import RELOAD_GRACE, Restored, hollow, restore, shots_list, view_buffers
+from helab.analysis.budget_core import (RELOAD_GRACE, Restored, estimate_over, estimate_text, hollow, restore,
+                                        shots_list, view_buffers)
 from helab.analysis.dataset_view import DatasetView, ViewKey, revise, view_of
 from helab.analysis.follow import FOLLOW, Follow, LivePolicy, changes, live_specs, policy_of, shots_text
 from helab.analysis.live_feed import LiveFeed
@@ -43,6 +44,7 @@ from helab.utils import txy_sources
 from helab.utils.ram_buffers import Buffers, arrays_in, buffers
 from helab.views.plots.cached_results import PENDING_NOTE, VERIFY_NOTE, CachedRuns
 from helab.views.plots.dock import AnalysisDock, release_figures
+from helab.views.plots.memory_row import MemoryRow
 from helab.views.plots.pictures import ReleasedPlot, snapshot
 from helab.views.ElidedLabel import ElidedLabel
 from helab.views.plots.plot_info import PlotInfo
@@ -202,6 +204,14 @@ class AnalysisInstance(LinkedAnalysisInstance):
         self._given_cache = cache
         self.metadata, self.script, self.action = metadata, script, action
         self.runner = runner or get_analysis_runner()
+        # The memory warning row (``_memory_check``): the settings last under it, and what was last logged.
+        self.memory_row: Optional[MemoryRow] = None
+        self._memory_under: Optional[Dict[str, Any]] = None
+        self._memory_logged: Optional[str] = None
+        self._memory_timer = QTimer(self)
+        self._memory_timer.setSingleShot(True)
+        self._memory_timer.setInterval(0)
+        self._memory_timer.timeout.connect(self._memory_check)
         self.job_id = ""
         # The last result (whatever its state), and the completed one whose plot shows.
         self.result: Optional[AnalysisResult] = None
@@ -338,6 +348,7 @@ class AnalysisInstance(LinkedAnalysisInstance):
             self.workspace.panel_right_top_plot_settings.plotShown.connect(self._plot_shown)
         if self.budget is not None:
             self.budget.add(self)
+            self.budget.changed.connect(self._memory_soon)
 
     def _fill_page(self, tab: QWidget) -> None:
         """The page's contents from the script's parameters, libraries and Live policy (again after a
@@ -363,6 +374,14 @@ class AnalysisInstance(LinkedAnalysisInstance):
         layout.addWidget(self.txy_row)
         self._show_txy()
         layout.addWidget(identify_parameters(settings_widget(self.parameter_root, [*specs, *drawing, *live])), 1)
+        self.memory_row = MemoryRow()
+        self.memory_row.undo.clicked.connect(self._memory_undo)
+        self.memory_row.cancel.clicked.connect(self._memory_cancel)
+        self.memory_row.cancel.setEnabled(bool(self.job_id))
+        layout.addWidget(self.memory_row)
+        self._memory_under, self._memory_logged = None, None
+        self.parameter_root.sigTreeStateChanged.connect(self._memory_soon)
+        self._memory_check()
         self.rerun_button = identify(QPushButton("Rerun with these settings"), "plot_rerun")
         self.rerun_button.setEnabled(bool(specs))
         self.rerun_button.clicked.connect(self.run)
@@ -384,7 +403,80 @@ class AnalysisInstance(LinkedAnalysisInstance):
             if widget is not None and widget not in (self.plot_info, self.status_label):
                 widget.hide()
                 widget.deleteLater()
-        self.parameter_root, self.txy_row, self.presets = None, None, None
+        self.parameter_root, self.txy_row, self.presets, self.memory_row = None, None, None, None
+
+    @property
+    def job_id(self) -> str:
+        """The run in flight ("" for none): the memory warning's Cancel follows it."""
+        return self._job_id
+
+    @job_id.setter
+    def job_id(self, value: str) -> None:
+        self._job_id = value
+        row = getattr(self, "memory_row", None)
+        if row is not None and not sip.isdeleted(row):
+            row.cancel.setEnabled(bool(value))
+
+    # The memory warning (``memory_row``)
+
+    def _ram_budget(self) -> int:
+        """HeLab's RAM budget in bytes, 0 when unknown (no plot area: tests of the plot alone)."""
+        return self.budget.cache.max_data_bytes if self.budget is not None else 0
+
+    def _memory_soon(self, *_: Any) -> None:
+        if not self.is_closed:
+            self._memory_timer.start()
+
+    def _memory_check(self) -> None:
+        """The row from the settings as set: shown while their estimate reaches the warning share of the RAM
+        budget (Undo back to the settings last under it), hidden otherwise; logged once per change of
+        settings."""
+        row = self.memory_row
+        if self.is_closed or row is None or sip.isdeleted(row) or self.parameter_root is None:
+            return
+        values = self.values()
+        estimate = self._hook("estimated_bytes", 0, values)
+        estimate = estimate if isinstance(estimate, int) and not isinstance(estimate, bool) else 0
+        budget = self._ram_budget()
+        if not estimate_over(estimate, budget):
+            self._memory_under, self._memory_logged = values, None
+            row.hide()
+            return
+        text = estimate_text(estimate, budget)
+        row.show_warning(text, self._memory_changes(values))
+        key = f"{budget}:{sorted(values.items())!r}"
+        if key != self._memory_logged:
+            self._memory_logged = key
+            logging.warning("%s (%s): %s; it still runs", self.name, self.instance_id, text)
+
+    def _memory_changes(self, values: Mapping[str, Any]) -> str:
+        """What Undo puts back: each setting changed since the settings last under the warning ("" for none)."""
+        under = self._memory_under
+        if under is None:
+            return ""
+        titles = {spec.name: spec.title for spec in self.script.parameters(self.action)}
+
+        def shown(value: Any) -> str:
+            return f"{value:,}" if isinstance(value, int) and not isinstance(value, bool) else str(value)
+        return "; ".join(f"{titles.get(name, name)} {shown(under[name])} (now {shown(value)})"
+                         for name, value in values.items() if name in under and under[name] != value)
+
+    @pyqtSlot()
+    def _memory_undo(self) -> None:
+        """The settings changed since they were last under the warning, put back."""
+        root, under = self.parameter_root, self._memory_under
+        if self.is_closed or root is None or under is None:
+            return
+        values = self.values()
+        for spec in self.script.parameters(self.action):
+            if spec.name in under and values.get(spec.name) != under[spec.name]:
+                parameter_of(root, spec).setValue(under[spec.name])
+        self._memory_check()
+
+    @pyqtSlot()
+    def _memory_cancel(self) -> None:
+        if not self.is_closed and self.job_id:
+            self._cancel_run()
 
     def values(self) -> Dict[str, Any]:
         """The analysis's parameters as set (not the plot's Live settings)."""
@@ -484,7 +576,8 @@ class AnalysisInstance(LinkedAnalysisInstance):
             # The source line's mark: this plot's runs are looked up and saved (``disk cache reuse on``).
             self.dock_widget.setProperty("plotReuse", cached)
         context = self.runner.prepare(self.script, self.metadata, self.action, view, values, constants,
-                                      owner=self.instance_id, live=live, to_cache=cached)
+                                      owner=self.instance_id, live=live, to_cache=cached,
+                                      ram_budget=self._ram_budget())
         waiting = cached and link is not None and link.start(context)
         if not waiting:
             try:
@@ -1826,6 +1919,11 @@ class AnalysisInstance(LinkedAnalysisInstance):
             pass
         if self.budget is not None:
             self.budget.remove(self)
+            try:
+                self.budget.changed.disconnect(self._memory_soon)
+            except TypeError:  # (Its settings page never opened.)
+                pass
+        self._memory_timer.stop()
         try:
             self.script.plot_closed(self.action, self.instance_id, self.path)
         except Exception:  # A script's cleanup never stops a plot from closing.

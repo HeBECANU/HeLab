@@ -121,6 +121,10 @@ class AnalysisContext:
         unused: The parameters not in use under ``parameters`` (hidden by their ``when`` or
             ``shown_with``), left out of the result's reuse key.
         to_cache: Whether the completed result may be saved in the disk cache.
+        ram_budget: HeLab's RAM budget in bytes (Settings › Cache) when the run was submitted, for an
+            analysis that warns when its result would take a large share of it; 0 when unknown (no
+            warning). Never part of the result or its reuse key: a change of budget leaves saved results
+            and presets as they are.
     """
     job_id: str
     action: str
@@ -157,6 +161,10 @@ class AnalysisContext:
     # A run whose completed result may be saved in the disk cache (result caching R2): the worker
     # then packs its data (``DatasetAnalysis.cache_pack``) into ``AnalysisResult.packed``.
     to_cache: bool = False
+    # HeLab's RAM budget (bytes) when the run was submitted, 0 when unknown: an analysis may warn when
+    # its result would take a large share of it. Not copied into the result (``AnalysisResult.of``),
+    # so not in its reuse key.
+    ram_budget: int = 0
 
     @property
     def covered(self) -> Coverage:

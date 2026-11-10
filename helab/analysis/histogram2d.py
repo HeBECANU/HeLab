@@ -12,7 +12,7 @@ Qt-free (``tests/test_headless_imports.py``'s ``PURE``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, cast
+from typing import Callable, Optional, Sequence, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -24,8 +24,16 @@ from helab.analysis.stats import AXES, freedman_diaconis_bins, shortest_range
 # across every plane, so that they can share its scale).
 PLANES = {"XY": ("X", "Y", "T"), "XT": ("X", "T", "Y"), "YT": ("Y", "T", "X")}
 MAX_AUTO_BINS = 1000  # Automatic bins per axis, for an image.
-MAX_BINS = 10_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
+MAX_BINS = 20_000  # Bins per axis set by hand (above ``stats.MAX_BINS``, the 1D histograms' limit).
 Bounds = Optional[tuple[float, float]]
+# Memory a plane takes a bin, for ``estimated_bytes``: held while the plot is open, its int64 counts
+# (``Histogram2D.counts``) and float64 image (v2's ``PlaneCounts.image``); for a moment, one plane at a time, the
+# colouring on the GUI thread (v2's ``colour_positions``: the image over its peak, held through ``compress``, its
+# clip and, for log, two more float64 arrays alive at once; it also covers the Gaussian, box, median and denoise
+# filters, about four images at most), or the adaptive KDE's steps (about eight: ``image_filters.adaptive``).
+HELD_BYTES_PER_BIN = 16
+MOMENT_BYTES_PER_BIN = 32
+ADAPTIVE_BYTES_PER_BIN = 64
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,15 @@ def _bins(values: npt.NDArray[np.float64], lower: float, upper: float, bins: int
     if bins > 0:
         return min(bins, MAX_BINS)
     return min(freedman_diaconis_bins(values, lower, upper), MAX_AUTO_BINS)
+
+
+def estimated_bytes(plane_bins: Sequence[int], adaptive: bool = False) -> int:
+    """The most memory planes of ``plane_bins`` bins each take at once (bytes): every plane's counts and image
+    held, and the largest plane's moment (colouring, or the adaptive KDE when on), as planes run one at a time."""
+    if not plane_bins:
+        return 0
+    moment = ADAPTIVE_BYTES_PER_BIN if adaptive else MOMENT_BYTES_PER_BIN
+    return HELD_BYTES_PER_BIN * sum(plane_bins) + moment * max(plane_bins)
 
 
 def histogram2d(events: Events, plane: str, keep: float, bins: tuple[int, int] = (0, 0),
