@@ -1,13 +1,12 @@
 # Calls in HeLab's GUI modules that can block, each allowed with why (tests/test_gui_thread_calls.py).
 # module:function:call  # reason
-# Native file dialogs: the user's own choice; Windows' or macOS's sidebar can stall on a dead share (GT-9, Tony's call).
-helab/views/ConverterTab.py:ConverterTab.export_selected:QFileDialog.getSaveFileName  # user-chosen export; native dialog (GT-9, open)
-helab/views/ConverterTab.py:ConverterTab.import_file:QFileDialog.getOpenFileName  # user-chosen import; native dialog (GT-9, open)
-helab/views/DataRootDialogs.py:ManualMarkerDialog.save_to_folder:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
-helab/views/HelabMainWindow.py:HelabMainWindow._runner_file_path:QFileDialog.getSaveFileName  # Debug menu; native dialog (GT-9, open)
-helab/views/SettingsDialog.py:SettingsDialog.browse_dir_temps:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
-helab/views/SettingsDialog.py:SettingsDialog.change_cache_folder:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9, open)
-helab/views/plots/script_tree.py:TreePanelWidget._on_load_directory:QFileDialog.getExistingDirectory  # Load Scripts…; native dialog (GT-9, open)
+# Qt's own folder dialog (Q~4): lists folders on its own thread, from the home folder.
+helab/views/folder_dialog.py:choose_folder:QFileDialog.getExistingDirectory  # Qt's dialog (DontUseNativeDialog), local start (Q~4)
+# Native file dialogs kept (Q~4): the user's own local files; the sidebar can stall on a dead share (GT-9).
+helab/views/ConverterTab.py:ConverterTab.export_selected:QFileDialog.getSaveFileName  # profile export: native kept (Q~4)
+helab/views/ConverterTab.py:ConverterTab.import_file:QFileDialog.getOpenFileName  # profile import: native kept (Q~4)
+helab/views/DataRootDialogs.py:ManualMarkerDialog.save_to_folder:QFileDialog.getExistingDirectory  # user-chosen folder; native dialog (GT-9: not among Q~4's)
+helab/views/HelabMainWindow.py:HelabMainWindow._runner_file_path:QFileDialog.getSaveFileName  # Debug menu; native dialog (GT-9: not among Q~4's)
 # The mount table (cached 10 s; on macOS/Linux the kernel's, never waits; Windows' redirector unconfirmed: GT-7 (b), M~1).
 helab/views/explorer_convert.py:ExplorerConverter._offer_answered:cache_location.share_of  # cached mount table, lexical path (GT-7 b)
 helab/views/explorer_convert.py:ExplorerConverter.clicked:cache_location.share_of  # cached mount table, lexical path (GT-7 b)

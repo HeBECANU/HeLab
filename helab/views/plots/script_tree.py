@@ -17,7 +17,7 @@ from PyQt6 import sip
 from PyQt6.QtCore import (QCoreApplication, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment, Qt, QTimer,
                           pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import QAction, QBrush, QColor, QPalette
-from PyQt6.QtWidgets import (QComboBox, QDockWidget, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
+from PyQt6.QtWidgets import (QComboBox, QDockWidget, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
                              QMenu, QMessageBox, QPushButton, QStyle, QToolButton, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QWidget)
 
@@ -27,6 +27,7 @@ from helab.analysis.runner import AnalysisRunner, get_analysis_runner
 from helab.scripts import dld, probe, standard, standard_v2
 from helab.scripts.base import DatasetAnalysis, ScriptMetadata
 from helab.scripts.scripts_manager import FolderReads, LoadError, ScriptsManager
+from helab.views.folder_dialog import choose_folder
 from helab.utils import activity
 from helab.utils.accessible import id_part, identify, identify_buttons
 from helab.utils.colours import AMBER
@@ -622,12 +623,7 @@ class TreePanelWidget(QWidget):
         - Logs any errors that occur during script loading
         - Maintains UI state even if script loading fails
         """
-        dir_path = QFileDialog.getExistingDirectory(
-            self,
-            "Select Script Directory",
-            os.path.expanduser("~"),
-            QFileDialog.Option.ShowDirsOnly
-        )
+        dir_path = choose_folder(self, "Select Script Directory")  # (Qt's own dialog: Q~4.)
         
         if dir_path:
             self.add_folder(dir_path)
