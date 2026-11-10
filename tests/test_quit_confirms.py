@@ -33,7 +33,7 @@ RUN = "/helab-test-nowhere/day/run"  # Never read: the entries are set in memory
 def test_the_watch_ends_a_process_left_running_with_its_exit_code(caplog: pytest.LogCaptureFixture) -> None:
     ended: list[int] = []
     with caplog.at_level(logging.WARNING):
-        quit_watch.exit_soon(3, grace=0.05, exit=ended.append).join(5)
+        quit_watch.exit_soon(3, grace=0.05, exit=ended.append).join(30)  # (A loaded runner formats stacks slowly.)
     assert ended == [3]
     assert "still running 0.1 s after its windows closed" in caplog.text and "MainThread" in caplog.text
 
