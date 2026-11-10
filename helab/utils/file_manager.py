@@ -29,7 +29,10 @@ def launch(program: str, arguments: list[str]) -> bool:
 
 
 def show(path: str) -> bool:
-    """Open ``path`` in the file manager (a file: in its default app), without waiting; whether it started."""
+    """Open ``path`` in the file manager (a file: in its default app), without waiting; whether it started. An
+    empty path opens nothing (``normpath("")`` is HeLab's working folder; ``openUrl`` of it did nothing: GT-28)."""
+    if not path.strip():
+        return False
     program, arguments = open_command(path)
     started = launch(program, arguments)
     if not started:

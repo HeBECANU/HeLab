@@ -37,6 +37,12 @@ def test_show_launches_detached_and_says_when_it_couldnt(
     assert not file_manager.show("/somewhere") and "Couldn't open /somewhere" in caplog.text
 
 
+def test_an_empty_path_opens_nothing(no_file_manager: list[tuple[str, list[str]]]) -> None:
+    """GT-28 (the re-review): Settings › Cache's Open with the disk cache off, or an Open beside an empty field,
+    asks for "": Windows' ``normpath("")`` is ".", which opened HeLab's working folder."""
+    assert not file_manager.show("") and not file_manager.show("  ") and no_file_manager == []
+
+
 def test_no_gui_module_opens_a_local_path_with_open_url() -> None:
     """``openUrl`` stays for web addresses only (``QUrl(url)``); a ``QUrl.fromLocalFile`` goes to ``show``."""
     found = []
