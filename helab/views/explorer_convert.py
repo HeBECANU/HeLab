@@ -632,7 +632,8 @@ class ExplorerConverter:
             explorer = self.explorer
             explorer.refresh_folder(conversion.path)
             if conversion.path == explorer.selected_path_globally:
-                explorer.queue_load(conversion.path)
+                # A large folder isn't asked about now, maybe minutes after the user's click: "Load anyway…" (Q~5).
+                explorer.queue_load(conversion.path, ask_large=False)
 
     def _report(self, conversion: FolderConversion, outcome: activity.Outcome) -> None:
         """A conversion's end in the session's history (the Activity window, Q62.4)."""

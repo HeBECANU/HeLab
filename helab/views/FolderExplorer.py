@@ -272,6 +272,9 @@ class FolderExplorer(QWidget):
         self._cancel_count = 0
         # Folders whose large-folder question waits for a helper's or a job's delivery to return (GT-1).
         self._large_asks: set[str] = set()
+        # Folders whose large-folder question isn't asked: a conversion's end asked for their load (Q~5, Tony
+        # 2026-11-10), with nobody necessarily there. "Load anyway…" shows instead, until the user asks for a load.
+        self._quiet_large: set[str] = set()
         # The latest helper stop for being large, per folder: (estimate, when, what was in RAM).
         self._large_stops: dict[str, tuple[int, float, tuple[str, int, int] | None]] = {}
         # Replaceable in tests; None asks with LargeFolderDialog. (Not a bound method: that
@@ -907,8 +910,12 @@ class FolderExplorer(QWidget):
         txy = node.txy_count if node else len((report.d_txy_shots if report else None) or [])
         return self.model.cache.on_read_shots(path, raw, txy)
 
-    def load_to_ram_cache(self, path: str, *, dwell: bool = True, explicit: bool = False) -> bool:
-        """Show this folder's data, loading it as the tab's visible load."""
+    def load_to_ram_cache(self, path: str, *, dwell: bool = True, explicit: bool = False,
+                          ask_large: bool = True) -> bool:
+        """Show this folder's data, loading it as the tab's visible load. ``ask_large`` False: a large folder isn't
+        asked about but shows "Load anyway…" (a conversion's end asked for the load, Q~5)."""
+        if explicit:
+            (self._quiet_large.discard if ask_large else self._quiet_large.add)(path)
         try:
             return self._load_to_ram_cache(path, dwell, explicit)
         finally:
@@ -1067,7 +1074,9 @@ class FolderExplorer(QWidget):
         if not verdict or estimate is None:
             self._set_large(path, None)
             return False
-        if verdict == "large" and explicit and gui_delivery.current() is not None:
+        if verdict == "large" and explicit and path in self._quiet_large:
+            pass  # (Not asked: "Load anyway…", Q~5.)
+        elif verdict == "large" and explicit and gui_delivery.current() is not None:
             # Asked for from a helper's result (a conversion's end, Live at launch): the question waits until
             # that delivery has returned, or its modal loop would stop every helper's I/O (GT-1).
             self._ask_large_later(path)
@@ -1133,7 +1142,7 @@ class FolderExplorer(QWidget):
         estimate, refused = int(event.get("estimate", 0)), bool(event.get("refused"))
         self._large_stops[path] = (estimate, time.time(), self._held_key(path))
         self._set_large(path, (estimate, refused))
-        if not refused and request.payload.get("deliberate"):
+        if not refused and request.payload.get("deliberate") and path not in self._quiet_large:
             # Asked for: ask about the size, then load again (unless cancelled meanwhile).
             cancels = self._cancel_count
             QTimer.singleShot(0, lambda: self._load_again(path, background, cancels))
@@ -1337,10 +1346,12 @@ class FolderExplorer(QWidget):
             self.loading = self.load_paused = False
             self.model.set_load_state(path, "")
 
-    def queue_load(self, path: str) -> bool:
-        """Explicit load: never cancels another load; runs now when idle, otherwise queues."""
+    def queue_load(self, path: str, *, ask_large: bool = True) -> bool:
+        """Explicit load: never cancels another load; runs now when idle, otherwise queues. ``ask_large`` False: a
+        large folder isn't asked about but shows "Load anyway…" (a conversion's end, Q~5)."""
         if path == self.selected_path_globally:
-            return self.load_to_ram_cache(path, dwell=False, explicit=True)
+            return self.load_to_ram_cache(path, dwell=False, explicit=True, ask_large=ask_large)
+        (self._quiet_large.discard if ask_large else self._quiet_large.add)(path)
         if self.model.cache.offline:
             return False  # Working offline: only the selected folder's cached data shows.
         if path in self._bg_paths or (self.loading and self._load_path == path):
