@@ -124,6 +124,27 @@ None open: RV-1's were decided (above). CoCo asked Tony whether "20k" meant 20,0
   in `bfe4009` (`join(30)`), on `review/v0.0.9-0de469b`"; close it once that change has been through a few Windows
   CI runs without a rerun.
 
+## The push and its CI
+
+Pushed once: `review/v0.0.9-0de469b` at `58abfdb` (2026-11-10). CI run 42757504516 ("CI CD"): **success**, every
+job. I read the logs of all 12 Tests and Converter backends jobs (the jobs API; `gh run view --log` returned
+nothing). Totals per job: Windows 867 / 3319 / 3235 / 3230 passed, macOS 869 / 3326 / 3253 / 3244, Ubuntu 869 / 3325
+/ 3250 / 3243 (Converter backends, Tests 1/3, 2/3, 3/3). **Two RERUNs, each passed on its rerun:**
+
+- `test_updates_launch.py::test_a_helab_the_updater_started_shows_that_updates_outcome_on_this_start`, windows +
+  py3.13 / Tests (3/3), job 129635247309: `pytestqt.exceptions.TimeoutError: waitUntil timed out in 15000
+  milliseconds` at `tests\test_updates_launch.py:234` (the window's status notice "updated to FFFFFF" never came
+  within 15 s). **First sighting**, in an area this branch doesn't touch (App updates). Cause not looked into.
+  Proposed known-issues entry: "reran once on Windows, `review/v0.0.9-0de469b` CI 42757504516 (Tests 3/3, job
+  129635247309, `58abfdb`, 2026-11-10): `waitUntil timed out in 15000 milliseconds` at line 234 (the updated
+  notice); passed on rerun. First sighting; cause unchecked."
+- `test_live_plots.py::test_a_floating_plot_runs_and_follows_with_its_settings_in_its_window`, macos + py3.13 /
+  Tests (1/3), job 129635247356: `AssertionError: assert 'completed' == 'cancelled'` at `tests/test_live_plots.py:1284`.
+  Already in known-issues with the same failure (since 2026-10-28, before this branch). This branch made
+  `AnalysisInstance.job_id` a property; its setter only enables the memory row's Cancel, so it doesn't change when
+  a run is cancelled. Proposed: add "Again on macOS: `review/v0.0.9-0de469b` CI 42757504516 (Tests 1/3, job
+  129635247356, `58abfdb`, 2026-11-10), passed on rerun" to that entry.
+
 ## Checks run here
 
 RV-1's warning (`3751ca8`): `tests/test_plot_memory_warning.py` (row over / under / budget 0 / no estimate or one
