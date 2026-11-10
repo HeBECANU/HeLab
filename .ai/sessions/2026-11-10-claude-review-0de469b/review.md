@@ -227,3 +227,35 @@ Proposed: `join(30)` in the test (it costs nothing when the test passes). CoCo's
 - `mypy helab/ --strict`, `mypy tests --strict`, `mypy helab/ --strict --platform win32`: no issues (238, 231,
   238 files). `pyright helab tests` and `pyright --pythonplatform Windows helab tests`: 0 errors. Output:
   `.ai/temp/review-types.txt`.
+
+---
+
+## Re-review of the fix diff (`71ba4f7..49aa1a6`, Reviewer, 2026-11-10)
+
+I read the code diff of the eleven commits and the handoff, reran my own reproductions against the fixes, and ran
+the full suite and the type checks myself at `49aa1a6`. **Every finding is closed. No new blocker.**
+
+| ID | Fix | Status | How checked |
+|---|---|---|---|
+| RV-1 | `07cde46`, `22bd1b3`, `3751ca8` | **closed (as Tony decided: no cap)** | No cap; `MAX_BINS` 20,000 an axis; a memory warning at 50 % of the RAM budget on the settings page (Undo, Cancel) and in the run's notes. Read `estimated_bytes` (16 B a bin held for each plane, plus the largest plane's 32 B, or 64 B with adaptive), which matches my measurements. `ram_budget` is on the context only, not in `AnalysisResult.of`, so it's in no key (tested). Cancel follows `job_id` through a property; the row has accessible names and IDs. The budget connection is undone at close, and the timer stops. Read `tests/test_plot_memory_warning.py` (6 tests). |
+| RV-2 | `14ef3f7` | **closed** | `levels` works in place, and `check` is called before each step and each σ step. My `mem.py` at 4,000²: adaptive's peak is **0.67 GB, down from 2.70 GB** (1.5 s). |
+| RV-3 | `0f19fdf` | **closed** | `planes_layout` now includes each group's side. My scratch run: `update(counts → rate, XY alone)` returns **False**, so the plot is drawn again (my old assertion checked the widget it had replaced). The new test `test_xy_alone_redraws_its_bar_on_its_side_when_show_changes` covers it. |
+| RV-4 | `b446775` (+ `22bd1b3`, `3751ca8`) | **closed** | The manual now gives the colour bars, the units (events / mm² / shot, events / (mm·ms) / shot), 20,000 bins and the warning. `docs/reference/api/results.md` explains `ram_budget` and `estimated_bytes`. Public text names no person or internal ID. |
+| RV-5 | `633c6ed` | **closed** | An incremental UTF-8 decoder on the console path only (pipes and files still get raw bytes). My stand-in console, every split point of "σ → · é 𝛼": **0 of 16 garbled**, against all 8 splits inside a character before. Still not run on a real Windows console (handoff M~2). |
+| RV-6 | `f931243` | **closed** | Handlers are listed under `logging._lock` (an RLock; at most 2 s, then without it) and swapped after it is released. The docstring's reason is corrected. |
+| RV-7 | `bfe4009` (+ `a151050`, CoCo's) | **closed** | `join(30)`; the known-issues entry gives the cause. |
+
+**Notes (Info, no action needed):**
+
+- The estimate assumes PyQtGraph's colouring. Plotly 7 also base64-encodes `z` and `customdata` (about 2 × 8 B a
+  bin, plus a third more for the encoding) and QtWebEngine holds its own copy, so with Plotly a plane at 20,000²
+  takes several GB more than the warning says. It's still the right order of magnitude to warn about. It could
+  become an A~ item if Plotly is used with fine bins.
+- `blur_brief` defaults a missing Order to 0 while `blur_steps` defaults it to the filter's place + 1. It's
+  harmless, because the run's values always include every parameter.
+
+**Rerun here at `49aa1a6`:** `pytest -n 4 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest-review`:
+**9823 passed, 674 skipped, 2 warnings (PyQtGraph's NumPy deprecation) in 188 s, no RERUN**. `mypy helab/ --strict`
+and `--platform win32`: no issues (239 files); `mypy tests --strict`: no issues (232). `pyright helab tests` and
+`--pythonplatform Windows`: 0 errors. `ruff check`: passed. My scratch edge cases (30, all three libraries) still
+pass.
