@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import time
 import types
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -40,12 +40,12 @@ def plot(script: Slow) -> Any:
 def test_a_slow_hook_is_logged_with_its_plot_script_and_hook(
         monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setattr(instance_module, "SLOW_HOOK_SECONDS", 0.01)
-    monkeypatch.setattr(instance_module.sip, "isdeleted", lambda widget: False)
-    shown = plot(Slow(0.05))
+    monkeypatch.setattr("helab.views.plots.instance.sip.isdeleted", lambda widget: False)
+    shown, result = plot(Slow(0.05)), cast(Any, object())
     with caplog.at_level(logging.WARNING):
-        assert AnalysisInstance._hook(shown, "describe_result", "", object()) == "described"
-        assert AnalysisInstance._draw(shown, object()) == "drawn"
-        assert AnalysisInstance._updated(shown, object()) is shown._content
+        assert AnalysisInstance._hook(shown, "describe_result", "", result) == "described"
+        assert cast(Any, AnalysisInstance._draw(shown, result)) == "drawn"
+        assert AnalysisInstance._updated(shown, result) is shown._content
     lines = [record.getMessage() for record in caplog.records]
     assert [line.split(" took ")[0] for line in lines] == [
         "Counts per shot (1): Slow.describe_result", "Counts per shot (1): Slow.render",
