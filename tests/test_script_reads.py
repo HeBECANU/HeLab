@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator, List
@@ -24,13 +25,17 @@ pytestmark = pytest.mark.usefixtures("restored_imports")
 @pytest.fixture
 def folder_reads_seen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[List[str]]:
     """Every listing, stat, type check and hash HeLab's code makes of a file under ``tmp_path`` (the import
-    machinery's own reads use ``posix`` directly, not these)."""
+    machinery's own reads use ``posix`` directly, not these; a tracer's, such as coverage's looking for
+    ``pyvenv.cfg`` above each file imported on CI, aren't HeLab's and don't count)."""
     seen: List[str] = []
     root = os.path.normcase(str(tmp_path))
+    helab = os.path.normcase(os.path.join(str(Path(scripts_manager.__file__).resolve().parents[1]), ""))
 
     def watching(name: str, call: Callable[..., Any]) -> Callable[..., Any]:
         def run(path: Any, *args: Any, **kwargs: Any) -> Any:
-            if isinstance(path, (str, os.PathLike)) and os.path.normcase(os.fspath(path)).startswith(root):
+            caller = os.path.normcase(os.path.abspath(sys._getframe(1).f_code.co_filename))
+            if (caller.startswith(helab) and isinstance(path, (str, os.PathLike))
+                    and os.path.normcase(os.fspath(path)).startswith(root)):
                 seen.append(f"{name} {os.path.basename(os.fspath(path))}")
             return call(path, *args, **kwargs)
         return run

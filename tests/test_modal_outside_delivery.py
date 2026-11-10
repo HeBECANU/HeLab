@@ -74,7 +74,9 @@ def test_a_box_opened_outside_the_delivery_leaves_every_helpers_events_flowing(
     qtbot: QtBot, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # (The nested loop here is a plain QEventLoop, which the guard doesn't watch.)
-    assert heartbeats_during_a_box(qtbot, deferred=True) >= 5
+    # (At least one: helpers' events go on. A loaded CI runner delivered 2 – 4 of its 20 in 0.4 s; inside the
+    # delivery it is none, whatever the load.)
+    assert heartbeats_during_a_box(qtbot, deferred=True) >= 1
     assert heartbeats_during_a_box(qtbot, deferred=False) == 0  # (What GT-1 found.)
 
 

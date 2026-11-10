@@ -93,7 +93,11 @@ print(crash_file.start(folder), flush=True)
 
 class Stuck:
     def __del__(self) -> None:
-        time.sleep(60)  # (A destructor stuck in Python's last collection.)
+        # (A destructor stuck in Python's last collection. Busy, not ``time.sleep``: on Windows a sleep this late in
+        # finalization fails at once, "WinError 6: The handle is invalid", and nothing would be stuck.)
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            pass
 
 gc.disable()
 stuck = Stuck()
