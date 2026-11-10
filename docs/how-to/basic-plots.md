@@ -27,6 +27,7 @@ with its own settings, so that you can compare settings side by side.
 | Counts per shot | The events in each shot, against its shot ID or its time |
 | T, X, Y histograms | The distributions of T, X and Y |
 | XY, XT, YT histograms | The events binned in the XY, XT and YT planes side by side, each plane's third axis summed |
+| Plane projections | The events' velocities in 3D with up to four planes at any angle, and each plane's histogram of the events flattened onto it |
 | Transfer fractions | Each shot's share of atoms in each diffraction order, against its shot ID or its time |
 
 Every Basic plot can be drawn with PyQtGraph (the default for 2D plots), Plotly (the default for the 3D
@@ -52,6 +53,30 @@ Between runs, or after a stall, the line breaks instead of joining the gap: it s
 next shot is over ten times the shots' usual interval.
 
 While Live is on, new shots join either axis in place, and a zoom or pan you made stays.
+
+## Plane projections
+
+This plot turns the chosen shots' events into velocities at release (v_z up, v_x, v_y), as **Velocity
+distributions** does: the release time and the trap's origin come from the folder (the Release time plot's
+**Use for this folder…**), the lab or this plot's constants, else they are found from the events. The velocities
+are drawn in 3D with up to four planes in them, each in its own colour, and below it each plane's histogram of
+the events flattened onto it. Every axis is a velocity at the same scale, so a plane can lean at any angle.
+
+- **Planes › Plane 1–4**: **Show** turns a plane on. **Orientation** is **XY** (v_x across, v_y up), **XT**
+  (v_x across, v_z up), **YT** (v_y across, v_z up), the XY, XT and YT histograms' planes in velocity, or
+  **custom**, set by three angles:
+    - **Across axis direction α**: where the plane's across axis points in the horizontal plane, from v_x
+      (0°) towards v_y (90°).
+    - **Tilt θ**: how far the plane leans up about that axis, 0° flat (like XY) to 90° upright (like XT, YT).
+    - **In-plane rotation ψ** (any orientation): turns the histogram's axes, then called u and v.
+- **Centre** (v_x, v_y, v_z, in mm/s): a point the plane passes through; the histogram's axes start there.
+- **Thickness**: 0 flattens every event onto the plane; above 0 only the events within half of it, either side,
+  are kept: a slice (a thin slice through a halo's centre shows its ring).
+- **Images**: **Range: keep** (each histogram spans the shortest range holding this share), or a **Half-width**
+  that gives every histogram the same span; **Bins per axis**; the colour scale (sqrt, log, power γ).
+- **3D view**: point size, opacity, the display cap and how solid the planes are drawn.
+
+It is drawn with Plotly (turn the 3D view with the mouse; it keeps its camera as Live adds shots) or Matplotlib.
 
 ## XY, XT, YT histograms
 
