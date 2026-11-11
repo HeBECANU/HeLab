@@ -217,3 +217,90 @@ def test_window_runs_with_sim(tmp_path: Any) -> None:
     finally:
         eng.stop()
     assert list(tmp_path.glob("laserlock-*.csv"))
+
+
+# ---------------------------------------------------------------- sweep and auto-lock
+
+from laserlock.engine import SweepPoint, choose_lock_point  # noqa: E402
+
+
+def _points(slope: float, hop_every: float, hop: float, f0: float = F0) -> list[SweepPoint]:
+    import math
+
+    pts = []
+    for i in range(71):
+        v = i * 0.1
+        mhz = slope * v - (hop * math.floor(v / hop_every) if hop_every else 0)
+        pts.append(SweepPoint(v, f0 + mhz * 1e-6, 1.0, 5))
+    return pts
+
+
+def test_choose_lock_point_avoids_hops_and_picks_most_room() -> None:
+    pts = _points(300.0, 2.0, 600.0)  # a sawtooth: each 2 V stretch spans 600 MHz
+    target = F0 + 300e-6  # crossed at 1.0, 3.0, 5.0 V (and near the hop edges)
+    choice = choose_lock_point(pts, target)
+    assert choice is not None
+    assert choice.mhz_per_v == pytest.approx(300.0, rel=0.05)
+    assert choice.volts == pytest.approx(round(choice.volts), abs=0.06)  # the middle of a stretch
+    assert choice.v_hi - choice.v_lo == pytest.approx(1.9, abs=0.11)  # never across a hop
+    assert choose_lock_point(pts, F0 + 5000e-6) is None  # never reached
+
+
+def test_choose_lock_point_negative_slope_and_gaps() -> None:
+    pts = _points(-500.0, 0, 0)
+    pts[10] = SweepPoint(1.0, None, None, 0)  # a missing reading splits the stretch
+    choice = choose_lock_point(pts, F0 - 2000e-6)  # at 4.0 V
+    assert choice is not None and choice.volts == pytest.approx(4.0, abs=0.01)
+    assert choice.mhz_per_v == pytest.approx(-500.0, rel=0.02)
+    assert choice.v_lo == pytest.approx(1.1)
+
+
+def _wait(eng: Engine, until: Any, seconds: float) -> None:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and not until(eng.snapshot()):
+        time.sleep(0.05)
+
+
+def test_auto_lock_on_simulated_laser_with_hops() -> None:
+    laser = SimLaser(f0_thz=F0, mhz_per_v=300.0, noise_mhz=0.3, walk_mhz_per_rt_s=0.3, sine_mhz=0.0, seed=4,
+                     hop_every_v=1.5, hop_mhz=400.0)
+    wm, out = SimWavemeter(laser, period=0.02), SimDG1022(laser, volts=2.0)
+    eng = Engine(wm, out, LockSettings())
+    target = F0 + (300 * 4.0 - 400 * 2) * 1e-6  # crossed at 4.0 V (the 3.0-4.5 V stretch) and elsewhere
+    eng.start()
+    try:
+        eng.sweep(2.5, 5.5, 0.1, 0.05, 0.1, lock_thz=target)
+        _wait(eng, lambda s: s.mode in ("locked", "idle", "fault") and not s.message.startswith("sweep"), 40)
+        snap = eng.snapshot()
+        assert snap.mode == "locked", snap.message
+        points, choice = eng.sweep_data()
+        assert len(points) == 31 and choice is not None
+        s = eng.settings()
+        assert s.setpoint_thz == target and s.sign == 1
+        assert 3.0 <= s.v_min < s.v_max <= 4.5  # kept inside the hop-free stretch
+        time.sleep(3)
+        snap = eng.snapshot()
+        assert snap.error_mhz is not None and abs(snap.error_mhz) < 5, snap
+        assert out.get() == pytest.approx(4.0, abs=0.05)
+    finally:
+        eng.stop()
+
+
+def test_sweep_refuses_with_output_off_and_returns_after_plain_sweep() -> None:
+    laser = SimLaser(f0_thz=F0, seed=5, output=False)
+    out = SimDG1022(laser, volts=1.0)
+    eng = Engine(SimWavemeter(laser, period=0.02), out, LockSettings())
+    eng.start()
+    try:
+        eng.sweep(0.0, 1.0, 0.1, 0.0, 0.05)
+        _wait(eng, lambda s: "output is off" in s.message, 5)
+        assert "output is off" in eng.snapshot().message
+        assert out.writes == 0  # nothing was written
+        laser.output = True
+        eng.sweep(1.0, 1.5, 0.1, 0.0, 0.05)
+        _wait(eng, lambda s: s.message.startswith("sweep done"), 15)
+        assert eng.snapshot().mode == "idle"
+        assert out.get() == pytest.approx(1.0)  # back where it was
+        assert len(eng.sweep_data()[0]) == 6
+    finally:
+        eng.stop()

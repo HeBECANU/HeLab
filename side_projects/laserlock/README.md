@@ -39,6 +39,22 @@ each, returns to V, and sets the tuning sign and gains from the slope: P correct
 update, I closes it in about 10 updates (at least 1 s). Start there, then tune by hand. The step moves the
 laser by `slope × step`: keep it small enough not to hop modes.
 
+## Sweep and auto-lock
+
+**Sweep** ramps gently (50 mV per write) to *From*, steps to *To*, and plots the frequency at each step (the
+median of the readings within 1 GHz of their median, so the far outliers drop out); then ramps back.
+
+**Auto-lock to setpoint** sweeps the same way, then:
+
+1. splits the sweep into hop-free stretches (a stretch ends at a missing reading or a jump well off the
+   trend: more than 5× the typical step and at least 300 MHz);
+2. picks where the setpoint is crossed inside a stretch with the most room on both sides;
+3. ramps back to *From* and up to that voltage (the sweep's direction, for the piezo's hysteresis);
+4. sets the sign and gains from the local slope, **limits the output to that stretch** (so the loop can't
+   push it over a mode hop), and locks.
+
+Both refuse (and write nothing) while the DG1022's output is off. Abort stops them and ramps back.
+
 ## Set up (once)
 
 Needs [uv](https://docs.astral.sh/uv/), NI-VISA (or Keysight VISA) and the HighFinesse software installed.

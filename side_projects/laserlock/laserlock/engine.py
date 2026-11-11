@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .controller import LockSettings, PILock, suggest_gains
-from .devices import DeviceFault, FrequencySource, Reading, VoltageOutput
+from .devices import HARD_V_MAX, HARD_V_MIN, DeviceFault, FrequencySource, Reading, VoltageOutput
 
 log = logging.getLogger("laserlock.engine")
 
@@ -34,7 +34,7 @@ class Sample:
 
 @dataclass(frozen=True)
 class Snapshot:
-    mode: str  # "idle", "locked", "calibrating", "fault"
+    mode: str  # "idle", "locked", "calibrating", "sweeping", "fault"
     reading: Reading
     error_mhz: float | None
     volts: float
@@ -63,8 +63,11 @@ class Engine:
         self._last_write = 0.0
         self._stop = threading.Event()
         self._cal_request: tuple[float, float, float] | None = None
-        self._cal_abort = threading.Event()
+        self._abort = threading.Event()
         self._cal_seq = -1
+        self._sweep_request: SweepRequest | None = None
+        self._sweep_points: list[SweepPoint] = []
+        self._sweep_choice: LockPoint | None = None
         self.log_dir = log_dir
         self._csv: csv.writer | None = None  # type: ignore[valid-type]
         self._csv_file = None
@@ -76,7 +79,7 @@ class Engine:
         self._thread.start()
 
     def stop(self) -> None:
-        self._cal_abort.set()
+        self._abort.set()
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout=5)
@@ -119,10 +122,30 @@ class Engine:
         with self._lock:
             if self._mode == "idle":
                 self._cal_request = (step_v, settle_s, average_s)
-                self._cal_abort.clear()
+                self._abort.clear()
+                self._mode, self._message = "calibrating", "calibrating…"
 
     def abort_calibration(self) -> None:
-        self._cal_abort.set()
+        self._abort.set()
+
+    def abort(self) -> None:
+        """Stops a calibration or sweep (a sweep then returns to where it started)."""
+        self._abort.set()
+
+    def sweep(self, v_start: float, v_stop: float, step: float, settle_s: float, dwell_s: float,
+              lock_thz: float | None = None) -> None:
+        """Steps the output from v_start to v_stop, recording the frequency at each step. With `lock_thz`,
+        then goes to where that frequency is crossed without a mode hop and locks there (auto-lock);
+        otherwise returns to where it started."""
+        with self._lock:
+            if self._mode == "idle" and step > 0:
+                self._sweep_request = SweepRequest(v_start, v_stop, step, settle_s, dwell_s, lock_thz)
+                self._abort.clear()
+                self._mode, self._message = "sweeping", "sweep: starting"  # at once, so no one sees "idle" in between
+
+    def sweep_data(self) -> tuple[list[SweepPoint], LockPoint | None]:
+        with self._lock:
+            return list(self._sweep_points), self._sweep_choice
 
     def snapshot(self) -> Snapshot:
         with self._lock:
@@ -156,6 +179,9 @@ class Engine:
             try:
                 if self._cal_request is not None:
                     self._calibrate(*self._cal_request)
+                    continue
+                if self._sweep_request is not None:
+                    self._sweep(self._sweep_request)
                     continue
                 self._tick()
                 self._flush_output()
@@ -213,7 +239,7 @@ class Engine:
     def _collect(self, seconds: float) -> list[float]:
         values: list[float] = []
         end = time.monotonic() + seconds
-        while time.monotonic() < end and not self._cal_abort.is_set():
+        while time.monotonic() < end and not self._abort.is_set():
             self._tick()
             r = self._reading
             if r.thz is not None and r.seq != self._cal_seq:
@@ -237,8 +263,8 @@ class Engine:
                 self._volts = self.out.set(v)
                 self._collect(settle_s)
                 vals = self._collect(average_s)
-                if self._cal_abort.is_set() or len(vals) < 3:
-                    result = "calibration aborted" if self._cal_abort.is_set() else "calibration: too few readings"
+                if self._abort.is_set() or len(vals) < 3:
+                    result = "calibration aborted" if self._abort.is_set() else "calibration: too few readings"
                     break
                 means.append(statistics.fmean(vals))
             else:
@@ -257,3 +283,176 @@ class Engine:
             with self._lock:
                 self._mode, self._state, self._message = "idle", "idle", result
             log.info("%s", result)
+
+    # ---------------------------------------------------------------- sweep and auto-lock
+
+    def _set_progress(self, message: str) -> None:
+        with self._lock:
+            self._message = message
+
+    def _ramp_to(self, v: float, step: float | None = None) -> None:
+        """Moves the output to v in steps of at most `step` (RAMP_STEP_V; one per DG1022 turn), reading as it goes."""
+        step = RAMP_STEP_V if step is None else step
+        v = min(max(v, HARD_V_MIN), HARD_V_MAX)
+        while abs(v - self._volts) > 5e-5 and not self._abort.is_set():
+            nxt = self._volts + max(min(v - self._volts, step), -step)
+            self._volts = self.out.set(nxt)
+            self._tick()
+
+    def _sweep(self, req: SweepRequest) -> None:
+        with self._lock:
+            self._sweep_request = None
+            self._mode, self._state = "sweeping", "sweeping"
+            self._sweep_points = []
+            self._sweep_choice = None
+        v_back = self._volts
+        result = "sweep aborted"
+        locked = False
+        try:
+            if not self.out.output_on():
+                result = "the DG1022's output is off: switch it on at the front panel first"
+                return
+            lo, hi = sorted((min(max(req.v_start, HARD_V_MIN), HARD_V_MAX), min(max(req.v_stop, HARD_V_MIN), HARD_V_MAX)))
+            up = req.v_stop >= req.v_start
+            n = max(int(round((hi - lo) / req.step)), 1)
+            vs = [lo + (hi - lo) * i / n for i in range(n + 1)]
+            if not up:
+                vs.reverse()
+            self._set_progress(f"sweep: ramping to {vs[0]:.3f} V")
+            self._ramp_to(vs[0])
+            for i, v in enumerate(vs):
+                if self._abort.is_set():
+                    return
+                self._volts = self.out.set(v)
+                self._collect(req.settle_s)
+                vals = self._collect(req.dwell_s)
+                point = sweep_point(self._volts, vals)
+                with self._lock:
+                    self._sweep_points.append(point)
+                    self._message = f"sweep {i + 1}/{len(vs)}: {v:.3f} V"
+            points = list(self._sweep_points)
+            if req.lock_thz is None:
+                result = f"sweep done: {len(points)} points"
+                return
+            choice = choose_lock_point(points, req.lock_thz)
+            with self._lock:
+                self._sweep_choice = choice
+            if choice is None:
+                got = [p.thz for p in points if p.thz is not None]
+                span = f"{min(got):.6f}–{max(got):.6f} THz" if got else "no readings"
+                result = f"auto-lock: {req.lock_thz:.7f} THz isn't crossed without a mode hop (sweep reached {span})"
+                return
+            # approach from the sweep's start side, as the sweep did (piezo hysteresis)
+            self._set_progress(f"auto-lock: approaching {choice.volts:.4f} V")
+            self._ramp_to(vs[0])
+            self._ramp_to(choice.volts)
+            self._collect(req.settle_s + 0.3)
+            update = statistics.median(self._periods) if self._periods else 0.1
+            sign, kp, ki = suggest_gains(choice.mhz_per_v, update)
+            with self._lock:
+                self._settings = replace(self._settings, setpoint_thz=req.lock_thz, sign=sign, kp=kp, ki=ki,
+                                         v_min=choice.v_lo, v_max=choice.v_hi,
+                                         capture_mhz=max(self._settings.capture_mhz, 2 * abs(choice.mhz_per_v) * req.step))
+                self.pi.s = replace(self._settings)
+                self.pi.engage(self._volts)
+                self._mode, self._state = "locked", "locked"
+                locked = True
+            result = (f"auto-lock engaged at {choice.volts:.4f} V (tuning {choice.mhz_per_v:+.0f} MHz/V, "
+                      f"hop-free {choice.v_lo:.3f}–{choice.v_hi:.3f} V kept as the output range)")
+        finally:
+            if not locked:
+                if self._volts != v_back and "output is off" not in result:
+                    self._set_progress("sweep: returning")
+                    self._abort.clear()
+                    self._ramp_to(v_back)
+                with self._lock:
+                    self._mode, self._state = "idle", "idle"
+            with self._lock:
+                self._message = result
+            log.info("%s", result)
+
+
+RAMP_STEP_V = 0.05  # V per write when ramping (one write per 50 ms: 1 V/s)
+HOP_MIN_MHZ = 300.0  # a jump between sweep points at least this big (and well off the trend) is a mode hop
+
+
+@dataclass(frozen=True)
+class SweepRequest:
+    v_start: float
+    v_stop: float
+    step: float
+    settle_s: float
+    dwell_s: float
+    lock_thz: float | None  # None: sweep only, then return
+
+
+@dataclass(frozen=True)
+class SweepPoint:
+    volts: float
+    thz: float | None  # median of the readings within 1 GHz of their median (drops the far outliers)
+    spread_mhz: float | None
+    n: int
+
+
+@dataclass(frozen=True)
+class LockPoint:
+    volts: float
+    mhz_per_v: float
+    v_lo: float  # the hop-free stretch around it
+    v_hi: float
+
+
+def sweep_point(volts: float, vals: list[float]) -> SweepPoint:
+    if not vals:
+        return SweepPoint(volts, None, None, 0)
+    med = statistics.median(vals)
+    near = [v for v in vals if abs(v - med) < 1e-3]
+    med = statistics.median(near)
+    spread = statistics.pstdev(near) * 1e6 if len(near) > 1 else 0.0
+    return SweepPoint(volts, med, spread, len(near))
+
+
+def choose_lock_point(points: list[SweepPoint], target_thz: float) -> LockPoint | None:
+    """Where the sweep crosses `target_thz` inside a hop-free stretch, choosing the crossing with the most room
+    to either side. A stretch ends at a missing reading or a jump that is well off the trend."""
+    pts = sorted((p for p in points), key=lambda p: p.volts)
+    if len(pts) < 3:
+        return None
+    steps = [(b.thz - a.thz) * 1e6 for a, b in zip(pts, pts[1:]) if a.thz is not None and b.thz is not None]
+    if not steps:
+        return None
+    typical = statistics.median(steps)
+    hop = max(5 * abs(typical), HOP_MIN_MHZ)
+
+    def joined(a: SweepPoint, b: SweepPoint) -> bool:
+        return a.thz is not None and b.thz is not None and abs((b.thz - a.thz) * 1e6 - typical) < hop
+
+    # hop-free stretches as index ranges
+    stretches: list[tuple[int, int]] = []
+    start = 0
+    for i in range(len(pts) - 1):
+        if not joined(pts[i], pts[i + 1]):
+            stretches.append((start, i))
+            start = i + 1
+    stretches.append((start, len(pts) - 1))
+    best: tuple[float, LockPoint] | None = None
+    for a, b in stretches:
+        if b - a < 2:
+            continue
+        for i in range(a, b):
+            f1, f2 = pts[i].thz, pts[i + 1].thz
+            assert f1 is not None and f2 is not None
+            if not (min(f1, f2) <= target_thz <= max(f1, f2)) or f1 == f2:
+                continue
+            v = pts[i].volts + (target_thz - f1) / (f2 - f1) * (pts[i + 1].volts - pts[i].volts)
+            lo_i, hi_i = max(a, i - 3), min(b, i + 4)  # local slope over a few points
+            fa, fb = pts[lo_i].thz, pts[hi_i].thz
+            assert fa is not None and fb is not None
+            slope = (fb - fa) * 1e6 / (pts[hi_i].volts - pts[lo_i].volts)
+            if slope == 0 or (slope > 0) != (typical > 0):
+                continue
+            room = min(v - pts[a].volts, pts[b].volts - v)
+            cand = LockPoint(v, slope, pts[a].volts, pts[b].volts)
+            if best is None or room > best[0]:
+                best = (room, cand)
+    return None if best is None else best[1]

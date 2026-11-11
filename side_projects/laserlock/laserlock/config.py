@@ -18,6 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "lock": {"setpoint_thz": 0.0, "kp": 0.0, "ki": 0.0, "sign": 1, "v_min": 0.0, "v_max": 7.0,
              "max_step": 0.01, "capture_mhz": 1000.0},
     "calibration": {"step_v": 0.05, "settle_s": 1.0, "average_s": 1.0},
+    "sweep": {"v_start": 0.0, "v_stop": 7.0, "step": 0.05, "settle_s": 0.1, "dwell_s": 0.2},
 }
 
 
@@ -38,7 +39,7 @@ def load(home: Path = HOME) -> dict[str, Any]:
 
 
 def save_local(cfg: dict[str, Any], home: Path = HOME) -> None:
-    keep = {k: cfg[k] for k in ("lock", "calibration") if k in cfg}
+    keep = {k: cfg[k] for k in ("lock", "calibration", "sweep") if k in cfg}
     (home / "config.local.json").write_text(json.dumps(keep, indent=2), encoding="utf-8")
 
 

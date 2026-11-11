@@ -39,6 +39,7 @@ class VoltageOutput(Protocol):
     def get(self) -> float: ...
     def set(self, volts: float) -> float: ...  # returns what was applied
     def readback(self) -> float: ...
+    def output_on(self) -> bool: ...
     def describe(self) -> str: ...
     def close(self) -> None: ...
 
@@ -199,6 +200,10 @@ class DG1022:
 
     def readback(self) -> float:
         return float(self._query(f"VOLT:OFFS{self._suffix}?"))
+
+    def output_on(self) -> bool:
+        self.output = self._query(f"OUTP{self._suffix}?")
+        return self.output == "ON"
 
     def describe(self) -> str:
         return f"DG1022 CH{self.channel}: {self.state}, output {self.output}"

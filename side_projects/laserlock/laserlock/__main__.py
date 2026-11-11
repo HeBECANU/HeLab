@@ -66,11 +66,14 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv[:1])
     title = f"Laser lock — {source.describe()} → {out.describe()}"
-    win = MainWindow(engine, cfg["calibration"], save, title)
+    win = MainWindow(engine, cfg["calibration"], save, title, sweep=cfg["sweep"])
     engine.start()
     win.show()
     try:
-        return app.exec()
+        code = app.exec()
+        cfg["sweep"] = win.sweep_settings()
+        config.save_local(cfg)
+        return code
     finally:
         engine.stop()  # holds the last voltage
         out.close()

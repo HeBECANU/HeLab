@@ -22,7 +22,8 @@ from .devices import HARD_V_MAX, HARD_V_MIN
 from .engine import Engine
 
 SPANS = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0}
-MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "fault": "#cf222e"}
+MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
+                "fault": "#cf222e"}
 
 
 def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix: str = "") -> QDoubleSpinBox:
@@ -39,7 +40,7 @@ def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix:
 
 class MainWindow(QMainWindow):
     def __init__(self, engine: Engine, calibration: dict[str, float], on_save: Callable[[LockSettings, dict[str, float]], None],
-                 title: str = "Laser lock") -> None:
+                 title: str = "Laser lock", sweep: dict[str, float] | None = None) -> None:
         super().__init__()
         self.engine, self.on_save = engine, on_save
         self.setWindowTitle(title)
@@ -133,6 +134,29 @@ class MainWindow(QMainWindow):
         f.addRow(self.cal_btn)
         f.addRow(self.log_box)
 
+        sw = {"v_start": 0.0, "v_stop": 7.0, "step": 0.05, "settle_s": 0.1, "dwell_s": 0.2, **(sweep or {})}
+        self.sw_start = spin(HARD_V_MIN, HARD_V_MAX, 3, 0.1, sw["v_start"], " V")
+        self.sw_stop = spin(HARD_V_MIN, HARD_V_MAX, 3, 0.1, sw["v_stop"], " V")
+        self.sw_step = spin(0.001, 1.0, 3, 0.01, sw["step"], " V")
+        self.sw_settle = spin(0.0, 5.0, 2, 0.05, sw["settle_s"], " s")
+        self.sw_dwell = spin(0.05, 5.0, 2, 0.05, sw["dwell_s"], " s")
+        self.sweep_btn = QPushButton("Sweep")
+        self.sweep_btn.setToolTip("Steps the output from start to stop and plots the frequency at each step, "
+                                  "then returns to where it was.")
+        self.sweep_btn.clicked.connect(self._sweep_only)
+        self.auto_btn = QPushButton("Auto-lock to setpoint")
+        self.auto_btn.setToolTip("Sweeps, finds where the setpoint is crossed without a mode hop (the crossing "
+                                 "with the most room), approaches it from the sweep's start side, sets the gains "
+                                 "from the local slope, limits the output to that hop-free stretch, and locks.")
+        self.auto_btn.clicked.connect(self._auto_lock)
+        swbox = QGroupBox("Sweep / auto-lock")
+        f = QFormLayout(swbox)
+        f.addRow("From", self.sw_start)
+        f.addRow("To", self.sw_stop)
+        f.addRow("Step", self.sw_step)
+        f.addRow("Settle / dwell", self._pair(self.sw_settle, self.sw_dwell))
+        f.addRow(self._pair(self.sweep_btn, self.auto_btn))
+
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.addWidget(self.mode_label)
@@ -140,6 +164,7 @@ class MainWindow(QMainWindow):
         lv.addWidget(setbox)
         lv.addWidget(gains)
         lv.addWidget(outbox)
+        lv.addWidget(swbox)
         lv.addWidget(self.message_label)
         lv.addStretch(1)
 
@@ -160,6 +185,20 @@ class MainWindow(QMainWindow):
         self.v_plot.showGrid(x=True, y=True, alpha=0.3)
         self.v_plot.setXLink(self.err_plot)
         self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1.5))
+        self.sw_plot = plots.addPlot(row=0, col=1, rowspan=2)
+        self.sw_plot.setLabel("left", "f − setpoint", units="Hz")
+        self.sw_plot.setLabel("bottom", "output", units="V")
+        self.sw_plot.setTitle("Sweep")
+        self.sw_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.sw_curve = self.sw_plot.plot(pen=pg.mkPen("#8250df", width=1), symbol="o", symbolSize=4,
+                                          symbolBrush="#8250df", symbolPen=None)
+        self.sw_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine))
+        self.sw_choice = pg.InfiniteLine(angle=90, pen=pg.mkPen("#1a7f37", width=2))
+        self.sw_range = pg.LinearRegionItem(movable=False, brush=(26, 127, 55, 40))
+        for item in (self.sw_choice, self.sw_range):
+            item.setVisible(False)
+            self.sw_plot.addItem(item)
+        self._sweep_n = -1
         right = QWidget()
         rv = QVBoxLayout(right)
         top = QHBoxLayout()
@@ -183,6 +222,38 @@ class MainWindow(QMainWindow):
         self.timer.start(100)
 
     # ---------------------------------------------------------------- user actions
+
+    @staticmethod
+    def _pair(a: QWidget, b: QWidget) -> QWidget:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(a)
+        h.addWidget(b)
+        return w
+
+    def _sweep_only(self) -> None:
+        self._sweep(False)
+
+    def _auto_lock(self) -> None:
+        self._sweep(True)
+
+    def _sweep(self, lock: bool) -> None:
+        if self.engine.snapshot().mode == "sweeping":
+            self.engine.abort()
+            return
+        self._push_settings()
+        target = self.set_thz.value() if lock else None
+        if lock and not target:
+            self.message_label.setText("set a setpoint first")
+            return
+        self._sweep_n = -1
+        self.engine.sweep(self.sw_start.value(), self.sw_stop.value(), self.sw_step.value(),
+                          self.sw_settle.value(), self.sw_dwell.value(), target)
+
+    def sweep_settings(self) -> dict[str, float]:
+        return {"v_start": self.sw_start.value(), "v_stop": self.sw_stop.value(), "step": self.sw_step.value(),
+                "settle_s": self.sw_settle.value(), "dwell_s": self.sw_dwell.value()}
 
     def _current_settings(self) -> LockSettings:
         return replace(self.engine.settings(), setpoint_thz=self.set_thz.value(), kp=self.kp.value(),
@@ -254,24 +325,26 @@ class MainWindow(QMainWindow):
             self.lock_btn.blockSignals(False)
         self.lock_btn.setText("Unlock" if locked else "Lock")
         busy = snap.mode in ("calibrating", "fault")
-        self.lock_btn.setEnabled(snap.mode != "fault" and snap.mode != "calibrating")
+        self.lock_btn.setEnabled(snap.mode in ("idle", "locked"))
+        sweeping = snap.mode == "sweeping"
+        self.sweep_btn.setText("Abort" if sweeping else "Sweep")
+        self.auto_btn.setText("Abort" if sweeping else "Auto-lock to setpoint")
+        self.sweep_btn.setEnabled(snap.mode in ("idle", "sweeping"))
+        self.auto_btn.setEnabled(snap.mode in ("idle", "sweeping"))
+        self._refresh_sweep()
         self.manual.setEnabled(snap.mode == "idle")
         self.cal_btn.setText("Abort calibration" if snap.mode == "calibrating" else "Calibrate tuning")
         self.cal_btn.setEnabled(snap.mode in ("idle", "calibrating"))
+        if snap.message.startswith("auto-lock engaged") and snap.message != self._shown_cal:
+            self._shown_cal = snap.message
+            self._show_settings()
         if snap.mode != "idle" or busy:
             self.manual.blockSignals(True)
             self.manual.setValue(snap.volts)
             self.manual.blockSignals(False)
         if snap.message.startswith("tuning") and snap.message != self._shown_cal:  # calibration set the gains
             self._shown_cal = snap.message
-            s = self.engine.settings()
-            for w, v in ((self.kp, s.kp), (self.ki, s.ki)):
-                w.blockSignals(True)
-                w.setValue(v)
-                w.blockSignals(False)
-            self.sign.blockSignals(True)
-            self.sign.setCurrentIndex(0 if s.sign >= 0 else 1)
-            self.sign.blockSignals(False)
+            self._show_settings()
 
         setpoint = self.set_thz.value()
         for smp in self.engine.drain():
@@ -291,6 +364,41 @@ class MainWindow(QMainWindow):
                                        f"mean {np.mean(locked_part) / 1e6:+.2f} MHz over the shown span")
             else:
                 self.rms_label.setText("")
+
+    def _show_settings(self) -> None:
+        """The engine changed the settings (calibration, auto-lock): show them without sending them back."""
+        s = self.engine.settings()
+        for w, v in ((self.kp, s.kp), (self.ki, s.ki), (self.v_min, s.v_min), (self.v_max, s.v_max),
+                     (self.capture, s.capture_mhz), (self.set_thz, s.setpoint_thz)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        self.set_nm.blockSignals(True)
+        self.set_nm.setValue(thz_to_nm(s.setpoint_thz) if s.setpoint_thz > 0 else 0.0)
+        self.set_nm.blockSignals(False)
+        self.sign.blockSignals(True)
+        self.sign.setCurrentIndex(0 if s.sign >= 0 else 1)
+        self.sign.blockSignals(False)
+
+    def _refresh_sweep(self) -> None:
+        points, choice = self.engine.sweep_data()
+        key = len(points) * 2 + (choice is not None)
+        if key == self._sweep_n:
+            return
+        self._sweep_n = key
+        ref = self.set_thz.value()
+        good = [p for p in points if p.thz is not None]
+        if good:
+            if ref <= 0:
+                ref = good[0].thz or 0.0
+            self.sw_curve.setData([p.volts for p in good], [((p.thz or 0.0) - ref) * 1e12 for p in good])
+        else:
+            self.sw_curve.setData([], [])
+        self.sw_choice.setVisible(choice is not None)
+        self.sw_range.setVisible(choice is not None)
+        if choice is not None:
+            self.sw_choice.setValue(choice.volts)
+            self.sw_range.setRegion((choice.v_lo, choice.v_hi))
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
         self.timer.stop()
