@@ -14,7 +14,7 @@ from .devices import HARD_V_MAX, HARD_V_MIN
 HOME = Path(__file__).resolve().parent.parent
 DEFAULTS: dict[str, Any] = {
     "wavemeter": {"dll": r"C:\Windows\System32\wlmData.dll", "channel": 1, "close_server_on_exit": True},
-    "dg1022": {"resource": "auto", "channel": 1, "min_interval_s": 0.05},
+    "dg1022": {"resource": "auto", "channel": 1, "min_interval_s": 0.1},
     "lock": {"setpoint_thz": 0.0, "kp": 0.0, "ki": 0.0, "sign": 1, "v_min": 0.0, "v_max": 7.0,
              "max_step": 0.01, "capture_mhz": 1000.0},
     "calibration": {"step_v": 0.05, "settle_s": 1.0, "average_s": 1.0},

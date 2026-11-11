@@ -1,6 +1,6 @@
 """The loop thread: reads the wavemeter, runs the PI step on each new measurement, writes the DG1022.
 
-Writes go out at most every `out.min_interval` (50 ms): the latest wanted voltage is written when its turn
+Writes go out at most every `out.min_interval` (100 ms): the latest wanted voltage is written when its turn
 comes, so a fast wavemeter never queues commands. The GUI reads `snapshot()` and `drain()`; it never waits on
 an instrument. An instrument that stops answering ends the lock (mode "fault") and leaves the voltage where
 it was.
@@ -372,7 +372,7 @@ class Engine:
             log.info("%s", result)
 
 
-RAMP_STEP_V = 0.05  # V per write when ramping (one write per 50 ms: 1 V/s)
+RAMP_STEP_V = 0.05  # V per write when ramping (one write per 100 ms: 0.5 V/s)
 HOP_MIN_MHZ = 300.0  # a jump between sweep points at least this big (and well off the trend) is a mode hop
 
 
@@ -389,7 +389,7 @@ class SweepRequest:
 @dataclass(frozen=True)
 class SweepPoint:
     volts: float
-    thz: float | None  # median of the readings within 1 GHz of their median (drops the far outliers)
+    thz: float | None  # median of the largest group of readings within 1 GHz (drops the far outliers)
     spread_mhz: float | None
     n: int
 
@@ -405,8 +405,9 @@ class LockPoint:
 def sweep_point(volts: float, vals: list[float]) -> SweepPoint:
     if not vals:
         return SweepPoint(volts, None, None, 0)
-    med = statistics.median(vals)
-    near = [v for v in vals if abs(v - med) < 1e-3]
+    # the largest group of readings within 1 GHz of each other (the median of two far groups is in neither)
+    groups = [[w for w in vals if abs(w - v) < 1e-3] for v in vals]
+    near = max(groups, key=len)
     med = statistics.median(near)
     spread = statistics.pstdev(near) * 1e6 if len(near) > 1 else 0.0
     return SweepPoint(volts, med, spread, len(near))

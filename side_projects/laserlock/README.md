@@ -6,7 +6,7 @@ DG1022's DC offset, with a PI loop. Windows only (the wavemeter's `wlmData.dll`)
 | Part | What it does |
 |---|---|
 | `devices.HighFinesse` | reads one channel's frequency (THz) through `wlmData.dll`. The DLL only talks to the WLM server program (`wlm_ws8.exe`); if it isn't running, laserlock starts it **hidden** (about 15 s) and closes it again on exit. If it was already running, it is left alone. |
-| `devices.DG1022` | sets one channel's DC offset, nothing else (never output on/off, waveform or amplitude). Offsets in 0.1 mV steps (its resolution), **hard limit 0–7 V**, at most one command every **50 ms**. |
+| `devices.DG1022` | sets one channel's DC offset, nothing else (never output on/off, waveform or amplitude). Offsets in 0.1 mV steps (its resolution), **hard limit 0–7 V**, at most one command every **100 ms**. |
 | `controller.PILock` | the PI loop (pure Python, tested). |
 | `engine.Engine` | the loop thread: a PI step on each new measurement, the newest voltage written when the DG1022's turn comes. |
 | `gui.MainWindow` | readings, setpoint, gains, limits, Lock / Calibrate, plots of the error and the output. |
@@ -15,12 +15,15 @@ DG1022's DC offset, with a PI loop. Windows only (the wavemeter's `wlmData.dll`)
 ## The DG1022's limits (measured 2026-11-11)
 
 - Its USB **stops answering** when commands come too close together — always below 5 ms, once at 20 ms —
-  and only a power cycle brings it back. Laserlock keeps 50 ms between any two commands (write and verify
+  and only a power cycle brings it back; it froze twice more in use on 2026-11-11. Laserlock keeps **100 ms**
+  between any two commands (configurable as `min_interval_s`; write and verify
   at 50 ms: 50/50 correct, about 18 verified or 20 unverified updates a second).
 - Laserlock holds an **exclusive VISA lock** on it while running: another program's commands between
-  laserlock's would break the 50 ms spacing (that hung it on 2026-11-11). Other VISA programs get
+  laserlock's would break the spacing (that hung it on 2026-11-11). Other VISA programs get
   "resource locked"; laserlock won't start while another program holds it.
 - The offset keeps 4 decimals in volts (0.1 mV); finer values are rounded.
+- While a program controls it, its screen stops updating and its keys are locked (remote mode); it still
+  answers over USB. Its **Local** key (on Burst) gives the front panel back.
 - Set CH1 up on the front panel (DC, or ARB DC, output on) before locking; laserlock only moves the offset.
   If it stops answering, the window says "fault" and the voltage stays where it was.
 
@@ -41,8 +44,9 @@ laser by `slope × step`: keep it small enough not to hop modes.
 
 ## Sweep and auto-lock
 
-**Sweep** ramps gently (50 mV per write) to *From*, steps to *To*, and plots the frequency at each step (the
-median of the readings within 1 GHz of their median, so the far outliers drop out); then ramps back.
+**Sweep** ramps gently (50 mV per write, 0.5 V/s) to *From*, steps to *To*, and plots the frequency at each step (the
+median of the largest group of readings within 1 GHz of each other, so far outliers drop out); then
+ramps back.
 
 **Auto-lock to setpoint** sweeps the same way, then:
 

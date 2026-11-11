@@ -304,3 +304,12 @@ def test_sweep_refuses_with_output_off_and_returns_after_plain_sweep() -> None:
         assert len(eng.sweep_data()[0]) == 6
     finally:
         eng.stop()
+
+
+def test_sweep_point_takes_the_largest_group() -> None:
+    from laserlock.engine import sweep_point
+
+    p = sweep_point(1.0, [F0, F0 + 1e-6, F0 - 11e-3, F0 - 11e-3 + 2e-6])  # two far groups of 2: median in neither
+    assert p.thz is not None and p.n == 2
+    p = sweep_point(1.0, [F0, F0 + 2e-6, F0 + 1e-6, F0 + 19.7e-3])
+    assert p.thz == pytest.approx(F0 + 1e-6) and p.n == 3

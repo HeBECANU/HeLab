@@ -127,10 +127,10 @@ class DG1022:
     """Sets one channel's DC offset, and nothing else (never output on/off, waveform or amplitude).
 
     The DG1022's USB stops answering (until it is power-cycled) when commands come too close together:
-    reliably at < 5 ms, once at 20 ms (2026-11-11). Every command here waits `min_interval` (50 ms) after the
-    previous one. Offsets are kept to 0.1 mV (its resolution) and within the hard 0-7 V."""
+    reliably at < 5 ms, once at 20 ms, and twice more in lab use on 2026-11-11 (cause unclear; both times
+    soon after offset writes). Every command here waits `min_interval` (100 ms) after the previous one. Offsets are kept to 0.1 mV (its resolution) and within the hard 0-7 V."""
 
-    def __init__(self, resource: str = "auto", channel: int = 1, min_interval: float = 0.05,
+    def __init__(self, resource: str = "auto", channel: int = 1, min_interval: float = 0.1,
                  timeout_ms: int = 1000) -> None:
         import pyvisa
 
@@ -146,7 +146,7 @@ class DG1022:
         self.min_interval = max(min_interval, 0.05)
         self._suffix = "" if channel == 1 else f":CH{channel}"
         self._io = rm.open_resource(resource, timeout=timeout_ms, write_termination="\n")
-        # Exclusive VISA lock: another program's commands slipped between ours would break the 50 ms rule and
+        # Exclusive VISA lock: another program's commands slipped between ours would break the spacing and
         # hang it (2026-11-11). Other VISA programs are refused while laserlock runs.
         try:
             self._io.lock_excl(timeout=500)
@@ -182,7 +182,7 @@ class DG1022:
             self._wait_turn()
             try:
                 self._io.write(cmd)
-                time.sleep(0.01)  # it answers late if read at once (1-2 ms was enough; margin)
+                time.sleep(0.02)  # it answers late if read at once (1-2 ms was enough; margin)
                 return str(self._io.read()).strip()
             except self._errors as e:
                 raise DeviceFault(f"DG1022 didn't answer {cmd!r} ({e}); power-cycle it") from e
