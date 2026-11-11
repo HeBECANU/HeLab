@@ -42,6 +42,16 @@ each, returns to V, and sets the tuning sign and gains from the slope: P correct
 update, I closes it in about 10 updates (at least 1 s). Start there, then tune by hand. The step moves the
 laser by `slope × step`: keep it small enough not to hop modes.
 
+## Setpoints and the window
+
+**Saved** lists saved setpoints, each as frequency and vacuum wavelength; choosing one sets the setpoint.
+**Save setpoint** adds the one typed above, **Remove** drops the chosen one. They start as 276.767676768 THz
+(also the default setpoint) and 1083.33064456 nm (vacuum), and are kept in `config.local.json` with the
+rest. The setpoint holds 9 decimals in THz (1 kHz) and 8 in nm.
+
+**Show: Time plots / Sweep plot** hides either plot panel (both: the window is just the controls); remembered
+between runs.
+
 ## Sweep and auto-lock
 
 **Sweep** ramps gently (50 mV per write, 0.5 V/s) to *From*, steps to *To*, and plots the frequency at each step (the

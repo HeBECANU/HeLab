@@ -15,17 +15,20 @@ HOME = Path(__file__).resolve().parent.parent
 DEFAULTS: dict[str, Any] = {
     "wavemeter": {"dll": r"C:\Windows\System32\wlmData.dll", "channel": 1, "close_server_on_exit": True},
     "dg1022": {"resource": "auto", "channel": 1, "min_interval_s": 0.1},
-    "lock": {"setpoint_thz": 0.0, "kp": 0.0, "ki": 0.0, "sign": 1, "v_min": 0.0, "v_max": 7.0,
+    "lock": {"setpoint_thz": 276.767676767677, "kp": 0.0, "ki": 0.0, "sign": 1, "v_min": 0.0, "v_max": 7.0,
              "max_step": 0.01, "capture_mhz": 1000.0},
     "calibration": {"step_v": 0.05, "settle_s": 1.0, "average_s": 1.0},
     "sweep": {"v_start": 0.0, "v_stop": 7.0, "step": 0.05, "settle_s": 0.1, "dwell_s": 0.2},
+    # saved setpoints: {"thz": f} or {"nm": vacuum wavelength}, optional "name"; the window can add and remove
+    "presets": [{"thz": 276.767676767677}, {"nm": 1083.33064456}],
+    "ui": {"show_plots": True, "show_sweep": True},
 }
 
 
 def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(base)
     for k, v in over.items():
-        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v  # lists replace
     return out
 
 
@@ -39,7 +42,7 @@ def load(home: Path = HOME) -> dict[str, Any]:
 
 
 def save_local(cfg: dict[str, Any], home: Path = HOME) -> None:
-    keep = {k: cfg[k] for k in ("lock", "calibration", "sweep") if k in cfg}
+    keep = {k: cfg[k] for k in ("lock", "calibration", "sweep", "presets", "ui") if k in cfg}
     (home / "config.local.json").write_text(json.dumps(keep, indent=2), encoding="utf-8")
 
 

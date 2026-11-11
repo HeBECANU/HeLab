@@ -313,3 +313,39 @@ def test_sweep_point_takes_the_largest_group() -> None:
     assert p.thz is not None and p.n == 2
     p = sweep_point(1.0, [F0, F0 + 2e-6, F0 + 1e-6, F0 + 19.7e-3])
     assert p.thz == pytest.approx(F0 + 1e-6) and p.n == 3
+
+
+def test_presets_and_hiding_plots(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow, preset_label, preset_thz
+
+    assert preset_thz({"nm": 1083.33064456}) == pytest.approx(299792.458 / 1083.33064456)
+    assert "THz" in preset_label({"thz": 276.767676767677}) and "nm" in preset_label({"thz": 276.767676767677})
+    cfg = config.load(tmp_path)  # defaults only
+    assert cfg["lock"]["setpoint_thz"] == pytest.approx(276.767676767677)
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=6)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), config.lock_settings(cfg))
+    win = MainWindow(eng, cfg["calibration"], lambda s, c: None, presets=cfg["presets"], ui={"show_sweep": False})
+    win.show()
+    app.processEvents()
+    assert win.preset_box.count() == 2 and win.preset_box.currentIndex() == 0  # the default setpoint is preset 1
+    assert win.set_thz.value() == pytest.approx(276.767676768, abs=1e-9)
+    win._preset_chosen(1)
+    assert win.set_nm.value() == pytest.approx(1083.33064456, abs=1e-8)
+    assert eng.settings().setpoint_thz == pytest.approx(299792.458 / 1083.33064456, abs=1e-9)
+    win.set_thz.setValue(276.5)
+    assert win.preset_box.currentIndex() == -1
+    win._add_preset()
+    assert win.preset_box.count() == 3 and win.preset_box.currentIndex() == 2
+    win._remove_preset()
+    assert len(win.presets()) == 2
+    assert not win.sweep_panel.isVisible() and win.time_panel.isVisible()
+    win.show_plots.setChecked(False)
+    assert not win.right.isVisible()
+    win.show_sweep.setChecked(True)
+    assert win.right.isVisible() and win.sweep_panel.isVisible()
+    assert win.ui_state() == {"show_plots": False, "show_sweep": True}
+    win.close()

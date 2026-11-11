@@ -9,17 +9,34 @@ import collections
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox,
-                             QHBoxLayout, QLabel, QMainWindow, QPushButton, QSplitter, QVBoxLayout, QWidget)
+                             QHBoxLayout, QLabel, QMainWindow, QPushButton, QScrollArea, QSplitter, QVBoxLayout,
+                             QWidget)
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
 from .engine import Engine
+
+def preset_thz(entry: dict[str, Any]) -> float | None:
+    """A preset is {"thz": f} or {"nm": vacuum wavelength}, with an optional "name"."""
+    if entry.get("thz"):
+        return float(entry["thz"])
+    if entry.get("nm"):
+        return nm_to_thz(float(entry["nm"]))
+    return None
+
+
+def preset_label(entry: dict[str, Any]) -> str:
+    thz = preset_thz(entry) or 0.0
+    name = f"{entry['name']}: " if entry.get("name") else ""
+    return f"{name}{thz:.9f} THz  ·  {thz_to_nm(thz):.8f} nm" if thz else f"{name}(empty)"
+
 
 SPANS = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0}
 MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
@@ -40,7 +57,8 @@ def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix:
 
 class MainWindow(QMainWindow):
     def __init__(self, engine: Engine, calibration: dict[str, float], on_save: Callable[[LockSettings, dict[str, float]], None],
-                 title: str = "Laser lock", sweep: dict[str, float] | None = None) -> None:
+                 title: str = "Laser lock", sweep: dict[str, float] | None = None,
+                 presets: list[dict[str, Any]] | None = None, ui: dict[str, bool] | None = None) -> None:
         super().__init__()
         self.engine, self.on_save = engine, on_save
         self.setWindowTitle(title)
@@ -72,14 +90,26 @@ class MainWindow(QMainWindow):
         g.addWidget(self.status_label, 3, 0, 1, 2)
 
         # setpoint
-        self.set_thz = spin(0.0, 2000.0, 7, 1e-6, s.setpoint_thz, " THz")
-        self.set_nm = spin(0.0, 1e6, 6, 1e-6, thz_to_nm(s.setpoint_thz) if s.setpoint_thz > 0 else 0.0, " nm")
+        self.set_thz = spin(0.0, 2000.0, 9, 1e-6, s.setpoint_thz, " THz")
+        self.set_nm = spin(0.0, 1e6, 8, 1e-6, thz_to_nm(s.setpoint_thz) if s.setpoint_thz > 0 else 0.0, " nm")
         use_now = QPushButton("Use current")
         use_now.clicked.connect(self._use_current)
         self.set_thz.valueChanged.connect(self._thz_changed)
         self.set_nm.valueChanged.connect(self._nm_changed)
+        self._presets: list[dict[str, Any]] = [dict(e) for e in (presets or []) if preset_thz(e)]
+        self.preset_box = QComboBox()
+        self.preset_box.setToolTip("Saved setpoints; choosing one sets the setpoint")
+        self.preset_box.activated.connect(self._preset_chosen)
+        add_preset, del_preset = QPushButton("Save setpoint"), QPushButton("Remove")
+        add_preset.setToolTip("Adds the setpoint above to the saved setpoints")
+        del_preset.setToolTip("Removes the chosen saved setpoint")
+        add_preset.clicked.connect(self._add_preset)
+        del_preset.clicked.connect(self._remove_preset)
+        self._fill_presets()
         setbox = QGroupBox("Setpoint")
         f = QFormLayout(setbox)
+        f.addRow("Saved", self.preset_box)
+        f.addRow("", self._pair(add_preset, del_preset))
         f.addRow("Frequency", self.set_thz)
         f.addRow("Wavelength (vac)", self.set_nm)
         f.addRow("", use_now)
@@ -157,8 +187,22 @@ class MainWindow(QMainWindow):
         f.addRow("Settle / dwell", self._pair(self.sw_settle, self.sw_dwell))
         f.addRow(self._pair(self.sweep_btn, self.auto_btn))
 
-        left = QWidget()
-        lv = QVBoxLayout(left)
+        ui = {"show_plots": True, "show_sweep": True, **(ui or {})}
+        self.show_plots = QCheckBox("Time plots")
+        self.show_sweep = QCheckBox("Sweep plot")
+        self.show_plots.setChecked(bool(ui["show_plots"]))
+        self.show_sweep.setChecked(bool(ui["show_sweep"]))
+        self.show_plots.toggled.connect(self._plots_shown)
+        self.show_sweep.toggled.connect(self._plots_shown)
+        view = QHBoxLayout()
+        view.addWidget(QLabel("Show:"))
+        view.addWidget(self.show_plots)
+        view.addWidget(self.show_sweep)
+        view.addStretch(1)
+
+        left_inner = QWidget()
+        lv = QVBoxLayout(left_inner)
+        lv.addLayout(view)
         lv.addWidget(self.mode_label)
         lv.addWidget(readout)
         lv.addWidget(setbox)
@@ -167,9 +211,13 @@ class MainWindow(QMainWindow):
         lv.addWidget(swbox)
         lv.addWidget(self.message_label)
         lv.addStretch(1)
+        left = QScrollArea()  # the controls scroll on a short screen
+        left.setWidget(left_inner)
+        left.setWidgetResizable(True)
+        left.setMinimumWidth(left_inner.sizeHint().width() + 24)
 
         # plots
-        pg.setConfigOptions(antialias=True)
+        pg.setConfigOptions(antialias=True, background="w", foreground="k")
         self.span = QComboBox()
         self.span.addItems(list(SPANS))
         self.span.setCurrentText("2 min")
@@ -185,7 +233,8 @@ class MainWindow(QMainWindow):
         self.v_plot.showGrid(x=True, y=True, alpha=0.3)
         self.v_plot.setXLink(self.err_plot)
         self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1.5))
-        self.sw_plot = plots.addPlot(row=0, col=1, rowspan=2)
+        sweep_plots = pg.GraphicsLayoutWidget()
+        self.sw_plot = sweep_plots.addPlot()
         self.sw_plot.setLabel("left", "f − setpoint", units="Hz")
         self.sw_plot.setLabel("bottom", "output", units="V")
         self.sw_plot.setTitle("Sweep")
@@ -199,7 +248,7 @@ class MainWindow(QMainWindow):
             item.setVisible(False)
             self.sw_plot.addItem(item)
         self._sweep_n = -1
-        right = QWidget()
+        right = self.right = QWidget()
         rv = QVBoxLayout(right)
         top = QHBoxLayout()
         top.addWidget(QLabel("Show"))
@@ -207,15 +256,27 @@ class MainWindow(QMainWindow):
         top.addStretch(1)
         self.rms_label = QLabel("")
         top.addWidget(self.rms_label)
-        rv.addLayout(top)
-        rv.addWidget(plots)
+        self.time_panel = QWidget()
+        tv = QVBoxLayout(self.time_panel)
+        tv.setContentsMargins(0, 0, 0, 0)
+        tv.addLayout(top)
+        tv.addWidget(plots)
+        self.sweep_panel = sweep_plots
+        plot_split = QSplitter()
+        plot_split.addWidget(self.time_panel)
+        plot_split.addWidget(self.sweep_panel)
+        plot_split.setStretchFactor(0, 3)
+        plot_split.setStretchFactor(1, 2)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.addWidget(plot_split)
 
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
         self.setCentralWidget(split)
-        self.resize(1300, 820)
+        self.resize(1400, 860)
+        self._plots_shown()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
@@ -231,6 +292,51 @@ class MainWindow(QMainWindow):
         h.addWidget(a)
         h.addWidget(b)
         return w
+
+    def _fill_presets(self) -> None:
+        self.preset_box.clear()
+        for e in self._presets:
+            self.preset_box.addItem(preset_label(e))
+        current = self.set_thz.value()
+        for i, e in enumerate(self._presets):
+            if abs((preset_thz(e) or 0) - current) < 5e-10:
+                self.preset_box.setCurrentIndex(i)
+                break
+        else:
+            self.preset_box.setCurrentIndex(-1)
+
+    def _preset_chosen(self, i: int) -> None:
+        if 0 <= i < len(self._presets):
+            thz = preset_thz(self._presets[i])
+            if thz:
+                self.set_thz.setValue(thz)
+
+    def _add_preset(self) -> None:
+        thz = self.set_thz.value()
+        if thz > 0 and all(abs((preset_thz(e) or 0) - thz) >= 5e-10 for e in self._presets):
+            self._presets.append({"thz": thz})
+        self._fill_presets()
+
+    def _remove_preset(self) -> None:
+        i = self.preset_box.currentIndex()
+        if 0 <= i < len(self._presets):
+            del self._presets[i]
+        self._fill_presets()
+
+    def presets(self) -> list[dict[str, Any]]:
+        return [dict(e) for e in self._presets]
+
+    def _plots_shown(self) -> None:
+        self.time_panel.setVisible(self.show_plots.isChecked())
+        self.sweep_panel.setVisible(self.show_sweep.isChecked())
+        any_shown = self.show_plots.isChecked() or self.show_sweep.isChecked()
+        if self.right.isVisible() != any_shown or not self.isVisible():
+            self.right.setVisible(any_shown)
+            if not any_shown and self.isVisible():
+                self.resize(self.minimumSizeHint().width(), self.height())
+
+    def ui_state(self) -> dict[str, bool]:
+        return {"show_plots": self.show_plots.isChecked(), "show_sweep": self.show_sweep.isChecked()}
 
     def _sweep_only(self) -> None:
         self._sweep(False)
@@ -268,6 +374,7 @@ class MainWindow(QMainWindow):
         self.set_nm.blockSignals(True)
         self.set_nm.setValue(thz_to_nm(thz) if thz > 0 else 0.0)
         self.set_nm.blockSignals(False)
+        self._fill_presets()
         self._push_settings()
 
     def _nm_changed(self, nm: float) -> None:
@@ -379,6 +486,7 @@ class MainWindow(QMainWindow):
         self.sign.blockSignals(True)
         self.sign.setCurrentIndex(0 if s.sign >= 0 else 1)
         self.sign.blockSignals(False)
+        self._fill_presets()
 
     def _refresh_sweep(self) -> None:
         points, choice = self.engine.sweep_data()

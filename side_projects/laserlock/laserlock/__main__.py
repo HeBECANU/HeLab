@@ -66,12 +66,14 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv[:1])
     title = f"Laser lock — {source.describe()} → {out.describe()}"
-    win = MainWindow(engine, cfg["calibration"], save, title, sweep=cfg["sweep"])
+    win = MainWindow(engine, cfg["calibration"], save, title, sweep=cfg["sweep"], presets=cfg["presets"], ui=cfg["ui"])
     engine.start()
     win.show()
     try:
         code = app.exec()
         cfg["sweep"] = win.sweep_settings()
+        cfg["presets"] = win.presets()
+        cfg["ui"] = win.ui_state()
         config.save_local(cfg)
         return code
     finally:
