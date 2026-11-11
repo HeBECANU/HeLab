@@ -94,3 +94,53 @@ def suggest_gains(mhz_per_v: float, update_s: float) -> tuple[int, float, float]
         raise ValueError("no tuning slope")
     tau = max(1.0, 10 * update_s)
     return (1 if mhz_per_v > 0 else -1), 0.2 / k, 1.0 / (k * tau)
+
+
+@dataclass(frozen=True)
+class Hop:
+    t: float  # when the first reading at the new level came
+    from_thz: float
+    to_thz: float
+
+    @property
+    def jump_mhz(self) -> float:
+        return (self.to_thz - self.from_thz) * 1e6
+
+
+class HopDetector:
+    """Finds mode hops in the stream of readings.
+
+    A hop is a jump of at least `min_jump_mhz` from the current level that holds for `confirm` readings in a
+    row (all within `min_jump_mhz` of each other). A lone far reading (the WS8 gives occasional ones about
+    19.7 GHz off) is not a hop. The level follows slow drift (a running average of readings near it)."""
+
+    def __init__(self, min_jump_mhz: float = 300.0, confirm: int = 3, follow: float = 0.1) -> None:
+        self.min_jump_mhz, self.confirm, self.follow = min_jump_mhz, confirm, follow
+        self.level: float | None = None
+        self._pending: list[tuple[float, float]] = []
+
+    def reset(self) -> None:
+        self.level = None
+        self._pending = []
+
+    def update(self, thz: float | None, t: float) -> Hop | None:
+        if thz is None:
+            return None
+        if self.level is None:
+            self.level = thz
+            return None
+        jump = self.min_jump_mhz * 1e-6
+        if abs(thz - self.level) < jump:
+            self.level += self.follow * (thz - self.level)
+            self._pending = []
+            return None
+        if self._pending and abs(thz - self._pending[0][1]) >= jump:
+            self._pending = []  # far, but not where the previous far readings were: start again
+        self._pending.append((t, thz))
+        if len(self._pending) < self.confirm:
+            return None
+        values = sorted(f for _, f in self._pending)
+        new = values[len(values) // 2]
+        hop = Hop(self._pending[0][0], self.level, new)
+        self.level, self._pending = new, []
+        return hop

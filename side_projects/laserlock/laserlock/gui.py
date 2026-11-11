@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, 
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
-from .engine import Engine
+from .engine import Engine, HopEvent, sweep_hops
 
 def preset_thz(entry: dict[str, Any]) -> float | None:
     """A preset is {"thz": f} or {"nm": vacuum wavelength}, with an optional "name"."""
@@ -47,6 +47,10 @@ def light_grid(plot: Any) -> None:
         axis.setPen(pg.mkPen("#888"))
         axis.setGrid(255)
         axis.setStyle(maxTickLevel=0)  # major lines only
+
+
+HOP_COLOUR = "#cf222e"
+HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
 SPANS = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0}
@@ -132,6 +136,10 @@ class MainWindow(QMainWindow):
         g.addWidget(QLabel("Error"), 2, 0)
         g.addWidget(self.err_label, 2, 1)
         g.addWidget(self.status_label, 3, 0, 1, 2)
+        self.hop_label = QLabel("Mode hops: none")
+        self.hop_label.setToolTip("Mode hops seen since start (red lines on the plots). A hop: a jump of at least "
+                                  "the threshold in Loop that holds for a few readings; a lone far reading isn't one.")
+        g.addWidget(self.hop_label, 4, 0, 1, 2)
 
         # setpoint
         self.set_thz = spin(0.0, 2000.0, 9, 1e-6, s.setpoint_thz, " THz")
@@ -168,6 +176,9 @@ class MainWindow(QMainWindow):
         self.v_max = spin(HARD_V_MIN, HARD_V_MAX, 4, 0.1, s.v_max, " V")
         self.max_step = spin(0.0001, 1.0, 4, 0.001, s.max_step, " V")
         self.capture = spin(1.0, 1e6, 1, 100.0, s.capture_mhz, " MHz")
+        self.hop_mhz = spin(10.0, 1e6, 0, 100.0, engine.hops.min_jump_mhz, " MHz")
+        self.hop_mhz.setToolTip("A jump at least this big that holds for a few readings counts as a mode hop")
+        self.hop_mhz.valueChanged.connect(self.engine.set_hop_threshold)
         gains = QGroupBox("Loop")
         f = QFormLayout(gains)
         f.addRow("P gain", self.kp)
@@ -177,6 +188,7 @@ class MainWindow(QMainWindow):
         f.addRow("Output max", self.v_max)
         f.addRow("Max step / update", self.max_step)
         f.addRow("Capture range ±", self.capture)
+        f.addRow("Mode hop ≥", self.hop_mhz)
         for w in (self.kp, self.ki, self.v_min, self.v_max, self.max_step, self.capture):
             w.valueChanged.connect(self._push_settings)
         self.sign.currentIndexChanged.connect(self._push_settings)
@@ -270,16 +282,20 @@ class MainWindow(QMainWindow):
         self.err_plot.setLabel("left", "f − setpoint", units="Hz")
         light_grid(self.err_plot)
         self.err_curve = self.err_plot.plot(pen=pg.mkPen("#0969da", width=1))
-        self.err_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine))
+        self.err_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine)).setZValue(-10)  # under the trace
         self.v_plot = plots.addPlot(row=1, col=0)
         self.v_plot.setLabel("left", "Output", units="V")
         self.v_plot.setLabel("bottom", "time", units="s")
         light_grid(self.v_plot)
         self.v_plot.setXLink(self.err_plot)
         self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1))
+        self.hop_dots = self.v_plot.plot(pen=None, symbol="o", symbolSize=9, symbolBrush=HOP_COLOUR, symbolPen=None)
+        self._hop_lines: list[Any] = []
+        self._hops_drawn = 0
         for curve in (self.err_curve, self.v_curve):  # draw at most about one point per pixel
             curve.setDownsampling(auto=True, method="peak")
             curve.setClipToView(True)
+            curve.setZValue(5)  # above the grid and the zero line
         sweep_plots = pg.GraphicsLayoutWidget()
         self.sw_plot = sweep_plots.addPlot()
         self.sw_plot.setLabel("left", "f − setpoint", units="Hz")
@@ -288,9 +304,10 @@ class MainWindow(QMainWindow):
         light_grid(self.sw_plot)
         self.sw_curve = self.sw_plot.plot(pen=pg.mkPen("#8250df", width=1), symbol="o", symbolSize=4,
                                           symbolBrush="#8250df", symbolPen=None)
-        self.sw_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine))
+        self.sw_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine)).setZValue(-10)
         self.sw_choice = pg.InfiniteLine(angle=90, pen=pg.mkPen("#1a7f37", width=2))
         self.sw_range = pg.LinearRegionItem(movable=False, brush=(26, 127, 55, 40))
+        self._sw_hop_lines: list[Any] = []
         for item in (self.sw_choice, self.sw_range):
             item.setVisible(False)
             self.sw_plot.addItem(item)
@@ -501,6 +518,12 @@ class MainWindow(QMainWindow):
             self._show_settings()
 
         self._hist.add(self.engine.drain(), self._t0)
+        if snap.hops:
+            h = snap.last_hop
+            assert h is not None
+            self.hop_label.setText(f"<b style='color:{HOP_COLOUR}'>Mode hops: {snap.hops}</b> · last "
+                                   f"{h.hop.jump_mhz / 1e3:+.3f} GHz at {time.strftime('%H:%M:%S', time.localtime(h.t))}"
+                                   f" ({h.volts:.4f} V)")
         self._tick_n += 1
         # the time plots: every other tick (5 Hz), only while shown, only the visible span
         if self._tick_n % 2 or not self.time_panel.isVisible() or self.isMinimized() or not self._hist.n:
@@ -511,10 +534,15 @@ class MainWindow(QMainWindow):
         err = (thz - ref) * 1e12  # Hz
         self.err_curve.setData(t, err)
         self.v_curve.setData(t, volts)
-        locked_part = err[locked]
+        self._draw_hops(snap.hops)
+        # the lock's quality: locked readings within the capture range (not the time spent in another mode)
+        in_capture = np.abs(err) <= self.capture.value() * 1e6
+        locked_part = err[locked & in_capture]
+        left_out = int(np.count_nonzero(locked & ~in_capture))
         if setpoint > 0 and locked_part.size > 2:
+            note = f" ({left_out} off-mode readings left out)" if left_out else ""
             self.rms_label.setText(f"locked: rms {np.sqrt(np.mean(locked_part ** 2)) / 1e6:.2f} MHz, "
-                                   f"mean {np.mean(locked_part) / 1e6:+.2f} MHz over the shown span")
+                                   f"mean {np.mean(locked_part) / 1e6:+.2f} MHz over the shown span{note}")
         else:
             self.rms_label.setText("")
 
@@ -534,6 +562,24 @@ class MainWindow(QMainWindow):
         self.sign.blockSignals(False)
         self._fill_presets()
 
+    def _draw_hops(self, count: int) -> None:
+        """Red dashed lines on both time plots and red dots on the output where the last 200 hops were. Redrawn
+        only when a hop comes; lines out of the shown span cost nothing (not drawn, not in the auto-range)."""
+        if count == self._hops_drawn:
+            return
+        self._hops_drawn = count
+        shown: list[HopEvent] = self.engine.hop_events()[-200:]
+        for plot, line in self._hop_lines:
+            plot.removeItem(line)
+        self._hop_lines = []
+        for e in shown:
+            x = e.t - self._t0
+            for plot in (self.err_plot, self.v_plot):
+                line = pg.InfiniteLine(pos=x, angle=90, pen=HOP_PEN)
+                plot.addItem(line, ignoreBounds=True)
+                self._hop_lines.append((plot, line))
+        self.hop_dots.setData([e.t - self._t0 for e in shown], [e.volts for e in shown])
+
     def _refresh_sweep(self) -> None:
         points, choice = self.engine.sweep_data()
         key = len(points) * 2 + (choice is not None)
@@ -548,6 +594,13 @@ class MainWindow(QMainWindow):
             self.sw_curve.setData([p.volts for p in good], [((p.thz or 0.0) - ref) * 1e12 for p in good])
         else:
             self.sw_curve.setData([], [])
+        for line in self._sw_hop_lines:
+            self.sw_plot.removeItem(line)
+        self._sw_hop_lines = []
+        for v in sweep_hops(points):
+            line = pg.InfiniteLine(pos=v, angle=90, pen=HOP_PEN)
+            self.sw_plot.addItem(line, ignoreBounds=True)
+            self._sw_hop_lines.append(line)
         self.sw_choice.setVisible(choice is not None)
         self.sw_range.setVisible(choice is not None)
         if choice is not None:

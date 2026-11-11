@@ -24,6 +24,7 @@ class SimLaser:
         self.walk, self.sine, self.sine_period = walk_mhz_per_rt_s, sine_mhz, sine_period_s
         self.clock = clock
         self.hop_every_v, self.hop_mhz, self.output = hop_every_v, hop_mhz, output
+        self.extra_mhz = 0.0  # set to jump the laser (a mode hop in time)
         self.rng = random.Random(seed)
         self.volts = 0.0
         self._walk_mhz = 0.0
@@ -40,7 +41,7 @@ class SimLaser:
             drift = self.sine * math.sin(2 * math.pi * (now - self._t0) / self.sine_period) + self._walk_mhz
             v = self.volts if self.output else 0.0
             hops = math.floor(v / self.hop_every_v) if self.hop_every_v > 0 else 0
-            mhz = self.slope * v - self.hop_mhz * hops + drift + self.rng.gauss(0.0, self.noise)
+            mhz = self.slope * v - self.hop_mhz * hops + self.extra_mhz + drift + self.rng.gauss(0.0, self.noise)
             return self.f0 + mhz * 1e-6
 
 

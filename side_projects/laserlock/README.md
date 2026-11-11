@@ -52,6 +52,23 @@ rest. The setpoint holds 9 decimals in THz (1 kHz) and 8 in nm.
 **Show: Time plots / Sweep plot** hides either plot panel (both: the window is just the controls); remembered
 between runs.
 
+## Mode hops
+
+While running, laserlock watches the readings for **mode hops**: a jump of at least **Mode hop ≥** (Loop;
+default 1000 MHz, since the free-running laser here scatters by up to ~300 MHz) from the current level that
+holds for 3 readings in a row. A lone far reading (the WS8 gives occasional ones about 19.7 GHz off) isn't
+one, and the level follows slow drift and tuning. Each hop:
+
+- is drawn as a red dashed line on both time plots and a red dot on the output plot (at the output when the
+  hop came);
+- is counted under the wavemeter readings (the last one's jump, time and output), logged as a WARNING in
+  `logs/laserlock.log`, and marked in the CSV's `hop` column.
+
+While locked, a hop beyond the capture range holds the output (it doesn't chase the other mode); the lock
+carries on when the laser comes back. "locked: rms" above the plots leaves out readings beyond the capture
+range and says how many. The sweep plot marks the sweep's mode hops (the jumps that split it into
+stretches) the same way.
+
 ## Sweep and auto-lock
 
 **Sweep** ramps gently (50 mV per write, 0.5 V/s) to *From*, steps to *To*, and plots the frequency at each step (the

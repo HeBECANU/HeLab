@@ -365,3 +365,119 @@ def test_history_keeps_newest_in_order() -> None:
     assert list(t2) == [36.0, 37.0, 38.0]
     h.add([Sample(100.0 + i, 1.0, None, 0.0, False) for i in range(25)], 0.0)  # more than cap at once
     assert h.n == 10 and h.t[h.n - 1] == 124.0
+
+
+# ---------------------------------------------------------------- mode hops
+
+from laserlock.controller import HopDetector  # noqa: E402
+
+
+def test_hop_detector() -> None:
+    import random
+
+    rng = random.Random(7)
+    d = HopDetector(min_jump_mhz=1000, confirm=3)
+    t = 0.0
+    hops = []
+
+    def feed(mhz: float, n: int) -> None:
+        nonlocal t
+        for _ in range(n):
+            t += 0.04
+            h = d.update(F0 + (mhz + rng.gauss(0, 150)) * 1e-6, t)  # 150 MHz scatter, like the free laser
+            if h:
+                hops.append(h)
+
+    feed(0, 200)
+    assert not hops  # noise alone
+    d.update(F0 + 19.7e-3, t + 0.01)  # one far reading (the WS8's odd ones)
+    feed(0, 50)
+    d.update(None, t)  # a lost reading is ignored
+    feed(0, 1)
+    d.update(F0 + 19.7e-3, t + 0.01)
+    d.update(F0 + 19.7e-3, t + 0.02)  # two in a row: still not a hop
+    feed(0, 50)
+    assert not hops
+    t_jump = t + 0.04
+    feed(15_800, 100)  # a real hop, +15.8 GHz
+    feed(0, 100)  # and back
+    assert len(hops) == 2
+    assert hops[0].t == pytest.approx(t_jump)
+    assert hops[0].jump_mhz == pytest.approx(15_800, abs=300)
+    assert hops[1].jump_mhz == pytest.approx(-15_800, abs=300)
+
+
+def test_hop_detector_follows_slow_tuning() -> None:
+    d = HopDetector(min_jump_mhz=300, confirm=3)
+    for i in range(2000):  # 100 MHz/s ramp, 25 readings/s: 4 MHz per reading, 8 GHz in all
+        assert d.update(F0 + i * 4e-6, i * 0.04) is None
+
+
+def test_engine_records_hops_and_holds_lock() -> None:
+    laser = SimLaser(f0_thz=F0, mhz_per_v=300.0, noise_mhz=0.3, walk_mhz_per_rt_s=0.2, sine_mhz=0.0, seed=8)
+    wm, out = SimWavemeter(laser, period=0.02), SimDG1022(laser, volts=3.0)
+    sign, kp, ki = suggest_gains(300.0, 0.02)
+    eng = Engine(wm, out, LockSettings(setpoint_thz=F0 + 900e-6, kp=kp, ki=ki, sign=sign, capture_mhz=500),
+                 hops=HopDetector(1000, 3))
+    eng.start()
+    try:
+        eng.engage()
+        time.sleep(1.5)
+        v_before = out.get()
+        laser.extra_mhz = 15_800.0  # the laser hops
+        time.sleep(1.0)
+        snap = eng.snapshot()
+        assert snap.hops == 1 and snap.last_hop is not None
+        assert snap.last_hop.locked and snap.last_hop.hop.jump_mhz == pytest.approx(15_800, abs=50)
+        assert snap.state == "out of capture"
+        assert out.get() == pytest.approx(v_before, abs=0.02)  # held, didn't chase it
+        laser.extra_mhz = 0.0  # back
+        time.sleep(1.5)
+        assert eng.snapshot().hops == 2
+        assert eng.snapshot().state == "locked"
+        assert sum(s.hop for s in eng.drain()) == 2
+    finally:
+        eng.stop()
+
+
+def test_sweep_hops_lists_the_jumps_only() -> None:
+    from laserlock.engine import sweep_hops
+
+    pts = _points(300.0, 2.0, 600.0)  # hops between 1.9 and 2.0 V, 3.9 and 4.0 V, 5.9 and 6.0 V
+    assert sweep_hops(pts) == pytest.approx([1.95, 3.95, 5.95])
+    pts[30] = SweepPoint(3.0, None, None, 0)  # a missing reading is a gap, not a hop
+    assert sweep_hops(pts) == pytest.approx([1.95, 3.95, 5.95])
+
+
+def test_window_draws_hops(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, noise_mhz=0.3, walk_mhz_per_rt_s=0.2, sine_mhz=0.0, seed=9)
+    eng = Engine(SimWavemeter(laser, period=0.02), SimDG1022(laser), LockSettings(), hops=HopDetector(1000, 3))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    eng.start()
+    try:
+        win.show()
+
+        def pump(sec: float) -> None:
+            end = time.monotonic() + sec
+            while time.monotonic() < end:
+                app.processEvents()
+                time.sleep(0.02)
+
+        pump(0.6)
+        laser.extra_mhz = 12_000.0
+        pump(0.8)
+        assert "Mode hops: 1" in win.hop_label.text()
+        assert len(win._hop_lines) == 2  # one line on each time plot
+        xs, ys = win.hop_dots.getData()
+        assert xs is not None and len(xs) == 1 and ys[0] == pytest.approx(eng.snapshot().volts)
+        win.hop_mhz.setValue(20_000)
+        assert eng.hops.min_jump_mhz == 20_000
+        win.close()
+    finally:
+        eng.stop()

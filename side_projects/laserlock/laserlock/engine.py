@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .controller import LockSettings, PILock, suggest_gains
+from .controller import Hop, HopDetector, LockSettings, PILock, suggest_gains
 from .devices import HARD_V_MAX, HARD_V_MIN, DeviceFault, FrequencySource, Reading, VoltageOutput
 
 log = logging.getLogger("laserlock.engine")
@@ -30,6 +30,15 @@ class Sample:
     error_mhz: float | None
     volts: float
     locked: bool
+    hop: bool = False  # a mode hop was confirmed at this reading
+
+
+@dataclass(frozen=True)
+class HopEvent:
+    t: float  # unix time of the first reading at the new level
+    hop: Hop
+    volts: float  # the output then
+    locked: bool
 
 
 @dataclass(frozen=True)
@@ -41,11 +50,13 @@ class Snapshot:
     state: str  # the last PI step's state, or what the engine is doing
     message: str
     update_s: float | None  # median time between new measurements
+    hops: int = 0  # mode hops seen since start
+    last_hop: HopEvent | None = None
 
 
 class Engine:
     def __init__(self, source: FrequencySource, out: VoltageOutput, settings: LockSettings,
-                 log_dir: Path | None = None) -> None:
+                 log_dir: Path | None = None, hops: HopDetector | None = None) -> None:
         self.source, self.out = source, out
         self._settings = settings
         self.pi = PILock(replace(settings))
@@ -58,6 +69,10 @@ class Engine:
         self._reading = source.read()
         self._error: float | None = None
         self._samples: collections.deque[Sample] = collections.deque(maxlen=100_000)
+        self.hops = hops or HopDetector()
+        self._hop_events: collections.deque[HopEvent] = collections.deque(maxlen=1000)
+        self._hop_count = 0
+        self._recent: collections.deque[tuple[float, float]] = collections.deque(maxlen=32)  # (reading t, volts)
         self._periods: collections.deque[float] = collections.deque(maxlen=50)
         self._last_seq = self._reading.seq
         self._last_write = 0.0
@@ -150,7 +165,17 @@ class Engine:
     def snapshot(self) -> Snapshot:
         with self._lock:
             update = statistics.median(self._periods) if self._periods else None
-            return Snapshot(self._mode, self._reading, self._error, self._volts, self._state, self._message, update)
+            last = self._hop_events[-1] if self._hop_events else None
+            return Snapshot(self._mode, self._reading, self._error, self._volts, self._state, self._message, update,
+                            self._hop_count, last)
+
+    def hop_events(self) -> list[HopEvent]:
+        with self._lock:
+            return list(self._hop_events)
+
+    def set_hop_threshold(self, mhz: float) -> None:
+        with self._lock:
+            self.hops.min_jump_mhz = mhz
 
     def drain(self) -> list[Sample]:
         with self._lock:
@@ -169,7 +194,7 @@ class Engine:
             path = self.log_dir / time.strftime("laserlock-%Y%m%d-%H%M%S.csv")
             self._csv_file = path.open("w", newline="")
             self._csv = csv.writer(self._csv_file)
-            self._csv.writerow(["unix_time", "thz", "setpoint_thz", "error_mhz", "volts", "locked", "status"])
+            self._csv.writerow(["unix_time", "thz", "setpoint_thz", "error_mhz", "volts", "locked", "status", "hop"])
             return path
 
     # ---------------------------------------------------------------- the loop thread
@@ -215,12 +240,23 @@ class Engine:
                 self._target, self._error, self._state = step.voltage, step.error_mhz, step.state
             else:
                 self._error = None if r.thz is None or s.setpoint_thz <= 0 else (r.thz - s.setpoint_thz) * 1e6
-            sample = Sample(time.time(), r.thz, self._error, self._volts, locked)
+            self._recent.append((r.t, self._volts))
+            hop = self.hops.update(r.thz, r.t)
+            now = time.time()
+            if hop is not None:
+                # the output when the first reading at the new level came, not now (3 readings later)
+                volts = next((v for t, v in self._recent if t >= hop.t), self._volts)
+                event = HopEvent(now - (time.monotonic() - hop.t), hop, volts, locked)
+                self._hop_events.append(event)
+                self._hop_count += 1
+                log.warning("mode hop %+.3f GHz (%.7f -> %.7f THz) at %.4f V%s", hop.jump_mhz / 1e3, hop.from_thz,
+                            hop.to_thz, volts, " while locked" if locked else "")
+            sample = Sample(now, r.thz, self._error, self._volts, locked, hop is not None)
             self._samples.append(sample)
             if self._csv is not None:
                 self._csv.writerow([f"{sample.t:.3f}", "" if r.thz is None else f"{r.thz:.9f}", f"{s.setpoint_thz:.9f}",
                                     "" if self._error is None else f"{self._error:.3f}", f"{self._volts:.4f}",
-                                    int(locked), r.status])
+                                    int(locked), r.status, int(hop is not None)])
 
     def _flush_output(self) -> None:
         with self._lock:
@@ -414,29 +450,42 @@ def sweep_point(volts: float, vals: list[float]) -> SweepPoint:
     return SweepPoint(volts, med, spread, len(near))
 
 
-def choose_lock_point(points: list[SweepPoint], target_thz: float) -> LockPoint | None:
-    """Where the sweep crosses `target_thz` inside a hop-free stretch, choosing the crossing with the most room
-    to either side. A stretch ends at a missing reading or a jump that is well off the trend."""
-    pts = sorted((p for p in points), key=lambda p: p.volts)
-    if len(pts) < 3:
-        return None
+def split_sweep(points: list[SweepPoint]) -> tuple[list[SweepPoint], list[tuple[int, int]], list[float], float]:
+    """The sweep's points by voltage, its hop-free stretches (index ranges), the voltages of its mode hops
+    (midway between the two points), and the typical step (MHz). A stretch ends at a missing reading or at a
+    jump well off the trend (more than 5x the typical step and at least HOP_MIN_MHZ)."""
+    pts = sorted(points, key=lambda p: p.volts)
     steps = [(b.thz - a.thz) * 1e6 for a, b in zip(pts, pts[1:]) if a.thz is not None and b.thz is not None]
     if not steps:
-        return None
+        return pts, [], [], 0.0
     typical = statistics.median(steps)
-    hop = max(5 * abs(typical), HOP_MIN_MHZ)
-
-    def joined(a: SweepPoint, b: SweepPoint) -> bool:
-        return a.thz is not None and b.thz is not None and abs((b.thz - a.thz) * 1e6 - typical) < hop
-
-    # hop-free stretches as index ranges
+    limit = max(5 * abs(typical), HOP_MIN_MHZ)
     stretches: list[tuple[int, int]] = []
+    hops: list[float] = []
     start = 0
     for i in range(len(pts) - 1):
-        if not joined(pts[i], pts[i + 1]):
+        a, b = pts[i], pts[i + 1]
+        if a.thz is None or b.thz is None or abs((b.thz - a.thz) * 1e6 - typical) >= limit:
             stretches.append((start, i))
             start = i + 1
+            if a.thz is not None and b.thz is not None:
+                hops.append((a.volts + b.volts) / 2)
     stretches.append((start, len(pts) - 1))
+    return pts, stretches, hops, typical
+
+
+def sweep_hops(points: list[SweepPoint]) -> list[float]:
+    return split_sweep(points)[2]
+
+
+def choose_lock_point(points: list[SweepPoint], target_thz: float) -> LockPoint | None:
+    """Where the sweep crosses `target_thz` inside a hop-free stretch, choosing the crossing with the most room
+    to either side."""
+    if len(points) < 3:
+        return None
+    pts, stretches, _, typical = split_sweep(points)
+    if not stretches:
+        return None
     best: tuple[float, LockPoint] | None = None
     for a, b in stretches:
         if b - a < 2:

@@ -8,7 +8,7 @@ import sys
 from dataclasses import asdict
 
 from . import config
-from .controller import LockSettings
+from .controller import HopDetector, LockSettings
 from .devices import DG1022, DeviceFault, FrequencySource, HighFinesse, VoltageOutput
 from .engine import Engine
 
@@ -56,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from .gui import MainWindow
 
-    engine = Engine(source, out, config.lock_settings(cfg), log_dir=logs)
+    hops = HopDetector(float(cfg["hops"]["min_jump_mhz"]), int(cfg["hops"]["confirm"]))
+    engine = Engine(source, out, config.lock_settings(cfg), log_dir=logs, hops=hops)
 
     def save(settings: LockSettings, calibration: dict[str, float]) -> None:
         cfg["lock"] = asdict(config.clamp(settings))
@@ -74,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg["sweep"] = win.sweep_settings()
         cfg["presets"] = win.presets()
         cfg["ui"] = win.ui_state()
+        cfg["hops"]["min_jump_mhz"] = engine.hops.min_jump_mhz
         config.save_local(cfg)
         return code
     finally:
