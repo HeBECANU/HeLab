@@ -196,7 +196,7 @@ class Engine:
                 log.exception("engine loop")
                 with self._lock:
                     self._mode, self._message = "fault", "internal error (see the log)"
-            self._stop.wait(0.005)
+            self._stop.wait(POLL_S)
 
     def _tick(self) -> None:
         r = self.source.read()
@@ -245,7 +245,7 @@ class Engine:
             if r.thz is not None and r.seq != self._cal_seq:
                 values.append(r.thz)
                 self._cal_seq = r.seq
-            self._stop.wait(0.005)
+            self._stop.wait(POLL_S)
         return values
 
     def _calibrate(self, step_v: float, settle_s: float, average_s: float) -> None:
@@ -372,6 +372,7 @@ class Engine:
             log.info("%s", result)
 
 
+POLL_S = 0.01  # the wavemeter is polled every 10 ms (it measures every ~40 ms here)
 RAMP_STEP_V = 0.05  # V per write when ramping (one write per 100 ms: 0.5 V/s)
 HOP_MIN_MHZ = 300.0  # a jump between sweep points at least this big (and well off the trend) is a mode hop
 

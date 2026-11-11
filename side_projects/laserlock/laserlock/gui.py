@@ -5,7 +5,6 @@ It never waits on an instrument: a 10 Hz timer reads the engine's snapshot and n
 
 from __future__ import annotations
 
-import collections
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -38,6 +37,18 @@ def preset_label(entry: dict[str, Any]) -> str:
     return f"{name}{thz:.9f} THz  ·  {thz_to_nm(thz):.8f} nm" if thz else f"{name}(empty)"
 
 
+def light_grid(plot: Any) -> None:
+    """A light-grey grid on the major ticks only: showGrid also draws the minor ticks' lines, which cost about
+    40 % of a core at 5 redraws a second (2026-11-11)."""
+    for side in ("left", "bottom"):
+        axis = plot.getAxis(side)
+        axis.setTickPen(pg.mkPen("#d8d8d8"))
+        axis.setTextPen(pg.mkPen("k"))
+        axis.setPen(pg.mkPen("#888"))
+        axis.setGrid(255)
+        axis.setStyle(maxTickLevel=0)  # major lines only
+
+
 SPANS = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0}
 MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
                 "fault": "#cf222e"}
@@ -55,6 +66,38 @@ def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix:
     return s
 
 
+class History:
+    """The time plots' samples in preallocated arrays (no per-tick rebuild): time (s since start), frequency
+    (THz, absolute, so the plot follows a changed setpoint), output (V), locked. Keeps the newest `cap`."""
+
+    def __init__(self, cap: int = 200_000) -> None:
+        self.cap, self.n = cap, 0
+        self.t = np.empty(cap)
+        self.thz = np.empty(cap)
+        self.volts = np.empty(cap)
+        self.locked = np.empty(cap, dtype=bool)
+
+    def add(self, samples: list[Any], t0: float) -> None:
+        rows = [(s.t - t0, s.thz, s.volts, s.locked) for s in samples if s.thz is not None]
+        if not rows:
+            return
+        rows = rows[-self.cap:]
+        k = len(rows)
+        if self.n + k > self.cap:  # keep the newest half (at most) and make room, in one move
+            keep = min(self.n, self.cap // 2, self.cap - k)
+            for a in (self.t, self.thz, self.volts, self.locked):
+                a[:keep] = a[self.n - keep:self.n]
+            self.n = keep
+        cols = list(zip(*rows))
+        sl = slice(self.n, self.n + k)
+        self.t[sl], self.thz[sl], self.volts[sl], self.locked[sl] = cols
+        self.n += k
+
+    def since(self, t_min: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        i = int(np.searchsorted(self.t[:self.n], t_min))
+        return self.t[i:self.n], self.thz[i:self.n], self.volts[i:self.n], self.locked[i:self.n]
+
+
 class MainWindow(QMainWindow):
     def __init__(self, engine: Engine, calibration: dict[str, float], on_save: Callable[[LockSettings, dict[str, float]], None],
                  title: str = "Laser lock", sweep: dict[str, float] | None = None,
@@ -64,7 +107,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(title)
         s = engine.settings()
         self._t0 = time.time()
-        self._data: collections.deque[tuple[float, float, float, float]] = collections.deque(maxlen=200_000)
+        self._hist = History()
+        self._tick_n = 0
         self._shown_cal = ""
 
         big = QFont()
@@ -217,28 +261,31 @@ class MainWindow(QMainWindow):
         left.setMinimumWidth(left_inner.sizeHint().width() + 24)
 
         # plots
-        pg.setConfigOptions(antialias=True, background="w", foreground="k")
+        pg.setConfigOptions(antialias=False, background="w", foreground="k")  # antialiasing costs a lot of CPU
         self.span = QComboBox()
         self.span.addItems(list(SPANS))
         self.span.setCurrentText("2 min")
         plots = pg.GraphicsLayoutWidget()
         self.err_plot = plots.addPlot(row=0, col=0)
         self.err_plot.setLabel("left", "f − setpoint", units="Hz")
-        self.err_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.err_curve = self.err_plot.plot(pen=pg.mkPen("#0969da", width=1.5))
+        light_grid(self.err_plot)
+        self.err_curve = self.err_plot.plot(pen=pg.mkPen("#0969da", width=1))
         self.err_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine))
         self.v_plot = plots.addPlot(row=1, col=0)
         self.v_plot.setLabel("left", "Output", units="V")
         self.v_plot.setLabel("bottom", "time", units="s")
-        self.v_plot.showGrid(x=True, y=True, alpha=0.3)
+        light_grid(self.v_plot)
         self.v_plot.setXLink(self.err_plot)
-        self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1.5))
+        self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1))
+        for curve in (self.err_curve, self.v_curve):  # draw at most about one point per pixel
+            curve.setDownsampling(auto=True, method="peak")
+            curve.setClipToView(True)
         sweep_plots = pg.GraphicsLayoutWidget()
         self.sw_plot = sweep_plots.addPlot()
         self.sw_plot.setLabel("left", "f − setpoint", units="Hz")
         self.sw_plot.setLabel("bottom", "output", units="V")
         self.sw_plot.setTitle("Sweep")
-        self.sw_plot.showGrid(x=True, y=True, alpha=0.3)
+        light_grid(self.sw_plot)
         self.sw_curve = self.sw_plot.plot(pen=pg.mkPen("#8250df", width=1), symbol="o", symbolSize=4,
                                           symbolBrush="#8250df", symbolPen=None)
         self.sw_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine))
@@ -453,24 +500,23 @@ class MainWindow(QMainWindow):
             self._shown_cal = snap.message
             self._show_settings()
 
+        self._hist.add(self.engine.drain(), self._t0)
+        self._tick_n += 1
+        # the time plots: every other tick (5 Hz), only while shown, only the visible span
+        if self._tick_n % 2 or not self.time_panel.isVisible() or self.isMinimized() or not self._hist.n:
+            return
+        t, thz, volts, locked = self._hist.since(time.time() - self._t0 - SPANS[self.span.currentText()])
         setpoint = self.set_thz.value()
-        for smp in self.engine.drain():
-            if smp.thz is not None:
-                ref = setpoint if setpoint > 0 else smp.thz
-                self._data.append((smp.t - self._t0, (smp.thz - ref) * 1e12, smp.volts, float(smp.locked)))
-        if self._data:
-            arr = np.asarray(self._data)
-            now = time.time() - self._t0
-            keep = arr[:, 0] >= now - SPANS[self.span.currentText()]
-            arr = arr[keep]
-            self.err_curve.setData(arr[:, 0], arr[:, 1])
-            self.v_curve.setData(arr[:, 0], arr[:, 2])
-            locked_part = arr[arr[:, 3] > 0, 1]
-            if setpoint > 0 and locked_part.size > 2:
-                self.rms_label.setText(f"locked: rms {np.sqrt(np.mean(locked_part ** 2)) / 1e6:.2f} MHz, "
-                                       f"mean {np.mean(locked_part) / 1e6:+.2f} MHz over the shown span")
-            else:
-                self.rms_label.setText("")
+        ref = setpoint if setpoint > 0 else float(thz[0]) if thz.size else 0.0
+        err = (thz - ref) * 1e12  # Hz
+        self.err_curve.setData(t, err)
+        self.v_curve.setData(t, volts)
+        locked_part = err[locked]
+        if setpoint > 0 and locked_part.size > 2:
+            self.rms_label.setText(f"locked: rms {np.sqrt(np.mean(locked_part ** 2)) / 1e6:.2f} MHz, "
+                                   f"mean {np.mean(locked_part) / 1e6:+.2f} MHz over the shown span")
+        else:
+            self.rms_label.setText("")
 
     def _show_settings(self) -> None:
         """The engine changed the settings (calibration, auto-lock): show them without sending them back."""

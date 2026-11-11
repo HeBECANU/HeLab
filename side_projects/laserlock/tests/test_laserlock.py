@@ -349,3 +349,19 @@ def test_presets_and_hiding_plots(tmp_path: Any) -> None:
     assert win.right.isVisible() and win.sweep_panel.isVisible()
     assert win.ui_state() == {"show_plots": False, "show_sweep": True}
     win.close()
+
+
+def test_history_keeps_newest_in_order() -> None:
+    from laserlock.engine import Sample
+    from laserlock.gui import History
+
+    h = History(cap=10)
+    for start in range(0, 37, 3):  # batches of 3
+        h.add([Sample(float(i), 276.0 + i, None, 0.1 * i, i % 2 == 0) for i in range(start, start + 3)], 0.0)
+    t, thz, volts, locked = h.since(-1.0)
+    assert list(t) == sorted(t) and t[-1] == 38.0 and h.n <= 10
+    assert thz[-1] == 276.0 + 38 and locked[-1] and not locked[-2]
+    t2, *_ = h.since(36.0)
+    assert list(t2) == [36.0, 37.0, 38.0]
+    h.add([Sample(100.0 + i, 1.0, None, 0.0, False) for i in range(25)], 0.0)  # more than cap at once
+    assert h.n == 10 and h.t[h.n - 1] == 124.0
