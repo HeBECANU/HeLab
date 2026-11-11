@@ -1,0 +1,4 @@
+.venv/
+logs/
+config.local.json
+*.egg-info/

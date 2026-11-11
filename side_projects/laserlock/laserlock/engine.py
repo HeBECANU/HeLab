@@ -1,0 +1,259 @@
+"""The loop thread: reads the wavemeter, runs the PI step on each new measurement, writes the DG1022.
+
+Writes go out at most every `out.min_interval` (50 ms): the latest wanted voltage is written when its turn
+comes, so a fast wavemeter never queues commands. The GUI reads `snapshot()` and `drain()`; it never waits on
+an instrument. An instrument that stops answering ends the lock (mode "fault") and leaves the voltage where
+it was.
+"""
+
+from __future__ import annotations
+
+import collections
+import csv
+import logging
+import statistics
+import threading
+import time
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from .controller import LockSettings, PILock, suggest_gains
+from .devices import DeviceFault, FrequencySource, Reading, VoltageOutput
+
+log = logging.getLogger("laserlock.engine")
+
+
+@dataclass(frozen=True)
+class Sample:
+    t: float
+    thz: float | None
+    error_mhz: float | None
+    volts: float
+    locked: bool
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    mode: str  # "idle", "locked", "calibrating", "fault"
+    reading: Reading
+    error_mhz: float | None
+    volts: float
+    state: str  # the last PI step's state, or what the engine is doing
+    message: str
+    update_s: float | None  # median time between new measurements
+
+
+class Engine:
+    def __init__(self, source: FrequencySource, out: VoltageOutput, settings: LockSettings,
+                 log_dir: Path | None = None) -> None:
+        self.source, self.out = source, out
+        self._settings = settings
+        self.pi = PILock(replace(settings))
+        self._lock = threading.Lock()
+        self._mode = "idle"
+        self._state = "idle"
+        self._message = ""
+        self._target: float | None = None  # wanted voltage not yet written
+        self._volts = out.get()
+        self._reading = source.read()
+        self._error: float | None = None
+        self._samples: collections.deque[Sample] = collections.deque(maxlen=100_000)
+        self._periods: collections.deque[float] = collections.deque(maxlen=50)
+        self._last_seq = self._reading.seq
+        self._last_write = 0.0
+        self._stop = threading.Event()
+        self._cal_request: tuple[float, float, float] | None = None
+        self._cal_abort = threading.Event()
+        self._cal_seq = -1
+        self.log_dir = log_dir
+        self._csv: csv.writer | None = None  # type: ignore[valid-type]
+        self._csv_file = None
+        self._thread = threading.Thread(target=self._run, name="laserlock-engine", daemon=True)
+
+    # ---------------------------------------------------------------- commands (any thread)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._cal_abort.set()
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+        self.set_logging(False)
+
+    def settings(self) -> LockSettings:
+        with self._lock:
+            return replace(self._settings)
+
+    def update_settings(self, settings: LockSettings) -> None:
+        with self._lock:
+            self._settings = replace(settings)
+            self.pi.s = replace(settings)
+
+    def engage(self) -> None:
+        with self._lock:
+            if self._mode == "fault":
+                return
+            if self._settings.setpoint_thz <= 0:
+                self._message = "set a setpoint first"
+                return
+            self.pi.engage(self._volts)
+            self._mode, self._message = "locked", "lock engaged"
+        log.info("lock engaged at %.4f V, setpoint %.7f THz", self._volts, self._settings.setpoint_thz)
+
+    def release(self) -> None:
+        with self._lock:
+            if self._mode == "locked":
+                self._mode, self._state, self._message = "idle", "idle", f"lock released, holding {self._volts:.4f} V"
+                log.info("lock released at %.4f V", self._volts)
+
+    def set_voltage(self, volts: float) -> None:
+        """Manual output (only while not locked or calibrating)."""
+        with self._lock:
+            if self._mode == "idle":
+                s = self._settings
+                self._target = min(max(volts, s.v_min), s.v_max)
+
+    def calibrate(self, step_v: float, settle_s: float, average_s: float) -> None:
+        with self._lock:
+            if self._mode == "idle":
+                self._cal_request = (step_v, settle_s, average_s)
+                self._cal_abort.clear()
+
+    def abort_calibration(self) -> None:
+        self._cal_abort.set()
+
+    def snapshot(self) -> Snapshot:
+        with self._lock:
+            update = statistics.median(self._periods) if self._periods else None
+            return Snapshot(self._mode, self._reading, self._error, self._volts, self._state, self._message, update)
+
+    def drain(self) -> list[Sample]:
+        with self._lock:
+            out = list(self._samples)
+            self._samples.clear()
+            return out
+
+    def set_logging(self, on: bool) -> Path | None:
+        with self._lock:
+            if self._csv_file is not None:
+                self._csv_file.close()
+                self._csv_file, self._csv = None, None
+            if not on or self.log_dir is None:
+                return None
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            path = self.log_dir / time.strftime("laserlock-%Y%m%d-%H%M%S.csv")
+            self._csv_file = path.open("w", newline="")
+            self._csv = csv.writer(self._csv_file)
+            self._csv.writerow(["unix_time", "thz", "setpoint_thz", "error_mhz", "volts", "locked", "status"])
+            return path
+
+    # ---------------------------------------------------------------- the loop thread
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                if self._cal_request is not None:
+                    self._calibrate(*self._cal_request)
+                    continue
+                self._tick()
+                self._flush_output()
+            except DeviceFault as e:
+                log.error("%s", e)
+                with self._lock:
+                    self._mode, self._state, self._message = "fault", "fault", str(e)
+                    self._target = None
+                self._stop.wait(0.5)
+                continue
+            except Exception:
+                log.exception("engine loop")
+                with self._lock:
+                    self._mode, self._message = "fault", "internal error (see the log)"
+            self._stop.wait(0.005)
+
+    def _tick(self) -> None:
+        r = self.source.read()
+        if r.seq == self._last_seq:
+            return
+        prev_t = self._reading.t
+        self._last_seq = r.seq
+        with self._lock:
+            if r.thz is not None and self._reading.thz is not None:
+                self._periods.append(r.t - prev_t)
+            self._reading = r
+            s = self._settings
+            locked = self._mode == "locked"
+            if locked:
+                step = self.pi.update(r.thz, r.t)
+                self._target, self._error, self._state = step.voltage, step.error_mhz, step.state
+            else:
+                self._error = None if r.thz is None or s.setpoint_thz <= 0 else (r.thz - s.setpoint_thz) * 1e6
+            sample = Sample(time.time(), r.thz, self._error, self._volts, locked)
+            self._samples.append(sample)
+            if self._csv is not None:
+                self._csv.writerow([f"{sample.t:.3f}", "" if r.thz is None else f"{r.thz:.9f}", f"{s.setpoint_thz:.9f}",
+                                    "" if self._error is None else f"{self._error:.3f}", f"{self._volts:.4f}",
+                                    int(locked), r.status])
+
+    def _flush_output(self) -> None:
+        with self._lock:
+            target = self._target
+        if target is None or abs(target - self._volts) < 5e-5:
+            return
+        if time.monotonic() - self._last_write < self.out.min_interval:
+            return
+        applied = self.out.set(target)  # outside the lock: may wait for the DG1022's turn
+        self._last_write = time.monotonic()
+        with self._lock:
+            self._volts = applied
+            if self._target == target:
+                self._target = None
+
+    def _collect(self, seconds: float) -> list[float]:
+        values: list[float] = []
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not self._cal_abort.is_set():
+            self._tick()
+            r = self._reading
+            if r.thz is not None and r.seq != self._cal_seq:
+                values.append(r.thz)
+                self._cal_seq = r.seq
+            self._stop.wait(0.005)
+        return values
+
+    def _calibrate(self, step_v: float, settle_s: float, average_s: float) -> None:
+        """Steps the output to V0 - step and V0 + step, fits the slope, returns to V0, suggests gains."""
+        with self._lock:
+            self._cal_request = None
+            self._mode, self._state, self._message = "calibrating", "calibrating", "calibrating…"
+            s = self._settings
+        v0 = self._volts
+        lo, hi = max(v0 - step_v, s.v_min), min(v0 + step_v, s.v_max)
+        result = "calibration aborted"
+        try:
+            means = []
+            for v in (lo, hi):
+                self._volts = self.out.set(v)
+                self._collect(settle_s)
+                vals = self._collect(average_s)
+                if self._cal_abort.is_set() or len(vals) < 3:
+                    result = "calibration aborted" if self._cal_abort.is_set() else "calibration: too few readings"
+                    break
+                means.append(statistics.fmean(vals))
+            else:
+                slope = (means[1] - means[0]) * 1e6 / (hi - lo)
+                update = statistics.median(self._periods) if self._periods else 0.1
+                try:
+                    sign, kp, ki = suggest_gains(slope, update)
+                    with self._lock:
+                        self._settings = replace(self._settings, sign=sign, kp=kp, ki=ki)
+                        self.pi.s = replace(self._settings)
+                    result = f"tuning {slope:+.1f} MHz/V → sign {sign:+d}, kp {kp:.3g} V/MHz, ki {ki:.3g} V/(MHz·s)"
+                except ValueError:
+                    result = "calibration: no frequency change seen"
+        finally:
+            self._volts = self.out.set(v0)
+            with self._lock:
+                self._mode, self._state, self._message = "idle", "idle", result
+            log.info("%s", result)
