@@ -110,6 +110,7 @@ _server alias/
 .ai/local/
 venv
 side_projects/rga_visualiser/RGAData
+side_projects/rga_visualiser_cache/
 venv.nosync
 legacy/tdc_launcher/*
 # MATLAB references cloned by hand (README, "Legacy references"): not submodules, since a

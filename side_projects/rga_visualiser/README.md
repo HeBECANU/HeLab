@@ -53,6 +53,17 @@ Common residual-gas masses are labelled by default and can be hidden with the
 **Show common gas labels** checkbox. In the 3D view, normal numeric AMU ticks
 remain on the mass axis while the gas names form a separate angled annotation
 row along the far side of that axis, at the plot floor.
+**Scale time axis by record time** turns the time axis into a real date axis:
+each scan is drawn from its record time until the next scan starts, so pauses
+in acquisition show as tall bands holding the last scan. The newest scan is
+held for the median interval between scans.
+**Show difference from scan** draws every scan minus a reference scan, chosen
+in the list below it (the newest scan by default, which follows new scans on
+refresh). The colour scale is diverging and centred on zero. With log colour
+the difference is in decades, `log10(I / I_ref)`; otherwise it is in amperes.
+**Opacity from |difference|** then colours only the sign (red higher, blue
+lower) and sets each point's opacity to `|Δ| / max|Δ|` over the scans shown,
+so unchanged regions fade out and the largest changes are fully opaque.
 
 ```bash
 source venv/bin/activate
@@ -65,6 +76,15 @@ by default and stops reading older files once it has enough data; set the scan
 limit to **All** to load the full archive.
 It is also available from **View Analog history heat map…** in the comparison
 window.
+
+Decoded files are cached in `side_projects/rga_visualiser_cache/scans.sqlite`
+(gitignored), so **Load / refresh** reads only new or changed files from the
+share. An entry is used only while the file's size and modification time are
+unchanged; files modified in the last 10 s may still be being written and are
+always read fresh. Files RGASoft left without a complete spectrum are
+remembered as rejected until they change. The status line says how many files
+came from the cache. The cache never makes a load fail (a damaged cache is
+reported and the files are read directly), and deleting the folder is safe.
 
 ### Compare two scans
 

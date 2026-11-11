@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 import struct
 import sys
@@ -35,6 +36,7 @@ from PyQt6.QtWidgets import (
 from .plotly_view import PlotlyPlotView
 from .rga_visualiser import COMMON_GAS_PEAKS, RGAData, parse_rgadata
 from .rgadata_compare import DEFAULT_RGADATA_FOLDER
+from .scan_cache import ScanCache
 
 
 DEFAULT_ANALOG_FOLDER = DEFAULT_RGADATA_FOLDER / "Analog"
@@ -65,6 +67,8 @@ class HeatmapData:
     values: tuple[tuple[float, ...], ...]
     source_files: int
     skipped_files: tuple[str, ...] = ()
+    cached_files: int = 0
+    cache_problem: str | None = None
 
 
 def parse_analog_timestamp(path: Path) -> datetime:
@@ -85,14 +89,14 @@ def discover_analog_files(folder: Path) -> list[Path]:
     """Return timestamped automated files in acquisition order."""
 
     files: list[tuple[datetime, Path]] = []
-    for path in folder.iterdir():
-        if not path.is_file() or path.suffix.lower() != ".rgadata":
-            continue
-        try:
-            timestamp = parse_analog_timestamp(path)
-        except ValueError:
-            continue
-        files.append((timestamp, path))
+    # scandir gives each entry's type from the listing itself, so this needs
+    # no per-file stat (one network round trip each on the lab share).
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if _ANALOG_NAME.fullmatch(entry.name) is None or not entry.is_file():
+                continue
+            path = folder / entry.name
+            files.append((parse_analog_timestamp(path), path))
     return [path for _timestamp, path in sorted(files)]
 
 
@@ -100,6 +104,7 @@ def load_heatmap_data(
     paths: Sequence[Path],
     progress: Callable[[int, int], None] | None = None,
     max_scans: int | None = None,
+    cache: ScanCache | None = None,
 ) -> HeatmapData:
     """Load scans from files sharing one mass grid.
 
@@ -107,7 +112,8 @@ def load_heatmap_data(
     have been collected, then the exact newest number is returned. Otherwise,
     the grid used by the most files is selected. Files with a different grid
     or invalid data are reported rather than interpolated, so the
-    visualisation never invents measurements.
+    visualisation never invents measurements. With ``cache``, unchanged
+    files are read from the disk cache instead of being decoded again.
     """
 
     if not paths:
@@ -124,7 +130,7 @@ def load_heatmap_data(
     for completed, path in enumerate(reversed(paths), start=1):
         try:
             file_time = parse_analog_timestamp(path)
-            data = parse_rgadata(path)
+            data = cache.load(path) if cache is not None else parse_rgadata(path)
             if max_scans is not None:
                 if newest_grid is None:
                     newest_grid = data.masses
@@ -178,6 +184,8 @@ def load_heatmap_data(
         values=tuple(row[1] for row in rows),
         source_files=len({row[2] for row in rows}),
         skipped_files=tuple(reversed(skipped)),
+        cached_files=cache.hits if cache is not None else 0,
+        cache_problem=cache.problem if cache is not None else None,
     )
 
 
@@ -236,6 +244,80 @@ def high_end_log_colorscale(
     return colourscale
 
 
+_FALLBACK_SCAN_INTERVAL = timedelta(minutes=1)
+_STEP_EPSILON = timedelta(milliseconds=1)
+
+
+def _time_label(time: datetime) -> str:
+    return time.isoformat(sep=" ", timespec="milliseconds")
+
+
+def scan_time_edges(times: Sequence[datetime]) -> tuple[datetime, ...]:
+    """Return row edges so each scan holds until the next scan starts.
+
+    Scan ``i`` spans ``times[i]`` to ``times[i + 1]``. The newest scan has no
+    successor, so it is given the median interval between scans (one minute
+    when there is only a single scan).
+    """
+
+    if not times:
+        return ()
+    gaps = sorted(
+        later - earlier
+        for earlier, later in zip(times, times[1:])
+        if later > earlier
+    )
+    last_span = gaps[len(gaps) // 2] if gaps else _FALLBACK_SCAN_INTERVAL
+    return (*times, times[-1] + last_span)
+
+
+def delta_values(
+    values: Sequence[Sequence[float | None]], reference_index: int
+) -> tuple[tuple[float | None, ...], ...]:
+    """Subtract the reference scan's row from every row.
+
+    A missing value (``None``, e.g. a non-positive current under log colour)
+    in either row leaves that point missing.
+    """
+
+    reference = values[reference_index]
+    return tuple(
+        tuple(
+            None if value is None or base is None else value - base
+            for value, base in zip(row, reference)
+        )
+        for row in values
+    )
+
+
+_DELTA_NEGATIVE_RGB = "33,102,172"  # RdBu's blue end
+_DELTA_POSITIVE_RGB = "178,24,43"  # RdBu's red end
+
+
+def delta_opacity_colorscale(*, with_alpha: bool) -> list[list[float | str]]:
+    """Colour by the sign of a difference; fade to transparent at zero.
+
+    Used with a colour range symmetric about zero, the opacity is the
+    normalised absolute difference ``|Δ| / max|Δ|``. With ``with_alpha`` the
+    opacity is carried in the colours (a heat map); without it the colours
+    are opaque and the caller pairs them with ``DELTA_OPACITY_SCALE`` (a
+    surface, whose colour scale ignores alpha).
+    """
+
+    def colour(rgb: str, alpha: float) -> str:
+        return f"rgba({rgb},{alpha:g})" if with_alpha else f"rgb({rgb})"
+
+    return [
+        [0.0, colour(_DELTA_NEGATIVE_RGB, 1.0)],
+        [0.5, colour(_DELTA_NEGATIVE_RGB, 0.0)],
+        [0.5, colour(_DELTA_POSITIVE_RGB, 0.0)],
+        [1.0, colour(_DELTA_POSITIVE_RGB, 1.0)],
+    ]
+
+
+DELTA_OPACITY_SCALE: list[list[float]] = [[0.0, 1.0], [0.5, 0.0], [1.0, 1.0]]
+
+
 def build_figure(
     data: HeatmapData,
     *,
@@ -243,15 +325,74 @@ def build_figure(
     log_colour: bool,
     top_down: bool = False,
     gas_labels: bool = True,
+    time_scaled: bool = False,
+    reference_index: int | None = None,
+    delta_opacity: bool = False,
 ) -> go.Figure:
-    """Build a Plotly heat map or rotatable 3D surface."""
+    """Build a Plotly heat map or rotatable 3D surface.
+
+    By default every scan is one equally tall row. With ``time_scaled`` the
+    time axis is a real date axis and each scan is drawn from its record time
+    until the next scan, so gaps in acquisition show as long held rows.
+
+    With ``reference_index`` every scan is shown as its difference from that
+    scan, on a diverging colour scale centred on zero. Under log colour the
+    difference is in decades (``log10(I / I_ref)``), otherwise in amperes.
+    With ``delta_opacity`` as well, the colour shows only the sign and the
+    opacity is the absolute difference normalised to the largest one shown.
+    """
 
     z_values = transformed_values(data.values, log_colour)
-    colour_scale = high_end_log_colorscale(z_values) if log_colour else "Viridis"
-    time_labels = [
-        time.isoformat(sep=" ", timespec="milliseconds") for time in data.times
-    ]
-    signal_label = "log10 ion current (A)" if log_colour else "Ion current (A)"
+    colour_mid: float | None = None
+    colour_range: tuple[float | None, float | None] = (None, None)
+    opacity_from_delta = reference_index is not None and delta_opacity
+    if reference_index is not None:
+        z_values = delta_values(z_values, reference_index)
+        colour_scale: str | list[list[float | str]] = "RdBu_r"
+        colour_mid = 0.0
+        if opacity_from_delta:
+            largest = max(
+                (
+                    abs(value)
+                    for row in z_values
+                    for value in row
+                    if value is not None and math.isfinite(value)
+                ),
+                default=0.0,
+            )
+            largest = largest if largest > 0 else 1.0
+            colour_range = (-largest, largest)
+            colour_mid = None
+            colour_scale = delta_opacity_colorscale(with_alpha=not surface)
+    elif log_colour:
+        colour_scale = high_end_log_colorscale(z_values)
+    else:
+        colour_scale = "Viridis"
+    time_labels = [_time_label(time) for time in data.times]
+    edges = scan_time_edges(data.times) if time_scaled else ()
+    if time_scaled:
+        # A surface interpolates between rows, so each scan is repeated just
+        # before the next one starts to draw flat steps instead of slopes.
+        surface_times: list[datetime] = []
+        surface_z: list[tuple[float | None, ...]] = []
+        for start, end, row in zip(edges, edges[1:], z_values):
+            surface_times.extend((start, max(start, end - _STEP_EPSILON)))
+            surface_z.extend((row, row))
+        surface_y = [_time_label(time) for time in surface_times]
+    else:
+        surface_y = time_labels
+        surface_z = list(z_values)
+    time_axis: dict[str, object] = (
+        dict(type="date")
+        if time_scaled
+        else dict(type="category", categoryorder="array", categoryarray=time_labels)
+    )
+    if reference_index is None:
+        signal_label = "log10 ion current (A)" if log_colour else "Ion current (A)"
+    else:
+        signal_label = (
+            "Δ log10 ion current (decades)" if log_colour else "Δ ion current (A)"
+        )
     hover = (
         "Time: %{y}<br>Mass: %{x:.2f} amu/e<br>"
         + signal_label
@@ -267,9 +408,13 @@ def build_figure(
         figure = go.Figure(
             go.Surface(
                 x=data.masses,
-                y=time_labels,
-                z=z_values,
+                y=surface_y,
+                z=surface_z,
                 colorscale=colour_scale,
+                cmid=colour_mid,
+                cmin=colour_range[0],
+                cmax=colour_range[1],
+                opacityscale=DELTA_OPACITY_SCALE if opacity_from_delta else None,
                 colorbar=dict(title=signal_label),
                 hovertemplate=hover,
                 connectgaps=False,
@@ -289,7 +434,7 @@ def build_figure(
             surface_annotations = [
                 dict(
                     x=mass,
-                    y=time_labels[-1],
+                    y=surface_y[-1],
                     z=plot_floor,
                     text=label,
                     textangle=-45,
@@ -303,12 +448,7 @@ def build_figure(
         figure.update_layout(
             scene=dict(
                 xaxis=dict(title="Mass-to-charge ratio (amu/e)"),
-                yaxis=dict(
-                    title="Acquisition time",
-                    type="category",
-                    categoryorder="array",
-                    categoryarray=time_labels,
-                ),
+                yaxis=dict(title="Acquisition time", **time_axis),
                 zaxis_title=signal_label,
                 camera=camera,
                 aspectmode="manual",
@@ -317,12 +457,17 @@ def build_figure(
             )
         )
     else:
+        # Time-scaled rows are given as edges (one more than the scans), so
+        # each scan fills the band up to the next scan's record time.
         figure = go.Figure(
             go.Heatmap(
                 x=data.masses,
-                y=time_labels,
+                y=[_time_label(time) for time in edges] if time_scaled else time_labels,
                 z=z_values,
                 colorscale=colour_scale,
+                zmid=colour_mid,
+                zmin=colour_range[0],
+                zmax=colour_range[1],
                 colorbar=dict(title=signal_label),
                 hovertemplate=hover,
                 connectgaps=False,
@@ -330,8 +475,12 @@ def build_figure(
         )
         figure.update_layout(
             xaxis_title="Mass-to-charge ratio (amu/e)",
-            yaxis_title="Acquisition time (time-ordered scans)",
-            yaxis=dict(type="category", categoryorder="array", categoryarray=time_labels),
+            yaxis_title=(
+                "Acquisition time (each scan held until the next)"
+                if time_scaled
+                else "Acquisition time (time-ordered scans)"
+            ),
+            yaxis=time_axis,
         )
         if gas_labels:
             for mass, label in visible_gases:
@@ -350,7 +499,12 @@ def build_figure(
 
     figure.update_layout(
         template="plotly_white",
-        title="Automated analogue RGA history",
+        title=(
+            "Automated analogue RGA history"
+            if reference_index is None
+            else "Automated analogue RGA history: difference from scan at "
+            + time_labels[reference_index]
+        ),
         margin=dict(l=85, r=35, t=65, b=70),
         uirevision="analogue-rga-history",
     )
@@ -378,13 +532,15 @@ class _LoadWorker(QRunnable):
 
     def run(self) -> None:
         try:
-            result = load_heatmap_data(
-                self.paths,
-                lambda completed, total: self.signals.progress.emit(
-                    self.generation, completed, total
-                ),
-                self.max_scans,
-            )
+            with ScanCache() as cache:
+                result = load_heatmap_data(
+                    self.paths,
+                    lambda completed, total: self.signals.progress.emit(
+                        self.generation, completed, total
+                    ),
+                    self.max_scans,
+                    cache,
+                )
         except (OSError, ValueError) as exc:
             self.signals.failed.emit(self.generation, str(exc))
             return
@@ -423,6 +579,25 @@ class AnalogHeatmapWindow(QMainWindow):
         self.log_colour_checkbox.setChecked(True)
         self.gas_labels_checkbox = QCheckBox("Show common gas labels")
         self.gas_labels_checkbox.setChecked(True)
+        self.time_scaled_checkbox = QCheckBox("Scale time axis by record time")
+        self.time_scaled_checkbox.setToolTip(
+            "Space scans by when they were recorded; each scan fills the time "
+            "until the next scan"
+        )
+        self.delta_checkbox = QCheckBox("Show difference from scan")
+        self.delta_checkbox.setToolTip(
+            "Show every scan minus the chosen reference scan "
+            "(in decades under log colour)"
+        )
+        self.delta_opacity_checkbox = QCheckBox("Opacity from |difference|")
+        self.delta_opacity_checkbox.setEnabled(False)
+        self.delta_opacity_checkbox.setToolTip(
+            "Colour shows the sign; opacity is the absolute difference "
+            "normalised to the largest shown"
+        )
+        self.reference_combo = QComboBox()
+        self.reference_combo.setEnabled(False)
+        self.reference_combo.setToolTip("Reference scan; defaults to the newest")
         self.top_down_button = QPushButton("Flatten to top-down view")
         self.top_down_button.setEnabled(False)
         self.status_label = QLabel("Choose or load an automated Analog folder.")
@@ -441,6 +616,10 @@ class AnalogHeatmapWindow(QMainWindow):
         controls_layout.addWidget(self.view_combo)
         controls_layout.addWidget(self.log_colour_checkbox)
         controls_layout.addWidget(self.gas_labels_checkbox)
+        controls_layout.addWidget(self.time_scaled_checkbox)
+        controls_layout.addWidget(self.delta_checkbox)
+        controls_layout.addWidget(self.reference_combo)
+        controls_layout.addWidget(self.delta_opacity_checkbox)
         controls_layout.addWidget(self.top_down_button)
         controls_layout.addStretch(1)
         controls_layout.addWidget(self.status_label)
@@ -457,6 +636,10 @@ class AnalogHeatmapWindow(QMainWindow):
         self.view_combo.currentIndexChanged.connect(self._view_changed)
         self.log_colour_checkbox.stateChanged.connect(self._redraw)
         self.gas_labels_checkbox.stateChanged.connect(self._redraw)
+        self.time_scaled_checkbox.stateChanged.connect(self._redraw)
+        self.delta_checkbox.stateChanged.connect(self._delta_toggled)
+        self.reference_combo.currentIndexChanged.connect(self._reference_changed)
+        self.delta_opacity_checkbox.stateChanged.connect(self._reference_changed)
         self.top_down_button.clicked.connect(lambda: self._redraw(top_down=True))
 
         self._show_placeholder()
@@ -519,10 +702,13 @@ class AnalogHeatmapWindow(QMainWindow):
         if generation != self._generation or not isinstance(result, HeatmapData):
             return
         self._data = result
+        self._fill_reference_combo(result)
         self.reload_button.setEnabled(True)
         skipped = len(result.skipped_files)
         self.status_label.setText(
-            f"Loaded {len(result.times)} scans from {result.source_files} files."
+            f"Loaded {len(result.times)} scans from {result.source_files} files"
+            + f" ({result.cached_files} read from cache)."
+            + (f" Note: {result.cache_problem}." if result.cache_problem else "")
             + (
                 f" Skipped {skipped}; first issue: {result.skipped_files[0]}"
                 if skipped
@@ -544,6 +730,35 @@ class AnalogHeatmapWindow(QMainWindow):
             worker for worker in self._workers if worker.generation != generation
         ]
 
+    def _fill_reference_combo(self, data: HeatmapData) -> None:
+        """List the loaded scans, keeping the chosen one if it is still there.
+
+        The newest scan is chosen when nothing was chosen before, when the
+        newest was chosen (so it follows new scans), or when the chosen scan
+        is no longer loaded.
+        """
+
+        previous = self.reference_combo.currentText()
+        was_newest = (
+            self.reference_combo.currentIndex() == self.reference_combo.count() - 1
+        )
+        labels = [_time_label(time) for time in data.times]
+        self.reference_combo.blockSignals(True)
+        self.reference_combo.clear()
+        self.reference_combo.addItems(labels)
+        index = labels.index(previous) if previous in labels and not was_newest else -1
+        self.reference_combo.setCurrentIndex(index if index >= 0 else len(labels) - 1)
+        self.reference_combo.blockSignals(False)
+
+    def _delta_toggled(self, _state: int) -> None:
+        self.reference_combo.setEnabled(self.delta_checkbox.isChecked())
+        self.delta_opacity_checkbox.setEnabled(self.delta_checkbox.isChecked())
+        self._redraw()
+
+    def _reference_changed(self, _value: int) -> None:
+        if self.delta_checkbox.isChecked():
+            self._redraw()
+
     def _view_changed(self, _index: int) -> None:
         self.top_down_button.setEnabled(self.view_combo.currentIndex() == 1)
         self._redraw()
@@ -551,6 +766,9 @@ class AnalogHeatmapWindow(QMainWindow):
     def _redraw(self, _state: int = 0, *, top_down: bool = False) -> None:
         if self._data is None:
             return
+        reference_index: int | None = None
+        if self.delta_checkbox.isChecked() and self.reference_combo.currentIndex() >= 0:
+            reference_index = self.reference_combo.currentIndex()
         self.plot_view.show_figure(
             build_figure(
                 self._data,
@@ -558,6 +776,9 @@ class AnalogHeatmapWindow(QMainWindow):
                 log_colour=self.log_colour_checkbox.isChecked(),
                 top_down=top_down,
                 gas_labels=self.gas_labels_checkbox.isChecked(),
+                time_scaled=self.time_scaled_checkbox.isChecked(),
+                reference_index=reference_index,
+                delta_opacity=self.delta_opacity_checkbox.isChecked(),
             )
         )
 
