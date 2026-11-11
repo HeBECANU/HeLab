@@ -130,6 +130,12 @@ class FakeVisa:
     def read(self) -> str:
         return self.reply
 
+    def lock_excl(self, timeout: int = 0) -> None:
+        self.locked = True
+
+    def unlock(self) -> None:
+        self.locked = False
+
     def close(self) -> None:
         pass
 
@@ -155,6 +161,7 @@ def test_dg1022_finds_rounds_clamps_and_paces(dg: tuple[DG1022, FakeVisa]) -> No
     d, fake = dg
     assert d.resource.startswith("USB0::0x0400::0x09C4")
     assert d.output == "ON"
+    assert fake.locked  # no other VISA program can interleave commands
     assert d.set(1.234567) == 1.2346
     assert d.set(9.0) == HARD_V_MAX
     assert d.set(-1.0) == 0.0

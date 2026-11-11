@@ -17,6 +17,9 @@ DG1022's DC offset, with a PI loop. Windows only (the wavemeter's `wlmData.dll`)
 - Its USB **stops answering** when commands come too close together — always below 5 ms, once at 20 ms —
   and only a power cycle brings it back. Laserlock keeps 50 ms between any two commands (write and verify
   at 50 ms: 50/50 correct, about 18 verified or 20 unverified updates a second).
+- Laserlock holds an **exclusive VISA lock** on it while running: another program's commands between
+  laserlock's would break the 50 ms spacing (that hung it on 2026-11-11). Other VISA programs get
+  "resource locked"; laserlock won't start while another program holds it.
 - The offset keeps 4 decimals in volts (0.1 mV); finer values are rounded.
 - Set CH1 up on the front panel (DC, or ARB DC, output on) before locking; laserlock only moves the offset.
   If it stops answering, the window says "fault" and the voltage stays where it was.

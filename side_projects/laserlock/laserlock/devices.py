@@ -145,6 +145,13 @@ class DG1022:
         self.min_interval = max(min_interval, 0.05)
         self._suffix = "" if channel == 1 else f":CH{channel}"
         self._io = rm.open_resource(resource, timeout=timeout_ms, write_termination="\n")
+        # Exclusive VISA lock: another program's commands slipped between ours would break the 50 ms rule and
+        # hang it (2026-11-11). Other VISA programs are refused while laserlock runs.
+        try:
+            self._io.lock_excl(timeout=500)
+        except self._errors as e:
+            self._io.close()
+            raise DeviceFault(f"another program is using the DG1022 ({e}); close it first") from e
         self._lock = threading.Lock()
         self._last_cmd = 0.0
         self.idn = self._query("*IDN?")
@@ -197,6 +204,10 @@ class DG1022:
         return f"DG1022 CH{self.channel}: {self.state}, output {self.output}"
 
     def close(self) -> None:
+        try:
+            self._io.unlock()
+        except Exception:
+            pass
         try:
             self._io.close()
         except Exception:  # closing a hung session
