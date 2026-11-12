@@ -4666,6 +4666,18 @@ class FolderCache(QObject):
                 # A Live check from before a mismatch (the folder's epoch moved): fenced like a ``loaded``.
                 self._cancel_job(job)
                 return
+            if kind == "live_unchanged":
+                # A Live check's answer ends it for its subscribers, as a ``loaded`` does: off the job list now,
+                # its later events (the helper's ``done``) to no one. Its ``done`` can come a drain later (each
+                # ``IOService._tick`` drains 8 ms of events); a check asked for meanwhile (a converted shot's
+                # ``check_soon``) would otherwise join this one and wait for an answer already given, and Live
+                # would never check again (the lab, 2026-11-11).
+                if self.jobs.get(job.key) is job:
+                    del self.jobs[job.key]
+                subscribers, job.subscribers = tuple(job.subscribers.values()), {}
+                for request in subscribers:
+                    self.resultReady.emit(request, event)
+                return
             if kind == "loaded":
                 job.clock.stop()
                 event = {"loaded_at": time.time(), **event}
