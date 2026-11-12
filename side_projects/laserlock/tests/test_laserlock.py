@@ -918,3 +918,29 @@ def test_error_axis_follows_the_newest_readings_after_a_hop() -> None:
     assert -7e6 < lo < -5e6 and 5e6 < hi < 7e6
     win.close()
     app.processEvents()
+
+
+
+def test_range_presets(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=14)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    win.show()
+    app.processEvents()
+    labels = [b.text() for b in win.err_range.preset_buttons]
+    assert labels == ["±1", "±10", "±100", "±1000"]
+    win.err_range.preset_buttons[2].click()
+    assert not win.err_range.auto.isChecked()
+    assert win.err_plot.getViewBox().viewRange()[1] == [pytest.approx(-100e6), pytest.approx(100e6)]
+    win.v_range.preset_buttons[0].click()
+    assert win.v_plot.getViewBox().viewRange()[1] == [pytest.approx(0.0), pytest.approx(7.0)]
+    win.err_range.auto.setChecked(True)
+    assert win.err_range.auto.isChecked()
+    win.close()
+    app.processEvents()

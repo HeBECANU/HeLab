@@ -191,7 +191,8 @@ class YRange(QWidget):
     followed too."""
 
     def __init__(self, views: list[Any], scale: float, unit: str, lo: float, hi: float, decimals: int = 3,
-                 state: dict[str, Any] | None = None, follow: bool = False) -> None:
+                 state: dict[str, Any] | None = None, follow: bool = False,
+                 presets: list[tuple[str, float, float]] | None = None) -> None:
         super().__init__()
         self.views = [v if isinstance(v, pg.ViewBox) else v.getViewBox() for v in views]
         self.scale, self.current = scale, 0
@@ -214,9 +215,34 @@ class YRange(QWidget):
         h.addWidget(self.lo)
         h.addWidget(QLabel("to"))
         h.addWidget(self.hi)
+        self.preset_buttons: list[QPushButton] = []
+        for label, p_lo, p_hi in presets or []:
+            b = QPushButton(label)
+            b.setToolTip(f"y from {p_lo:g} to {p_hi:g} {unit}")
+            b.setMaximumWidth(max(44, 9 * len(label) + 16))
+            b.clicked.connect(self._preset_clicked)
+            b.setProperty("range", (p_lo, p_hi))
+            h.addWidget(b)
+            self.preset_buttons.append(b)
         for vb in self.views:
             vb.sigRangeChangedManually.connect(self._mouse)
         self._apply()
+
+    def _preset_clicked(self) -> None:
+        b = self.sender()
+        if isinstance(b, QPushButton):
+            lo, hi = b.property("range")
+            self.set_fixed(lo, hi)
+
+    def set_fixed(self, lo: float, hi: float) -> None:
+        for w, v in ((self.lo, lo), (self.hi, hi)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        if self.auto.isChecked():
+            self.auto.setChecked(False)  # applies
+        else:
+            self._apply()
 
     def _typed(self) -> None:
         if self.auto.isChecked():
@@ -645,11 +671,13 @@ class MainWindow(QMainWindow):
         self.sw_plot.setLabel("bottom", "output", units="V")
         self.sw_plot.setTitle("Sweep")
         light_grid(self.sw_plot)
-        self.err_range = YRange([self.err_plot, self.comb], 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"), follow=True)
+        self.err_range = YRange([self.err_plot, self.comb], 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"), follow=True,
+                                presets=[(f"±{w:g}", -w, w) for w in (1, 10, 100, 1000)])
         self.err_range.auto.setToolTip(f"Fit the error axis to the newest {FOLLOW_S:.0f} s of readings, so it follows "
                                        "the laser (an older jump, e.g. a mode hop, scrolls off); untick to keep "
                                        "the range in the boxes")
-        self.v_range = YRange([self.v_plot, self.comb_vb], 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"))
+        self.v_range = YRange([self.v_plot, self.comb_vb], 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"),
+                              presets=[("0–7 V", HARD_V_MIN, HARD_V_MAX)])
         self.sw_y = YRange([self.sw_plot], 1e6, "MHz", -5000.0, 5000.0, 1, ui.get("sweep_y"))
         # plot options
         self.layout_kind = Combo()
