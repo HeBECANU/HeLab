@@ -71,6 +71,9 @@ anything for what it does. Which panels are shut, and the input lock, are rememb
 **Mini window** swaps to a small always-on-top window with just the state, error and output (the lock keeps
 running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
 
+**Locked and lost.** A light green band marks each stretch the lock was engaged; a dotted red line marks each
+LOCK LOST (the newest 40 of each in the shown span).
+
 **Flicker and jumps.** The time plots colour the traces where the frequency misbehaves: **orange** where it
 flickers (big steps reversing direction 3 or more times within 1 s: a ringing lock, a laser flicking between
 modes, a bad signal), **red** at a sharp jump (one big step that isn't flicker: a mode hop, a sudden step); the

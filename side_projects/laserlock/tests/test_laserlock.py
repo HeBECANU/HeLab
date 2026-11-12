@@ -1100,3 +1100,30 @@ def test_quality_labels_flicker_and_jumps() -> None:
     g = 0.05 * t + rng.normal(0, 30, t.size)
     q = classify(t, g)
     assert q.flicker.mean() < 0.05 and q.jumps == 0
+
+
+def test_locked_bands_and_lost_lines(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import numpy as np
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=18)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    win.show()
+    app.processEvents()
+    t = np.arange(100.0, 160.0, 1.0)
+    locked = (t >= 110) & (t < 130) | (t >= 140)
+    with eng._lock:
+        eng._lost_events.append(win._t0 + 130.0)
+    win._draw_lock_marks(t, locked, -math.inf, (win.err_plot, win.v_plot))
+    bands = [b for b in win._lock_bands[win.err_plot] if b.isVisible()]
+    assert [tuple(b.getRegion()) for b in bands] == [(110.0, 129.0), (140.0, 159.0)]
+    lines = [ln for ln in win._lost_lines[win.v_plot] if ln.isVisible()]
+    assert [ln.value() for ln in lines] == [130.0]
+    assert not any(b.isVisible() for b in win._lock_bands[win.comb])
+    win.close()
+    app.processEvents()

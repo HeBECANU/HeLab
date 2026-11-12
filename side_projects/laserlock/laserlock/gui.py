@@ -74,6 +74,7 @@ def light_grid(plot: Any) -> None:
         axis.setGrid(255)
         axis.setTickDensity(1.6)
         axis.setStyle(maxTickLevel=0, tickFont=mono(), tickLength=-6)
+        axis.setZValue(-1000)  # the grid under the traces: opaque lines drawn over them hid a trace lying on one
 
 
 HOP_COLOUR = "#cf222e"
@@ -85,6 +86,9 @@ HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
 ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
 FLICKER_COLOUR, JUMP_COLOUR = "#e8590c", "#cf222e"
+LOCKED_BAND = (226, 242, 230)  # light green behind locked stretches (opaque: cheaper to draw)
+LOST_PEN = pg.mkPen("#cf222e", width=1.5, style=Qt.PenStyle.DotLine)
+LOCK_MARKS_MAX = 40
 MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
                 "fault": "#cf222e"}
 
@@ -874,6 +878,7 @@ class MainWindow(QMainWindow):
         right_axis.setLabel("Output", units="V", color=OUT_COLOUR)
         right_axis.setPen(pg.mkPen("#888"))
         right_axis.setTextPen(pg.mkPen("k"))
+        right_axis.setZValue(-1000)
         self.comb_vb.setXLink(self.comb)
         self.comb.getViewBox().sigResized.connect(self._comb_geometry)
         self.comb.getViewBox().sigRangeChangedManually.connect(self._time_dragged)
@@ -900,6 +905,9 @@ class MainWindow(QMainWindow):
                 pair.append(item)
             self._marks[curve] = (pair[0], pair[1])
         self._quality: Quality | None = None
+        # locked stretches (light green bands) and lost locks (dotted red lines), reused, per time plot
+        self._lock_bands: dict[Any, list[Any]] = {p: [] for p in (self.err_plot, self.v_plot, self.comb)}
+        self._lost_lines: dict[Any, list[Any]] = {p: [] for p in (self.err_plot, self.v_plot, self.comb)}
         self._quality_t = np.empty(0)
         sweep_plots = pg.GraphicsLayoutWidget()
         self.sw_plot = sweep_plots.addPlot()
@@ -1221,6 +1229,40 @@ class MainWindow(QMainWindow):
             flick_item, jump_item = self._marks[curve]
             flick_item.setPen(pg.mkPen(FLICKER_COLOUR, width=w + 0.5))
             jump_item.setPen(pg.mkPen(JUMP_COLOUR, width=w + 0.5))
+
+    def _draw_lock_marks(self, t: np.ndarray, locked: np.ndarray, t_from: float, plots: tuple[Any, ...]) -> None:
+        """A light green band behind each locked stretch, and a dotted red line where the lock was lost (the newest
+        LOCK_MARKS_MAX of each in the shown span; the items are reused)."""
+        bands: list[tuple[float, float]] = []
+        if t.size:
+            edges = np.diff(np.concatenate(([0], locked.astype(np.int8), [0])))
+            starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1
+            bands = [(float(t[a]), float(t[b])) for a, b in zip(starts, ends)][-LOCK_MARKS_MAX:]
+        lost = [x - self._t0 for x in self.engine.lost_events() if x - self._t0 >= t_from][-LOCK_MARKS_MAX:]
+        for plot in (self.err_plot, self.v_plot, self.comb):
+            shown = plot in plots
+            pool = self._lock_bands[plot]
+            while shown and len(pool) < len(bands):
+                band = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(LOCKED_BAND), pen=pg.mkPen(None))
+                band.setZValue(-20)
+                plot.addItem(band, ignoreBounds=True)
+                pool.append(band)
+            for k, band in enumerate(pool):
+                on = shown and k < len(bands)
+                if on:
+                    band.setRegion(bands[k])
+                band.setVisible(on)
+            lines = self._lost_lines[plot]
+            while shown and len(lines) < len(lost):
+                line = pg.InfiniteLine(angle=90, pen=LOST_PEN)
+                line.setZValue(7)
+                plot.addItem(line, ignoreBounds=True)
+                lines.append(line)
+            for k, line in enumerate(lines):
+                on = shown and k < len(lost)
+                if on:
+                    line.setValue(lost[k])
+                line.setVisible(on)
 
     def _draw_time_now(self) -> None:
         self._draw_time()
@@ -1618,6 +1660,8 @@ class MainWindow(QMainWindow):
         self.quality_label.setText("  ".join(bits) if bits else "no flicker or jumps")
         self.err_range.fit(err[t >= now - min(FOLLOW_S, span or FOLLOW_S)])
         self._draw_hops(self.engine.snapshot().hops if hops is None else hops, now - span if span else -math.inf)
+        self._draw_lock_marks(t, locked, now - span if span else -math.inf,
+                              (self.comb,) if combined else (self.err_plot, self.v_plot))
         # the lock's quality: locked readings within the capture range (not the time spent in another mode)
         in_capture = np.abs(err) <= self.capture.value() * 1e6
         locked_part = err[locked & in_capture]

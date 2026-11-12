@@ -79,6 +79,7 @@ class Engine:
         self._hop_logged_at = 0.0
         self._out_since: float | None = None  # reading time the lock went out of capture
         self._lost = 0
+        self._lost_events: collections.deque[float] = collections.deque(maxlen=1000)  # unix times
         self._relock: ScanRequest | None = None  # on a lost lock: find a stable range and relock with this
         self._hops_unlogged = 0
         self._recent: collections.deque[tuple[float, float]] = collections.deque(maxlen=32)  # (reading t, volts)
@@ -225,6 +226,11 @@ class Engine:
         with self._lock:
             self._wm_request.update(changes)
 
+    def lost_events(self) -> list[float]:
+        """When the lock was lost (unix times)."""
+        with self._lock:
+            return list(self._lost_events)
+
     def hop_events(self) -> list[HopEvent]:
         with self._lock:
             return list(self._hop_events)
@@ -365,6 +371,7 @@ class Engine:
         self._target = None
         self._out_since = None
         self._lost += 1
+        self._lost_events.append(time.time())
         when = time.strftime("%H:%M:%S")
         self._message = f"LOCK LOST at {when}: {why}; output held at {self._volts:.4f} V"
         log.warning("lock lost: %s; output held at %.4f V", why, self._volts)
