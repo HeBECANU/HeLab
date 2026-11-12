@@ -3135,6 +3135,12 @@ class FolderCache(QObject):
         self.quitSavesChanged.emit()
         return submitted
 
+    def save_deferred(self, owner: str, path: str) -> bool:
+        """Whether ``owner``'s save of ``path`` waits for its turn (``save``: another load or save of the folder
+        runs first). Memory only (Live's backstop)."""
+        waiting = self._deferred_saves.get(self.key(path))
+        return waiting is not None and waiting[0] == owner
+
     def _save_waits(self, path: str) -> bool:
         """A save of ``path`` waits: the folder's data is being written, or another load of it
         that isn't a save is running or queued."""

@@ -118,3 +118,61 @@ def test_a_late_event_of_an_answered_check_never_stops_the_next(
     assert session.request == "check" and not session.error
     explorer.stop_live(save=False)
     explorer.close_cleanup()
+
+
+def test_the_backstop_starts_a_check_live_lost(qtbot: QtBot, service: IOService, tmp_path: Path,
+                                               caplog: pytest.LogCaptureFixture) -> None:
+    """Belt and braces: while Live is on, a check that is thought in flight with no job behind it, or no check
+    timed at all, for ``LIVE_STALL_SECONDS``, is logged with Live's state and replaced by a new check."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cache = explorer.model.cache
+    control = explorer.live_control
+    session = explorer.live
+    assert session is not None
+    cache.live_interval = 30.0
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None)
+    check(cache, path, tmp_path)
+    assert session.request == "" and control._live_timer.isActive()
+
+    # Lost: Live thinks a check runs, but none does (and no timer will start one).
+    control._live_timer.stop()
+    session.request = "check"
+    control._live_watch()
+    assert job_of(cache, path) is None  # (Not yet: a few intervals first.)
+    session.check_started_at -= control.stall_seconds() + 1
+    with caplog.at_level(logging.WARNING):
+        control._live_watch()
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None, timeout=2_000)
+    assert session.request == "check"
+    assert any("Live: no check started for" in record.getMessage() and "request='check'" in record.getMessage()
+               for record in caplog.records), caplog.text
+
+    # A check that runs (its job is there) is the helper's to time out: never replaced beside itself.
+    caplog.clear()
+    session.check_started_at -= control.stall_seconds() + 1
+    job = job_of(cache, path)
+    control._live_watch()
+    assert job_of(cache, path) is job and not caplog.records
+
+    # A conversion thought in flight with no job behind it ends, and the next tick converts again.
+    check(cache, path, tmp_path)
+    convert_state = session.convert
+    assert convert_state is not None
+    cache.cancel(explorer.live_owner, "convert", path)
+    convert_state.request, convert_state.error = True, ""
+    convert_state.requested_at -= control.stall_seconds() + 1
+    with caplog.at_level(logging.WARNING):
+        control._live_watch()
+    assert not convert_state.request and "Live auto-convert: no conversion of" in caplog.text
+
+    # No check in flight and none timed: one starts.
+    assert session.request == "" and job_of(cache, path) is None
+    control._live_timer.stop()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        control._live_watch()
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None, timeout=2_000)
+    assert "request='', reading=False, check_soon=False, timer=False" in caplog.text
+    explorer.stop_live(save=False)
+    assert not control._watch_timer.isActive()
+    explorer.close_cleanup()
