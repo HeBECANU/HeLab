@@ -72,7 +72,8 @@ anything for what it does. Which panels are shut, and the input lock, are rememb
 running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
 
 **The right plot** shows error against output. **Show**: *live* draws it for the time shown, as a path through the
-readings with the newest one a big dot (the tuning slope, hysteresis, a mode hop as a jump off the line, as
+readings with the newest one a big dot, coloured like the time plots' flags: thick black (unlocked) or dark green
+(locked) where normal, thin orange (flicker) and thin red (jumps) (the tuning slope, hysteresis, a mode hop as a jump off the line, as
 they happen); *last sweep* the last sweep or scan; *auto* (default) the sweep while one runs and for 30 s after,
 otherwise live. Hover for a point's time, output and error.
 
@@ -82,7 +83,7 @@ LOCK LOST (the newest 40 of each in the shown span).
 **Flicker and jumps.** The time plots colour the traces where the frequency misbehaves: **orange** where it
 flickers (big steps reversing direction 3 or more times within 1 s: a ringing lock, a laser flicking between
 modes, a bad signal), **red** at a sharp jump (one big step that isn't flicker: a mode hop, a sudden step); the
-rest is normal (error blue, output black). "Big" is judged against the trace's own step noise (at least 6×
+rest is normal (error blue, output black), drawn thicker than the flagged parts. "Big" is judged against the trace's own step noise (at least 6×
 for flicker, 10× for a jump, robust to the bad parts), so the normal scatter isn't flagged; **flicker ≥** and
 **jump ≥** set the smallest steps that count (default 5 and 50 MHz). The toolbar counts them over the shown
 span, and hovering says which a reading is (`laserlock/quality.py`).

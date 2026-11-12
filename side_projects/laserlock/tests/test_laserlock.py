@@ -836,7 +836,8 @@ def test_window_combined_plot_and_lost_label(tmp_path: Any) -> None:
             time.sleep(0.02)
         assert win.comb_widget.isVisible() and not win.sep_widget.isVisible()
         assert win.c_v.getData()[0] is not None and len(win.c_v.getData()[0]) > 5
-        assert win.c_v.opts["pen"].widthF() == 2.0
+        assert win.c_v.opts["pen"].widthF() == 3.0  # normal: the line width + 1
+        assert win._marks[win.c_v][0].opts["pen"].widthF() == 2.0  # flagged: the line width
         win.v_range.auto.setChecked(False)
         win.v_range.hi.setValue(5.0)
         assert win.comb_vb.viewRange()[1][1] == pytest.approx(5.0)
@@ -1191,6 +1192,7 @@ def test_minmax_bins_keeps_spikes_and_flags() -> None:
 
 def test_right_plot_live_and_auto(tmp_path: Any) -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import numpy as np
     from PyQt6.QtWidgets import QApplication
 
     from laserlock import gui
@@ -1210,8 +1212,11 @@ def test_right_plot_live_and_auto(tmp_path: Any) -> None:
         win._refresh()
         win._draw_time()
         assert win._live_shown and win.sw_live.isVisible() and not win.sw_curve.isVisible()
-        xs, ys = win.sw_live.getData()
-        assert xs is not None and len(xs) > 10 and min(xs) < 2.05 and max(xs) > 2.15  # the output moved 2.0 -> 2.2
+        xs, ys = win._live_xy
+        assert len(xs) > 10 and min(xs) < 2.05 and max(xs) > 2.15  # the output moved 2.0 -> 2.2
+        bx, by = win.sw_live.getData()  # unlocked and normal: the black thick path
+        assert np.isfinite(by).sum() > 10 and not np.isfinite(win.sw_live_lk.getData()[1]).any()
+        assert win.sw_live.opts["pen"].widthF() > win.sw_live_fl.opts["pen"].widthF()
         assert "Live" in win.sw_plot.titleLabel.text
         # a sweep: the sweep view while it runs and for SWEEP_HOLD_S after
         eng.sweep(2.0, 2.3, 0.1, 0.0, 0.05)

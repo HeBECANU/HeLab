@@ -118,6 +118,7 @@ REDRAW_HZ = {"1 Hz": 1.0, "2 Hz": 2.0, "5 Hz": 5.0}
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
 ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
 FLICKER_COLOUR, JUMP_COLOUR = "#e8590c", "#cf222e"
+LOCKED_LINE = "#116329"  # dark green: the right plot's path while locked
 LOCKED_BAND = (226, 242, 230)  # light green behind locked stretches (opaque: cheaper to draw)
 LOST_PEN = pg.mkPen("#cf222e", width=1.5, style=Qt.PenStyle.DotLine)
 LOCK_MARKS_MAX = 40
@@ -946,6 +947,7 @@ class MainWindow(QMainWindow):
                 pair.append(item)
             self._marks[curve] = (pair[0], pair[1])
         self._quality: Quality | None = None
+        self._full: dict[Any, tuple[np.ndarray, np.ndarray]] = {}  # each trace's plotted data, without gaps
         # locked stretches (light green bands) and lost locks (dotted red lines), reused, per time plot
         self._lock_bands: dict[Any, list[Any]] = {p: [] for p in (self.err_plot, self.v_plot, self.comb)}
         self._lost_lines: dict[Any, list[Any]] = {p: [] for p in (self.err_plot, self.v_plot, self.comb)}
@@ -995,12 +997,18 @@ class MainWindow(QMainWindow):
         self.sw_plot.legend.addItem(self.sw_curve, "sweep / up")
         self.sw_plot.legend.addItem(self.sw_down, "down")
         # live: error against output over the time shown (a path through the readings, the newest a big dot)
-        self.sw_live = self.sw_plot.plot(pen=pg.mkPen(ERR_COLOUR, width=1))
-        self.sw_now = self.sw_plot.plot(pen=None, symbol="o", symbolSize=10, symbolBrush=ERR_COLOUR,
+        # coloured by class: normal thick (black unlocked, dark green locked), flicker and jumps thin on top
+        self.sw_live = self.sw_plot.plot(connect="finite")  # normal, unlocked
+        self.sw_live_lk = self.sw_plot.plot(connect="finite")  # normal, locked
+        self.sw_live_fl = self.sw_plot.plot(connect="finite")  # flicker
+        self.sw_live_jp = self.sw_plot.plot(connect="finite")  # jumps
+        self.sw_now = self.sw_plot.plot(pen=None, symbol="o", symbolSize=10, symbolBrush=OUT_COLOUR,
                                         symbolPen=pg.mkPen("w", width=1.5))
-        for item in (self.sw_live, self.sw_now):
-            item.setZValue(8)
+        self._live_items = (self.sw_live, self.sw_live_lk, self.sw_live_fl, self.sw_live_jp, self.sw_now)
+        for z, item in enumerate(self._live_items):
+            item.setZValue(8 + z)
             item.setVisible(False)
+        self._live_xy = (np.empty(0), np.empty(0))
         self._live_shown = False
         self._live_t = np.empty(0)
         self._sweep_ended = -1e9
@@ -1301,10 +1309,12 @@ class MainWindow(QMainWindow):
         w = self.line_width.value()
         for curve, colour in ((self.err_curve, ERR_COLOUR), (self.c_err, ERR_COLOUR), (self.v_curve, OUT_COLOUR),
                               (self.c_v, OUT_COLOUR)):
-            curve.setPen(pg.mkPen(colour, width=w))
+            curve.setPen(pg.mkPen(colour, width=w + 1))  # normal: thick
             flick_item, jump_item = self._marks[curve]
-            flick_item.setPen(pg.mkPen(FLICKER_COLOUR, width=w + 0.5))
-            jump_item.setPen(pg.mkPen(JUMP_COLOUR, width=w + 0.5))
+            flick_item.setPen(pg.mkPen(FLICKER_COLOUR, width=w))  # flagged: thin
+            jump_item.setPen(pg.mkPen(JUMP_COLOUR, width=w))
+        if hasattr(self, "sw_live"):
+            self._live_pens()
 
     def _draw_lock_marks(self, t: np.ndarray, locked: np.ndarray, t_from: float, plots: tuple[Any, ...]) -> None:
         """A light green band behind each locked stretch, and a dotted red line where the lock was lost (the newest
@@ -1339,6 +1349,13 @@ class MainWindow(QMainWindow):
                 if on:
                     line.setValue(lost[k])
                 line.setVisible(on)
+
+    def _live_pens(self) -> None:
+        w = self.line_width.value()
+        self.sw_live.setPen(pg.mkPen(OUT_COLOUR, width=w + 1.5))
+        self.sw_live_lk.setPen(pg.mkPen(LOCKED_LINE, width=w + 1.5))
+        self.sw_live_fl.setPen(pg.mkPen(FLICKER_COLOUR, width=w))
+        self.sw_live_jp.setPen(pg.mkPen(JUMP_COLOUR, width=w))
 
     def _draw_time_now(self) -> None:
         self._draw_time()
@@ -1432,9 +1449,9 @@ class MainWindow(QMainWindow):
             return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 10)}"
         return f"{x - (self._start - self._t0):.1f} s"
 
-    @staticmethod
-    def _nearest(curve: Any, x: float) -> tuple[float, float] | None:
-        xs, ys = curve.getData()
+    def _nearest(self, curve: Any, x: float) -> tuple[float, float] | None:
+        """The plotted reading nearest time x (from the full data: the drawn trace has gaps where flagged)."""
+        xs, ys = self._full.get(curve) or curve.getData()
         if xs is None or len(xs) == 0:
             return None
         i = int(np.clip(np.searchsorted(xs, x), 1, len(xs) - 1)) if len(xs) > 1 else 0
@@ -1454,8 +1471,8 @@ class MainWindow(QMainWindow):
             text, dot = self._hover[plot]
             lines: list[str] = []
             if plot is self.sw_plot and self._live_shown:
-                xs, ys = self.sw_live.getData()
-                if xs is None or len(xs) == 0 or len(self._live_t) != len(xs):
+                xs, ys = self._live_xy
+                if len(xs) == 0 or len(self._live_t) != len(xs):
                     return
                 p = vb.mapSceneToView(pos)
                 (x0, x1), (y0, y1) = vb.viewRange()
@@ -1518,6 +1535,7 @@ class MainWindow(QMainWindow):
         self.rms_label.setText("")
         self.quality_label.setText("")
         self._quality = None
+        self._full.clear()
 
     def _nudge(self, direction: int) -> None:
         self.set_thz.setValue(self.set_thz.value() + direction * self.nudge.value() * 1e-6)
@@ -1752,17 +1770,27 @@ class MainWindow(QMainWindow):
         self._quality, self._quality_t = q, t
         self._last_draw = time.monotonic()
         # a long span: plot each bin's extremes only (a few per pixel); the flags and hover use every reading
-        tp, ep, vp, fp, jp = t, err, volts, q.flicker, q.jump
+        tp, ep, vp, fp, jp, lp = t, err, volts, q.flicker, q.jump, locked
         if t.size > PLOT_POINTS_MAX:
-            idx, fp, jp = minmax_bins(PLOT_POINTS_MAX // 4, (err, volts), (q.flicker, q.jump))
+            idx, fp, jp, lp = minmax_bins(PLOT_POINTS_MAX // 4, (err, volts), (q.flicker, q.jump, locked))
             tp, ep, vp = t[idx], err[idx], volts[idx]
         if live:
-            self.sw_live.setData(vp, ep)
+            good = ~(fp | jp)
+            for item, mask in ((self.sw_live, good & ~lp), (self.sw_live_lk, good & lp), (self.sw_live_fl, fp),
+                               (self.sw_live_jp, jp)):
+                joined = mask.copy()
+                joined[1:] |= mask[:-1]  # and the segment into the next reading, so the path has no gaps
+                item.setData(vp, np.where(joined, ep, np.nan))
             self.sw_now.setData([float(volts[-1])], [float(err[-1])])
-            self._live_t = tp
+            self.sw_now.setSymbolBrush(LOCKED_LINE if bool(locked[-1]) else OUT_COLOUR)
+            self._live_t, self._live_xy = tp, (vp, ep)
         pairs = ((self.c_err, ep), (self.c_v, vp)) if combined else ((self.err_curve, ep), (self.v_curve, vp))
-        for curve, y in pairs:
-            curve.setData(tp, y)
+        good = ~(fp | jp)
+        good_joined = good.copy()
+        good_joined[1:] |= good[:-1]  # and the segment into the next reading, so the trace has no gaps
+        for curve, y in pairs:  # normal readings thick, flicker (orange) and jumps (red) thin, in their place
+            curve.setData(tp, np.where(good_joined, y, np.nan), connect="finite")
+            self._full[curve] = (tp, y)
             flick_item, jump_item = self._marks[curve]
             flick_item.setData(tp, np.where(fp, y, np.nan))
             jump_item.setData(tp, np.where(jp, y, np.nan))
@@ -1877,8 +1905,8 @@ class MainWindow(QMainWindow):
         if live == self._live_shown:
             return
         self._live_shown = live
-        self.sw_live.setVisible(live)
-        self.sw_now.setVisible(live)
+        for item in self._live_items:
+            item.setVisible(live)
         self.sw_plot.legend.setVisible(not live)
         self.sw_plot.setTitle("Live: error vs output, the time shown" if live else "Sweep")
         if not live:
