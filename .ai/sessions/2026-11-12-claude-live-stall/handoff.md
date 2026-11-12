@@ -23,6 +23,15 @@ the last `convert_done converted=1` came during a GUI stall, no `load_done` foll
 | `871afff` | **The two GUI stall sources (step 4).** `low_hits_threshold()` is read once per settings store and then kept in memory until `set_low_hits_threshold` (the Auto-convert menu) or Settings close (`HelabMainWindow._apply_live_settings` → `forget_low_hits`, after Save or Reset all). It is keyed by `HELAB_TEST_SETTINGS_FILE`, so each test's own file reads it afresh, with no conftest change. `_update_plot_source_label` works out the line, tooltip and error from the dock's properties first, sets the labels only when those change (a key on their wrapper, which `_wrap_plot` replaces), and finds them with `FindDirectChildrenOnly` on the wrapper, never through the plot's widget tree. |
 | `88e96ce` | **Activity (step 5).** `AutoConvert.summary_at`. The Auto-convert row's "waiting for N raw files to settle" gets " (as of HH:MM:SS)" once that summary is older than `stall_seconds()` with no conversion since (CoCo approved, Q2). |
 
+### Review fixes (Lookout's read of `7c28fc1`: no blockers; F1–F4 from CoCo)
+
+| Commit | Finding | What |
+|---|---|---|
+| `5a35599` | F2 | Every answer that ends a load for its subscribers (`ANSWERS` = `shots_missing`, `too_large`: a load's, a Live check's or save's, a cached read's) goes through `FolderCache._answered`, shared with `live_unchanged`. The job leaves `jobs`, its subscribers get the answer and nothing after, and `_producers` keeps it so the late `done` finds the orphan (a deferred save still starts at that `done`). The helpers stop right after these answers (`live.py`, `save_held.py`, `loading.py`), so no store write path is touched. Test: Live stopped by either answer, Retry clicked before the `done`: a check of its own runs. It fails with the change disabled. |
+| `28d072a` | F1 | The Live row's "waiting for N files to settle" (`session.unsettled`, from the last check) gets " (as of HH:MM:SS)" once `checked_at` is older than `stall_seconds()`. This is most likely the text Tony saw, since both stops' last conversions logged waiting=0. The Auto-convert row's test docstring no longer claims to be the lab's text. |
+| `3b6624b` | F3 | The Live tooltip (and so Folder details' Auto-convert row) adds "<files>: couldn't be read; Live off and on, or Convert this folder…, tries it again." (CoCo's wording). A `FileNotFoundError` on read (removed or renamed after the listing) waits as `changed` ("Gone when it was read (removed or renamed): looked at again at the next check"), never `read_failed`. |
+| `e578c47` | F4 | Only `read_failed` creates a folder's `convert_unreadable` entry (bounded like `convert_reasons`). Another reason removes the file, and the entry once it's empty, so a conversion cancelled before its summary leaves none. |
+
 ### Files outside the brief's owned list (each approved or required by CoCo's answers)
 
 - `helab/io_ops/convert.py`: the `read_failed` rule (CoCo's Q1 approval). `READ_FAILED`; `unchanged_for` shared by `unfinished_or_damaged` and the new `unreadable`; module docstring.
@@ -62,11 +71,20 @@ Changed:
 - `tests/test_live_convert.py`: the low-count test sets 0 through `set_low_hits_threshold`, as the menu does.
 - `tests/test_activity.py`: `fake_explorer`'s `live_control` gains `stall_seconds`.
 
-Full suite on `88e96ce` (`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`):
-**9,931 passed, 674 skipped, 6 warnings, no RERUN**. Output whole in [full-suite.txt](full-suite.txt). The skips
-are the private test data, not checked out on this floor.
+Full suite on `88e96ce`: 9,931 passed, 674 skipped, no RERUN. After the review fixes, on `e578c47`
+(`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`): **9,936 passed, 674 skipped, 6 warnings, no
+RERUN**. Output whole in [full-suite.txt](full-suite.txt) (that run). The skips are the private test data, not
+checked out on this floor.
 
-The five type checks, all clean (output in [type-checks.txt](type-checks.txt)):
+**RERUN on record** (Lookout's run of `7c28fc1`: 9,931 passed, 1 RERUN):
+`tests/test_convert_helab.py::test_a_killed_helpers_workers_exit` ("the pool started / assert []", line 1145).
+It is already in known-issues (line 474), not caused by this branch, and it didn't rerun in my two runs.
+
+Twice during this work, git found a stale, empty `index.lock` in this worktree's git folder (11:45 and 12:05,
+each during or just after a test run; no process held it), and I removed it. Its source is unknown: a test, or
+another session's `git status` on this worktree. Worth a look if other floors see it.
+
+The five type checks, all clean on `e578c47` (output in [type-checks.txt](type-checks.txt)):
 - `mypy helab/ --strict` and `mypy tests --strict`: no issues;
 - `pyright helab tests`: 0 errors;
 - `mypy helab/ --strict --platform win32`: no issues;
@@ -95,10 +113,9 @@ The five type checks, all clean (output in [type-checks.txt](type-checks.txt)):
   `loadStateChanged`), so every event re-renders Folder details and every plot's source line. Coalescing it to
   once per event-loop turn (a 0 ms single-shot) would cut the GUI work per drain. In 65 of the 217 stalls only the
   event loop was on the stack.
-- **A~3**: `IOService` delivers a helper's answer and its `done` in different drains under load. Other owners that
-  re-ask when an answer arrives could hit the same join. I checked Live's conversion (its request ends on `done`,
-  after `_forget_job`) and Live's save (`loaded` forgets the job). A short audit of other `has_request` callers
-  would close it.
+- **A~3**: `IOService` delivers a helper's answer and its `done` in different drains under load. F2 covered loads'
+  answers (`ANSWERS`). Live's conversion ends on `done` (after `_forget_job`), and scans replay their snapshot at
+  `done`. A short audit of the other `has_request` callers (results, admin, icons) would close it.
 - **M~1** (the lab PC): the next time Live runs with auto-convert there, check that the log has no "Live: no check
   started for" warning. If one appears, the backstop fired: send the log. Also see whether GUI stalls are fewer
   than the 70 of 2026-11-11.
@@ -127,14 +144,17 @@ No `Q~`: CoCo approved the 20 s, the backstop's numbers and the Activity wording
 - **`.ai/architecture/app-runtime-and-ui.md`**, Activity: the Auto-convert row's "(as of HH:MM:SS)" once its summary
   is older than Live's backstop limit; and plots' source lines set only on a change (`plotSourceShown` on the
   wrapper).
-- **`.ai/architecture/io-and-browsing.md`**, FolderCache jobs: a shared job whose answer was delivered (`loaded`,
-  `live_unchanged`) leaves `jobs` at once; until then `submit` joins it (`has_request` says yes and starts nothing),
-  so an answer kind that ends a job must forget it.
+- **`.ai/architecture/io-and-browsing.md`**, FolderCache jobs: a shared job whose answer was delivered (`loaded`, and
+  through `_answered`: `live_unchanged`, `shots_missing`, `too_large`) leaves `jobs` at once, keeping `_producers`
+  for the late `done`. Until then `submit` joins it (`has_request` says yes and starts nothing), so a new answer
+  kind that ends a request must go in `ANSWERS`.
 - **`helab/io_ops/events.py`** (docstrings only, CoCo to approve): `ShotWaitingEvent`'s "couldn't be read now
   (`read_failed`)" gains "…; unconvertible once unchanged and unreadable for 20 s". `ShotUnconvertibleEvent`'s
   reasons gain "`read_failed` (unchanged and unreadable for `DAMAGED_SECONDS`, by its mtime and since first seen)".
 - **`roadmaps/known-issues.md`**: no new entry (no RERUN). If Live stalling is listed there, it can be closed by
   `997e4e5`.
 - **`AGENTS.md`**: optionally one invariant under "I/O and threads": "A shared job leaves `FolderCache.jobs` as its
-  answer is delivered (`loaded`, `live_unchanged`), never only at `done`: a request joined after the answer waits
-  for good."
+  answer is delivered (`loaded`, `live_unchanged`, `ANSWERS`), never only at `done`: a request joined after the
+  answer waits for good."
+- **`app-runtime-and-ui.md`**, Activity: the Live row's "waiting for N files to settle (as of HH:MM:SS)" too (F1).
+- **`converter.md`**: a raw file gone when read waits as `changed`, never `read_failed` (F3).
