@@ -780,6 +780,23 @@ def test_a_raw_file_unreadable_for_20_s_is_unconvertible_and_holds_nothing_up(
     assert [(event["shot"], event["reason"]) for event in of(sixth, "shot_waiting")] == [(1, raw.CHANGED)]
 
 
+def test_a_raw_file_gone_when_read_waits_and_is_never_given_up_on(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Removed or renamed between the listing and the read (a writer's temporary name): it waits, however long
+    since it was first seen, never unconvertible as a file that can't be read is."""
+    write_raw(source, 1, raw_bytes(10_000, 20_000))
+
+    def gone(shot: Any, beat: Any) -> bytes | str:
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory", shot.path)
+    request = request_for(source, tmp_path, seen=[])
+    request["seen"] = aged(summary(run(source, request))["waiting"], 25)
+    monkeypatch.setattr(convert, "_read_raw", gone)
+    events = run(source, request)
+    assert of(events, "shot_unconvertible") == []
+    [waiting] = of(events, "shot_waiting")
+    assert (waiting["shot"], waiting["reason"]) == (1, raw.CHANGED) and waiting["message"].startswith("Gone when")
+
+
 @pytest.mark.parametrize("age, damaged", [(30, False), (61, True)], ids=["30s-waits", "61s-damaged"])
 def test_once_calls_a_file_damaged_only_after_the_once_settle_age(
         source: Path, tmp_path: Path, age: float, damaged: bool) -> None:

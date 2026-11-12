@@ -206,8 +206,9 @@ def test_a_raw_file_live_cant_read_ends_unconvertible_and_a_new_session_tries_it
     assert session.convert.unconvertible == {"d1.txt": refused["message"]} and not session.convert.waiting
     text = explorer.live_control.convert_line(session)[0]
     assert "1 unconvertible" in text and "waiting" not in text, text
-    assert "Can't be converted (1): d1.txt: Couldn't be read for" in "\n".join(
-        explorer.live_control.convert_line(session)[1])
+    tooltip = "\n".join(explorer.live_control.convert_line(session)[1])
+    assert "Can't be converted (1): d1.txt: Couldn't be read for" in tooltip
+    assert "d1.txt: couldn't be read; Live off and on, or Convert this folder…, tries it again." in tooltip
     # This auto-convert skips it while unchanged.
     request, _ = cycle(qtbot, explorer, path, tmp_path)
     assert [entry[0] for entry in request.payload["skip"]] == ["d1.txt"]

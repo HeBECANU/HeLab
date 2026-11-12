@@ -1292,6 +1292,10 @@ class LiveController:
             if entries:
                 lines.append(f"{title} ({len(entries):,}): " + "; ".join(entries[:8])
                              + (" …" if len(entries) > 8 else ""))
+        unreadable = self.explorer.model.cache.convert_unreadable.get(session.path, {})
+        if names := sorted(name for name in convert.unconvertible if name in unreadable):
+            lines.append(f"{', '.join(names[:8])}{' …' if len(names) > 8 else ''}: couldn't be read; Live off and on, "
+                         "or Convert this folder…, tries it again.")
         if convert.stuck():
             lines.append("A waiting file is checked again only when it changes.")
         if (instead := explorer_convert.instead_of_beside(session.path)) is not None:
