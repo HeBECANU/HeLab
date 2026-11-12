@@ -483,7 +483,7 @@ def test_window_draws_hops(tmp_path: Any) -> None:
         win.hop_lines.setChecked(True)
         pump(0.6)
         laser.extra_mhz = 12_000.0
-        pump(0.8)
+        pump(1.6)  # plots redraw at 2 Hz, hop lines at most once a second
         assert "Mode hops: 1" in win.hop_label.text()
         assert sum(a.isVisible() for a, _ in win._hop_pool) == 1  # one line on each time plot
         xs, ys = win.hop_dots.getData()
@@ -1127,3 +1127,63 @@ def test_locked_bands_and_lost_lines(tmp_path: Any) -> None:
     assert not any(b.isVisible() for b in win._lock_bands[win.comb])
     win.close()
     app.processEvents()
+
+
+def test_fault_leaves_instruments_alone_until_retry() -> None:
+    from laserlock.devices import Reading
+
+    class FlakyWavemeter(SimWavemeter):
+        def __init__(self, laser: SimLaser) -> None:
+            super().__init__(laser, period=0.01)
+            self.calls, self.broken = 0, False
+
+        def read(self) -> Reading:
+            self.calls += 1
+            if self.broken:
+                raise OSError("WLM server gone")
+            return super().read()
+
+    laser = SimLaser(f0_thz=F0, seed=19)
+    wm = FlakyWavemeter(laser)
+    eng = Engine(wm, SimDG1022(laser, volts=2.0), LockSettings(setpoint_thz=F0))
+    eng.start()
+    try:
+        time.sleep(0.2)
+        wm.broken = True
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and eng.snapshot().mode != "fault":
+            time.sleep(0.02)
+        assert eng.snapshot().mode == "fault"
+        calls = wm.calls
+        time.sleep(1.0)
+        assert wm.calls == calls  # no retrying (and logging) every loop
+        eng.retry()
+        time.sleep(0.5)
+        assert eng.snapshot().mode == "fault" and "still not answering" in eng.snapshot().message
+        wm.broken = False
+        eng.retry()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and eng.snapshot().mode != "idle":
+            time.sleep(0.02)
+        snap = eng.snapshot()
+        assert snap.mode == "idle" and "answering again" in snap.message and snap.volts == pytest.approx(2.0)
+    finally:
+        eng.stop()
+
+
+def test_minmax_bins_keeps_spikes_and_flags() -> None:
+    import numpy as np
+
+    from laserlock.gui import minmax_bins
+
+    n = 100_003
+    y = np.zeros(n)
+    y[12_345] = 50.0
+    y[77_777] = -40.0
+    v = np.linspace(0, 1, n)
+    flag = np.zeros(n, dtype=bool)
+    flag[50_000] = True
+    idx, f = minmax_bins(2000, (y, v), (flag,))
+    assert len(idx) < 12_000 and np.all(np.diff(idx) >= 0)
+    assert 12_345 in idx and 77_777 in idx and idx[-1] == n - 1
+    assert f.sum() >= 1 and f[np.searchsorted(idx, 50_000) - 2: np.searchsorted(idx, 50_000) + 3].any()

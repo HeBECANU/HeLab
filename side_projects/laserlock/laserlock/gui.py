@@ -62,6 +62,12 @@ def mono_label(label: QLabel, size: float | None = None, bold: bool = False) -> 
     return label
 
 
+def set_text(label: QLabel, text: str) -> None:
+    """Sets a label's text only when it changed (each change repaints it)."""
+    if label.text() != text:
+        label.setText(text)
+
+
 def light_grid(plot: Any) -> None:
     """A light-grey grid: labelled major lines about every 60 px and fainter minor ones between them.
     (pyqtgraph's showGrid at its default density cost about 40 % of a core at 5 redraws a second, 2026-11-11;
@@ -83,6 +89,31 @@ FOLLOW_S = 20.0  # the error axis's auto range fits the newest this many seconds
 HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
+PLOT_POINTS_MAX = 8000  # a longer shown span is thinned to each bin's extremes before plotting
+
+
+def minmax_bins(bins: int, columns: tuple[np.ndarray, ...], flags: tuple[np.ndarray, ...]
+                ) -> tuple[np.ndarray, ...]:
+    """Indices that keep, in `bins` equal bins, each column's smallest and largest value (in time order), so a
+    thinned trace keeps its spikes; and each flag, true for a kept index when any reading in its bin was."""
+    n = len(columns[0])
+    k = max(n // bins, 1)
+    m = (n // k) * k
+    base = np.arange(0, m, k)[:, None]
+    picks = [base[:, 0]]
+    for c in columns:
+        block = c[:m].reshape(-1, k)
+        picks += [base[:, 0] + block.argmin(axis=1), base[:, 0] + block.argmax(axis=1)]
+    head = np.sort(np.stack(picks, axis=1), axis=1)  # each bin's picks, in time order
+    idx = np.concatenate([head.ravel(), np.arange(m, n)])
+    out_flags = []
+    for f in flags:
+        per_bin = f[:m].reshape(-1, k).any(axis=1)
+        out_flags.append(np.concatenate([np.repeat(per_bin, head.shape[1]), f[m:]]))
+    return (idx, *out_flags)
+
+
+REDRAW_HZ = {"1 Hz": 1.0, "2 Hz": 2.0, "5 Hz": 5.0}
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
 ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
 FLICKER_COLOUR, JUMP_COLOUR = "#e8590c", "#cf222e"
@@ -517,6 +548,7 @@ class MainWindow(QMainWindow):
         self._tick_n = 0
         self._shown_cal = ""
         self._mode_colour = ""
+        self._last_draw = 0.0
 
         ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, "combined": False,
               "line_width": 1.0, "hop_lines": False, "collapsed": [], "inputs_locked": False, **(ui or {})}
@@ -578,7 +610,15 @@ class MainWindow(QMainWindow):
                                  "(the lock keeps running; Full there brings this window back)")
         self.mini_btn.clicked.connect(self.show_mini)
         hl.addWidget(self.mini_btn, 0, 4)
-        hl.addWidget(self.message_label, 1, 0, 1, 5)
+        self.retry_btn = QPushButton("Retry instruments")
+        self.retry_btn.setMinimumHeight(52)
+        self.retry_btn.setToolTip("After a fault (an instrument stopped answering): ask the wavemeter and the DG1022 "
+                                  "again; if both answer, the lock is back to idle with the output read back. A hung "
+                                  "DG1022 needs a power cycle first")
+        self.retry_btn.clicked.connect(self.engine.retry)
+        self.retry_btn.setVisible(False)
+        hl.addWidget(self.retry_btn, 0, 5)
+        hl.addWidget(self.message_label, 1, 0, 1, 6)
         self.mini = MiniWindow(self)
         hl.setColumnStretch(1, 1)
         self.header = header
@@ -966,6 +1006,15 @@ class MainWindow(QMainWindow):
         top.addWidget(self._lab("Time", "How the time axis is labelled"))
         top.addWidget(self.time_kind)
         top.addWidget(clear)
+        top.addWidget(self._lab("Redraw", "How often the time plots are redrawn: drawing is most of the window's CPU "
+                                "(about 5 % of a core at 1 Hz, 9 % at 2 Hz, 18 % at 5 Hz on this PC). The readings "
+                                "and the lock run at their own rate whatever this is"))
+        self.redraw = Combo()
+        self.redraw.addItems(list(REDRAW_HZ))
+        self.redraw.setCurrentText(str(ui.get("redraw", "2 Hz")) if ui.get("redraw") in REDRAW_HZ else "2 Hz")
+        self.redraw.setToolTip("How often the time plots are redrawn (lower: less CPU)")
+        self.redraw.currentIndexChanged.connect(self._redraw_changed)
+        top.addWidget(self.redraw)
         top.addStretch(1)
         self.rms_label = mono_label(QLabel(""))
         self.rms_label.setToolTip("The lock's quality over the shown span: rms and mean of the error while locked, "
@@ -1077,9 +1126,12 @@ class MainWindow(QMainWindow):
         self._plots_shown()
         self._apply_input_lock()
 
-        self.timer = QTimer(self)
+        self.timer = QTimer(self)  # readings, state and buttons
         self.timer.timeout.connect(self._refresh)
-        self.timer.start(100)
+        self.timer.start(200)
+        self.plot_timer = QTimer(self)  # the time plots (drawing is most of the window's CPU)
+        self.plot_timer.timeout.connect(self._plot_tick)
+        self._redraw_changed()
 
     # ---------------------------------------------------------------- user actions
 
@@ -1204,6 +1256,7 @@ class MainWindow(QMainWindow):
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
                 "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
                 "hop_lines": self.hop_lines.isChecked(),
+                "redraw": self.redraw.currentText(),
                 "flicker_min_mhz": self.flicker_min.value(), "jump_min_mhz": self.jump_min.value(),
                 "collapsed": [sec.key for sec in self.sections if sec.collapsed],
                 "inputs_locked": self.inputs_lock.isChecked(),
@@ -1553,13 +1606,13 @@ class MainWindow(QMainWindow):
         snap = self.engine.snapshot()
         r = snap.reading
         if r.thz is not None:
-            self.freq_label.setText(f"{r.thz:.7f} THz")
-            self.nm_label.setText(f"{thz_to_nm(r.thz):.6f} nm")
-            self.status_label.setText(f"ok, new value every {snap.update_s * 1e3:.0f} ms" if snap.update_s else "ok")
+            set_text(self.freq_label, f"{r.thz:.7f} THz")
+            set_text(self.nm_label, f"{thz_to_nm(r.thz):.6f} nm")
+            set_text(self.status_label, f"ok, new value every {snap.update_s * 1e3:.0f} ms" if snap.update_s else "ok")
         else:
-            self.status_label.setText(f"<b style='color:#cf222e'>{r.status}</b>")
-        self.err_label.setText("—" if snap.error_mhz is None else f"{snap.error_mhz:+.2f} MHz")
-        self.volt_label.setText(f"{snap.volts:.4f} V")
+            set_text(self.status_label, f"<b style='color:#cf222e'>{r.status}</b>")
+        set_text(self.err_label, "—" if snap.error_mhz is None else f"{snap.error_mhz:+.2f} MHz")
+        set_text(self.volt_label, f"{snap.volts:.4f} V")
         mode = snap.mode if snap.mode != "locked" or snap.state == "locked" else f"locked · {snap.state}"
         colour = MODE_COLOURS.get(snap.mode, "#6e7781")
         if snap.state == "lost" and snap.mode == "idle":
@@ -1567,13 +1620,13 @@ class MainWindow(QMainWindow):
         elif snap.mode == "locked" and snap.state != "locked":
             colour = "#9a6700"  # holding: out of capture, limited, no reading
         if self.mode_label.text() != mode.upper() or self._mode_colour != colour:
-            self.mode_label.setText(mode.upper())
+            set_text(self.mode_label, mode.upper())
             self.mode_label.setStyleSheet(f"background: {colour}")
             self._mode_colour = colour
         if self.mini.isVisible():
             self.mini.show_state(mode.upper(), colour, self.err_label.text(), self.volt_label.text())
         if snap.message:
-            self.message_label.setText(snap.message)
+            set_text(self.message_label, snap.message)
         locked = snap.mode == "locked"
         if self.lock_btn.isChecked() != locked:
             self.lock_btn.blockSignals(True)
@@ -1582,6 +1635,8 @@ class MainWindow(QMainWindow):
         self.lock_btn.setText("Unlock" if locked else "Lock")
         busy = snap.mode in ("calibrating", "fault")
         self._refresh_buttons(snap)
+        if self.retry_btn.isVisible() != (snap.mode == "fault"):
+            self.retry_btn.setVisible(snap.mode == "fault")
         if (snap.message.startswith(("find stable range: locked", "locked at ")) and snap.message != self._shown_cal):
             self._shown_cal = snap.message
             self._show_settings()
@@ -1603,18 +1658,29 @@ class MainWindow(QMainWindow):
         if snap.hops:
             h = snap.last_hop
             assert h is not None
-            self.hop_label.setText(f"<b style='color:{HOP_COLOUR}'>Mode hops: {snap.hops}</b> · last "
+            set_text(self.hop_label, f"<b style='color:{HOP_COLOUR}'>Mode hops: {snap.hops}</b> · last "
                                    f"{h.hop.jump_mhz / 1e3:+.3f} GHz at {time.strftime('%H:%M:%S', time.localtime(h.t))}"
                                    f" ({h.volts:.4f} V)")
-        self._tick_n += 1
-        # the time plots: every other tick (5 Hz), only while shown, only the visible span
-        if self._tick_n % 2 or self.isMinimized():
+
+    def _plot_tick(self) -> None:
+        """The time plots, at the Redraw rate: only while shown and not paused, only the visible span."""
+        if self.isMinimized() or not self.isVisible():
             return
         for r_ in (self.err_range, self.v_range, self.sw_y):
             r_.sync()
         if self.pause.isChecked():
             return
-        self._draw_time(snap.hops)
+        # skip a redraw that would scroll the plots by less than a pixel (a long span)
+        span = SPANS[self.span.currentText()] or (float(self._hist.t[self._hist.n - 1] - self._hist.t[0])
+                                                  if self._hist.n else 0.0)
+        width = (self.comb if self.layout_kind.currentIndex() == 1 else self.v_plot).getViewBox().width()
+        if time.monotonic() - self._last_draw < span / max(width, 1.0):
+            return
+        self._draw_time()
+
+    def _redraw_changed(self) -> None:
+        hz = REDRAW_HZ.get(self.redraw.currentText(), 2.0)
+        self.plot_timer.start(int(1000 / hz))
 
     def _refresh_buttons(self, snap: Any) -> None:
         """The action buttons for the mode now; with the inputs locked only Abort stays available."""
@@ -1646,12 +1712,18 @@ class MainWindow(QMainWindow):
         err = (thz - ref) * 1e12  # Hz
         q = classify(t, err / 1e6, self.flicker_min.value(), self.jump_min.value())
         self._quality, self._quality_t = q, t
-        pairs = ((self.c_err, err), (self.c_v, volts)) if combined else ((self.err_curve, err), (self.v_curve, volts))
+        self._last_draw = time.monotonic()
+        # a long span: plot each bin's extremes only (a few per pixel); the flags and hover use every reading
+        tp, ep, vp, fp, jp = t, err, volts, q.flicker, q.jump
+        if t.size > PLOT_POINTS_MAX:
+            idx, fp, jp = minmax_bins(PLOT_POINTS_MAX // 4, (err, volts), (q.flicker, q.jump))
+            tp, ep, vp = t[idx], err[idx], volts[idx]
+        pairs = ((self.c_err, ep), (self.c_v, vp)) if combined else ((self.err_curve, ep), (self.v_curve, vp))
         for curve, y in pairs:
-            curve.setData(t, y)
+            curve.setData(tp, y)
             flick_item, jump_item = self._marks[curve]
-            flick_item.setData(t, np.where(q.flicker, y, np.nan))
-            jump_item.setData(t, np.where(q.jump, y, np.nan))
+            flick_item.setData(tp, np.where(fp, y, np.nan))
+            jump_item.setData(tp, np.where(jp, y, np.nan))
         bits = []
         if q.jumps:
             bits.append(f"<span style='color:{JUMP_COLOUR}'>■ {q.jumps} jump{'s' if q.jumps != 1 else ''}</span>")

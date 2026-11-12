@@ -180,6 +180,21 @@ direction jumped next to it. Then:
 frequency there the setpoint (if it still reads the scan's mode), and keeps the output inside the stretch.
 The sweep plot shows the up and down sweeps and shades the stable stretches (the chosen one darker).
 
+## CPU and long runs
+
+Measured on the lab PC with the simulator (2026-11-12): the lock loop about 0.6 % of a core, the window with
+the plots hidden (or the mini window) about 2 %, with the plots shown about 5 / 8 / 18 % at **Redraw** 1 / 2 /
+5 Hz (default 2 Hz). Long spans don't cost more: a redraw that would scroll the plots by less than a pixel is
+skipped (on 1 h, a pixel is about 2.4 s), and a span of more than 8000 readings is thinned to each bin's
+extremes before plotting (spikes kept; the flags and the hover use every reading): 1 h or All with a full
+history (200 000 readings, about 1.8 h at 30 readings a second) costs about 4–5 %.
+
+For days of running: every buffer is bounded (the plots' history keeps the newest 200 000 readings; hops,
+lost locks and the engine's queue are capped), the log rotates (`logs/laserlock.log`, 5 × 5 MB), the CSV
+log is flushed about once a second, and an instrument that stops answering puts the lock in **fault**
+without retrying (or logging) in a loop: **Retry instruments** in the header asks both again and, if they
+answer, goes back to idle with the output read back. A hung DG1022 needs a power cycle before that.
+
 ## Set up (once)
 
 Needs [uv](https://docs.astral.sh/uv/), NI-VISA (or Keysight VISA) and the HighFinesse software installed.

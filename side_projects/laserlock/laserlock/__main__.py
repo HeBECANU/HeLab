@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import sys
 from dataclasses import asdict
 
@@ -22,8 +23,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     logs = config.HOME / "logs"
     logs.mkdir(exist_ok=True)
+    # the log rotates (5 x 5 MB): a lab PC runs this for days
+    rotating = logging.handlers.RotatingFileHandler(logs / "laserlock.log", maxBytes=5_000_000, backupCount=5,
+                                                    encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                        handlers=[logging.StreamHandler(), logging.FileHandler(logs / "laserlock.log", encoding="utf-8")])
+                        handlers=[logging.StreamHandler(), rotating])
     log = logging.getLogger("laserlock")
     cfg = config.load()
     if args.resource:

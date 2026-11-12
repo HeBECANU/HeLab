@@ -100,6 +100,8 @@ class Engine:
         self.log_dir = log_dir
         self._csv: csv.writer | None = None  # type: ignore[valid-type]
         self._csv_file = None
+        self._csv_flushed = 0.0
+        self._retry = False
         self._wm_timing: WavemeterTiming | None = None
         self._wm_request: dict[str, int | bool] = {}
         self._wm_read_at = 0.0
@@ -215,6 +217,13 @@ class Engine:
                             self._hop_count, last, self._wm_timing, self._lost,
                             self.pi.d_term if self._mode == "locked" else 0.0)
 
+    def retry(self) -> None:
+        """After a fault: ask both instruments again; if they answer, back to idle (the output read back)."""
+        with self._lock:
+            if self._mode == "fault":
+                self._retry = True
+                self._message = "retrying the instruments…"
+
     def set_relock(self, request: ScanRequest | None) -> None:
         """With a request, a lost lock starts a find-stable-range scan (its target the setpoint then) and
         relocks if it finds one; None: a lost lock just stays unlocked, the output held."""
@@ -263,6 +272,11 @@ class Engine:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            if self._mode == "fault":  # leave the instruments alone (and the log quiet) until asked to retry
+                if self._retry:
+                    self._retry_instruments()
+                self._stop.wait(0.2)
+                continue
             try:
                 if self._cal_request is not None:
                     self._calibrate(*self._cal_request)
@@ -289,7 +303,8 @@ class Engine:
             except Exception:
                 log.exception("engine loop")
                 with self._lock:
-                    self._mode, self._message = "fault", "internal error (see the log)"
+                    self._mode, self._state, self._message = "fault", "fault", "internal error (see the log)"
+                    self._target = None
             self._stop.wait(POLL_S)
 
     def _wavemeter_timing(self) -> None:
@@ -313,6 +328,24 @@ class Engine:
         timing = get_timing()
         with self._lock:
             self._wm_timing = timing
+
+    def _retry_instruments(self) -> None:
+        self._retry = False
+        try:
+            volts = self.out.readback()
+            r = self.source.read()
+        except Exception as e:  # noqa: BLE001 - any failure: still faulted, say why
+            log.error("retry: %s", e)
+            with self._lock:
+                self._message = f"still not answering: {e}"
+            return
+        with self._lock:
+            self._volts = volts
+            self._target = None
+            self._reading, self._last_seq = r, r.seq
+            self._mode, self._state = "idle", "idle"
+            self._message = f"instruments answering again; output {volts:.4f} V (unlocked)"
+        log.info("retry: instruments answering again, output %.4f V", volts)
 
     def _tick(self) -> None:
         r = self.source.read()
@@ -364,6 +397,9 @@ class Engine:
                 self._csv.writerow([f"{sample.t:.3f}", "" if r.thz is None else f"{r.thz:.9f}", f"{s.setpoint_thz:.9f}",
                                     "" if self._error is None else f"{self._error:.3f}", f"{self._volts:.4f}",
                                     int(locked), r.status, int(hop is not None)])
+                if time.monotonic() - self._csv_flushed > 1.0:  # a crash loses at most a second of rows
+                    self._csv_file.flush()  # type: ignore[union-attr]
+                    self._csv_flushed = time.monotonic()
 
     def _lose(self, why: str) -> None:
         """The lock is gone (called holding the lock): unlock, hold the output, say so; relock if asked."""
