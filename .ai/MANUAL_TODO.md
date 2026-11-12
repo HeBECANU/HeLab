@@ -404,6 +404,15 @@ and M42.1 on a lab PC with the switch on (one Live session).
 - [ ] **M72.2 A Windows console's UTF-8** (RV-5): on a lab PC, start HeLab from PowerShell or cmd and make a long
   log line with "σ", "→" or "·" (e.g. a blur note at DEBUG): the console shows them, and keeps printing.
 
+## Live stall (added 2026-11-12, block 74)
+
+- [ ] **M74.1 Live with auto-convert on the TDC PC**: after the next long session, the log has no "Live: no check
+  started for" warning (if one appears, the backstop fired: send the log), and fewer GUI stalls than the 70 of
+  2026-11-11.
+- [ ] **M74.2 An unreadable raw file in Live** (any machine): lock one (Windows: open it exclusively; macOS:
+  `chmod 000`). Within about 25 s it shows as unconvertible, "Couldn't be read for 20 s: …", later shots go on,
+  and after unlocking it converts on Live off and on.
+
 ## The GUI thread audit (added 2026-11-10, block 73)
 
 - [ ] **M73.1 A dead mapped drive at start** (GT-7, Windows lab PC): with a mapped drive whose server is off,

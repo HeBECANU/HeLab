@@ -580,13 +580,14 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
 - [ ] **A73.2 Mounts from helpers** (A~2, GT-7 (b)): `share_of`'s mount table (Folder details' refresh, Live's
   convert tick, the share question) is read on the GUI thread every 10 s on Windows. Proposed: helpers report
   mounts (`mounts_seen` in `events.py`), `FolderCache` keeps them; after M73.1 shows whether those calls wait.
+  Evidence (block 74, A~1): in 3 of the lab log's GUI stalls of 2026-11-11 the GUI thread was in
+  `cache_paths._windows_unc`, from `_convert_tick` → `explorer_convert.share_to_confirm` (beside on).
 - [ ] **A73.3 `RamBudget.check` in O(plots × shots)** (A~3, GT-11): each plot's buffers taken once per check, with
   holder counts.
 - [ ] **A73.4 Fewer derives and activity updates** (A~4, GT-12): coalesce `activityChanged` with `one_activity()`
   or a dirty flag; running tallies on parents instead of `_derive` over all children per child event; cache
-  `txy_sources.empty_helab_shots`/`origins_of` per dataset (11 ms per 100 ms at 100,000 shots); cache
-  `explorer_live.low_hits_threshold()` until the setting changes (needs a per-test reset); refresh only the shown
-  tab's summary.
+  `txy_sources.empty_helab_shots`/`origins_of` per dataset (11 ms per 100 ms at 100,000 shots); refresh
+  only the shown tab's summary. (`low_hits_threshold()` from memory: done in block 74, `871afff`.)
 - [ ] **A73.5 Profiles, trace and cache-move clean-ups off the GUI thread** (A~5, GT-13): keep the profile library
   in memory; `delete_io_traces` into `trace_check`'s helper; the cache move's `undo_rename` and
   `cache_move.cleanup` into a helper.
@@ -601,6 +602,23 @@ A56.7, A58.2 and A56.4 done; landed `20dd672`, CI 41770471113).
   scoping: IOService and the watchdog wait on their own threads), and `open`/`os.stat` with a longer allow-list.
 - [ ] **A73.10 A modal in a delivery, logged in the app** (A~10, GT-1): a warning with its stack when a box opens
   inside a delivery; today only the suite catches it.
+
+## Live stall (block 74; [handoff](sessions/2026-11-12-claude-live-stall/handoff.md))
+
+- [ ] **A74.1 Coalesce `_update_folder_details`** (A~2): `HelabMainWindow._update_folder_details` runs on most
+  Live events (each `_update_activity` and `loadStateChanged`), re-rendering Folder details and every plot's
+  source line; once per event-loop turn (a 0 ms single-shot) would cut the GUI work per drain (65 of the lab
+  log's 217 stalls showed only the event loop).
+- [ ] **A74.2 Answers and `done` in different drains** (A~3): F2 covered loads' answers (`ANSWERS`); audit the
+  other `has_request` callers (results, admin, icons; Live's conversion ends on `done`, scans replay at `done`)
+  for a request joined after its answer.
+- [ ] **A74.3 Build info once per app run** (A~4, with A73.6): every process importing `helab.utils.constants`
+  (each helper and test worker) runs `get_build_info()`'s four git calls, up to 2 s each. Cache it per app run
+  and pass it to helpers (as `settle_seconds` is), or read it lazily where shown (About, the log's header); may
+  also explain the lab log's "Commit: unknown".
+- [ ] **A74.4 `events.py` docstrings for `read_failed`**: `ShotWaitingEvent`'s "couldn't be read now
+  (`read_failed`)" gains "; unconvertible once unchanged and unreadable for 20 s"; `ShotUnconvertibleEvent`'s
+  reasons gain `read_failed` (unchanged and unreadable for `DAMAGED_SECONDS`, by its mtime and since first seen).
 
 ## Not AI work (stays in MANUAL_TODO)
 

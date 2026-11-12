@@ -142,6 +142,11 @@ How to use it:
 
 ## Tests and CI
 
+- [ ] **`test_crash_file.py::test_a_held_up_file_write_never_holds_a_log_line`** reran once (macOS CI
+  43134544536, Tests (2/3), `agent/live-stall`; that branch doesn't touch the tee): `assert 1572 == 2000`
+  lines in `console-held.txt` (line 392). The child waits for the tee's queue to empty, then 0.2 s, then
+  `stop()`, which waits only 2 s for the file's writer: an empty queue doesn't mean the last chunks are written.
+  Fix candidate: wait for the writer to finish (a flushed count or a join), not `qsize()`. Added by GT-3 (block 73).
 - [ ] **`tests/test_basic_plots_v2_hist2d.py` prints "RuntimeError: wrapped C/C++ object of type FigureCanvasQTAgg
   has been deleted"** (2026-11-09, macOS, local; the tests pass, no RERUN). Matplotlib's queued `_draw_idle`
   fires after qtbot deleted a `MatplotlibPane` that `update` had just redrawn
@@ -493,6 +498,14 @@ crashed" on CI with no traceback is usually CI's 120 s timeout, whose stacks
 Landed in `dev/v0.0.9` (`dev/v0.0.8`'s were dropped at the v0.0.8a1 tidy-up; their release-notes lines are in
 TonyXTYan/HeLab#11):
 
+- [x] **Live stopped picking up shots after a conversion** (the lab PC, 2026-11-11, twice: no check or
+  conversion for 2 h and 1.5 h until Live off and on). A Live check answering `live_unchanged` stayed in
+  `FolderCache.jobs` until its `done`, so a check asked for in between was joined to it and never ran. Fixed in
+  `997e4e5` with a backstop (`0a90050`) and the unreadable-file rule (`c24bd5d`; block 74, merged `e6603ab`); M74.1.
+- [x] **Stale `index.lock` in checkouts** (2026-11-12): `build_info._git`'s `git status`, run by every process
+  importing `helab.utils.constants`, refreshed the index under its lock, and its 2 s timeout's kill under load
+  left an empty `index.lock` that stopped the next commit (floors and Ground). Fixed in `8e882fa`
+  (`GIT_OPTIONAL_LOCKS=0`; merged `e6603ab`); the per-process git calls remain (A74.3).
 - [x] `test_accessible_names.py::test_every_script_and_each_library`: "Basic plots › Plot T, X, Y histograms:
   QTabBar < QMainWindow < QSplitter < HelabMainWindow: no ID" (Windows CI 41086378298, 41465454700, Ground CI
   42765698387). Cause: the walk ran before the debounced dock fit that names the tab bar, late behind a stall in

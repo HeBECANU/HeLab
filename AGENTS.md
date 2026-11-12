@@ -150,7 +150,9 @@ Each rule names the area file with the detail.
 - Rendering never reads disk or submits I/O: models, badges, tooltips and summaries read memory
   only (`SnapshotFileSystemModel`).
 - Never let the GUI thread wait on cancellation, deadlines or a helper. Queues and concurrency
-  stay bounded and requests deduplicated.
+  stay bounded and requests deduplicated. A shared job leaves `FolderCache.jobs` as its answer is
+  delivered (`loaded`, `live_unchanged`, `ANSWERS`), never only at `done`: a request joined after
+  the answer would wait for good.
 - No dialog, box or menu is `exec()`ed inside a delivery (IOService's `_tick`, a plot's run end):
   code a result reaches opens it through `gui_delivery.outside` (conftest's `no_modal_in_delivery`).
   Local folders and files open with `file_manager.show` (detached), never `QDesktopServices.openUrl`.

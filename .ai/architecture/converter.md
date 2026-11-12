@@ -627,6 +627,8 @@ unchanged; choosing beside again in Folder details clears it (Q48.5). Never a si
 - The converter's per-folder flag is its own store table (`convert_prefs`), not a `folder_prefs`
   column (older HeLabs `INSERT OR REPLACE` named `folder_prefs` columns, which would reset a new one).
 
+**Files that can't be read** (`agent/live-stall`, merged `e6603ab`; `io_ops/convert.py`): a settled raw file whose read raises `OSError` waits as `read_failed` until it has been unchanged and unreadable for `DAMAGED_SECONDS` (20 s, the same two clocks as damaged: its mtime and since this computer first saw it, `unchanged_for`), then is `shot_unconvertible` with reason `read_failed` ("Couldn't be read for N s: <error>"), skipped while unchanged and tried again on a change, a new Live session or Convert this folder… (`retry_unreadable_since` leaves files found unreadable before that asker's start out of `skip`; only `read_failed` creates a folder's `convert_unreadable` entry). A `FileNotFoundError` (removed or renamed after the listing) waits as `changed`, never `read_failed`; on Windows, where a path of 260+ characters fails to open that way, `path_too_long` makes the file unconvertible ("failed", "Path too long for Windows (N characters …)") while its folder is there.
+
 ## The sample set and reference faults
 
 `~/HeLab-samples/txy-v1/` (read-only, outside the repo; Q8.6): 8 sets, 309 shots. Under
