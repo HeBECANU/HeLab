@@ -27,10 +27,30 @@ class Reading:
     seq: int  # +1 for every new measurement
 
 
+@dataclass(frozen=True)
+class WavemeterTiming:
+    """How often the wavemeter measures: the exposure (ms, CCD array 1), whether the server sets it itself
+    (auto), and whether it waits `interval_ms` between measurements (interval mode) instead of measuring
+    continuously. The next measurement takes about max(exposure + readout, interval)."""
+
+    exposure_ms: int
+    auto: bool
+    interval_ms: int
+    interval_on: bool
+
+
 class FrequencySource(Protocol):
     def read(self) -> Reading: ...
     def describe(self) -> str: ...
     def close(self) -> None: ...
+
+
+class TimedSource(FrequencySource, Protocol):
+    """A wavemeter whose measurement timing can be read and set."""
+
+    def timing(self) -> WavemeterTiming: ...
+    def set_timing(self, exposure_ms: int | None = None, auto: bool | None = None, interval_ms: int | None = None,
+                   interval_on: bool | None = None) -> None: ...
 
 
 class VoltageOutput(Protocol):
@@ -81,6 +101,15 @@ class HighFinesse:
         sig("GetOperationState", US, US)
         sig("Operation", L, US)
         sig("GetWLMVersion", L, L)
+        B = ctypes.c_bool
+        sig("GetExposureNum", L, L, L, L)
+        sig("SetExposureNum", L, L, L, L)
+        sig("GetExposureModeNum", B, L, B)
+        sig("SetExposureModeNum", L, L, B)
+        sig("GetInterval", L, L)
+        sig("SetInterval", L, L)
+        sig("GetIntervalMode", B, B)
+        sig("SetIntervalMode", L, B)
         self._w = w
         self.started = False
         if w.Instantiate(-1, 0, 0, 0) == 0:
@@ -111,6 +140,32 @@ class HighFinesse:
 
     def describe(self) -> str:
         return f"HighFinesse WS{self._w.GetWLMVersion(0)} #{self.version}, channel {self.channel}"
+
+    def timing(self) -> WavemeterTiming:
+        w = self._w
+        return WavemeterTiming(int(w.GetExposureNum(self.channel, 1, 0)), bool(w.GetExposureModeNum(self.channel, False)),
+                               int(w.GetInterval(0)), bool(w.GetIntervalMode(False)))
+
+    def set_timing(self, exposure_ms: int | None = None, auto: bool | None = None, interval_ms: int | None = None,
+                   interval_on: bool | None = None) -> None:
+        """Changes the server's own settings (the WLM program shows the same ones). Exposure is set only with
+        auto off; a manual exposure turns auto off."""
+        w, ch = self._w, self.channel
+        calls: list[tuple[str, int]] = []
+        if exposure_ms is not None:
+            if auto is None:
+                auto = False
+            calls.append(("SetExposureModeNum", w.SetExposureModeNum(ch, False)))
+            calls.append(("SetExposureNum", w.SetExposureNum(ch, 1, int(min(max(exposure_ms, 1), 9999)))))
+        if auto is not None:
+            calls.append(("SetExposureModeNum", w.SetExposureModeNum(ch, bool(auto))))
+        if interval_ms is not None:
+            calls.append(("SetInterval", w.SetInterval(int(min(max(interval_ms, 1), 100_000)))))
+        if interval_on is not None:
+            calls.append(("SetIntervalMode", w.SetIntervalMode(bool(interval_on))))
+        for name, res in calls:
+            if res != 0:
+                log.warning("wlmData %s returned %d", name, res)
 
     def close(self) -> None:
         if self.started and self.close_server:

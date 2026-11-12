@@ -347,7 +347,8 @@ def test_presets_and_hiding_plots(tmp_path: Any) -> None:
     assert not win.right.isVisible()
     win.show_sweep.setChecked(True)
     assert win.right.isVisible() and win.sweep_panel.isVisible()
-    assert win.ui_state() == {"show_plots": False, "show_sweep": True}
+    state = win.ui_state()
+    assert state["show_plots"] is False and state["show_sweep"] is True
     win.close()
 
 
@@ -481,3 +482,132 @@ def test_window_draws_hops(tmp_path: Any) -> None:
         win.close()
     finally:
         eng.stop()
+
+
+# ---------------------------------------------------------------- PID, calibration step, wavemeter timing, axes
+
+
+def test_d_term_opposes_the_rate_and_kd_zero_is_pi() -> None:
+    s = LockSettings(setpoint_thz=F0, kp=0.0, ki=0.0, kd=0.01, d_filter_s=0.0, max_step=1.0)
+    pid = PILock(s)
+    pid.engage(3.0)
+    pid.update(F0, 0.0)
+    step = pid.update(F0 + 10e-6, 1.0)  # rising 10 MHz/s, sign +1: the D term lowers the output
+    assert step.voltage == pytest.approx(3.0 - 0.01 * 10)
+    # the setpoint moving gives no kick (D on the measurement)
+    s.setpoint_thz = F0 + 100e-6
+    step = pid.update(F0 + 10e-6, 2.0)
+    assert step.voltage == pytest.approx(3.0)
+    pi = PILock(LockSettings(setpoint_thz=F0, kp=0.01, ki=0.0, max_step=1.0))
+    pi.engage(3.0)
+    pi.update(F0 + 5e-6, 0.0)
+    assert pi.update(F0 + 10e-6, 1.0).voltage == pytest.approx(3.0 - 0.1)
+
+
+def test_d_filter_smooths_the_rate() -> None:
+    pid = PILock(LockSettings(setpoint_thz=F0, kd=1.0, d_filter_s=1.0, max_step=10.0, v_max=7.0))
+    pid.engage(3.0)
+    pid.update(F0, 0.0)
+    pid.update(F0 + 10e-6, 1.0)
+    assert pid.rate == pytest.approx(10 * 0.5)  # a = dt / (tau + dt) = 0.5
+
+
+def _calibrate(eng: Engine, step: float) -> str:
+    eng.calibrate(step, 0.2, 0.4)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and eng.snapshot().mode == "calibrating":
+        time.sleep(0.05)
+    return eng.snapshot().message
+
+
+def test_calibration_with_a_negative_step_and_no_room() -> None:
+    laser = SimLaser(f0_thz=F0, mhz_per_v=-200.0, noise_mhz=0.2, walk_mhz_per_rt_s=0.0, sine_mhz=0.0, seed=4)
+    out = SimDG1022(laser, volts=7.0)
+    eng = Engine(SimWavemeter(laser, period=0.02), out, LockSettings())
+    eng.start()
+    try:
+        msg = _calibrate(eng, 0.05)  # at the top: no room upwards
+        assert msg.startswith("calibration: no room"), msg
+        msg = _calibrate(eng, -0.05)
+        assert msg.startswith("tuning -2"), msg  # about -200 MHz/V
+        assert eng.settings().sign == -1
+        assert out.get() == pytest.approx(7.0)
+    finally:
+        eng.stop()
+
+
+def test_engine_sets_and_reads_wavemeter_timing() -> None:
+    laser = SimLaser(f0_thz=F0, seed=5)
+    wm = SimWavemeter(laser, period=0.02)
+    eng = Engine(wm, SimDG1022(laser), LockSettings())
+    eng.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and eng.snapshot().wavemeter is None:
+            time.sleep(0.02)
+        assert eng.snapshot().wavemeter is not None
+        eng.set_wavemeter(interval_ms=200, interval_on=True)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not (eng.snapshot().wavemeter or wm.timing()).interval_on:
+            time.sleep(0.02)
+        timing = eng.snapshot().wavemeter
+        assert timing is not None and timing.interval_on and timing.interval_ms == 200
+        assert wm.period == pytest.approx(0.2)
+        eng.set_wavemeter(exposure_ms=50)
+        time.sleep(0.3)
+        assert not wm.timing().auto and wm.timing().exposure_ms == 50
+    finally:
+        eng.stop()
+
+
+def test_window_axes_pause_and_nudge(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow, TimeAxis
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=6)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0 + 1e-3))
+    ui = {"span": "30 s", "clock": False, "err_y": {"auto": False, "lo": -20.0, "hi": 30.0}}
+    win = MainWindow(eng, {"step_v": -0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None, ui=ui)
+    eng.start()
+    try:
+        win.show()
+        end = time.monotonic() + 1.0
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        assert win.cal_step.value() == pytest.approx(-0.05)
+        lo, hi = win.err_plot.getViewBox().viewRange()[1]
+        assert (lo, hi) == (pytest.approx(-20e6), pytest.approx(30e6))
+        x0, x1 = win.v_plot.getViewBox().viewRange()[0]
+        assert x1 - x0 == pytest.approx(30.0, abs=0.5)
+        assert win.wm_interval.isEnabled()  # the sim's timing was read
+        win.v_range.auto.setChecked(False)
+        win.v_range.hi.setValue(5.0)
+        assert win.v_plot.getViewBox().viewRange()[1][1] == pytest.approx(5.0)
+        win.pause.setChecked(True)
+        frozen = win.v_plot.getViewBox().viewRange()[0]
+        end = time.monotonic() + 0.5
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        assert win.v_plot.getViewBox().viewRange()[0] == pytest.approx(frozen)
+        before = win.set_thz.value()
+        win.nudge.setValue(5.0)
+        win._nudge(+1)
+        assert win.set_thz.value() == pytest.approx(before + 5e-6, abs=1e-9)
+        assert eng.settings().setpoint_thz == pytest.approx(before + 5e-6, abs=1e-9)
+        state = win.ui_state()
+        assert state["span"] == "30 s" and state["clock"] is False and state["v_y"]["hi"] == 5.0
+        win._clear()
+        assert win._hist.n == 0
+        win.close()
+    finally:
+        eng.stop()
+    axis = TimeAxis(3600.0 * 10, 3600.0 * 10 + 5)
+    assert axis.tickSpacing(0, 120, 900)[0][0] in (10, 15)
+    assert axis.tickStrings([65.0], 1.0, 30)[0] == time.strftime("%H:%M:%S", time.localtime(36065.0))
+    axis.set_clock(False)
+    assert axis.tickStrings([65.0], 1.0, 30) == ["60"]

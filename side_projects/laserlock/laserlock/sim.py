@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from .devices import HARD_V_MAX, HARD_V_MIN, Reading
+from .devices import HARD_V_MAX, HARD_V_MIN, Reading, WavemeterTiming
 
 
 class SimLaser:
@@ -48,6 +48,7 @@ class SimLaser:
 class SimWavemeter:
     def __init__(self, laser: SimLaser, period: float = 0.03) -> None:
         self.laser, self.period = laser, period
+        self._timing = WavemeterTiming(max(1, round(period * 1e3)), True, 10, False)
         self._next = laser.clock() + period
         self._pending = laser.thz()
         self._reading = Reading(laser.clock(), None, "no value", 0)
@@ -62,6 +63,21 @@ class SimWavemeter:
 
     def describe(self) -> str:
         return f"simulated wavemeter ({self.period * 1e3:.0f} ms)"
+
+    def timing(self) -> WavemeterTiming:
+        return self._timing
+
+    def set_timing(self, exposure_ms: int | None = None, auto: bool | None = None, interval_ms: int | None = None,
+                   interval_on: bool | None = None) -> None:
+        t = self._timing
+        if exposure_ms is not None and auto is None:
+            auto = False
+        t = WavemeterTiming(t.exposure_ms if exposure_ms is None else int(exposure_ms),
+                            t.auto if auto is None else bool(auto),
+                            t.interval_ms if interval_ms is None else int(interval_ms),
+                            t.interval_on if interval_on is None else bool(interval_on))
+        self._timing = t
+        self.period = max(t.exposure_ms, t.interval_ms if t.interval_on else 0) / 1e3
 
     def close(self) -> None:
         pass

@@ -1,4 +1,4 @@
-"""The loop thread: reads the wavemeter, runs the PI step on each new measurement, writes the DG1022.
+"""The loop thread: reads the wavemeter, runs the PID step on each new measurement, writes the DG1022.
 
 Writes go out at most every `out.min_interval` (100 ms): the latest wanted voltage is written when its turn
 comes, so a fast wavemeter never queues commands. The GUI reads `snapshot()` and `drain()`; it never waits on
@@ -18,7 +18,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .controller import Hop, HopDetector, LockSettings, PILock, suggest_gains
-from .devices import HARD_V_MAX, HARD_V_MIN, DeviceFault, FrequencySource, Reading, VoltageOutput
+from .devices import (HARD_V_MAX, HARD_V_MIN, DeviceFault, FrequencySource, Reading, VoltageOutput,
+                      WavemeterTiming)
 
 log = logging.getLogger("laserlock.engine")
 
@@ -52,6 +53,8 @@ class Snapshot:
     update_s: float | None  # median time between new measurements
     hops: int = 0  # mode hops seen since start
     last_hop: HopEvent | None = None
+    wavemeter: WavemeterTiming | None = None  # None: this source's timing can't be read
+    d_term: float = 0.0  # V, the lock's D share of the output now
 
 
 class Engine:
@@ -86,6 +89,9 @@ class Engine:
         self.log_dir = log_dir
         self._csv: csv.writer | None = None  # type: ignore[valid-type]
         self._csv_file = None
+        self._wm_timing: WavemeterTiming | None = None
+        self._wm_request: dict[str, int | bool] = {}
+        self._wm_read_at = 0.0
         self._thread = threading.Thread(target=self._run, name="laserlock-engine", daemon=True)
 
     # ---------------------------------------------------------------- commands (any thread)
@@ -167,7 +173,12 @@ class Engine:
             update = statistics.median(self._periods) if self._periods else None
             last = self._hop_events[-1] if self._hop_events else None
             return Snapshot(self._mode, self._reading, self._error, self._volts, self._state, self._message, update,
-                            self._hop_count, last)
+                            self._hop_count, last, self._wm_timing, self.pi.d_term if self._mode == "locked" else 0.0)
+
+    def set_wavemeter(self, **changes: int | bool) -> None:
+        """Changes the wavemeter's timing (keys of `WavemeterTiming`), on the loop thread."""
+        with self._lock:
+            self._wm_request.update(changes)
 
     def hop_events(self) -> list[HopEvent]:
         with self._lock:
@@ -208,6 +219,7 @@ class Engine:
                 if self._sweep_request is not None:
                     self._sweep(self._sweep_request)
                     continue
+                self._wavemeter_timing()
                 self._tick()
                 self._flush_output()
             except DeviceFault as e:
@@ -222,6 +234,28 @@ class Engine:
                 with self._lock:
                     self._mode, self._message = "fault", "internal error (see the log)"
             self._stop.wait(POLL_S)
+
+    def _wavemeter_timing(self) -> None:
+        """Applies a requested timing change, and reads the timing back about once a second (auto exposure
+        changes it by itself)."""
+        set_timing = getattr(self.source, "set_timing", None)
+        get_timing = getattr(self.source, "timing", None)
+        if get_timing is None:
+            return
+        with self._lock:
+            request, self._wm_request = self._wm_request, {}
+        now = time.monotonic()
+        if request and set_timing is not None:
+            set_timing(**request)
+            log.info("wavemeter timing: %s", request)
+            with self._lock:
+                self._periods.clear()  # the update period changes
+        elif now - self._wm_read_at < 1.0:
+            return
+        self._wm_read_at = now
+        timing = get_timing()
+        with self._lock:
+            self._wm_timing = timing
 
     def _tick(self) -> None:
         r = self.source.read()
@@ -285,14 +319,21 @@ class Engine:
         return values
 
     def _calibrate(self, step_v: float, settle_s: float, average_s: float) -> None:
-        """Steps the output to V0 - step and V0 + step, fits the slope, returns to V0, suggests gains."""
+        """Measures at V0 and at V0 + step (the step may be negative), fits the slope, returns to V0, suggests
+        gains. A one-sided step keeps the laser to one side of where it is (away from a mode hop on the other)."""
         with self._lock:
             self._cal_request = None
             self._mode, self._state, self._message = "calibrating", "calibrating", "calibrating…"
             s = self._settings
         v0 = self._volts
-        lo, hi = max(v0 - step_v, s.v_min), min(v0 + step_v, s.v_max)
+        lo, hi = v0, min(max(v0 + step_v, s.v_min), s.v_max)
         result = "calibration aborted"
+        if abs(hi - lo) < 1e-3:
+            with self._lock:
+                self._mode, self._state = "idle", "idle"
+                self._message = (f"calibration: no room for a {step_v:+.4f} V step from {v0:.4f} V inside "
+                                 f"{s.v_min:g}–{s.v_max:g} V (try the other sign)")
+            return
         try:
             means = []
             for v in (lo, hi):
