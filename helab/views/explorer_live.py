@@ -122,12 +122,37 @@ class AutoConvert:
         return {name: why for name, why in self.waiting.items() if why[0] not in CONVERT_SETTLING}
 
 
+# ``low_hits_threshold``'s value and the settings store it was read from (the test seam's file, else ""): the Live
+# line, Folder details and each converted shot ask for it, so it is read once, not with each render (a settings
+# read on the GUI thread: 28 of the lab's 70 stall stacks on 2026-11-11), until it is set here or Settings close
+# (``forget_low_hits``: after Save or Reset all). Each test's own settings file reads it afresh.
+_low_hits: tuple[str, int] | None = None
+
+
 def low_hits_threshold() -> int:
-    """Settings: a converted shot with fewer hits notifies (0: never)."""
+    """Settings: a converted shot with fewer hits notifies (0: never). From memory once read."""
+    global _low_hits
+    store = os.environ.get("HELAB_TEST_SETTINGS_FILE", "")
+    if _low_hits is not None and _low_hits[0] == store:
+        return _low_hits[1]
     try:
-        return max(0, int(read_setting(app_settings(), CONVERT_LOW_HITS_SETTING)))
+        value = max(0, int(read_setting(app_settings(), CONVERT_LOW_HITS_SETTING)))
     except (TypeError, ValueError, OverflowError):
-        return int(setting_default(CONVERT_LOW_HITS_SETTING))
+        value = int(setting_default(CONVERT_LOW_HITS_SETTING))
+    _low_hits = (store, value)
+    return value
+
+
+def set_low_hits_threshold(value: int) -> None:
+    """Save the low-count threshold (the Auto-convert menu's Notify…); ``low_hits_threshold`` reads it next."""
+    app_settings().setValue(CONVERT_LOW_HITS_SETTING, value)
+    forget_low_hits()
+
+
+def forget_low_hits() -> None:
+    """The next ``low_hits_threshold`` reads Settings again (the main window, as Settings close)."""
+    global _low_hits
+    _low_hits = None
 
 
 @dataclass(eq=False)
@@ -974,7 +999,7 @@ class LiveController:
             self.explorer, "Low-count notifications",
             "Notify when a converted shot has fewer hits than (0: never):", low_hits_threshold(), 0, 10**9, 100)
         if accepted:
-            app_settings().setValue(CONVERT_LOW_HITS_SETTING, value)
+            set_low_hits_threshold(value)
             self._live_changed()
 
     def _convert_on(self, session: LiveSession) -> None:

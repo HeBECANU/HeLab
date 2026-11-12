@@ -21,6 +21,7 @@ from helab.io_ops.fingerprints import DEFAULT_CHECK_LEVEL
 from helab.io_ops.live import live_check
 from helab.utils.folder_cache import FolderCache
 from helab.utils.io_service import IORequest, IOService
+from helab.views import explorer_live
 from helab.views.FolderExplorer import FolderExplorer
 from test_convert_helab import raw_bytes
 from test_live import deliver, job_of, producer, service  # noqa: F401
@@ -219,3 +220,74 @@ def test_a_raw_file_live_cant_read_ends_unconvertible_and_a_new_session_tries_it
     assert [event["raw_name"] for event in of(sent, "shot_waiting")] == ["d1.txt"]  # (Not in seen: a second look.)
     explorer.stop_live(save=False)
     explorer.close_cleanup()
+
+
+def test_the_low_count_threshold_is_read_once_until_it_is_set_or_settings_close(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Live line and Folder details ask for it with each render (28 of the lab's stall stacks read it from
+    Settings): read once, then from memory, until the Auto-convert menu sets it or Settings close (Save, or
+    Reset all, which clears the store underneath)."""
+    from types import SimpleNamespace
+    from helab.utils.settings_defaults import CONVERT_LOW_HITS_SETTING
+    from helab.utils.settings_store import app_settings
+    from helab.views import HelabMainWindow as main_window
+    from helab.utils.settings_defaults import read_setting
+    reads: list[str] = []
+
+    def counted(settings: Any, key: str, **kwargs: Any) -> Any:
+        reads.append(key)
+        return read_setting(settings, key, **kwargs)
+    monkeypatch.setattr("helab.views.explorer_live.read_setting", counted)
+    explorer_live.forget_low_hits()
+    assert explorer_live.low_hits_threshold() == 100 and explorer_live.low_hits_threshold() == 100
+    assert reads == [CONVERT_LOW_HITS_SETTING]
+    explorer_live.set_low_hits_threshold(7)
+    assert explorer_live.low_hits_threshold() == 7 and len(reads) == 2
+    app_settings().clear()  # (Settings › Reset all.)
+    assert explorer_live.low_hits_threshold() == 7  # (Memory, until Settings close.)
+    fake = SimpleNamespace(settle_seconds=None)
+    monkeypatch.setattr(main_window, "get_io_service", lambda: fake)
+    monkeypatch.setattr(main_window, "get_folder_cache", lambda service: SimpleNamespace())
+    main_window.HelabMainWindow._apply_live_settings(app_settings())
+    assert explorer_live.low_hits_threshold() == 100 and len(reads) == 3
+
+
+def test_a_plots_source_line_is_set_only_when_it_changes(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The main window asks with every change of Folder details (29 of the lab's stall stacks were in it): what the
+    line shows is worked out from the dock's properties, and its labels are set only when that changes, found among
+    their wrapper's own children (never by searching the plot's widget tree). A replaced plot's content gets its
+    lines anew."""
+    from PyQt6.QtWidgets import QDockWidget, QLabel, QWidget
+    from helab.views.ElidedLabel import ElidedLabel
+    from helab.views.plots.workspace import PlotWorkspace
+    sets: list[str] = []
+    original = ElidedLabel.setText
+
+    def counted(self: ElidedLabel, text: str | None) -> None:
+        sets.append(text or "")
+        original(self, text)
+    monkeypatch.setattr(ElidedLabel, "setText", counted)
+    dock = QDockWidget()
+    qtbot.addWidget(dock)
+    content = QWidget()
+    for _ in range(50):
+        QLabel("a plot's own label", content)
+    PlotWorkspace._wrap_plot(dock, content)
+    dock.setProperty("dataSourcePath", "/data/run_1")
+    dock.setProperty("plotSourceRevision", "revision 1")
+    sets.clear()
+    for _ in range(5):
+        PlotWorkspace._update_plot_source_label(dock, None)
+    assert sets == ["Showing previously loaded data: run_1 · revision 1"]
+    label = dock.findChild(QLabel, "plot_data_source")
+    assert label is not None and label.toolTip() == "/data/run_1"
+    dock.setProperty("plotSourceRevision", "revision 2")
+    dock.setProperty("plotError", "no totals")
+    PlotWorkspace._update_plot_source_label(dock, None)
+    assert sets[-1].endswith("revision 2") and dock.property("plotSourceText") == sets[-1]
+    error = dock.findChild(QLabel, "plot_error")
+    assert error is not None and error.text() == "⚠ no totals" and not error.isHidden()
+    PlotWorkspace._wrap_plot(dock, QWidget())  # (A released plot's picture in its place.)
+    sets.clear()
+    PlotWorkspace._update_plot_source_label(dock, None)
+    assert sets == ["Showing previously loaded data: run_1 · revision 2"]
