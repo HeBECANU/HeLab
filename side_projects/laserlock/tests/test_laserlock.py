@@ -1213,9 +1213,9 @@ def test_right_plot_live_and_auto(tmp_path: Any) -> None:
         win._draw_time()
         assert win._live_shown and win.sw_live.isVisible() and not win.sw_curve.isVisible()
         xs, ys = win._live_xy
-        assert len(xs) > 10 and min(xs) < 2.05 and max(xs) > 2.15  # the output moved 2.0 -> 2.2
+        assert len(xs) >= 2 and min(xs) < 2.05 and max(xs) > 2.15  # the output moved 2.0 -> 2.2 (one point a value)
         bx, by = win.sw_live.getData()  # unlocked and normal: the black thick path
-        assert np.isfinite(by).sum() > 10 and not np.isfinite(win.sw_live_lk.getData()[1]).any()
+        assert np.isfinite(by).sum() >= 2 and not np.isfinite(win.sw_live_lk.getData()[1]).any()
         assert win.sw_live.opts["pen"].widthF() > win.sw_live_fl.opts["pen"].widthF()
         assert "Live" in win.sw_plot.titleLabel.text
         # a sweep: the sweep view while it runs and for SWEEP_HOLD_S after
@@ -1236,3 +1236,45 @@ def test_right_plot_live_and_auto(tmp_path: Any) -> None:
         win.close()
     finally:
         eng.stop()
+
+
+def test_manual_ramp_walks_the_output() -> None:
+    laser = SimLaser(f0_thz=F0, seed=21)
+    out = SimDG1022(laser, volts=3.0, min_interval=0.1)
+    eng = Engine(SimWavemeter(laser), out, LockSettings(setpoint_thz=F0 + 900e-6))
+    eng.start()
+    try:
+        time.sleep(0.2)
+        writes = out.writes
+        eng.set_voltage(3.5, ramp_s=1.0)
+        time.sleep(0.5)
+        assert 3.1 < out.get() < 3.4  # on the way
+        time.sleep(0.9)
+        assert out.get() == pytest.approx(3.5)
+        assert 6 <= out.writes - writes <= 14  # about one write per 100 ms
+        eng.set_voltage(3.0)  # no ramp: at once
+        time.sleep(0.3)
+        assert out.get() == pytest.approx(3.0)
+        eng.set_voltage(4.0, ramp_s=5.0)
+        time.sleep(0.3)
+        eng.engage()  # locking takes over: the ramp stops
+        time.sleep(0.3)
+        assert eng._ramp is None
+    finally:
+        eng.stop()
+
+
+def test_held_points_average_each_output_value() -> None:
+    import numpy as np
+
+    from laserlock.gui import held_points
+
+    t = np.arange(0, 3.0, 0.03)
+    v = np.where(t < 0.5, 3.0, np.where(t < 0.6, 3.01, 3.02))  # 3.02 held for 2.4 s: 3 points (1 s each)
+    y = 100.0 * v + np.where(np.arange(t.size) % 2, 0.5, -0.5)
+    flag = np.zeros(t.size, dtype=bool)
+    flag[np.searchsorted(t, 0.54)] = True
+    ht, hy, hv, (hf,) = held_points(t, y, v, (flag,))
+    assert list(hv) == [3.0, 3.01, 3.02, 3.02, 3.02]
+    assert np.allclose(hy, 100.0 * hv, atol=0.2)  # the mean of each run (the ±0.5 alternation averages out)
+    assert list(hf) == [False, True, False, False, False]

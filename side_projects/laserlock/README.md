@@ -73,7 +73,8 @@ running); its **Full** button, or closing it, brings the full window back. Numbe
 
 **The right plot** shows error against output. **Show**: *live* draws it for the time shown, as a path through the
 readings with the newest one a big dot, coloured like the time plots' flags: thick black (unlocked) or dark green
-(locked) where normal, thin orange (flicker) and thin red (jumps) (the tuning slope, hysteresis, a mode hop as a jump off the line, as
+(locked) where normal, thin orange (flicker) and thin red (jumps). Readings at one held output value are averaged to a
+point (one per second of a long hold), so the path runs straight between output values instead of in steps (the tuning slope, hysteresis, a mode hop as a jump off the line, as
 they happen); *last sweep* the last sweep or scan; *auto* (default) the sweep while one runs and for 30 s after,
 otherwise live. Hover for a point's time, output and error.
 
@@ -117,6 +118,10 @@ and the plot's own "A" button returns to auto. Span, time labels, ranges, layout
 
 **Show: Time plots / Sweep plot** hides either plot panel (both: the window is just the controls); remembered
 between runs.
+
+**Ramp** (Output): a manual change walks the output to the new value over this time (default 1 s; one write per
+100 ms) instead of jumping; a new value replaces a ramp under way, and locking takes over from one. 0 jumps at
+once.
 
 **Number boxes.** The mouse wheel never changes a value or a drop-down (it scrolls the panel). While a box
 is being edited, **↑ / ↓** step the digit just left of the text cursor (at the decimal point, the units),

@@ -102,6 +102,7 @@ class Engine:
         self._csv_file = None
         self._csv_flushed = 0.0
         self._retry = False
+        self._ramp: tuple[float, float, float, float] | None = None  # manual ramp: from, to, start, seconds
         self._wm_timing: WavemeterTiming | None = None
         self._wm_request: dict[str, int | bool] = {}
         self._wm_read_at = 0.0
@@ -135,6 +136,7 @@ class Engine:
             if self._settings.setpoint_thz <= 0:
                 self._message = "set a setpoint first"
                 return
+            self._ramp = None  # the lock takes over from a manual ramp
             self.pi.engage(self._volts)
             self._mode, self._message = "locked", "lock engaged"
             self._out_since = None
@@ -146,12 +148,18 @@ class Engine:
                 self._mode, self._state, self._message = "idle", "idle", f"lock released, holding {self._volts:.4f} V"
                 log.info("lock released at %.4f V", self._volts)
 
-    def set_voltage(self, volts: float) -> None:
-        """Manual output (only while not locked or calibrating)."""
+    def set_voltage(self, volts: float, ramp_s: float = 0.0) -> None:
+        """Manual output (only while idle). With `ramp_s`, the output walks there over that time in steps at the
+        DG1022's pace (one write per min_interval) instead of jumping; a new value replaces a ramp under way."""
         with self._lock:
             if self._mode == "idle":
                 s = self._settings
-                self._target = min(max(volts, s.v_min), s.v_max)
+                v = min(max(volts, s.v_min), s.v_max)
+                if ramp_s > 0 and abs(v - self._volts) > 5e-5:
+                    self._ramp = (self._volts, v, time.monotonic(), ramp_s)
+                else:
+                    self._ramp = None
+                    self._target = v
 
     def calibrate(self, step_v: float, settle_s: float, average_s: float) -> None:
         with self._lock:
@@ -292,6 +300,7 @@ class Engine:
                     continue
                 self._wavemeter_timing()
                 self._tick()
+                self._ramp_step()
                 self._flush_output()
             except DeviceFault as e:
                 log.error("%s", e)
@@ -416,6 +425,20 @@ class Engine:
             self._abort.clear()
             self._mode = "sweeping"
             self._message += " — finding a stable range to relock"
+
+    def _ramp_step(self) -> None:
+        """A manual ramp under way: the output's target now (written when the DG1022's turn comes)."""
+        with self._lock:
+            if self._ramp is None:
+                return
+            if self._mode != "idle":
+                self._ramp = None  # locking, sweeping or calibrating takes over
+                return
+            v0, v1, t0, dur = self._ramp
+            k = min((time.monotonic() - t0) / dur, 1.0)
+            self._target = v0 + (v1 - v0) * k
+            if k >= 1.0:
+                self._ramp = None
 
     def _flush_output(self) -> None:
         with self._lock:

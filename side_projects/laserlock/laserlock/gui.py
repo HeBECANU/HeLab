@@ -114,6 +114,25 @@ def minmax_bins(bins: int, columns: tuple[np.ndarray, ...], flags: tuple[np.ndar
 
 
 SWEEP_HOLD_S = 30.0  # auto: the right plot keeps a finished sweep this long before going live
+HELD_CHUNK_S = 1.0  # the right plot: a held output longer than this gives a point per this long
+
+
+def held_points(t: np.ndarray, y: np.ndarray, v: np.ndarray, flags: tuple[np.ndarray, ...]
+                ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
+    """Runs of readings at one output value (cut every HELD_CHUNK_S) as one point each: the middle time, the
+    mean y, the value; each flag true if any reading in the run had it."""
+    if v.size == 0:
+        return t, y, v, list(flags)
+    changed = np.concatenate(([True], v[1:] != v[:-1]))
+    run = np.cumsum(changed) - 1
+    run_t0 = t[np.flatnonzero(changed)][run]
+    chunk = np.floor((t - run_t0) / HELD_CHUNK_S)
+    starts = np.flatnonzero(np.concatenate(([True], (run[1:] != run[:-1]) | (chunk[1:] != chunk[:-1]))))
+    counts = np.diff(np.append(starts, v.size))
+    return (t[starts + counts // 2], np.add.reduceat(y, starts) / counts, v[starts],
+            [np.logical_or.reduceat(f, starts) for f in flags])
+
+
 REDRAW_HZ = {"1 Hz": 1.0, "2 Hz": 2.0, "5 Hz": 5.0}
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
 ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
@@ -738,6 +757,11 @@ class MainWindow(QMainWindow):
         self.log_box.toggled.connect(self._log)
         sec_out = Section("output", "Output", "The DG1022 CH1 DC offset (hard limit 0–7 V)", "output" in collapsed)
         sec_out.row("Manual", self.manual, "Set the output by hand (unlocked only); it goes out at most every 100 ms")
+        self.manual_ramp = spin(0.0, 600.0, 1, 0.5, float(ui.get("manual_ramp_s", 1.0)), " s")
+        sec_out.row("Ramp", self.manual_ramp, "A manual change walks the output to the new value over this time (in "
+                    "steps, one write per 100 ms) instead of jumping: gentler on the laser, and the right plot fills in "
+                    "along the way. 0: jump at once")
+        self._guarded.append(self.manual_ramp)
         sec_out.full(self.log_box)
         self._guarded += [self.manual, self.log_box]
 
@@ -1287,7 +1311,7 @@ class MainWindow(QMainWindow):
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
                 "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
                 "hop_lines": self.hop_lines.isChecked(),
-                "redraw": self.redraw.currentText(), "sweep_view": self.sw_mode.currentText(),
+                "redraw": self.redraw.currentText(), "manual_ramp_s": self.manual_ramp.value(), "sweep_view": self.sw_mode.currentText(),
                 "flicker_min_mhz": self.flicker_min.value(), "jump_min_mhz": self.jump_min.value(),
                 "collapsed": [sec.key for sec in self.sections if sec.collapsed],
                 "inputs_locked": self.inputs_lock.isChecked(),
@@ -1631,7 +1655,7 @@ class MainWindow(QMainWindow):
             self.set_thz.setValue(round(r.thz, 7))
 
     def _manual(self, v: float) -> None:
-        self.engine.set_voltage(v)
+        self.engine.set_voltage(v, self.manual_ramp.value())
 
     def _toggle_lock(self, on: bool) -> None:
         if on:
@@ -1775,15 +1799,21 @@ class MainWindow(QMainWindow):
             idx, fp, jp, lp = minmax_bins(PLOT_POINTS_MAX // 4, (err, volts), (q.flicker, q.jump, locked))
             tp, ep, vp = t[idx], err[idx], volts[idx]
         if live:
-            good = ~(fp | jp)
-            for item, mask in ((self.sw_live, good & ~lp), (self.sw_live_lk, good & lp), (self.sw_live_fl, fp),
-                               (self.sw_live_jp, jp)):
+            # one point per held output value (and per second of it): straight lines between output values,
+            # not the steps of several readings at each written value
+            ht, he, hv, (hf, hj, hl) = held_points(t, err, volts, (q.flicker, q.jump, locked))
+            if ht.size > PLOT_POINTS_MAX:
+                idx, hf, hj, hl = minmax_bins(PLOT_POINTS_MAX // 4, (he, hv), (hf, hj, hl))
+                ht, he, hv = ht[idx], he[idx], hv[idx]
+            good = ~(hf | hj)
+            for item, mask in ((self.sw_live, good & ~hl), (self.sw_live_lk, good & hl), (self.sw_live_fl, hf),
+                               (self.sw_live_jp, hj)):
                 joined = mask.copy()
-                joined[1:] |= mask[:-1]  # and the segment into the next reading, so the path has no gaps
-                item.setData(vp, np.where(joined, ep, np.nan))
+                joined[1:] |= mask[:-1]  # and the segment into the next point, so the path has no gaps
+                item.setData(hv, np.where(joined, he, np.nan))
             self.sw_now.setData([float(volts[-1])], [float(err[-1])])
             self.sw_now.setSymbolBrush(LOCKED_LINE if bool(locked[-1]) else OUT_COLOUR)
-            self._live_t, self._live_xy = tp, (vp, ep)
+            self._live_t, self._live_xy = ht, (hv, he)
         pairs = ((self.c_err, ep), (self.c_v, vp)) if combined else ((self.err_curve, ep), (self.v_curve, vp))
         good = ~(fp | jp)
         good_joined = good.copy()
