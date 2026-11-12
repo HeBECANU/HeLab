@@ -319,3 +319,25 @@ def test_a_retry_clicked_between_a_stopping_answer_and_its_done_is_its_own(
     assert job_of(cache, path) is retry and session.request == "check" and not session.error
     explorer.stop_live(save=False)
     explorer.close_cleanup()
+
+
+def test_a_conversion_leaves_no_empty_unreadable_record(qtbot: QtBot, service: IOService, tmp_path: Path) -> None:
+    """``FolderCache.convert_unreadable`` holds a folder only while one of its files is unconvertible for being
+    unreadable: another reason (a damaged file) leaves no entry, even from a conversion cancelled before its
+    summary, and a file found damaged after being unreadable takes the folder's entry with it."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cache = explorer.model.cache
+    qtbot.waitUntil(lambda: ("convert", path) in cache.jobs)
+    request = producer(cache, path, "convert")
+
+    def refused(name: str, reason: str) -> dict[str, Any]:
+        return {"kind": "shot_unconvertible", "path": path, "shot": int(name[1:-4]), "raw_name": name, "raw_size": 1,
+                "raw_mtime_ns": 1, "reason": reason, "message": reason}
+    deliver(cache, request, [refused("d1.txt", "damaged")])
+    assert path not in cache.convert_unreadable
+    deliver(cache, request, [refused("d2.txt", "read_failed")])
+    assert set(cache.convert_unreadable[path]) == {"d2.txt"}
+    deliver(cache, request, [refused("d2.txt", "damaged"), {"kind": "cancelled"}])
+    assert path not in cache.convert_unreadable
+    explorer.stop_live(save=False)
+    explorer.close_cleanup()

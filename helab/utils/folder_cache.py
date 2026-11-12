@@ -4803,12 +4803,17 @@ class FolderCache(QObject):
             self.convert_reasons.setdefault(job.path, {})[str(event["raw_name"])] = str(
                 event.get("message") or event["reason"])
             self.convert_reasons.move_to_end(job.path)
-            unreadable = self.convert_unreadable.setdefault(job.path, {})
             if event["reason"] == "read_failed":
-                unreadable[str(event["raw_name"])] = time.time()
-            else:
+                self.convert_unreadable.setdefault(job.path, {})[str(event["raw_name"])] = time.time()
+                self.convert_unreadable.move_to_end(job.path)
+                while len(self.convert_unreadable) > self.MAX_SNAPSHOTS:
+                    self.convert_unreadable.popitem(last=False)
+            elif (unreadable := self.convert_unreadable.get(job.path)) is not None:
+                # Unconvertible now for another reason. (No empty entry is left: a cancelled conversion sends no
+                # summary to prune it.)
                 unreadable.pop(str(event["raw_name"]), None)
-            self.convert_unreadable.move_to_end(job.path)
+                if not unreadable:
+                    del self.convert_unreadable[job.path]
         elif job.operation == "invalidate" and kind in ("removed", "admin_result"):
             # Its state was reset when it was submitted; only the cleanup deadline and usage are new.
             self._schedule_sweep(event.get("next_deadline"))
