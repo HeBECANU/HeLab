@@ -71,6 +71,11 @@ anything for what it does. Which panels are shut, and the input lock, are rememb
 **Mini window** swaps to a small always-on-top window with just the state, error and output (the lock keeps
 running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
 
+**The right plot** shows error against output. **Show**: *live* draws it for the time shown, as a path through the
+readings with the newest one a big dot (the tuning slope, hysteresis, a mode hop as a jump off the line, as
+they happen); *last sweep* the last sweep or scan; *auto* (default) the sweep while one runs and for 30 s after,
+otherwise live. Hover for a point's time, output and error.
+
 **Locked and lost.** A light green band marks each stretch the lock was engaged; a dotted red line marks each
 LOCK LOST (the newest 40 of each in the shown span).
 

@@ -113,6 +113,7 @@ def minmax_bins(bins: int, columns: tuple[np.ndarray, ...], flags: tuple[np.ndar
     return (idx, *out_flags)
 
 
+SWEEP_HOLD_S = 30.0  # auto: the right plot keeps a finished sweep this long before going live
 REDRAW_HZ = {"1 Hz": 1.0, "2 Hz": 2.0, "5 Hz": 5.0}
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
 ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
@@ -843,9 +844,9 @@ class MainWindow(QMainWindow):
         self.sections = [sec_set, sec_loop, sec_cal, sec_lim, sec_out, sec_wm, sec_sw]
 
         self.show_plots = QCheckBox("Time plots")
-        self.show_sweep = QCheckBox("Sweep plot")
+        self.show_sweep = QCheckBox("Right plot")
         self.show_plots.setToolTip("Show the error and output against time")
-        self.show_sweep.setToolTip("Show the last sweep or scan (frequency against output)")
+        self.show_sweep.setToolTip("Show the right plot: error against output, live or from the last sweep or scan")
         self.show_plots.setChecked(bool(ui["show_plots"]))
         self.show_sweep.setChecked(bool(ui["show_sweep"]))
         self.show_plots.toggled.connect(self._plots_shown)
@@ -993,6 +994,17 @@ class MainWindow(QMainWindow):
         self.sw_plot.addLegend(offset=(10, 10))
         self.sw_plot.legend.addItem(self.sw_curve, "sweep / up")
         self.sw_plot.legend.addItem(self.sw_down, "down")
+        # live: error against output over the time shown (a path through the readings, the newest a big dot)
+        self.sw_live = self.sw_plot.plot(pen=pg.mkPen(ERR_COLOUR, width=1))
+        self.sw_now = self.sw_plot.plot(pen=None, symbol="o", symbolSize=10, symbolBrush=ERR_COLOUR,
+                                        symbolPen=pg.mkPen("w", width=1.5))
+        for item in (self.sw_live, self.sw_now):
+            item.setZValue(8)
+            item.setVisible(False)
+        self._live_shown = False
+        self._live_t = np.empty(0)
+        self._sweep_ended = -1e9
+        self._was_sweeping = False
         right = self.right = QWidget()
         rv = QVBoxLayout(right)
         top = QHBoxLayout()
@@ -1098,6 +1110,17 @@ class MainWindow(QMainWindow):
         srow = QHBoxLayout()
         srow.addWidget(self._lab("Sweep y", "The sweep plot's frequency axis: auto or a fixed range"))
         srow.addWidget(self.sw_y)
+        srow.addSpacing(12)
+        srow.addWidget(self._lab("Show", "What the right plot shows"))
+        self.sw_mode = Combo()
+        self.sw_mode.addItems(["auto", "live", "last sweep"])
+        self.sw_mode.setCurrentText(str(ui.get("sweep_view", "auto")) if ui.get("sweep_view") in ("auto", "live", "last sweep")
+                                    else "auto")
+        self.sw_mode.setToolTip("live: error against output over the time shown (the newest reading a big dot): the "
+                                "tuning slope and hysteresis as they happen. last sweep: the last sweep or scan. auto: "
+                                "the sweep while one runs and for 30 s after, otherwise live")
+        self.sw_mode.currentIndexChanged.connect(self._sweep_view_changed)
+        srow.addWidget(self.sw_mode)
         srow.addStretch(1)
         sv.addLayout(srow)
         sv.addWidget(sweep_plots)
@@ -1256,7 +1279,7 @@ class MainWindow(QMainWindow):
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
                 "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
                 "hop_lines": self.hop_lines.isChecked(),
-                "redraw": self.redraw.currentText(),
+                "redraw": self.redraw.currentText(), "sweep_view": self.sw_mode.currentText(),
                 "flicker_min_mhz": self.flicker_min.value(), "jump_min_mhz": self.jump_min.value(),
                 "collapsed": [sec.key for sec in self.sections if sec.collapsed],
                 "inputs_locked": self.inputs_lock.isChecked(),
@@ -1430,7 +1453,17 @@ class MainWindow(QMainWindow):
             x = vb.mapSceneToView(pos).x()
             text, dot = self._hover[plot]
             lines: list[str] = []
-            if plot is self.sw_plot:
+            if plot is self.sw_plot and self._live_shown:
+                xs, ys = self.sw_live.getData()
+                if xs is None or len(xs) == 0 or len(self._live_t) != len(xs):
+                    return
+                p = vb.mapSceneToView(pos)
+                (x0, x1), (y0, y1) = vb.viewRange()
+                d = ((xs - p.x()) / max(x1 - x0, 1e-12)) ** 2 + ((ys - p.y()) / max(y1 - y0, 1e-12)) ** 2
+                k = int(np.argmin(d))
+                lines = [self._time_text(float(self._live_t[k])), f"{xs[k]:.4f} V", f"{ys[k] / 1e6:+.3f} MHz"]
+                where = (float(xs[k]), float(ys[k]))
+            elif plot is self.sw_plot:
                 xs, ys = self.sw_curve.getData()
                 xd, yd = self.sw_down.getData()
                 pts = [(a, b) for a, b in zip(list(xs if xs is not None else []) + list(xd if xd is not None else []),
@@ -1641,6 +1674,10 @@ class MainWindow(QMainWindow):
             self._shown_cal = snap.message
             self._show_settings()
         self._refresh_sweep()
+        if self._was_sweeping and snap.mode != "sweeping":
+            self._sweep_ended = time.monotonic()
+        self._was_sweeping = snap.mode == "sweeping"
+        self._apply_sweep_view(snap.mode == "sweeping")
         self.manual.setEnabled(snap.mode == "idle")
         if snap.message.startswith("auto-lock engaged") and snap.message != self._shown_cal:
             self._shown_cal = snap.message
@@ -1699,7 +1736,8 @@ class MainWindow(QMainWindow):
 
     def _draw_time(self, hops: int | None = None) -> None:
         """The time plots of the shown layout (only while shown and not paused)."""
-        if not self.time_panel.isVisible() or not self._hist.n or self.pause.isChecked():
+        live = self._live_shown and self.sweep_panel.isVisible()
+        if not (self.time_panel.isVisible() or live) or not self._hist.n or self.pause.isChecked():
             return
         combined = self.layout_kind.currentIndex() == 1
         now = time.time() - self._t0
@@ -1718,6 +1756,10 @@ class MainWindow(QMainWindow):
         if t.size > PLOT_POINTS_MAX:
             idx, fp, jp = minmax_bins(PLOT_POINTS_MAX // 4, (err, volts), (q.flicker, q.jump))
             tp, ep, vp = t[idx], err[idx], volts[idx]
+        if live:
+            self.sw_live.setData(vp, ep)
+            self.sw_now.setData([float(volts[-1])], [float(err[-1])])
+            self._live_t = tp
         pairs = ((self.c_err, ep), (self.c_v, vp)) if combined else ((self.err_curve, ep), (self.v_curve, vp))
         for curve, y in pairs:
             curve.setData(tp, y)
@@ -1811,6 +1853,41 @@ class MainWindow(QMainWindow):
         xs, ys = [e.t - self._t0 for e in shown], [e.volts for e in shown]
         (self.c_hops if combined else self.hop_dots).setData(xs, ys)
         (self.hop_dots if combined else self.c_hops).setData([], [])
+
+    def _live_wanted(self, sweeping: bool) -> bool:
+        kind = self.sw_mode.currentText()
+        if kind != "auto":
+            return kind == "live"
+        return not sweeping and time.monotonic() - self._sweep_ended > SWEEP_HOLD_S
+
+    def _sweep_view_changed(self) -> None:
+        self._apply_sweep_view(self.engine.snapshot().mode == "sweeping")
+        self._draw_time()
+
+    def _apply_sweep_view(self, sweeping: bool) -> None:
+        """Live or sweep on the right plot. Live hides the sweep's items (the sweep's own refresh may show some
+        again, so they are hidden every time); going back redraws the sweep."""
+        live = self._live_wanted(sweeping)
+        sweep_items = [self.sw_curve, self.sw_down, self.sw_choice, self.sw_range, *self._stretch_regions,
+                       *self._sw_hop_lines]
+        if live:
+            for item in sweep_items:
+                if item.isVisible():
+                    item.setVisible(False)
+        if live == self._live_shown:
+            return
+        self._live_shown = live
+        self.sw_live.setVisible(live)
+        self.sw_now.setVisible(live)
+        self.sw_plot.legend.setVisible(not live)
+        self.sw_plot.setTitle("Live: error vs output, the time shown" if live else "Sweep")
+        if not live:
+            self.sw_curve.setVisible(True)
+            self.sw_down.setVisible(True)
+            self._sweep_n = self._scan_shown = -1  # redraw the sweep, its marks included
+            self._refresh_sweep()
+        else:
+            self._draw_time()
 
     def _refresh_scan(self) -> bool:
         """Draws the last find-stable-range scan (both directions, the stable stretches) and fills the table.

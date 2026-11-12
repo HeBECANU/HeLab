@@ -1187,3 +1187,47 @@ def test_minmax_bins_keeps_spikes_and_flags() -> None:
     assert len(idx) < 12_000 and np.all(np.diff(idx) >= 0)
     assert 12_345 in idx and 77_777 in idx and idx[-1] == n - 1
     assert f.sum() >= 1 and f[np.searchsorted(idx, 50_000) - 2: np.searchsorted(idx, 50_000) + 3].any()
+
+
+def test_right_plot_live_and_auto(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock import gui
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=20)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser, volts=2.0), LockSettings(setpoint_thz=F0 + 600e-6))
+    win = gui.MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    eng.start()
+    try:
+        win.show()
+        win.engine.set_voltage(2.2)
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        win._refresh()
+        win._draw_time()
+        assert win._live_shown and win.sw_live.isVisible() and not win.sw_curve.isVisible()
+        xs, ys = win.sw_live.getData()
+        assert xs is not None and len(xs) > 10 and min(xs) < 2.05 and max(xs) > 2.15  # the output moved 2.0 -> 2.2
+        assert "Live" in win.sw_plot.titleLabel.text
+        # a sweep: the sweep view while it runs and for SWEEP_HOLD_S after
+        eng.sweep(2.0, 2.3, 0.1, 0.0, 0.05)
+        win._refresh()
+        assert not win._live_shown and win.sw_curve.isVisible()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and eng.snapshot().mode == "sweeping":
+            time.sleep(0.05)
+        win._refresh()
+        assert not win._live_shown  # held after it ends
+        win._sweep_ended -= gui.SWEEP_HOLD_S + 1
+        win._refresh()
+        assert win._live_shown
+        win.sw_mode.setCurrentText("last sweep")
+        assert not win._live_shown and win.sw_curve.isVisible()
+        assert win.ui_state()["sweep_view"] == "last sweep"
+        win.close()
+    finally:
+        eng.stop()
