@@ -32,6 +32,17 @@ the last `convert_done converted=1` came during a GUI stall, no `load_done` foll
 | `3b6624b` | F3 | The Live tooltip (and so Folder details' Auto-convert row) adds "<files>: couldn't be read; Live off and on, or Convert this folder…, tries it again." (CoCo's wording). A `FileNotFoundError` on read (removed or renamed after the listing) waits as `changed` ("Gone when it was read (removed or renamed): looked at again at the next check"), never `read_failed`. |
 | `e578c47` | F4 | Only `read_failed` creates a folder's `convert_unreadable` entry (bounded like `convert_reasons`). Another reason removes the file, and the entry once it's empty, so a conversion cancelled before its summary leaves none. |
 
+### Review round 2 (Lookout: F1–F4 closed, no blockers; G1 and H1 from CoCo)
+
+| Commit | Finding | What |
+|---|---|---|
+| `efa21be` | G1 | On Windows a raw path of 260+ characters fails to open as `FileNotFoundError` (WinError 3); since `3b6624b` it waited as `changed` for good, silently. The `FileNotFoundError` branch now asks `path_too_long`, as the TXY's write does. While the folder is there, the file is unconvertible ("failed", "Path too long for Windows (N characters …)"), skipped while unchanged. With the folder gone too, it waits. Test with `PLATFORM` patched to win32. |
+| `8e882fa` | H1 | `build_info._git` runs every git call with `GIT_OPTIONAL_LOCKS=0`. Every process importing `helab.utils.constants` (the app, each helper, each test worker) runs `get_build_info()`, whose `git status` refreshed the index under `index.lock`; the 2 s timeout's kill under load left the stale, empty lock seen twice on this floor (Lookout: 8 of 150 samples in a parallel suite; on Ground too). Tests: every call gets the variable; in a temporary repository with a stat change, `_git`'s status leaves the index unwritten while plain `git status` rewrites it (both fail without the change). `helab/build_info.py` (CoCo's brief said `helab/utils/build_info.py`; the module is `helab/build_info.py`) was added to my owned files for this only. |
+
+**Merge with `dev/v0.0.9`**: fetched `origin/dev/v0.0.9` at 12:40. It is still `d2bd306`, this branch's base, and
+Ground's local `dev/v0.0.9` (`9e75d77`, the brief) is already in the branch, so there was nothing to merge and
+there is no merge commit. The checks below are on the branch's head, `8e882fa`.
+
 ### Files outside the brief's owned list (each approved or required by CoCo's answers)
 
 - `helab/io_ops/convert.py`: the `read_failed` rule (CoCo's Q1 approval). `READ_FAILED`; `unchanged_for` shared by `unfinished_or_damaged` and the new `unreadable`; module docstring.
@@ -71,9 +82,13 @@ Changed:
 - `tests/test_live_convert.py`: the low-count test sets 0 through `set_low_hits_threshold`, as the menu does.
 - `tests/test_activity.py`: `fake_explorer`'s `live_control` gains `stall_seconds`.
 
-Full suite on `88e96ce`: 9,931 passed, 674 skipped, no RERUN. After the review fixes, on `e578c47`
-(`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`): **9,936 passed, 674 skipped, 6 warnings, no
-RERUN**. Output whole in [full-suite.txt](full-suite.txt) (that run). The skips are the private test data, not
+Full suite (`pytest -n 8 --reruns 5 --reruns-delay 1 --basetemp=.ai/temp/pytest`):
+- on `88e96ce`: 9,931 passed, 674 skipped, no RERUN;
+- on `e578c47`: 9,936 passed, 674 skipped, no RERUN;
+- on the head `8e882fa`: **9,939 passed, 674 skipped, 10 warnings, no RERUN**, and no `index.lock` left after the run.
+
+The output of the head's run is whole in [full-suite.txt](full-suite.txt). The 10 warnings are PyQtGraph's NumPy 2.5
+deprecation notices from plot tests; their count varies with the workers, and they're not this branch's. The skips are the private test data, not
 checked out on this floor.
 
 **RERUN on record** (Lookout's run of `7c28fc1`: 9,931 passed, 1 RERUN):
@@ -81,10 +96,10 @@ checked out on this floor.
 It is already in known-issues (line 474), not caused by this branch, and it didn't rerun in my two runs.
 
 Twice during this work, git found a stale, empty `index.lock` in this worktree's git folder (11:45 and 12:05,
-each during or just after a test run; no process held it), and I removed it. Its source is unknown: a test, or
-another session's `git status` on this worktree. Worth a look if other floors see it.
+each during or just after a test run; no process held it), and I removed it. Lookout traced it to
+`build_info._git`'s `git status`, killed by its timeout under load; fixed by H1 (`8e882fa`).
 
-The five type checks, all clean on `e578c47` (output in [type-checks.txt](type-checks.txt)):
+The five type checks, all clean on `8e882fa` (output in [type-checks.txt](type-checks.txt)):
 - `mypy helab/ --strict` and `mypy tests --strict`: no issues;
 - `pyright helab tests`: 0 errors;
 - `mypy helab/ --strict --platform win32`: no issues;
@@ -116,6 +131,11 @@ The five type checks, all clean on `e578c47` (output in [type-checks.txt](type-c
 - **A~3**: `IOService` delivers a helper's answer and its `done` in different drains under load. F2 covered loads'
   answers (`ANSWERS`). Live's conversion ends on `done` (after `_forget_job`), and scans replay their snapshot at
   `done`. A short audit of the other `has_request` callers (results, admin, icons) would close it.
+- **A~4** (H1's follow-up; Lookout's evidence: a stale `index.lock` in 8 of 150 samples of a parallel suite run,
+  and on Ground): every process importing `helab.utils.constants` still runs `get_build_info()`'s four git calls
+  (each up to 2 s), including each I/O helper and each test worker. Cache the build info once per app run and pass
+  it to helpers (as `settle_seconds` is), or read it lazily where it's shown (About, the log's header). This would
+  also help "Commit: unknown" in the lab's log (A73.6), which may be the 2 s timeout on the slow PC.
 - **M~1** (the lab PC): the next time Live runs with auto-convert there, check that the log has no "Live: no check
   started for" warning. If one appears, the backstop fired: send the log. Also see whether GUI stalls are fewer
   than the 70 of 2026-11-11.
@@ -151,8 +171,13 @@ No `Q~`: CoCo approved the 20 s, the backstop's numbers and the Activity wording
 - **`helab/io_ops/events.py`** (docstrings only, CoCo to approve): `ShotWaitingEvent`'s "couldn't be read now
   (`read_failed`)" gains "…; unconvertible once unchanged and unreadable for 20 s". `ShotUnconvertibleEvent`'s
   reasons gain "`read_failed` (unchanged and unreadable for `DAMAGED_SECONDS`, by its mtime and since first seen)".
-- **`roadmaps/known-issues.md`**: no new entry (no RERUN). If Live stalling is listed there, it can be closed by
-  `997e4e5`.
+- **`roadmaps/known-issues.md`**: no new RERUN entry; Lookout's one RERUN (`test_a_killed_helpers_workers_exit`) is
+  line 474's. If Live stalling is listed there, it can be closed by `997e4e5`. A new line, closed by H1:
+  > **Stale `index.lock` in checkouts** (2026-11-12, fixed `8e882fa`): `build_info._git`'s `git status`, run by every
+  > process importing `helab.utils.constants`, refreshed the index under its lock, and its 2 s timeout's kill under
+  > load left an empty `index.lock` that stopped the next commit (floors and Ground). Now run with
+  > `GIT_OPTIONAL_LOCKS=0`; the per-process git calls remain (A~4).
+- **`converter.md`**: G1, a raw path past Windows' limit is unconvertible ("failed"), not waited for.
 - **`AGENTS.md`**: optionally one invariant under "I/O and threads": "A shared job leaves `FolderCache.jobs` as its
   answer is delivered (`loaded`, `live_unchanged`, `ANSWERS`), never only at `done`: a request joined after the
   answer waits for good."
