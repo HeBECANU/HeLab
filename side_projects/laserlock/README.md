@@ -60,6 +60,18 @@ read back about once a second; changing them here changes them in the WLM progra
 laserlock exits. A new reading comes about every max(exposure + readout, interval): that is the lock's sample
 rate ("new value every … ms" shows it). Setting an exposure turns auto off.
 
+## The window
+
+Across the top: the lock's state (**IDLE**, **LOCKED**, amber while holding, red **LOCK LOST**), the frequency,
+wavelength, error and output, **Lock / Unlock**, and **Inputs locked / unlocked**; under them the last
+message. On the left, panels that click open and shut: Setpoint, Lock loop, Calibrate, Limits and safety,
+Output, Wavemeter, Sweep and find stable range. On the right, the plots and their controls. Hover over
+anything for what it does. Which panels are shut, and the input lock, are remembered between runs.
+
+**Inputs locked** guards against stray clicks and keys: number boxes become read-only, and lists, ticks
+and action buttons (Lock included) are disabled; **Abort** stays available while a sweep or a calibration
+runs, and the plots' view controls still work.
+
 ## Setpoints and the window
 
 **Saved** lists saved setpoints, each as frequency and vacuum wavelength; choosing one sets the setpoint.

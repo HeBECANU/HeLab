@@ -15,11 +15,11 @@ from typing import Any
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QCloseEvent, QFont
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-                             QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QPushButton,
-                             QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox,
+                             QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
+                             QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTableWidget,
+                             QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
@@ -213,7 +213,9 @@ class YRange(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.auto)
         h.addWidget(self.lo)
-        h.addWidget(QLabel("to"))
+        to = QLabel("to")
+        to.setToolTip("The y range while auto is off: from the left box to the right one")
+        h.addWidget(to)
         h.addWidget(self.hi)
         self.preset_buttons: list[QPushButton] = []
         for label, p_lo, p_hi in presets or []:
@@ -300,6 +302,73 @@ class YRange(QWidget):
         return {"auto": self.auto.isChecked(), "lo": self.lo.value(), "hi": self.hi.value()}
 
 
+STYLE = """
+QFrame#header { background: #f6f8fa; border-bottom: 1px solid #d0d7de; }
+QLabel#caption { color: #57606a; font-size: 8pt; }
+QLabel#reading { font-size: 17pt; font-weight: 600; }
+QLabel#mode { font-size: 15pt; font-weight: 700; color: white; border-radius: 6px; padding: 8px 14px; }
+QLabel#message { color: #57606a; }
+QPushButton#lockButton { font-size: 14pt; font-weight: 700; padding: 6px 18px; }
+QPushButton#lockButton:checked { background: #1a7f37; color: white; border: 1px solid #116329; border-radius: 4px; }
+QPushButton#primary { font-weight: 600; }
+QPushButton#inputsLock { padding: 6px 12px; }
+QPushButton#inputsLock:checked { background: #fff8c5; color: #4d2d00; border: 1px solid #d4a72c; border-radius: 4px;
+                                 font-weight: 600; }
+QFrame#section { background: white; border: 1px solid #d0d7de; border-radius: 6px; }
+QFrame#section QLabel, QFrame#section QCheckBox { background: transparent; }
+QToolButton#sectionHeader { border: none; font-weight: 600; font-size: 10pt; padding: 5px 4px; color: #24292f; }
+QAbstractSpinBox[readOnly="true"] { background: #eef1f4; color: #57606a; }
+"""
+
+
+class Section(QFrame):
+    """A titled panel whose body its header shows or hides; rows get a label and a tooltip."""
+
+    def __init__(self, key: str, title: str, tip: str, collapsed: bool = False) -> None:
+        super().__init__()
+        self.key = key
+        self.setObjectName("section")
+        self.head = QToolButton()
+        self.head.setObjectName("sectionHeader")
+        self.head.setText(title)
+        self.head.setCheckable(True)
+        self.head.setChecked(not collapsed)
+        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.head.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.head.setToolTip(f"{tip}. Click to show or hide.")
+        self.body = QWidget()
+        self.form = QFormLayout(self.body)
+        self.form.setContentsMargins(10, 0, 10, 8)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(0)
+        lay.addWidget(self.head)
+        lay.addWidget(self.body)
+        self.head.toggled.connect(self._toggled)
+        self._toggled(self.head.isChecked())
+
+    def _toggled(self, shown: bool) -> None:
+        self.body.setVisible(shown)
+        self.head.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+
+    @property
+    def collapsed(self) -> bool:
+        return not self.head.isChecked()
+
+    def row(self, label: str, widget: QWidget, tip: str) -> None:
+        lab = QLabel(label)
+        lab.setToolTip(tip)
+        if not widget.toolTip():
+            widget.setToolTip(tip)
+        for child in widget.findChildren(QWidget):
+            if not child.toolTip():
+                child.setToolTip(tip)
+        self.form.addRow(lab, widget)
+
+    def full(self, widget: QWidget) -> None:
+        self.form.addRow(widget)
+
+
 class History:
     """The time plots' samples in preallocated arrays (no per-tick rebuild): time (s since start), frequency
     (THz, absolute, so the plot follows a changed setpoint), output (V), locked. Keeps the newest `cap`."""
@@ -345,169 +414,218 @@ class MainWindow(QMainWindow):
         self._hist = History()
         self._tick_n = 0
         self._shown_cal = ""
+        self._mode_colour = ""
 
-        big = QFont()
-        big.setPointSize(20)
-        big.setBold(True)
-        self.freq_label, self.nm_label, self.err_label = QLabel("—"), QLabel("—"), QLabel("—")
-        for lab in (self.freq_label, self.nm_label, self.err_label):
-            lab.setFont(big)
+        ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, "combined": False,
+              "line_width": 1.0, "hop_lines": False, "collapsed": [], "inputs_locked": False, **(ui or {})}
+        collapsed = set(ui.get("collapsed") or [])
+        self._guarded: list[QWidget] = []  # what the input lock freezes
+
+        # ---- the header: state, readings, Lock, input lock
+        self.mode_label = QLabel("idle")
+        self.mode_label.setObjectName("mode")
+        self.mode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mode_label.setMinimumWidth(170)
+        self.mode_label.setToolTip("What the lock is doing: idle, locked (with why if it is holding: out of "
+                                   "capture, limited, no reading), calibrating, sweeping, LOCK LOST, or fault "
+                                   "(an instrument stopped answering)")
+        self.freq_label, self.nm_label, self.err_label, self.volt_label = (QLabel("—") for _ in range(4))
+        readings = QHBoxLayout()
+        readings.setSpacing(36)
+        for title, lab, tip in (
+                ("Frequency", self.freq_label, "The wavemeter's latest reading of the laser (channel 1)"),
+                ("Wavelength (vacuum)", self.nm_label, "The same reading as a vacuum wavelength"),
+                ("Error", self.err_label, "Frequency − setpoint. While locked, the lock drives this to zero"),
+                ("Output", self.volt_label, "The DG1022 CH1 DC offset now: what steers the laser (hard limit 0–7 V)")):
+            lab.setObjectName("reading")
             lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.status_label, self.volt_label, self.mode_label = QLabel(""), QLabel("—"), QLabel("idle")
-        self.mode_label.setFont(big)
+            readings.addWidget(self._caption(title, lab, tip))
+        readings.addStretch(1)
+        self.lock_btn = QPushButton("Lock")
+        self.lock_btn.setObjectName("lockButton")
+        self.lock_btn.setCheckable(True)
+        self.lock_btn.setMinimumSize(130, 52)
+        self.lock_btn.setToolTip("Lock: hold the laser at the setpoint, starting from the output now (no jump). "
+                                 "Unlock: stop correcting and hold the output where it is.")
+        self.lock_btn.toggled.connect(self._toggle_lock)
+        self.inputs_lock = QPushButton()
+        self.inputs_lock.setObjectName("inputsLock")
+        self.inputs_lock.setCheckable(True)
+        self.inputs_lock.setChecked(bool(ui["inputs_locked"]))
+        self.inputs_lock.setMinimumHeight(52)
+        self.inputs_lock.setToolTip("Lock the inputs against accidental clicks, keys or typing: number boxes "
+                                    "become read-only, lists, ticks and action buttons are disabled (Abort stays "
+                                    "available while something runs). The plots' view controls still work.")
+        self.inputs_lock.toggled.connect(self._apply_input_lock)
         self.message_label = QLabel("")
         self.message_label.setWordWrap(True)
+        self.message_label.setObjectName("message")
+        self.message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.message_label.setToolTip("The last thing the lock did or reported (also in logs/laserlock.log)")
+        header = QFrame()
+        header.setObjectName("header")
+        hl = QGridLayout(header)
+        hl.setContentsMargins(12, 8, 12, 8)
+        hl.addWidget(self.mode_label, 0, 0)
+        hl.addLayout(readings, 0, 1)
+        hl.addWidget(self.lock_btn, 0, 2)
+        hl.addWidget(self.inputs_lock, 0, 3)
+        hl.addWidget(self.message_label, 1, 0, 1, 4)
+        hl.setColumnStretch(1, 1)
+        self.header = header
 
-        readout = QGroupBox("Wavemeter")
-        g = QGridLayout(readout)
-        g.addWidget(QLabel("Frequency"), 0, 0)
-        g.addWidget(self.freq_label, 0, 1)
-        g.addWidget(QLabel("Wavelength (vac)"), 1, 0)
-        g.addWidget(self.nm_label, 1, 1)
-        g.addWidget(QLabel("Error"), 2, 0)
-        g.addWidget(self.err_label, 2, 1)
-        g.addWidget(self.status_label, 3, 0, 1, 2)
-        self.hop_label = QLabel("Mode hops: none")
-        self.hop_label.setToolTip("Mode hops seen since start (red lines on the plots). A hop: a jump of at least "
-                                  "the threshold in Loop that holds for a few readings; a lone far reading isn't one.")
-        g.addWidget(self.hop_label, 4, 0, 1, 2)
-        # its timing (the server's own settings, read back about once a second)
-        self.wm_exposure = IntSpin()
-        self.wm_exposure.setRange(1, 9999)
-        self.wm_exposure.setSuffix(" ms")
-        self.wm_exposure.setKeyboardTracking(False)
-        self.wm_exposure.setToolTip("The exposure (CCD 1). Setting it turns auto exposure off.")
-        self.wm_auto = QCheckBox("auto")
-        self.wm_auto.setToolTip("The wavemeter sets its exposure itself from the signal")
-        self.wm_interval = IntSpin()
-        self.wm_interval.setRange(1, 100_000)
-        self.wm_interval.setSuffix(" ms")
-        self.wm_interval.setKeyboardTracking(False)
-        self.wm_interval.setToolTip("With interval on, the wavemeter measures once per interval instead of "
-                                    "as fast as the exposure allows: the lock's sample rate")
-        self.wm_interval_on = QCheckBox("on")
-        self.wm_interval_on.setToolTip("Measure once per interval (off: continuously)")
-        self.wm_exposure.valueChanged.connect(lambda v: self.engine.set_wavemeter(exposure_ms=v))
-        self.wm_auto.toggled.connect(lambda on: self.engine.set_wavemeter(auto=on))
-        self.wm_interval.valueChanged.connect(lambda v: self.engine.set_wavemeter(interval_ms=v))
-        self.wm_interval_on.toggled.connect(lambda on: self.engine.set_wavemeter(interval_on=on))
-        g.addWidget(QLabel("Exposure"), 5, 0)
-        g.addWidget(self._pair(self.wm_exposure, self.wm_auto), 5, 1)
-        g.addWidget(QLabel("Measure every"), 6, 0)
-        g.addWidget(self._pair(self.wm_interval, self.wm_interval_on), 6, 1)
-        self._wm_widgets = (self.wm_exposure, self.wm_auto, self.wm_interval, self.wm_interval_on)
-        for w in self._wm_widgets:
-            w.setEnabled(False)  # until the timing has been read
-
-        # setpoint
+        # ---- Setpoint
         self.set_thz = spin(0.0, 2000.0, 9, 1e-6, s.setpoint_thz, " THz")
         self.set_nm = spin(0.0, 1e6, 8, 1e-6, thz_to_nm(s.setpoint_thz) if s.setpoint_thz > 0 else 0.0, " nm")
-        use_now = QPushButton("Use current")
-        use_now.clicked.connect(self._use_current)
         self.set_thz.valueChanged.connect(self._thz_changed)
         self.set_nm.valueChanged.connect(self._nm_changed)
+        use_now = QPushButton("Use current")
+        use_now.setToolTip("Make the wavemeter's reading now the setpoint")
+        use_now.clicked.connect(self._use_current)
         self._presets: list[dict[str, Any]] = [dict(e) for e in (presets or []) if preset_thz(e)]
         self.preset_box = Combo()
-        self.preset_box.setToolTip("Saved setpoints; choosing one sets the setpoint")
         self.preset_box.activated.connect(self._preset_chosen)
-        add_preset, del_preset = QPushButton("Save setpoint"), QPushButton("Remove")
-        add_preset.setToolTip("Adds the setpoint above to the saved setpoints")
-        del_preset.setToolTip("Removes the chosen saved setpoint")
+        add_preset, del_preset = QPushButton("Save"), QPushButton("Remove")
+        add_preset.setToolTip("Add the setpoint below to the saved setpoints (kept in config.local.json)")
+        del_preset.setToolTip("Remove the chosen saved setpoint")
         add_preset.clicked.connect(self._add_preset)
         del_preset.clicked.connect(self._remove_preset)
         self._fill_presets()
-        setbox = QGroupBox("Setpoint")
-        f = QFormLayout(setbox)
-        f.addRow("Saved", self.preset_box)
-        f.addRow("", self._pair(add_preset, del_preset))
-        f.addRow("Frequency", self.set_thz)
-        f.addRow("Wavelength (vac)", self.set_nm)
-        f.addRow("", use_now)
         self.nudge = spin(0.001, 1e5, 3, 1.0, 10.0, " MHz")
-        self.nudge.setToolTip("How far the − and + buttons move the setpoint (also while locked)")
         down, up = QPushButton("−"), QPushButton("+")
-        down.setToolTip("Setpoint down by the nudge")
-        up.setToolTip("Setpoint up by the nudge")
+        down.setToolTip("Move the setpoint down by the nudge (also while locked)")
+        up.setToolTip("Move the setpoint up by the nudge (also while locked)")
         for b in (down, up):
-            b.setMaximumWidth(32)
-        down.clicked.connect(lambda: self._nudge(-1))
-        up.clicked.connect(lambda: self._nudge(+1))
+            b.setMaximumWidth(34)
+        down.clicked.connect(self._nudge_down)
+        up.clicked.connect(self._nudge_up)
         nudge = QWidget()
         nh = QHBoxLayout(nudge)
         nh.setContentsMargins(0, 0, 0, 0)
         nh.addWidget(down)
-        nh.addWidget(self.nudge)
+        nh.addWidget(self.nudge, 1)
         nh.addWidget(up)
-        f.addRow("Nudge", nudge)
+        sec_set = Section("setpoint", "Setpoint", "The frequency the lock holds the laser at", "setpoint" in collapsed)
+        sec_set.row("Saved", self._pair(self.preset_box, add_preset, del_preset, stretch=0),
+                    "Saved setpoints, as frequency and vacuum wavelength; choosing one makes it the setpoint")
+        sec_set.row("Frequency", self.set_thz, "The setpoint in THz (9 decimals: 1 kHz). ↑/↓ step the digit left of "
+                    "the cursor")
+        sec_set.row("Wavelength", self.set_nm, "The setpoint as a vacuum wavelength (follows the frequency)")
+        sec_set.row("Nudge", nudge, "How far − and + move the setpoint")
+        sec_set.full(use_now)
+        self._guarded += [self.set_thz, self.set_nm, self.preset_box, add_preset, del_preset, self.nudge, down, up,
+                          use_now]
 
-        # gains and limits
+        # ---- Lock loop
         self.kp = spin(0.0, 10.0, 8, 1e-5, s.kp, " V/MHz")
         self.ki = spin(0.0, 10.0, 8, 1e-5, s.ki, " V/(MHz·s)")
         self.kd = spin(0.0, 10.0, 8, 1e-5, s.kd, " V/(MHz/s)")
-        self.kd.setToolTip("D acts on the measured frequency's rate (no kick when the setpoint changes); "
-                           "0 is a PI lock. Calibrate sets P and I and leaves D alone.")
         self.d_filter = spin(0.0, 60.0, 2, 0.1, s.d_filter_s, " s")
-        self.d_filter.setToolTip("The D term's low-pass time constant (the wavemeter's noise differentiates badly)")
         self.sign = Combo()
         self.sign.addItems(["+ (more V → higher f)", "− (more V → lower f)"])
         self.sign.setCurrentIndex(0 if s.sign >= 0 else 1)
+        sec_loop = Section("loop", "Lock loop", "The PID gains. Calibrate (below) or Find stable range set P, I and "
+                           "the sign from the measured tuning", "loop" in collapsed)
+        sec_loop.row("P gain", self.kp, "Proportional: volts per MHz of error, applied at once")
+        sec_loop.row("I gain", self.ki, "Integral: volts per MHz of error per second; removes a steady error")
+        sec_loop.row("D gain", self.kd, "Derivative: acts on the measured frequency's rate (no kick when the "
+                     "setpoint changes); 0 is a PI lock. Calibrate leaves it alone")
+        sec_loop.row("D filter", self.d_filter, "The D term's low-pass time constant (the wavemeter's noise "
+                     "differentiates badly)")
+        sec_loop.row("Tuning sign", self.sign, "Which way more voltage moves the laser's frequency")
+        self._guarded += [self.kp, self.ki, self.kd, self.d_filter, self.sign]
+
+        # ---- Calibrate
+        self.cal_step = spin(-1.0, 1.0, 4, 0.01, calibration["step_v"], " V")
+        self.cal_settle = spin(0.1, 30.0, 1, 0.5, calibration["settle_s"], " s")
+        self.cal_avg = spin(0.1, 30.0, 1, 0.5, calibration["average_s"], " s")
+        self.cal_btn = QPushButton("Calibrate tuning")
+        self.cal_btn.setToolTip("Measure the frequency at the output now and at the output plus the step, "
+                                "return, and set the sign and the P and I gains from the slope (unlocked only)")
+        self.cal_btn.clicked.connect(self._calibrate)
+        sec_cal = Section("calibrate", "Calibrate", "Measures the tuning slope (MHz/V) and sets the gains from it",
+                          "calibrate" in collapsed)
+        sec_cal.row("Step", self.cal_step, "The second point is the output now plus this step; negative steps down "
+                    "(near the top limit, or with a mode hop just above). It moves the laser by slope × step: keep "
+                    "it small enough not to hop")
+        sec_cal.row("Settle", self.cal_settle, "Wait this long after each step before averaging")
+        sec_cal.row("Average", self.cal_avg, "Average the frequency for this long at each point")
+        sec_cal.full(self.cal_btn)
+        self._guarded += [self.cal_step, self.cal_settle, self.cal_avg]
+
+        # ---- Limits and safety
         self.v_min = spin(HARD_V_MIN, HARD_V_MAX, 4, 0.1, s.v_min, " V")
         self.v_max = spin(HARD_V_MIN, HARD_V_MAX, 4, 0.1, s.v_max, " V")
         self.max_step = spin(0.0001, 1.0, 4, 0.001, s.max_step, " V")
         self.capture = spin(1.0, 1e6, 1, 100.0, s.capture_mhz, " MHz")
-        self.hop_mhz = spin(10.0, 1e6, 0, 100.0, engine.hops.min_jump_mhz, " MHz")
-        self.hop_mhz.setToolTip("A jump at least this big that holds for a few readings counts as a mode hop")
-        self.hop_mhz.valueChanged.connect(self.engine.set_hop_threshold)
-        gains = QGroupBox("Loop")
-        f = QFormLayout(gains)
-        f.addRow("P gain", self.kp)
-        f.addRow("I gain", self.ki)
-        f.addRow("D gain", self.kd)
-        f.addRow("D filter", self.d_filter)
-        f.addRow("Tuning sign", self.sign)
-        f.addRow("Output min", self.v_min)
-        f.addRow("Output max", self.v_max)
-        f.addRow("Max step / update", self.max_step)
-        f.addRow("Capture range ±", self.capture)
-        f.addRow("Mode hop ≥", self.hop_mhz)
         self.lost_after = spin(0.1, 600.0, 1, 0.5, s.lost_after_s, " s")
-        self.lost_after.setToolTip("Out of the capture range this long (or a mode hop out of it) and the lock is "
-                                   "lost: it lets go, holds the output, and says LOCK LOST")
-        self.lost_after.valueChanged.connect(self._push_settings)
-        f.addRow("Lost after", self.lost_after)
-        for w in (self.kp, self.ki, self.kd, self.d_filter, self.v_min, self.v_max, self.max_step, self.capture):
+        self.hop_mhz = spin(10.0, 1e6, 0, 100.0, engine.hops.min_jump_mhz, " MHz")
+        self.hop_mhz.valueChanged.connect(self.engine.set_hop_threshold)
+        sec_lim = Section("limits", "Limits and safety", "What the lock may do, and when it gives up",
+                          "limits" in collapsed)
+        sec_lim.row("Output min", self.v_min, "The lock never sets the output below this (inside the hard 0–7 V)")
+        sec_lim.row("Output max", self.v_max, "The lock never sets the output above this (inside the hard 0–7 V)")
+        sec_lim.row("Max step", self.max_step, "The most the output may move per update (one wavemeter reading)")
+        sec_lim.row("Capture ±", self.capture, "A reading further than this from the setpoint holds the output "
+                    "(it doesn't chase a far reading or another mode)")
+        sec_lim.row("Lost after", self.lost_after, "Out of the capture range this long, or a mode hop out of it, and "
+                    "the lock is lost: it lets go, holds the output, and says LOCK LOST")
+        sec_lim.row("Mode hop ≥", self.hop_mhz, "A jump at least this big that holds for 3 readings and 0.2 s counts "
+                    "as a mode hop (red dots on the output plot)")
+        for w in (self.kp, self.ki, self.kd, self.d_filter, self.v_min, self.v_max, self.max_step, self.capture,
+                  self.lost_after):
             w.valueChanged.connect(self._push_settings)
         self.sign.currentIndexChanged.connect(self._push_settings)
+        self._guarded += [self.v_min, self.v_max, self.max_step, self.capture, self.lost_after, self.hop_mhz]
 
-        # output and actions
+        # ---- Output
         self.manual = spin(HARD_V_MIN, HARD_V_MAX, 4, 0.001, engine.snapshot().volts, " V")
         self.manual.valueChanged.connect(self._manual)
-        self.lock_btn = QPushButton("Lock")
-        self.lock_btn.setCheckable(True)
-        self.lock_btn.setMinimumHeight(40)
-        self.lock_btn.toggled.connect(self._toggle_lock)
-        self.cal_step = spin(-1.0, 1.0, 4, 0.01, calibration["step_v"], " V")
-        self.cal_step.setToolTip("Calibrate measures at the output now and at the output plus this step; "
-                                 "negative steps down (e.g. near the top limit or a mode hop above)")
-        self.cal_settle = spin(0.1, 30.0, 1, 0.5, calibration["settle_s"], " s")
-        self.cal_avg = spin(0.1, 30.0, 1, 0.5, calibration["average_s"], " s")
-        self.cal_btn = QPushButton("Calibrate tuning")
-        self.cal_btn.setToolTip("Measures the frequency at the output now and at the output plus the step, "
-                                "returns, and sets the sign and the P and I gains from the slope.")
-        self.cal_btn.clicked.connect(self._calibrate)
-        self.log_box = QCheckBox("Log to CSV")
+        self.log_box = QCheckBox("Log readings to CSV")
+        self.log_box.setToolTip("Write every reading (time, frequency, error, output, locked, hop) to "
+                                "logs/laserlock-<date>-<time>.csv while ticked")
         self.log_box.toggled.connect(self._log)
-        outbox = QGroupBox("Output (DG1022 DC offset, hard limit 0–7 V)")
-        f = QFormLayout(outbox)
-        f.addRow("Now", self.volt_label)
-        f.addRow("Manual", self.manual)
-        f.addRow(self.lock_btn)
-        f.addRow("Cal. step", self.cal_step)
-        f.addRow("Cal. settle", self.cal_settle)
-        f.addRow("Cal. average", self.cal_avg)
-        f.addRow(self.cal_btn)
-        f.addRow(self.log_box)
+        sec_out = Section("output", "Output", "The DG1022 CH1 DC offset (hard limit 0–7 V)", "output" in collapsed)
+        sec_out.row("Manual", self.manual, "Set the output by hand (unlocked only); it goes out at most every 100 ms")
+        sec_out.full(self.log_box)
+        self._guarded += [self.manual, self.log_box]
 
+        # ---- Wavemeter
+        self.status_label = QLabel("")
+        self.status_label.setToolTip("The wavemeter's state and how often a new reading comes (the lock's rate)")
+        self.hop_label = QLabel("Mode hops: none")
+        self.hop_label.setToolTip("Mode hops seen since start: the count, and the last one's jump, time and output")
+        self.wm_exposure = IntSpin()
+        self.wm_exposure.setRange(1, 9999)
+        self.wm_exposure.setSuffix(" ms")
+        self.wm_exposure.setKeyboardTracking(False)
+        self.wm_auto = QCheckBox("auto")
+        self.wm_auto.setToolTip("The wavemeter picks the exposure itself from the signal")
+        self.wm_interval = IntSpin()
+        self.wm_interval.setRange(1, 100_000)
+        self.wm_interval.setSuffix(" ms")
+        self.wm_interval.setKeyboardTracking(False)
+        self.wm_interval_on = QCheckBox("on")
+        self.wm_interval_on.setToolTip("Measure once per interval (off: as fast as the exposure allows)")
+        self.wm_exposure.valueChanged.connect(self._wm_exposure)
+        self.wm_auto.toggled.connect(self._wm_auto)
+        self.wm_interval.valueChanged.connect(self._wm_interval)
+        self.wm_interval_on.toggled.connect(self._wm_interval_on)
+        self._wm_widgets = (self.wm_exposure, self.wm_auto, self.wm_interval, self.wm_interval_on)
+        self._wm_seen = False
+        for w in self._wm_widgets:
+            w.setEnabled(False)  # until the timing has been read
+        sec_wm = Section("wavemeter", "Wavemeter", "The HighFinesse WS8's state and timing (its server's own "
+                         "settings: changing them here changes them in the WLM program too)", "wavemeter" in collapsed)
+        sec_wm.full(self.status_label)
+        sec_wm.full(self.hop_label)
+        sec_wm.row("Exposure", self._pair(self.wm_exposure, self.wm_auto), "The exposure (CCD 1); setting one turns "
+                   "auto off")
+        sec_wm.row("Measure every", self._pair(self.wm_interval, self.wm_interval_on), "With on, one measurement per "
+                   "interval: sets the lock's sample rate")
+        self._guarded += list(self._wm_widgets)
+
+        # ---- Sweep and find stable range
         sw = {"v_start": 0.0, "v_stop": 7.0, "step": 0.05, "settle_s": 0.1, "dwell_s": 0.2, **(sweep or {})}
         self.sw_start = spin(HARD_V_MIN, HARD_V_MAX, 3, 0.1, sw["v_start"], " V")
         self.sw_stop = spin(HARD_V_MIN, HARD_V_MAX, 3, 0.1, sw["v_stop"], " V")
@@ -515,45 +633,32 @@ class MainWindow(QMainWindow):
         self.sw_settle = spin(0.0, 5.0, 2, 0.05, sw["settle_s"], " s")
         self.sw_dwell = spin(0.05, 5.0, 2, 0.05, sw["dwell_s"], " s")
         self.sweep_btn = QPushButton("Sweep")
-        self.sweep_btn.setToolTip("Steps the output from start to stop and plots the frequency at each step, "
-                                  "then returns to where it was.")
+        self.sweep_btn.setToolTip("Step the output From → To, plot the frequency at each step, then return")
         self.sweep_btn.clicked.connect(self._sweep_only)
-        self.auto_btn = QPushButton("Auto-lock to setpoint")
-        self.auto_btn.setToolTip("Sweeps, finds where the setpoint is crossed without a mode hop (the crossing "
-                                 "with the most room), approaches it from the sweep's start side, sets the gains "
-                                 "from the local slope, limits the output to that hop-free stretch, and locks.")
+        self.auto_btn = QPushButton("Auto-lock")
+        self.auto_btn.setToolTip("Sweep, then go to where the setpoint is crossed without a mode hop (the crossing "
+                                 "with the most room), from the sweep's start side, set the gains from the local "
+                                 "slope, keep the output in that stretch, and lock")
         self.auto_btn.clicked.connect(self._auto_lock)
-        swbox = QGroupBox("Sweep / auto-lock")
-        f = QFormLayout(swbox)
-        f.addRow("From", self.sw_start)
-        f.addRow("To", self.sw_stop)
-        f.addRow("Step", self.sw_step)
-        f.addRow("Settle / dwell", self._pair(self.sw_settle, self.sw_dwell))
-        f.addRow(self._pair(self.sweep_btn, self.auto_btn))
         self.scan_margin = spin(0.0, 3.5, 2, 0.05, float(sw.get("margin_v", 0.3)), " V")
-        self.scan_margin.setToolTip("The setpoint must be at least this far from the ends of its hop-free stretch")
         self.scan_hold = spin(0.0, 600.0, 1, 1.0, float(sw.get("hold_s", 5.0)), " s")
-        self.scan_hold.setToolTip("Before locking, the output is held there this long: a mode hop meanwhile "
-                                  "means not stable, so no lock")
-        f.addRow("Margin / hold", self._pair(self.scan_margin, self.scan_hold))
         self.scan_btn = QPushButton("Find stable range → lock")
-        self.scan_btn.setToolTip("Sweeps From→To→From and finds the output ranges that are mode-hop free both "
-                                 "ways. If the setpoint is in one with the margin to spare, goes there from below, "
-                                 "holds, and locks if no hop comes; otherwise returns and lists the stable ranges "
-                                 "with the laser shift each needs (tune the hardware, then press again).")
+        self.scan_btn.setObjectName("primary")
+        self.scan_btn.setToolTip("Sweep From → To → From and find the output ranges that are mode-hop free both "
+                                 "ways. If the setpoint is in one with the margin to spare: go there from below, "
+                                 "hold, and lock if no hop comes. Otherwise return and list the stable ranges with "
+                                 "the laser shift each needs (tune the hardware, then press again)")
         self.scan_btn.clicked.connect(self._find_stable)
-        f.addRow(self.scan_btn)
-        self.relock = QCheckBox("If the lock is lost: find stable range → relock")
+        self.relock = QCheckBox("On LOCK LOST: find stable range → relock")
         self.relock.setChecked(bool(sw.get("relock", False)))
-        self.relock.setToolTip("When the lock is lost (a mode hop, or out of capture for longer than Lost after), "
-                               "run Find stable range with these settings and relock if the setpoint is in a "
-                               "stable stretch (once per loss)")
+        self.relock.setToolTip("When the lock is lost, run Find stable range with these settings and relock if the "
+                               "setpoint is in a stable stretch (once per loss). It sweeps the whole range")
         self.relock.toggled.connect(self._push_relock)
-        f.addRow(self.relock)
         self.scan_table = QTableWidget(0, 5)
         self.scan_table.setHorizontalHeaderLabels(["Output", "Setpoint", "Width", "Tuning", "Frequency (THz)"])
-        self.scan_table.setToolTip("The mode-hop-free stretches of the last scan, widest first. Setpoint: where "
-                                   "it falls, or how far to shift the laser (hardware: + raises its frequency) to centre the setpoint there.")
+        self.scan_table.setToolTip("The last scan's mode-hop-free stretches, widest first. Setpoint: where it "
+                                   "falls, or how far to shift the laser (hardware: + raises its frequency) to "
+                                   "centre the setpoint there")
         self.scan_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.scan_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.scan_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -561,44 +666,51 @@ class MainWindow(QMainWindow):
         self.scan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.scan_table.setMinimumHeight(110)
         self.scan_table.itemSelectionChanged.connect(self._scan_selected)
-        f.addRow(self.scan_table)
-        self.stretch_btn = QPushButton("Lock at selected")
-        self.stretch_btn.setToolTip("Goes to the centre of the chosen stretch (from below), makes the frequency "
-                                    "there the setpoint, and locks with the output kept inside the stretch")
+        self.stretch_btn = QPushButton("Lock at selected stretch")
+        self.stretch_btn.setToolTip("Go to the chosen stretch's centre (from below), make the frequency there the "
+                                    "setpoint, and lock with the output kept inside the stretch")
         self.stretch_btn.clicked.connect(self._lock_selected)
         self.stretch_btn.setEnabled(False)
-        f.addRow(self.stretch_btn)
         self._stretches: list[Stretch] = []
         self._scan_shown = -1
+        sec_sw = Section("sweep", "Sweep and find stable range", "Sweeps the output to map the laser's tuning and "
+                         "its mode hops, and finds where it can lock", "sweep" in collapsed)
+        sec_sw.row("From / to", self._pair(self.sw_start, self.sw_stop), "The output range swept")
+        sec_sw.row("Step", self.sw_step, "The output step between points")
+        sec_sw.row("Settle / dwell", self._pair(self.sw_settle, self.sw_dwell), "At each point: wait (settle), then "
+                   "read the frequency (dwell)")
+        sec_sw.full(self._pair(self.sweep_btn, self.auto_btn))
+        sec_sw.row("Margin / hold", self._pair(self.scan_margin, self.scan_hold), "Find stable range: the setpoint "
+                   "must be at least the margin from its stretch's ends, and the laser must hold there this long "
+                   "without a hop before it locks")
+        sec_sw.full(self.scan_btn)
+        sec_sw.full(self.relock)
+        sec_sw.full(self.scan_table)
+        sec_sw.full(self.stretch_btn)
+        self._guarded += [self.sw_start, self.sw_stop, self.sw_step, self.sw_settle, self.sw_dwell, self.scan_margin,
+                          self.scan_hold, self.relock]
+        self.sections = [sec_set, sec_loop, sec_cal, sec_lim, sec_out, sec_wm, sec_sw]
 
-        ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, "combined": False,
-              "line_width": 1.0, "hop_lines": False, **(ui or {})}
         self.show_plots = QCheckBox("Time plots")
         self.show_sweep = QCheckBox("Sweep plot")
+        self.show_plots.setToolTip("Show the error and output against time")
+        self.show_sweep.setToolTip("Show the last sweep or scan (frequency against output)")
         self.show_plots.setChecked(bool(ui["show_plots"]))
         self.show_sweep.setChecked(bool(ui["show_sweep"]))
         self.show_plots.toggled.connect(self._plots_shown)
         self.show_sweep.toggled.connect(self._plots_shown)
-        view = QHBoxLayout()
-        view.addWidget(QLabel("Show:"))
-        view.addWidget(self.show_plots)
-        view.addWidget(self.show_sweep)
-        view.addStretch(1)
 
         left_inner = QWidget()
         lv = QVBoxLayout(left_inner)
-        lv.addLayout(view)
-        lv.addWidget(self.mode_label)
-        lv.addWidget(readout)
-        lv.addWidget(setbox)
-        lv.addWidget(gains)
-        lv.addWidget(outbox)
-        lv.addWidget(swbox)
-        lv.addWidget(self.message_label)
+        lv.setContentsMargins(6, 6, 6, 6)
+        lv.setSpacing(6)
+        for sec in self.sections:
+            lv.addWidget(sec)
         lv.addStretch(1)
         left = QScrollArea()  # the controls scroll on a short screen
         left.setWidget(left_inner)
         left.setWidgetResizable(True)
+        left.setFrameShape(QFrame.Shape.NoFrame)
         left.setMinimumWidth(left_inner.sizeHint().width() + 24)
 
         # plots
@@ -712,33 +824,38 @@ class MainWindow(QMainWindow):
         right = self.right = QWidget()
         rv = QVBoxLayout(right)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Show"))
+        top.addWidget(self._lab("Show", "Which plot panels to show"))
+        top.addWidget(self.show_plots)
+        top.addWidget(self.show_sweep)
+        top.addSpacing(14)
+        top.addWidget(self._lab("Span", "The time shown"))
         top.addWidget(self.span)
         top.addWidget(self.pause)
-        top.addWidget(QLabel("Time"))
+        top.addWidget(self._lab("Time", "How the time axis is labelled"))
         top.addWidget(self.time_kind)
         top.addWidget(clear)
         top.addStretch(1)
         self.rms_label = QLabel("")
+        self.rms_label.setToolTip("The lock's quality over the shown span: rms and mean of the error while locked, "
+                                  "leaving out readings beyond the capture range")
         top.addWidget(self.rms_label)
         yrow = QHBoxLayout()
-        yrow.addWidget(QLabel("Error y"))
+        yrow.addWidget(self._lab("Error y", "The error axis: auto (the newest 20 s) or a fixed range"))
         yrow.addWidget(self.err_range)
         yrow.addSpacing(16)
-        yrow.addWidget(QLabel("Output y"))
+        yrow.addWidget(self._lab("Output y", "The output axis: auto (the shown span) or a fixed range"))
         yrow.addWidget(self.v_range)
         yrow.addStretch(1)
         orow = QHBoxLayout()
-        orow.addWidget(QLabel("Plot"))
+        orow.addWidget(self._lab("Plot", "Error and output on two plots, or on one with two y axes"))
         orow.addWidget(self.layout_kind)
-        orow.addWidget(QLabel("Line"))
+        orow.addWidget(self._lab("Line", "The traces' line width"))
         orow.addWidget(self.line_width)
         orow.addWidget(self.hop_lines)
         orow.addStretch(1)
         self.time_panel = QWidget()
         tv = QVBoxLayout(self.time_panel)
         tv.setContentsMargins(0, 0, 0, 0)
-        tv.addLayout(top)
         tv.addLayout(yrow)
         tv.addLayout(orow)
         tv.addWidget(plots)
@@ -750,7 +867,7 @@ class MainWindow(QMainWindow):
         sv = QVBoxLayout(self.sweep_panel)
         sv.setContentsMargins(0, 0, 0, 0)
         srow = QHBoxLayout()
-        srow.addWidget(QLabel("Sweep y"))
+        srow.addWidget(self._lab("Sweep y", "The sweep plot's frequency axis: auto or a fixed range"))
         srow.addWidget(self.sw_y)
         srow.addStretch(1)
         sv.addLayout(srow)
@@ -760,16 +877,25 @@ class MainWindow(QMainWindow):
         plot_split.addWidget(self.sweep_panel)
         plot_split.setStretchFactor(0, 3)
         plot_split.setStretchFactor(1, 2)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.addWidget(plot_split)
+        rv.setContentsMargins(4, 6, 6, 4)
+        rv.addLayout(top)
+        rv.addWidget(plot_split, 1)
 
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
-        self.setCentralWidget(split)
-        self.resize(1400, 860)
+        central = QWidget()
+        cv = QVBoxLayout(central)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self.header)
+        cv.addWidget(split, 1)
+        self.setCentralWidget(central)
+        self.setStyleSheet(STYLE)
+        self.resize(1500, 900)
         self._plots_shown()
+        self._apply_input_lock()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
@@ -778,13 +904,66 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- user actions
 
     @staticmethod
-    def _pair(a: QWidget, b: QWidget) -> QWidget:
+    def _pair(*widgets: QWidget, stretch: int = 1) -> QWidget:
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(a)
-        h.addWidget(b)
+        for k, x in enumerate(widgets):
+            h.addWidget(x, 1 if (stretch or k == 0) else 0)
         return w
+
+    @staticmethod
+    def _lab(text: str, tip: str) -> QLabel:
+        lab = QLabel(text)
+        lab.setToolTip(tip)
+        return lab
+
+    @staticmethod
+    def _caption(title: str, value: QLabel, tip: str) -> QWidget:
+        """A header reading: a small caption over a big value."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        cap = QLabel(title)
+        cap.setObjectName("caption")
+        v.addWidget(cap)
+        v.addWidget(value)
+        for x in (w, cap, value):
+            x.setToolTip(tip)
+        return w
+
+    def _apply_input_lock(self) -> None:
+        locked = self.inputs_lock.isChecked()
+        self.inputs_lock.setText("🔒  Inputs locked" if locked else "🔓  Inputs unlocked")
+        for w in self._guarded:
+            if isinstance(w, QAbstractSpinBox):
+                w.setReadOnly(locked)
+                w.style().unpolish(w)
+                w.style().polish(w)
+            elif w in self._wm_widgets:
+                w.setEnabled(self._wm_seen and not locked)
+            else:
+                w.setEnabled(not locked)
+        self._refresh_buttons(self.engine.snapshot())
+
+    def _nudge_down(self) -> None:
+        self._nudge(-1)
+
+    def _nudge_up(self) -> None:
+        self._nudge(+1)
+
+    def _wm_exposure(self, v: int) -> None:
+        self.engine.set_wavemeter(exposure_ms=v)
+
+    def _wm_auto(self, on: bool) -> None:
+        self.engine.set_wavemeter(auto=on)
+
+    def _wm_interval(self, v: int) -> None:
+        self.engine.set_wavemeter(interval_ms=v)
+
+    def _wm_interval_on(self, on: bool) -> None:
+        self.engine.set_wavemeter(interval_on=on)
 
     def _fill_presets(self) -> None:
         self.preset_box.clear()
@@ -833,6 +1012,8 @@ class MainWindow(QMainWindow):
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
                 "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
                 "hop_lines": self.hop_lines.isChecked(),
+                "collapsed": [sec.key for sec in self.sections if sec.collapsed],
+                "inputs_locked": self.inputs_lock.isChecked(),
                 "err_y": self.err_range.state(), "v_y": self.v_range.state(), "sweep_y": self.sw_y.state()}
 
     def _comb_geometry(self) -> None:
@@ -930,7 +1111,7 @@ class MainWindow(QMainWindow):
         return self._stretches[rows.pop()] if len(rows) == 1 and 0 <= min(rows) < len(self._stretches) else None
 
     def _scan_selected(self) -> None:
-        self.stretch_btn.setEnabled(self._selected_stretch() is not None and self.engine.snapshot().mode == "idle")
+        self._refresh_buttons(self.engine.snapshot())
         self._sweep_n = -1
         self._scan_shown = -1  # redraw: the chosen stretch is darker
 
@@ -1003,12 +1184,16 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"<b style='color:#cf222e'>{r.status}</b>")
         self.err_label.setText("—" if snap.error_mhz is None else f"{snap.error_mhz:+.2f} MHz")
         self.volt_label.setText(f"{snap.volts:.4f} V")
-        mode = snap.mode if snap.mode != "locked" or snap.state == "locked" else f"locked ({snap.state})"
-        colour = MODE_COLOURS.get(snap.mode, "#666")
+        mode = snap.mode if snap.mode != "locked" or snap.state == "locked" else f"locked · {snap.state}"
+        colour = MODE_COLOURS.get(snap.mode, "#6e7781")
         if snap.state == "lost" and snap.mode == "idle":
             mode, colour = "LOCK LOST", "#cf222e"
-        self.mode_label.setText(mode)
-        self.mode_label.setStyleSheet(f"color: {colour}")
+        elif snap.mode == "locked" and snap.state != "locked":
+            colour = "#9a6700"  # holding: out of capture, limited, no reading
+        if self.mode_label.text() != mode.upper() or self._mode_colour != colour:
+            self.mode_label.setText(mode.upper())
+            self.mode_label.setStyleSheet(f"background: {colour}")
+            self._mode_colour = colour
         if snap.message:
             self.message_label.setText(snap.message)
         locked = snap.mode == "locked"
@@ -1018,22 +1203,12 @@ class MainWindow(QMainWindow):
             self.lock_btn.blockSignals(False)
         self.lock_btn.setText("Unlock" if locked else "Lock")
         busy = snap.mode in ("calibrating", "fault")
-        self.lock_btn.setEnabled(snap.mode in ("idle", "locked"))
-        sweeping = snap.mode == "sweeping"
-        self.sweep_btn.setText("Abort" if sweeping else "Sweep")
-        self.auto_btn.setText("Abort" if sweeping else "Auto-lock to setpoint")
-        self.sweep_btn.setEnabled(snap.mode in ("idle", "sweeping"))
-        self.auto_btn.setEnabled(snap.mode in ("idle", "sweeping"))
-        self.scan_btn.setText("Abort" if sweeping else "Find stable range → lock")
-        self.scan_btn.setEnabled(snap.mode in ("idle", "sweeping"))
-        self.stretch_btn.setEnabled(snap.mode == "idle" and self._selected_stretch() is not None)
+        self._refresh_buttons(snap)
         if (snap.message.startswith(("find stable range: locked", "locked at ")) and snap.message != self._shown_cal):
             self._shown_cal = snap.message
             self._show_settings()
         self._refresh_sweep()
         self.manual.setEnabled(snap.mode == "idle")
-        self.cal_btn.setText("Abort calibration" if snap.mode == "calibrating" else "Calibrate tuning")
-        self.cal_btn.setEnabled(snap.mode in ("idle", "calibrating"))
         if snap.message.startswith("auto-lock engaged") and snap.message != self._shown_cal:
             self._shown_cal = snap.message
             self._show_settings()
@@ -1062,6 +1237,21 @@ class MainWindow(QMainWindow):
         if self.pause.isChecked():
             return
         self._draw_time(snap.hops)
+
+    def _refresh_buttons(self, snap: Any) -> None:
+        """The action buttons for the mode now; with the inputs locked only Abort stays available."""
+        free = not self.inputs_lock.isChecked()
+        idle, sweeping = snap.mode == "idle", snap.mode == "sweeping"
+        self.lock_btn.setEnabled(free and snap.mode in ("idle", "locked"))
+        self.sweep_btn.setText("Abort" if sweeping else "Sweep")
+        self.auto_btn.setText("Abort" if sweeping else "Auto-lock")
+        self.scan_btn.setText("Abort" if sweeping else "Find stable range → lock")
+        for b in (self.sweep_btn, self.auto_btn, self.scan_btn):
+            b.setEnabled(sweeping or (idle and free))
+        self.stretch_btn.setEnabled(free and idle and self._selected_stretch() is not None)
+        calibrating = snap.mode == "calibrating"
+        self.cal_btn.setText("Abort calibration" if calibrating else "Calibrate tuning")
+        self.cal_btn.setEnabled(calibrating or (idle and free))
 
     def _draw_time(self, hops: int | None = None) -> None:
         """The time plots of the shown layout (only while shown and not paused)."""
@@ -1100,8 +1290,10 @@ class MainWindow(QMainWindow):
         timing = snap.wavemeter
         if timing is None:
             return
-        for w in self._wm_widgets:
-            w.setEnabled(True)
+        if not self._wm_seen:
+            self._wm_seen = True
+            for w in self._wm_widgets:
+                w.setEnabled(isinstance(w, QAbstractSpinBox) or not self.inputs_lock.isChecked())
         for w, v in ((self.wm_exposure, timing.exposure_ms), (self.wm_interval, timing.interval_ms)):
             if not w.hasFocus() and w.value() != v:
                 w.blockSignals(True)

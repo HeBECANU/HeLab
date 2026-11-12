@@ -948,3 +948,48 @@ def test_range_presets(tmp_path: Any) -> None:
     assert win.err_range.auto.isChecked()
     win.close()
     app.processEvents()
+
+
+
+def test_input_lock_sections_and_tooltips(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QLabel, QPushButton,
+                                 QToolButton)
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=15)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None,
+                     ui={"collapsed": ["calibrate"], "inputs_locked": True})
+    win.show()
+    app.processEvents()
+    # every control and label in the panels and the header explains itself
+    for root in [*win.sections, win.header, win.right]:
+        for w in root.findChildren((QLabel, QAbstractSpinBox, QPushButton, QCheckBox, QComboBox, QToolButton)):
+            if isinstance(w, QLabel) and not w.text():
+                continue
+            assert w.toolTip(), (type(w).__name__, getattr(w, "text", lambda: "")())
+    # collapsed sections stay collapsed, and come back open
+    cal = next(sec for sec in win.sections if sec.key == "calibrate")
+    assert cal.collapsed and not cal.body.isVisible()
+    cal.head.click()
+    assert not cal.collapsed and cal.body.isVisible()
+    # inputs locked: read-only boxes, disabled buttons and lists; the plot controls still work
+    assert win.inputs_lock.isChecked()
+    assert win.set_thz.isReadOnly() and win.kp.isReadOnly()
+    assert not win.lock_btn.isEnabled() and not win.preset_box.isEnabled() and not win.scan_btn.isEnabled()
+    assert win.span.isEnabled() and win.pause.isEnabled()
+    win.inputs_lock.click()
+    assert not win.set_thz.isReadOnly() and win.lock_btn.isEnabled() and win.preset_box.isEnabled()
+    # a sweep running with the inputs locked can still be aborted
+    win.engine.sweep(0.0, 1.0, 0.1, 0.0, 0.05)
+    win.inputs_lock.click()
+    win._refresh()
+    assert win.sweep_btn.text() == "Abort" and win.sweep_btn.isEnabled()
+    eng.abort()
+    state = win.ui_state()
+    assert state["inputs_locked"] is True and "calibrate" not in state["collapsed"]
+    win.close()
+    app.processEvents()
