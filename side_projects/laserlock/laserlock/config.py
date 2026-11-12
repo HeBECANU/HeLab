@@ -22,8 +22,8 @@ DEFAULTS: dict[str, Any] = {
     # saved setpoints: {"thz": f} or {"nm": vacuum wavelength}, optional "name"; the window can add and remove
     "presets": [{"thz": 276.767676767677}, {"nm": 1083.33064456}],
     "ui": {"show_plots": True, "show_sweep": True},
-    # a mode hop: a jump of at least min_jump_mhz that holds for `confirm` readings in a row
-    "hops": {"min_jump_mhz": 1000.0, "confirm": 3},
+    # a mode hop: a jump of at least min_jump_mhz that holds for `confirm` readings in a row and min_hold_s
+    "hops": {"min_jump_mhz": 1000.0, "confirm": 3, "min_hold_s": 0.2},
 }
 
 

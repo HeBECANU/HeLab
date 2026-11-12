@@ -56,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from .gui import MainWindow
 
-    hops = HopDetector(float(cfg["hops"]["min_jump_mhz"]), int(cfg["hops"]["confirm"]))
+    hops = HopDetector(float(cfg["hops"]["min_jump_mhz"]), int(cfg["hops"]["confirm"]),
+                       min_hold_s=float(cfg["hops"]["min_hold_s"]))
     engine = Engine(source, out, config.lock_settings(cfg), log_dir=logs, hops=hops)
 
     def save(settings: LockSettings, calibration: dict[str, float]) -> None:

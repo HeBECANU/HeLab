@@ -130,11 +130,14 @@ class HopDetector:
     """Finds mode hops in the stream of readings.
 
     A hop is a jump of at least `min_jump_mhz` from the current level that holds for `confirm` readings in a
-    row (all within `min_jump_mhz` of each other). A lone far reading (the WS8 gives occasional ones about
-    19.7 GHz off) is not a hop. The level follows slow drift (a running average of readings near it)."""
+    row (all within `min_jump_mhz` of each other) and for at least `min_hold_s`. A lone far reading (the WS8
+    gives occasional ones about 19.7 GHz off), or a few lasting under `min_hold_s` (at a 5 ms exposure, three
+    readings are 15 ms; the WS8 gave 60 GHz glitches of ~0.1 s, 2026-11-12), is not a hop. The level follows
+    slow drift (a running average of readings near it)."""
 
-    def __init__(self, min_jump_mhz: float = 300.0, confirm: int = 3, follow: float = 0.1) -> None:
-        self.min_jump_mhz, self.confirm, self.follow = min_jump_mhz, confirm, follow
+    def __init__(self, min_jump_mhz: float = 300.0, confirm: int = 3, follow: float = 0.1,
+                 min_hold_s: float = 0.2) -> None:
+        self.min_jump_mhz, self.confirm, self.follow, self.min_hold_s = min_jump_mhz, confirm, follow, min_hold_s
         self.level: float | None = None
         self._pending: list[tuple[float, float]] = []
 
@@ -156,7 +159,7 @@ class HopDetector:
         if self._pending and abs(thz - self._pending[0][1]) >= jump:
             self._pending = []  # far, but not where the previous far readings were: start again
         self._pending.append((t, thz))
-        if len(self._pending) < self.confirm:
+        if len(self._pending) < self.confirm or t - self._pending[0][0] < self.min_hold_s:
             return None
         values = sorted(f for _, f in self._pending)
         new = values[len(values) // 2]

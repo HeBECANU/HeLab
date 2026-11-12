@@ -52,6 +52,7 @@ def light_grid(plot: Any) -> None:
 
 
 HOP_COLOUR = "#cf222e"
+HOP_LINES_MAX = 30  # hop lines per time plot: the newest in the shown span (dots show all of them)
 HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
@@ -467,8 +468,8 @@ class MainWindow(QMainWindow):
         self._time_kind()
         self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1))
         self.hop_dots = self.v_plot.plot(pen=None, symbol="o", symbolSize=9, symbolBrush=HOP_COLOUR, symbolPen=None)
-        self._hop_lines: list[Any] = []
-        self._hops_drawn = 0
+        self._hop_pool: list[tuple[Any, Any]] = []  # (error-plot line, output-plot line), reused
+        self._hops_drawn = (0, 0.0)  # (count, when)
         for curve in (self.err_curve, self.v_curve):  # draw at most about one point per pixel
             curve.setDownsampling(auto=True, method="peak")
             curve.setClipToView(True)
@@ -764,7 +765,7 @@ class MainWindow(QMainWindow):
         err = (thz - ref) * 1e12  # Hz
         self.err_curve.setData(t, err)
         self.v_curve.setData(t, volts)
-        self._draw_hops(snap.hops)
+        self._draw_hops(snap.hops, now - span if span else -math.inf)
         # the lock's quality: locked readings within the capture range (not the time spent in another mode)
         in_capture = np.abs(err) <= self.capture.value() * 1e6
         locked_part = err[locked & in_capture]
@@ -811,22 +812,31 @@ class MainWindow(QMainWindow):
         self.sign.blockSignals(False)
         self._fill_presets()
 
-    def _draw_hops(self, count: int) -> None:
-        """Red dashed lines on both time plots and red dots on the output where the last 200 hops were. Redrawn
-        only when a hop comes; lines out of the shown span cost nothing (not drawn, not in the auto-range)."""
-        if count == self._hops_drawn:
+    def _draw_hops(self, count: int, t_from: float) -> None:
+        """Red dashed lines on both time plots at the newest HOP_LINES_MAX hops in the shown span, and red dots
+        on the output at all of them. At most once a second, and the lines are reused, not rebuilt: a laser
+        flipping between modes hops twice a second, and rebuilding hundreds of lines froze the window
+        (2026-11-12)."""
+        now = time.monotonic()
+        if count == self._hops_drawn[0] or now - self._hops_drawn[1] < 1.0:
             return
-        self._hops_drawn = count
-        shown: list[HopEvent] = self.engine.hop_events()[-200:]
-        for plot, line in self._hop_lines:
-            plot.removeItem(line)
-        self._hop_lines = []
-        for e in shown:
-            x = e.t - self._t0
+        self._hops_drawn = (count, now)
+        shown: list[HopEvent] = [e for e in self.engine.hop_events() if e.t - self._t0 >= t_from]
+        lines = shown[-HOP_LINES_MAX:]
+        while len(self._hop_pool) < len(lines):
+            pair = []
             for plot in (self.err_plot, self.v_plot):
-                line = pg.InfiniteLine(pos=x, angle=90, pen=HOP_PEN)
+                line = pg.InfiniteLine(angle=90, pen=HOP_PEN)
                 plot.addItem(line, ignoreBounds=True)
-                self._hop_lines.append((plot, line))
+                pair.append(line)
+            self._hop_pool.append((pair[0], pair[1]))
+        for k, (a, b) in enumerate(self._hop_pool):
+            if k < len(lines):
+                x = lines[k].t - self._t0
+                a.setValue(x)
+                b.setValue(x)
+            a.setVisible(k < len(lines))
+            b.setVisible(k < len(lines))
         self.hop_dots.setData([e.t - self._t0 for e in shown], [e.volts for e in shown])
 
     def _refresh_sweep(self) -> None:

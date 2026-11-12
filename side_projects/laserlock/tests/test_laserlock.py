@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import time
 from typing import Any
@@ -474,7 +475,7 @@ def test_window_draws_hops(tmp_path: Any) -> None:
         laser.extra_mhz = 12_000.0
         pump(0.8)
         assert "Mode hops: 1" in win.hop_label.text()
-        assert len(win._hop_lines) == 2  # one line on each time plot
+        assert sum(a.isVisible() for a, _ in win._hop_pool) == 1  # one line on each time plot
         xs, ys = win.hop_dots.getData()
         assert xs is not None and len(xs) == 1 and ys[0] == pytest.approx(eng.snapshot().volts)
         win.hop_mhz.setValue(20_000)
@@ -611,3 +612,38 @@ def test_window_axes_pause_and_nudge(tmp_path: Any) -> None:
     assert axis.tickStrings([65.0], 1.0, 30)[0] == time.strftime("%H:%M:%S", time.localtime(36065.0))
     axis.set_clock(False)
     assert axis.tickStrings([65.0], 1.0, 30) == ["60"]
+
+
+def test_hop_needs_to_hold_and_many_hops_reuse_few_lines(tmp_path: Any) -> None:
+    det = HopDetector(1000.0, confirm=3, min_hold_s=0.2)
+    det.update(F0, 0.0)
+    for k in range(5):  # a 60 GHz glitch of 5 readings over 0.1 s, then back
+        assert det.update(F0 - 60e-3, 0.01 + 0.025 * k) is None
+    assert det.update(F0, 0.2) is None and det.level == pytest.approx(F0, abs=1e-6)
+    hop = None
+    for k in range(12):  # a jump that holds for 0.3 s
+        hop = hop or det.update(F0 - 11.8e-3, 1.0 + 0.025 * k)
+    assert hop is not None and hop.t == pytest.approx(1.0)
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock import gui
+    from laserlock.controller import Hop
+    from laserlock.engine import HopEvent
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=7)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = gui.MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    now = time.time()
+    for k in range(300):
+        eng._hop_events.append(HopEvent(now - 60 + k * 0.2, Hop(0.0, F0, F0 + 0.01), 3.0, False))
+    win._draw_hops(300, -math.inf)
+    shown = [a for a, _ in win._hop_pool if a.isVisible()]
+    assert len(shown) == gui.HOP_LINES_MAX
+    assert len(win.hop_dots.getData()[0]) == 300
+    win._draw_hops(301, -math.inf)  # within a second: not redrawn
+    assert win._hops_drawn[0] == 300
+    win.close()
+    app.processEvents()

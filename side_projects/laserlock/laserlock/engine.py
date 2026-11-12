@@ -75,6 +75,8 @@ class Engine:
         self.hops = hops or HopDetector()
         self._hop_events: collections.deque[HopEvent] = collections.deque(maxlen=1000)
         self._hop_count = 0
+        self._hop_logged_at = 0.0
+        self._hops_unlogged = 0
         self._recent: collections.deque[tuple[float, float]] = collections.deque(maxlen=32)  # (reading t, volts)
         self._periods: collections.deque[float] = collections.deque(maxlen=50)
         self._last_seq = self._reading.seq
@@ -283,8 +285,13 @@ class Engine:
                 event = HopEvent(now - (time.monotonic() - hop.t), hop, volts, locked)
                 self._hop_events.append(event)
                 self._hop_count += 1
-                log.warning("mode hop %+.3f GHz (%.7f -> %.7f THz) at %.4f V%s", hop.jump_mhz / 1e3, hop.from_thz,
-                            hop.to_thz, volts, " while locked" if locked else "")
+                if now - self._hop_logged_at >= 1.0:  # at most one line a second: a laser between modes hops often
+                    more = f" (+{self._hops_unlogged} more since the last line)" if self._hops_unlogged else ""
+                    log.warning("mode hop %+.3f GHz (%.7f -> %.7f THz) at %.4f V%s%s", hop.jump_mhz / 1e3,
+                                hop.from_thz, hop.to_thz, volts, " while locked" if locked else "", more)
+                    self._hop_logged_at, self._hops_unlogged = now, 0
+                else:
+                    self._hops_unlogged += 1
             sample = Sample(now, r.thz, self._error, self._volts, locked, hop is not None)
             self._samples.append(sample)
             if self._csv is not None:

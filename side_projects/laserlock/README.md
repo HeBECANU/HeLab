@@ -83,13 +83,16 @@ between runs.
 
 While running, laserlock watches the readings for **mode hops**: a jump of at least **Mode hop ≥** (Loop;
 default 1000 MHz, since the free-running laser here scatters by up to ~300 MHz) from the current level that
-holds for 3 readings in a row. A lone far reading (the WS8 gives occasional ones about 19.7 GHz off) isn't
-one, and the level follows slow drift and tuning. Each hop:
+holds for 3 readings in a row and at least 0.2 s (`hops.min_hold_s`). A lone far reading (the WS8 gives
+occasional ones about 19.7 GHz off) or a short glitch (60 GHz for ~0.1 s, 2026-11-12) isn't one, and the
+level follows slow drift and tuning. Each hop:
 
-- is drawn as a red dashed line on both time plots and a red dot on the output plot (at the output when the
-  hop came);
+- is drawn as a red dot on the output plot (at the output when the hop came) and, for the newest 30 in the
+  shown span, a red dashed line on both time plots (redrawn at most once a second: a laser sitting between
+  two modes hops twice a second, and redrawing hundreds of lines froze the window, 2026-11-12);
 - is counted under the wavemeter readings (the last one's jump, time and output), logged as a WARNING in
-  `logs/laserlock.log`, and marked in the CSV's `hop` column.
+  `logs/laserlock.log` (at most one line a second, with a count of the others), and marked in the CSV's
+  `hop` column.
 
 While locked, a hop beyond the capture range holds the output (it doesn't chase the other mode); the lock
 carries on when the laser comes back. "locked: rms" above the plots leaves out readings beyond the capture
