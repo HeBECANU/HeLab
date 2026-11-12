@@ -1,0 +1,10 @@
+Success: no issues found in 244 source files
+exit 0
+Success: no issues found in 243 source files
+exit 0
+0 errors, 0 warnings, 0 informations
+exit 0
+Success: no issues found in 244 source files
+exit 0
+0 errors, 0 warnings, 0 informations
+exit 0
