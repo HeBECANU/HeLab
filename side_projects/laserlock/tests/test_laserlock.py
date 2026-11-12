@@ -797,10 +797,13 @@ def test_lock_lost_after_time_out_of_capture_and_relock() -> None:
         eng.engage()
         time.sleep(0.8)
         laser.extra_mhz = 700.0
-        time.sleep(1.0)
-        laser.extra_mhz = 0.0  # the hardware is back by the time the scan runs
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and eng.snapshot().lost < 2:
+            time.sleep(0.005)
+        laser.extra_mhz = 0.0  # the hardware is back as the scan starts
+        assert eng.snapshot().mode == "sweeping", eng.snapshot().message
         deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and eng.snapshot().mode != "locked":
+        while time.monotonic() < deadline and eng.snapshot().mode == "sweeping":
             time.sleep(0.05)
         snap = eng.snapshot()
         assert snap.mode == "locked" and snap.lost == 2, snap
@@ -844,3 +847,74 @@ def test_window_combined_plot_and_lost_label(tmp_path: Any) -> None:
         win.close()
     finally:
         eng.stop()
+
+
+def test_number_boxes_step_the_digit_at_the_cursor_and_ignore_the_wheel() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock import gui
+
+    app = QApplication.instance() or QApplication([])
+    box = gui.spin(0.0, 2000.0, 9, 1e-6, 276.767676768, " THz")
+    box.show()
+    box.setFocus()
+    app.processEvents()
+    le = box.lineEdit()
+    assert le.text() == "276.767676768 THz"
+    le.setCursorPosition(len("276.76"))  # just right of the 2nd decimal: steps 0.01
+    box.stepBy(1)
+    assert box.value() == pytest.approx(276.777676768)
+    assert le.cursorPosition() == len("276.77")
+    le.setCursorPosition(len("276"))  # at the point: the units digit
+    box.stepBy(-1)
+    assert box.value() == pytest.approx(275.777676768)
+    box.setValue(99.5)
+    le.setCursorPosition(len("99"))  # 99.5 -> 100.5: the cursor stays left of the point
+    box.stepBy(1)
+    assert box.value() == pytest.approx(100.5) and le.cursorPosition() == len("100")
+    ints = gui.IntSpin()
+    ints.setRange(1, 9999)
+    ints.setValue(250)
+    ints.show()
+    ints.setFocus()
+    app.processEvents()
+    ints.lineEdit().setCursorPosition(2)  # the tens
+    ints.stepBy(1)
+    assert ints.value() == 260
+    before = box.value()
+    wheel = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, 120), Qt.MouseButton.NoButton,
+                        Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    app.sendEvent(box, wheel)
+    assert box.value() == before and not wheel.isAccepted()
+    combo = gui.Combo()
+    combo.addItems(["a", "b", "c"])
+    app.sendEvent(combo, wheel)
+    assert combo.currentIndex() == 0
+    for w in (box, ints, combo):
+        w.close()
+
+
+def test_error_axis_follows_the_newest_readings_after_a_hop() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import numpy as np
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock import gui
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=13)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = gui.MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    win.show()
+    app.processEvents()
+    now = time.time() - win._t0
+    t = np.arange(now - 60, now, 0.1)
+    err = np.where(t < now - 30, -12e9, np.sin(t) * 5e6)  # a hop 30 s ago, then +-5 MHz
+    win.err_range.fit(err[t >= now - gui.FOLLOW_S])
+    lo, hi = win.err_plot.getViewBox().viewRange()[1]
+    assert -7e6 < lo < -5e6 and 5e6 < hi < 7e6
+    win.close()
+    app.processEvents()
