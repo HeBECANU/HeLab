@@ -304,6 +304,10 @@ class ActivitySources:
                 state, text = "running", "saving new shots"
             elif session.unsettled:
                 state, text = "settling", f"waiting for {session.unsettled:,} file{'' if session.unsettled == 1 else 's'} to settle"
+                if (session.checked_at is not None
+                        and wall - session.checked_at > control.stall_seconds()):
+                    # The last check's count, with no check since for longer than Live's backstop allows: when it was.
+                    text += f" (as of {time.strftime('%H:%M:%S', time.localtime(session.checked_at))})"
             else:
                 state, text = "waiting", watching_text(session)
         else:

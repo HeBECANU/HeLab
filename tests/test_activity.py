@@ -494,8 +494,8 @@ def test_an_auto_convert_pass_with_nothing_to_convert_leaves_its_row_as_it_was(
 
 def test_an_auto_convert_rows_waiting_note_says_when_it_was_once_no_conversion_followed(
         qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lab's "waiting for a very old d raw to settle": the row's waiting note is the last conversion's. Once
-    no conversion has followed it for longer than Live's backstop allows, it says when it was so."""
+    """The Auto-convert row's waiting note is the last conversion's summary: once no conversion has followed it for
+    longer than Live's backstop allows (as when Live stalled), it says when it was so."""
     service = quiet_service(monkeypatch)
     cache = get_folder_cache(service)
     data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
@@ -508,6 +508,24 @@ def test_an_auto_convert_rows_waiting_note_says_when_it_was_once_no_conversion_f
     convert = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "autoconvert:")
     assert (convert.state, convert.state_text) == ("settling", "waiting for 1 raw file to settle (as of 16:38:50)")
     assert time.time() - at > 60
+    service.shutdown()
+
+
+def test_a_live_rows_settling_note_says_when_it_was_once_no_check_followed(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most likely the text Tony saw on 2026-11-11 ("waiting for a very old d raw to settle"): the Live row's
+    "waiting for 1 file to settle" is the last check's count (both stops' last conversions logged waiting=0).
+    Once no check has followed it for longer than Live's backstop allows, it says when it was so."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
+    session = LiveSession("/live", time.time(), set(), data, unsettled=1, checked_at=time.time() - 5)
+    explorer = fake_explorer("tab", [session])
+    live = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "live:")
+    assert (live.state, live.state_text) == ("settling", "waiting for 1 file to settle")
+    session.checked_at = time.mktime((2026, 11, 11, 16, 38, 50, 0, 0, -1))
+    live = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "live:")
+    assert (live.state, live.state_text) == ("settling", "waiting for 1 file to settle (as of 16:38:50)")
     service.shutdown()
 
 
