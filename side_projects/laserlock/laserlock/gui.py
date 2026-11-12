@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpi
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
-from .engine import Engine, HopEvent, ScanResult, Stretch, sweep_hops
+from .engine import Engine, HopEvent, ScanRequest, ScanResult, Stretch, sweep_hops
 
 def preset_thz(entry: dict[str, Any]) -> float | None:
     """A preset is {"thz": f} or {"nm": vacuum wavelength}, with an optional "name"."""
@@ -58,6 +58,7 @@ HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
+ERR_COLOUR, OUT_COLOUR = "#0969da", "#bf3989"
 MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
                 "fault": "#cf222e"}
 
@@ -112,14 +113,16 @@ class TimeAxis(pg.AxisItem):
 
 
 class YRange(QWidget):
-    """A plot's y range: auto, or fixed between two values (in `unit`; the plot's data are `scale` times
-    that). Zooming the y axis with the mouse switches to fixed and shows the range; the plot's own "A" button
-    is followed too."""
+    """A y range: auto, or fixed between two values (in `unit`; the data are `scale` times that), for one or
+    more views (a plot, or a plot's second y axis) showing the same quantity; `current` is the one shown.
+    Zooming the y axis with the mouse switches to fixed and shows the range; the plot's own "A" button is
+    followed too."""
 
-    def __init__(self, plot: Any, scale: float, unit: str, lo: float, hi: float, decimals: int = 3,
+    def __init__(self, views: list[Any], scale: float, unit: str, lo: float, hi: float, decimals: int = 3,
                  state: dict[str, Any] | None = None) -> None:
         super().__init__()
-        self.plot, self.scale = plot, scale
+        self.views = [v if isinstance(v, pg.ViewBox) else v.getViewBox() for v in views]
+        self.scale, self.current = scale, 0
         state = state or {}
         self.auto = QCheckBox("auto")
         self.auto.setChecked(bool(state.get("auto", True)))
@@ -138,7 +141,8 @@ class YRange(QWidget):
         h.addWidget(self.lo)
         h.addWidget(QLabel("to"))
         h.addWidget(self.hi)
-        plot.getViewBox().sigRangeChangedManually.connect(self._mouse)
+        for vb in self.views:
+            vb.sigRangeChangedManually.connect(self._mouse)
         self._apply()
 
     def _typed(self) -> None:
@@ -148,18 +152,19 @@ class YRange(QWidget):
             self._apply()
 
     def _apply(self) -> None:
-        if self.auto.isChecked():
-            self.plot.enableAutoRange(axis="y")
-        else:
-            lo, hi = sorted((self.lo.value(), self.hi.value()))
-            if hi == lo:
-                hi = lo + 10 ** -self.lo.decimals()
-            self.plot.setYRange(lo * self.scale, hi * self.scale, padding=0)
+        for vb in self.views:
+            if self.auto.isChecked():
+                vb.enableAutoRange(y=True)
+            else:
+                lo, hi = sorted((self.lo.value(), self.hi.value()))
+                if hi == lo:
+                    hi = lo + 10 ** -self.lo.decimals()
+                vb.setYRange(lo * self.scale, hi * self.scale, padding=0)
 
     def _mouse(self, mask: Any) -> None:
         if mask is not None and len(mask) > 1 and not mask[1]:
             return
-        lo, hi = self.plot.getViewBox().viewRange()[1]
+        lo, hi = self.views[self.current].viewRange()[1]
         for w, v in ((self.lo, lo), (self.hi, hi)):
             w.blockSignals(True)
             w.setValue(v / self.scale)
@@ -167,14 +172,13 @@ class YRange(QWidget):
         self.auto.blockSignals(True)
         self.auto.setChecked(False)
         self.auto.blockSignals(False)
+        self._apply()  # the other views follow
 
     def sync(self) -> None:
-        """Follows the plot's own auto-range button."""
-        auto = bool(self.plot.getViewBox().state["autoRange"][1])
+        """Follows the shown plot's own auto-range button."""
+        auto = bool(self.views[self.current].state["autoRange"][1])
         if auto != self.auto.isChecked():
-            self.auto.blockSignals(True)
-            self.auto.setChecked(auto)
-            self.auto.blockSignals(False)
+            self.auto.setChecked(auto)  # applies to the others too
 
     def state(self) -> dict[str, Any]:
         return {"auto": self.auto.isChecked(), "lo": self.lo.value(), "hi": self.hi.value()}
@@ -350,6 +354,11 @@ class MainWindow(QMainWindow):
         f.addRow("Max step / update", self.max_step)
         f.addRow("Capture range ±", self.capture)
         f.addRow("Mode hop ≥", self.hop_mhz)
+        self.lost_after = spin(0.1, 600.0, 1, 0.5, s.lost_after_s, " s")
+        self.lost_after.setToolTip("Out of the capture range this long (or a mode hop out of it) and the lock is "
+                                   "lost: it lets go, holds the output, and says LOCK LOST")
+        self.lost_after.valueChanged.connect(self._push_settings)
+        f.addRow("Lost after", self.lost_after)
         for w in (self.kp, self.ki, self.kd, self.d_filter, self.v_min, self.v_max, self.max_step, self.capture):
             w.valueChanged.connect(self._push_settings)
         self.sign.currentIndexChanged.connect(self._push_settings)
@@ -418,6 +427,13 @@ class MainWindow(QMainWindow):
                                  "with the laser shift each needs (tune the hardware, then press again).")
         self.scan_btn.clicked.connect(self._find_stable)
         f.addRow(self.scan_btn)
+        self.relock = QCheckBox("If the lock is lost: find stable range → relock")
+        self.relock.setChecked(bool(sw.get("relock", False)))
+        self.relock.setToolTip("When the lock is lost (a mode hop, or out of capture for longer than Lost after), "
+                               "run Find stable range with these settings and relock if the setpoint is in a "
+                               "stable stretch (once per loss)")
+        self.relock.toggled.connect(self._push_relock)
+        f.addRow(self.relock)
         self.scan_table = QTableWidget(0, 5)
         self.scan_table.setHorizontalHeaderLabels(["Output", "Setpoint", "Width", "Tuning", "Frequency (THz)"])
         self.scan_table.setToolTip("The mode-hop-free stretches of the last scan, widest first. Setpoint: where "
@@ -439,7 +455,8 @@ class MainWindow(QMainWindow):
         self._stretches: list[Stretch] = []
         self._scan_shown = -1
 
-        ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, **(ui or {})}
+        ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, "combined": False,
+              "line_width": 1.0, "hop_lines": False, **(ui or {})}
         self.show_plots = QCheckBox("Time plots")
         self.show_sweep = QCheckBox("Sweep plot")
         self.show_plots.setChecked(bool(ui["show_plots"]))
@@ -490,7 +507,7 @@ class MainWindow(QMainWindow):
         self.err_plot = plots.addPlot(row=0, col=0, axisItems={"bottom": self._time_axes[0]})
         self.err_plot.setLabel("left", "f − setpoint", units="Hz")
         light_grid(self.err_plot)
-        self.err_curve = self.err_plot.plot(pen=pg.mkPen("#0969da", width=1))
+        self.err_curve = self.err_plot.plot(pen=pg.mkPen(ERR_COLOUR, width=1))
         self.err_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine)).setZValue(-10)  # under the trace
         self.v_plot = plots.addPlot(row=1, col=0, axisItems={"bottom": self._time_axes[1]})
         self.v_plot.setLabel("left", "Output", units="V")
@@ -500,11 +517,35 @@ class MainWindow(QMainWindow):
             plot.getViewBox().sigRangeChangedManually.connect(self._time_dragged)
             plot.getAxis("left").setWidth(72)  # equal widths: linked time axes line up and don't shift
         self._time_kind()
-        self.v_curve = self.v_plot.plot(pen=pg.mkPen("#bf3989", width=1))
+        self.v_curve = self.v_plot.plot(pen=pg.mkPen(OUT_COLOUR, width=1))
         self.hop_dots = self.v_plot.plot(pen=None, symbol="o", symbolSize=9, symbolBrush=HOP_COLOUR, symbolPen=None)
         self._hop_pool: list[tuple[Any, Any]] = []  # (error-plot line, output-plot line), reused
         self._hops_drawn = (0, 0.0)  # (count, when)
-        for curve in (self.err_curve, self.v_curve):  # draw at most about one point per pixel
+        # the same two on one plot: error on the left axis, output on the right
+        self.comb_widget = pg.GraphicsLayoutWidget()
+        self._time_axes.append(TimeAxis(self._t0, self._start))
+        self.comb = self.comb_widget.addPlot(axisItems={"bottom": self._time_axes[2]})
+        self.comb.setLabel("left", "f − setpoint", units="Hz", color=ERR_COLOUR)
+        light_grid(self.comb)
+        self.comb.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine)).setZValue(-10)
+        self.comb_vb = pg.ViewBox()
+        self.comb.showAxis("right")
+        self.comb.scene().addItem(self.comb_vb)
+        right_axis = self.comb.getAxis("right")
+        right_axis.linkToView(self.comb_vb)
+        right_axis.setLabel("Output", units="V", color=OUT_COLOUR)
+        right_axis.setPen(pg.mkPen("#888"))
+        right_axis.setTextPen(pg.mkPen("k"))
+        self.comb_vb.setXLink(self.comb)
+        self.comb.getViewBox().sigResized.connect(self._comb_geometry)
+        self.comb.getViewBox().sigRangeChangedManually.connect(self._time_dragged)
+        self.c_err = self.comb.plot(pen=pg.mkPen(ERR_COLOUR, width=1))
+        self.c_v = pg.PlotDataItem(pen=pg.mkPen(OUT_COLOUR, width=1))
+        self.c_hops = pg.PlotDataItem(pen=None, symbol="o", symbolSize=9, symbolBrush=HOP_COLOUR, symbolPen=None)
+        self.comb_vb.addItem(self.c_v)
+        self.comb_vb.addItem(self.c_hops)
+        self._time_kind()
+        for curve in (self.err_curve, self.v_curve, self.c_err, self.c_v):  # at most about one point per pixel
             curve.setDownsampling(auto=True, method="peak")
             curve.setClipToView(True)
             curve.setZValue(5)  # above the grid and the zero line
@@ -514,9 +555,23 @@ class MainWindow(QMainWindow):
         self.sw_plot.setLabel("bottom", "output", units="V")
         self.sw_plot.setTitle("Sweep")
         light_grid(self.sw_plot)
-        self.err_range = YRange(self.err_plot, 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"))
-        self.v_range = YRange(self.v_plot, 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"))
-        self.sw_y = YRange(self.sw_plot, 1e6, "MHz", -5000.0, 5000.0, 1, ui.get("sweep_y"))
+        self.err_range = YRange([self.err_plot, self.comb], 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"))
+        self.v_range = YRange([self.v_plot, self.comb_vb], 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"))
+        self.sw_y = YRange([self.sw_plot], 1e6, "MHz", -5000.0, 5000.0, 1, ui.get("sweep_y"))
+        # plot options
+        self.layout_kind = QComboBox()
+        self.layout_kind.addItems(["two plots", "one plot, two y axes"])
+        self.layout_kind.setCurrentIndex(1 if ui["combined"] else 0)
+        self.layout_kind.setToolTip("Error and output on separate plots, or on one (error left, output right)")
+        self.layout_kind.currentIndexChanged.connect(self._layout_changed)
+        self.line_width = spin(0.5, 5.0, 1, 0.5, float(ui["line_width"]), " px")
+        self.line_width.setToolTip("The traces' line width (wider costs a little more to draw)")
+        self.line_width.valueChanged.connect(self._pens)
+        self.hop_lines = QCheckBox("Hop lines")
+        self.hop_lines.setChecked(bool(ui["hop_lines"]))
+        self.hop_lines.setToolTip("Also mark mode hops with vertical lines (the red dots on the output are always "
+                                  "there)")
+        self.hop_lines.toggled.connect(self._hop_lines_toggled)
         self.sw_curve = self.sw_plot.plot(pen=pg.mkPen("#8250df", width=1), symbol="o", symbolSize=4,
                                           symbolBrush="#8250df", symbolPen=None)
         self.sw_plot.addLine(y=0, pen=pg.mkPen("#888", style=Qt.PenStyle.DashLine)).setZValue(-10)
@@ -552,12 +607,24 @@ class MainWindow(QMainWindow):
         yrow.addWidget(QLabel("Output y"))
         yrow.addWidget(self.v_range)
         yrow.addStretch(1)
+        orow = QHBoxLayout()
+        orow.addWidget(QLabel("Plot"))
+        orow.addWidget(self.layout_kind)
+        orow.addWidget(QLabel("Line"))
+        orow.addWidget(self.line_width)
+        orow.addWidget(self.hop_lines)
+        orow.addStretch(1)
         self.time_panel = QWidget()
         tv = QVBoxLayout(self.time_panel)
         tv.setContentsMargins(0, 0, 0, 0)
         tv.addLayout(top)
         tv.addLayout(yrow)
+        tv.addLayout(orow)
         tv.addWidget(plots)
+        tv.addWidget(self.comb_widget)
+        self.sep_widget = plots
+        self._layout_changed()
+        self._pens()
         self.sweep_panel = QWidget()
         sv = QVBoxLayout(self.sweep_panel)
         sv.setContentsMargins(0, 0, 0, 0)
@@ -643,13 +710,40 @@ class MainWindow(QMainWindow):
     def ui_state(self) -> dict[str, Any]:
         return {"show_plots": self.show_plots.isChecked(), "show_sweep": self.show_sweep.isChecked(),
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
+                "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
+                "hop_lines": self.hop_lines.isChecked(),
                 "err_y": self.err_range.state(), "v_y": self.v_range.state(), "sweep_y": self.sw_y.state()}
+
+    def _comb_geometry(self) -> None:
+        self.comb_vb.setGeometry(self.comb.getViewBox().sceneBoundingRect())
+        self.comb_vb.linkedViewChanged(self.comb.getViewBox(), self.comb_vb.XAxis)
+
+    def _layout_changed(self) -> None:
+        combined = self.layout_kind.currentIndex() == 1
+        self.sep_widget.setVisible(not combined)
+        self.comb_widget.setVisible(combined)
+        self.err_range.current = self.v_range.current = 1 if combined else 0
+        self._hops_drawn = (-1, 0.0)
+        self._draw_time()
+
+    def _pens(self) -> None:
+        w = self.line_width.value()
+        for curve, colour in ((self.err_curve, ERR_COLOUR), (self.c_err, ERR_COLOUR), (self.v_curve, OUT_COLOUR),
+                              (self.c_v, OUT_COLOUR)):
+            curve.setPen(pg.mkPen(colour, width=w))
+
+    def _hop_lines_toggled(self) -> None:
+        self._hops_drawn = (-1, 0.0)
+        self._sweep_n = -1
+        self._draw_time()
 
     def _time_kind(self) -> None:
         clock = self.time_kind.currentIndex() == 0
         for axis in self._time_axes:
             axis.set_clock(clock)
         self.v_plot.setLabel("bottom", "time" if clock else "time since start (s)")
+        if hasattr(self, "comb"):
+            self.comb.setLabel("bottom", "time" if clock else "time since start (s)")
 
     def _time_dragged(self, mask: Any) -> None:
         if mask is None or len(mask) < 1 or mask[0]:
@@ -657,8 +751,8 @@ class MainWindow(QMainWindow):
 
     def _clear(self) -> None:
         self._hist.n = 0
-        self.err_curve.setData([], [])
-        self.v_curve.setData([], [])
+        for curve in (self.err_curve, self.v_curve, self.c_err, self.c_v):
+            curve.setData([], [])
         self.rms_label.setText("")
 
     def _nudge(self, direction: int) -> None:
@@ -686,7 +780,16 @@ class MainWindow(QMainWindow):
     def sweep_settings(self) -> dict[str, float]:
         return {"v_start": self.sw_start.value(), "v_stop": self.sw_stop.value(), "step": self.sw_step.value(),
                 "settle_s": self.sw_settle.value(), "dwell_s": self.sw_dwell.value(),
-                "margin_v": self.scan_margin.value(), "hold_s": self.scan_hold.value()}
+                "margin_v": self.scan_margin.value(), "hold_s": self.scan_hold.value(),
+                "relock": self.relock.isChecked()}
+
+    def _push_relock(self) -> None:
+        req = None
+        if self.relock.isChecked():
+            lo, hi = sorted((self.sw_start.value(), self.sw_stop.value()))
+            req = ScanRequest(lo, hi, self.sw_step.value(), self.sw_settle.value(), self.sw_dwell.value(),
+                              self.set_thz.value(), self.scan_margin.value(), self.scan_hold.value())
+        self.engine.set_relock(req)
 
     def _find_stable(self) -> None:
         if self.engine.snapshot().mode == "sweeping":
@@ -719,12 +822,15 @@ class MainWindow(QMainWindow):
     def _current_settings(self) -> LockSettings:
         return replace(self.engine.settings(), setpoint_thz=self.set_thz.value(), kp=self.kp.value(),
                        ki=self.ki.value(), kd=self.kd.value(), d_filter_s=self.d_filter.value(),
+                       lost_after_s=self.lost_after.value(),
                        sign=1 if self.sign.currentIndex() == 0 else -1,
                        v_min=self.v_min.value(), v_max=max(self.v_max.value(), self.v_min.value()),
                        max_step=self.max_step.value(), capture_mhz=self.capture.value())
 
     def _push_settings(self) -> None:
         self.engine.update_settings(self._current_settings())
+        if hasattr(self, "relock"):
+            self._push_relock()
 
     def _thz_changed(self, thz: float) -> None:
         self.set_nm.blockSignals(True)
@@ -777,8 +883,11 @@ class MainWindow(QMainWindow):
         self.err_label.setText("—" if snap.error_mhz is None else f"{snap.error_mhz:+.2f} MHz")
         self.volt_label.setText(f"{snap.volts:.4f} V")
         mode = snap.mode if snap.mode != "locked" or snap.state == "locked" else f"locked ({snap.state})"
+        colour = MODE_COLOURS.get(snap.mode, "#666")
+        if snap.state == "lost" and snap.mode == "idle":
+            mode, colour = "LOCK LOST", "#cf222e"
         self.mode_label.setText(mode)
-        self.mode_label.setStyleSheet(f"color: {MODE_COLOURS.get(snap.mode, '#666')}")
+        self.mode_label.setStyleSheet(f"color: {colour}")
         if snap.message:
             self.message_label.setText(snap.message)
         locked = snap.mode == "locked"
@@ -829,18 +938,30 @@ class MainWindow(QMainWindow):
             return
         for r_ in (self.err_range, self.v_range, self.sw_y):
             r_.sync()
+        if self.pause.isChecked():
+            return
+        self._draw_time(snap.hops)
+
+    def _draw_time(self, hops: int | None = None) -> None:
+        """The time plots of the shown layout (only while shown and not paused)."""
         if not self.time_panel.isVisible() or not self._hist.n or self.pause.isChecked():
             return
+        combined = self.layout_kind.currentIndex() == 1
         now = time.time() - self._t0
         span = SPANS[self.span.currentText()]
         t, thz, volts, locked = self._hist.since(now - span if span else -math.inf)
-        self.v_plot.setXRange(now - span if span else (float(t[0]) if t.size else now - 1), now, padding=0)
+        (self.comb if combined else self.v_plot).setXRange(now - span if span else (float(t[0]) if t.size else now - 1),
+                                                            now, padding=0)
         setpoint = self.set_thz.value()
         ref = setpoint if setpoint > 0 else float(thz[0]) if thz.size else 0.0
         err = (thz - ref) * 1e12  # Hz
-        self.err_curve.setData(t, err)
-        self.v_curve.setData(t, volts)
-        self._draw_hops(snap.hops, now - span if span else -math.inf)
+        if combined:
+            self.c_err.setData(t, err)
+            self.c_v.setData(t, volts)
+        else:
+            self.err_curve.setData(t, err)
+            self.v_curve.setData(t, volts)
+        self._draw_hops(self.engine.snapshot().hops if hops is None else hops, now - span if span else -math.inf)
         # the lock's quality: locked readings within the capture range (not the time spent in another mode)
         in_capture = np.abs(err) <= self.capture.value() * 1e6
         locked_part = err[locked & in_capture]
@@ -897,7 +1018,8 @@ class MainWindow(QMainWindow):
             return
         self._hops_drawn = (count, now)
         shown: list[HopEvent] = [e for e in self.engine.hop_events() if e.t - self._t0 >= t_from]
-        lines = shown[-HOP_LINES_MAX:]
+        combined = self.layout_kind.currentIndex() == 1
+        lines = shown[-HOP_LINES_MAX:] if self.hop_lines.isChecked() and not combined else []
         while len(self._hop_pool) < len(lines):
             pair = []
             for plot in (self.err_plot, self.v_plot):
@@ -912,7 +1034,9 @@ class MainWindow(QMainWindow):
                 b.setValue(x)
             a.setVisible(k < len(lines))
             b.setVisible(k < len(lines))
-        self.hop_dots.setData([e.t - self._t0 for e in shown], [e.volts for e in shown])
+        xs, ys = [e.t - self._t0 for e in shown], [e.volts for e in shown]
+        (self.c_hops if combined else self.hop_dots).setData(xs, ys)
+        (self.hop_dots if combined else self.c_hops).setData([], [])
 
     def _refresh_scan(self) -> bool:
         """Draws the last find-stable-range scan (both directions, the stable stretches) and fills the table.
@@ -990,7 +1114,7 @@ class MainWindow(QMainWindow):
         for line in self._sw_hop_lines:
             self.sw_plot.removeItem(line)
         self._sw_hop_lines = []
-        for v in sweep_hops(points):
+        for v in sweep_hops(points) if self.hop_lines.isChecked() else []:
             line = pg.InfiniteLine(pos=v, angle=90, pen=HOP_PEN)
             self.sw_plot.addItem(line, ignoreBounds=True)
             self._sw_hop_lines.append(line)

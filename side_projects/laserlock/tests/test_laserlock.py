@@ -431,11 +431,16 @@ def test_engine_records_hops_and_holds_lock() -> None:
         snap = eng.snapshot()
         assert snap.hops == 1 and snap.last_hop is not None
         assert snap.last_hop.locked and snap.last_hop.hop.jump_mhz == pytest.approx(15_800, abs=50)
-        assert snap.state == "out of capture"
+        # a confirmed hop out of capture: the lock is lost, the output held
+        assert snap.mode == "idle" and snap.state == "lost" and snap.lost == 1, snap
+        assert snap.message.startswith("LOCK LOST") and "mode hop" in snap.message
         assert out.get() == pytest.approx(v_before, abs=0.02)  # held, didn't chase it
         laser.extra_mhz = 0.0  # back
-        time.sleep(1.5)
+        time.sleep(1.0)
         assert eng.snapshot().hops == 2
+        assert eng.snapshot().mode == "idle"  # stays unlocked until engaged again
+        eng.engage()
+        time.sleep(0.5)
         assert eng.snapshot().state == "locked"
         assert sum(s.hop for s in eng.drain()) == 2
     finally:
@@ -471,6 +476,7 @@ def test_window_draws_hops(tmp_path: Any) -> None:
                 app.processEvents()
                 time.sleep(0.02)
 
+        win.hop_lines.setChecked(True)
         pump(0.6)
         laser.extra_mhz = 12_000.0
         pump(0.8)
@@ -637,6 +643,7 @@ def test_hop_needs_to_hold_and_many_hops_reuse_few_lines(tmp_path: Any) -> None:
     eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
     win = gui.MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
     now = time.time()
+    win.hop_lines.setChecked(True)
     for k in range(300):
         eng._hop_events.append(HopEvent(now - 60 + k * 0.2, Hop(0.0, F0, F0 + 0.01), 3.0, False))
     win._draw_hops(300, -math.inf)
@@ -706,7 +713,7 @@ def test_find_stable_locks_inside_a_stretch_or_proposes() -> None:
         _, scan = eng.scan_data()
         assert scan is not None and len(scan.stretches) == 4
         assert all(abs(s.mhz_per_v - 300) < 20 for s in scan.stretches)
-        target = F0 + 300e-6  # crossed at 1, 3, 5 V (and not 7: 6–7 V reaches 600 MHz only... at 7)
+        target = F0 + 300e-6  # crossed at 1 V only
         msg = _run_scan(eng, target)
         assert msg.startswith("find stable range: locked"), msg
         snap = eng.snapshot()
@@ -759,3 +766,81 @@ def test_window_lists_stretches(tmp_path: Any) -> None:
     assert win.stretch_btn.isEnabled()
     win.close()
     app.processEvents()
+
+
+
+def test_lock_lost_after_time_out_of_capture_and_relock() -> None:
+    from laserlock.engine import ScanRequest
+
+    laser = SimLaser(f0_thz=F0, mhz_per_v=300.0, noise_mhz=0.2, walk_mhz_per_rt_s=0.0, sine_mhz=0.0, seed=11,
+                     hop_every_v=2.0, hop_mhz=1500.0)
+    out = SimDG1022(laser, min_interval=0.01, volts=1.0)
+    sign, kp, ki = suggest_gains(300.0, 0.01)
+    target = F0 + 300e-6  # crossed at 1 V only (each 2 V stretch spans 0 ... +600 MHz minus 1.5 GHz per hop)
+    eng = Engine(SimWavemeter(laser, period=0.01), out,
+                 LockSettings(setpoint_thz=target, kp=kp, ki=ki, sign=sign, capture_mhz=500, lost_after_s=0.5),
+                 hops=HopDetector(1000, 3))
+    eng.start()
+    try:
+        eng.engage()
+        time.sleep(1.0)
+        assert eng.snapshot().state == "locked"
+        laser.extra_mhz = 700.0  # out of capture but under the hop threshold: lost after 0.5 s
+        time.sleep(0.3)
+        assert eng.snapshot().mode == "locked"  # not yet
+        time.sleep(0.6)
+        snap = eng.snapshot()
+        assert snap.state == "lost" and "out of capture" in snap.message, snap
+        # with relock on, a loss scans and locks again
+        laser.extra_mhz = 0.0
+        eng.set_relock(ScanRequest(0.0, 7.0, 0.25, 0.0, 0.1, 0.0, 0.3, 0.3))
+        eng.engage()
+        time.sleep(0.8)
+        laser.extra_mhz = 700.0
+        time.sleep(1.0)
+        laser.extra_mhz = 0.0  # the hardware is back by the time the scan runs
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and eng.snapshot().mode != "locked":
+            time.sleep(0.05)
+        snap = eng.snapshot()
+        assert snap.mode == "locked" and snap.lost == 2, snap
+        assert snap.message.startswith("find stable range: locked")
+    finally:
+        eng.stop()
+
+
+def test_window_combined_plot_and_lost_label(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=12)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0 + 1e-3))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None,
+                     ui={"combined": True, "line_width": 2.0})
+    eng.start()
+    try:
+        win.show()
+        end = time.monotonic() + 1.0
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        assert win.comb_widget.isVisible() and not win.sep_widget.isVisible()
+        assert win.c_v.getData()[0] is not None and len(win.c_v.getData()[0]) > 5
+        assert win.c_v.opts["pen"].widthF() == 2.0
+        win.v_range.auto.setChecked(False)
+        win.v_range.hi.setValue(5.0)
+        assert win.comb_vb.viewRange()[1][1] == pytest.approx(5.0)
+        with eng._lock:
+            eng._mode, eng._state, eng._message = "idle", "lost", "LOCK LOST at 12:00:00: test"
+        win._refresh()
+        assert win.mode_label.text() == "LOCK LOST"
+        win.layout_kind.setCurrentIndex(0)
+        assert win.sep_widget.isVisible() and not win.comb_widget.isVisible()
+        state = win.ui_state()
+        assert state["combined"] is False and state["line_width"] == 2.0 and state["hop_lines"] is False
+        win.close()
+    finally:
+        eng.stop()

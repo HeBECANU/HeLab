@@ -54,6 +54,7 @@ class Snapshot:
     hops: int = 0  # mode hops seen since start
     last_hop: HopEvent | None = None
     wavemeter: WavemeterTiming | None = None  # None: this source's timing can't be read
+    lost: int = 0  # times the lock was lost since start (state "lost" until the next engage)
     d_term: float = 0.0  # V, the lock's D share of the output now
 
 
@@ -76,6 +77,9 @@ class Engine:
         self._hop_events: collections.deque[HopEvent] = collections.deque(maxlen=1000)
         self._hop_count = 0
         self._hop_logged_at = 0.0
+        self._out_since: float | None = None  # reading time the lock went out of capture
+        self._lost = 0
+        self._relock: ScanRequest | None = None  # on a lost lock: find a stable range and relock with this
         self._hops_unlogged = 0
         self._recent: collections.deque[tuple[float, float]] = collections.deque(maxlen=32)  # (reading t, volts)
         self._periods: collections.deque[float] = collections.deque(maxlen=50)
@@ -130,6 +134,7 @@ class Engine:
                 return
             self.pi.engage(self._volts)
             self._mode, self._message = "locked", "lock engaged"
+            self._out_since = None
         log.info("lock engaged at %.4f V, setpoint %.7f THz", self._volts, self._settings.setpoint_thz)
 
     def release(self) -> None:
@@ -206,7 +211,14 @@ class Engine:
             update = statistics.median(self._periods) if self._periods else None
             last = self._hop_events[-1] if self._hop_events else None
             return Snapshot(self._mode, self._reading, self._error, self._volts, self._state, self._message, update,
-                            self._hop_count, last, self._wm_timing, self.pi.d_term if self._mode == "locked" else 0.0)
+                            self._hop_count, last, self._wm_timing, self._lost,
+                            self.pi.d_term if self._mode == "locked" else 0.0)
+
+    def set_relock(self, request: ScanRequest | None) -> None:
+        """With a request, a lost lock starts a find-stable-range scan (its target the setpoint then) and
+        relocks if it finds one; None: a lost lock just stays unlocked, the output held."""
+        with self._lock:
+            self._relock = request
 
     def set_wavemeter(self, **changes: int | bool) -> None:
         """Changes the wavemeter's timing (keys of `WavemeterTiming`), on the loop thread."""
@@ -308,9 +320,16 @@ class Engine:
             self._reading = r
             s = self._settings
             locked = self._mode == "locked"
+            lost_why = ""
             if locked:
                 step = self.pi.update(r.thz, r.t)
                 self._target, self._error, self._state = step.voltage, step.error_mhz, step.state
+                if step.state == "out of capture":
+                    self._out_since = r.t if self._out_since is None else self._out_since
+                    if r.t - self._out_since >= s.lost_after_s:
+                        lost_why = f"out of capture (±{s.capture_mhz:.0f} MHz) for {r.t - self._out_since:.1f} s"
+                elif step.state != "no reading":
+                    self._out_since = None
             else:
                 self._error = None if r.thz is None or s.setpoint_thz <= 0 else (r.thz - s.setpoint_thz) * 1e6
             self._recent.append((r.t, self._volts))
@@ -329,12 +348,31 @@ class Engine:
                     self._hop_logged_at, self._hops_unlogged = now, 0
                 else:
                     self._hops_unlogged += 1
+                if locked and abs(hop.to_thz - s.setpoint_thz) * 1e6 > s.capture_mhz:
+                    lost_why = f"mode hop {hop.jump_mhz / 1e3:+.3f} GHz, out of capture"
+            if lost_why:
+                self._lose(lost_why)
             sample = Sample(now, r.thz, self._error, self._volts, locked, hop is not None)
             self._samples.append(sample)
             if self._csv is not None:
                 self._csv.writerow([f"{sample.t:.3f}", "" if r.thz is None else f"{r.thz:.9f}", f"{s.setpoint_thz:.9f}",
                                     "" if self._error is None else f"{self._error:.3f}", f"{self._volts:.4f}",
                                     int(locked), r.status, int(hop is not None)])
+
+    def _lose(self, why: str) -> None:
+        """The lock is gone (called holding the lock): unlock, hold the output, say so; relock if asked."""
+        self._mode, self._state = "idle", "lost"
+        self._target = None
+        self._out_since = None
+        self._lost += 1
+        when = time.strftime("%H:%M:%S")
+        self._message = f"LOCK LOST at {when}: {why}; output held at {self._volts:.4f} V"
+        log.warning("lock lost: %s; output held at %.4f V", why, self._volts)
+        if self._relock is not None:
+            self._scan_request = replace(self._relock, target_thz=self._settings.setpoint_thz)
+            self._abort.clear()
+            self._mode = "sweeping"
+            self._message += " — finding a stable range to relock"
 
     def _flush_output(self) -> None:
         with self._lock:

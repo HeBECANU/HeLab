@@ -44,6 +44,7 @@ class LockSettings:
     max_dt: float = 1.0  # s: a longer gap between readings integrates as this
     kd: float = 0.0  # V per (MHz/s)
     d_filter_s: float = 0.5  # s: the D term's low-pass time constant
+    lost_after_s: float = 2.0  # s out of capture (or a confirmed hop out of it) and the lock counts as lost
 
 
 @dataclass

@@ -72,9 +72,10 @@ rest. The setpoint holds 9 decimals in THz (1 kHz) and 8 in nm.
 **The plots.** **Show** picks the time span (or All); the time plots scroll with the newest reading.
 **Pause** freezes them to pan and zoom with the mouse (dragging the time axis pauses too); the readings keep
 being recorded. **Time** labels the axis with the clock time or the seconds since the window opened.
-**Clear** forgets the plotted readings (not the CSV log). Each plot's **y** range is **auto** or fixed
+**Clear** forgets the plotted readings (not the CSV log). **Plot** puts the error and the output on two plots
+or on one with two y axes (error left, output right); **Line** sets the traces' width. Each plot's **y** range is **auto** or fixed
 between the two boxes (MHz or V); zooming a y axis with the mouse switches it to fixed and fills the boxes,
-and the plot's own "A" button returns to auto. Span, time labels and ranges are remembered between runs.
+and the plot's own "A" button returns to auto. Span, time labels, ranges, layout, line width and hop lines are remembered between runs.
 
 **Show: Time plots / Sweep plot** hides either plot panel (both: the window is just the controls); remembered
 between runs.
@@ -87,15 +88,21 @@ holds for 3 readings in a row and at least 0.2 s (`hops.min_hold_s`). A lone far
 occasional ones about 19.7 GHz off) or a short glitch (60 GHz for ~0.1 s, 2026-11-12) isn't one, and the
 level follows slow drift and tuning. Each hop:
 
-- is drawn as a red dot on the output plot (at the output when the hop came) and, for the newest 30 in the
-  shown span, a red dashed line on both time plots (redrawn at most once a second: a laser sitting between
-  two modes hops twice a second, and redrawing hundreds of lines froze the window, 2026-11-12);
+- is drawn as a red dot on the output trace (at the output when the hop came). **Hop lines** (off by
+  default) also draws dashed lines across the time plots, for the newest 30 in the shown span, and the
+  sweep's hops on the sweep plot; redrawn at most once a second (a laser sitting between two modes hops
+  twice a second, and redrawing hundreds of lines froze the window, 2026-11-12);
 - is counted under the wavemeter readings (the last one's jump, time and output), logged as a WARNING in
   `logs/laserlock.log` (at most one line a second, with a count of the others), and marked in the CSV's
   `hop` column.
 
-While locked, a hop beyond the capture range holds the output (it doesn't chase the other mode); the lock
-carries on when the laser comes back. "locked: rms" above the plots leaves out readings beyond the capture
+While locked, a reading beyond the capture range holds the output for a moment ("locked (out of capture)":
+it doesn't chase a far reading). The lock is **lost** when a confirmed mode hop lands out of the capture
+range, or the readings stay out of it for **Lost after** (Loop, default 2 s): laserlock lets go, holds the
+output where it was, says **LOCK LOST** (red) with the time and why, and logs it. It stays unlocked until
+you lock again. With **If the lock is lost: find stable range → relock** (Sweep box) it runs Find stable
+range with the box's settings instead and relocks if the setpoint is in a stable stretch (once per loss;
+otherwise the table proposes). "locked: rms" above the plots leaves out readings beyond the capture
 range and says how many. The sweep plot marks the sweep's mode hops (the jumps that split it into
 stretches) the same way.
 
