@@ -993,3 +993,51 @@ def test_input_lock_sections_and_tooltips(tmp_path: Any) -> None:
     assert state["inputs_locked"] is True and "calibrate" not in state["collapsed"]
     win.close()
     app.processEvents()
+
+
+def test_mini_window_menu_and_pause(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QPointF
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=16)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    eng.start()
+    try:
+        win.show()
+        app.processEvents()
+        win.show_mini()
+        end = time.monotonic() + 0.5
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        assert win.mini.isVisible() and not win.isVisible()
+        assert win.mini.mode.text() == "IDLE" and win.mini.output.text().endswith(" V")
+        assert win.mini.error.text().endswith("MHz")
+        win.mini.expand.click()
+        assert win.isVisible() and not win.mini.isVisible()
+
+        class Ev:
+            def screenPos(self) -> QPointF:
+                return QPointF(10, 10)
+
+            def accept(self) -> None:
+                pass
+
+        win.err_range.preset_buttons[1].click()
+        win.pause.setChecked(True)
+        assert win.pause.text().startswith("▶ Resume")
+        win._plot_menu(win.err_plot.getViewBox(), Ev())
+        texts = [a.text() for a in win._menu.actions() if a.text()]
+        assert texts[0].startswith("Resume") and "y: ±10" in texts and texts[-1].startswith("Export")
+        assert not any("FFT" in t or "Log" in t for t in texts)
+        win._menu.actions()[0].trigger()  # Resume
+        assert not win.pause.isChecked() and win.err_range.auto.isChecked()
+        win._menu.close()
+        win.close()
+    finally:
+        eng.stop()

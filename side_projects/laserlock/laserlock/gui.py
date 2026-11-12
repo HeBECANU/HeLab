@@ -15,11 +15,11 @@ from typing import Any
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox,
                              QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
                              QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTableWidget,
-                             QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                             QTableWidgetItem, QToolButton, QVBoxLayout, QWidget, QMenu)
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
@@ -40,6 +40,27 @@ def preset_label(entry: dict[str, Any]) -> str:
     return f"{name}{thz:.9f} THz  ·  {thz_to_nm(thz):.8f} nm" if thz else f"{name}(empty)"
 
 
+_MONO: QFont | None = None
+
+
+def mono() -> QFont:
+    """The font for numbers (digits line up as they change)."""
+    global _MONO
+    if _MONO is None:
+        _MONO = QFont("Consolas")
+        _MONO.setStyleHint(QFont.StyleHint.Monospace)
+    return QFont(_MONO)
+
+
+def mono_label(label: QLabel, size: float | None = None, bold: bool = False) -> QLabel:
+    f = mono()
+    if size:
+        f.setPointSizeF(size)
+    f.setBold(bold)
+    label.setFont(f)
+    return label
+
+
 def light_grid(plot: Any) -> None:
     """A light-grey grid on the major ticks only: showGrid also draws the minor ticks' lines, which cost about
     40 % of a core at 5 redraws a second (2026-11-11)."""
@@ -49,7 +70,7 @@ def light_grid(plot: Any) -> None:
         axis.setTextPen(pg.mkPen("k"))
         axis.setPen(pg.mkPen("#888"))
         axis.setGrid(255)
-        axis.setStyle(maxTickLevel=0)  # major lines only
+        axis.setStyle(maxTickLevel=0, tickFont=mono())  # major lines only
 
 
 HOP_COLOUR = "#cf222e"
@@ -114,6 +135,7 @@ class Spin(QDoubleSpinBox):
 class IntSpin(QSpinBox):
     def __init__(self) -> None:
         super().__init__()
+        self.setFont(mono())
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def wheelEvent(self, e: Any) -> None:
@@ -137,6 +159,7 @@ class Combo(QComboBox):
 
 def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix: str = "") -> QDoubleSpinBox:
     s = Spin()
+    s.setFont(mono())
     s.setRange(lo, hi)
     s.setDecimals(decimals)
     s.setSingleStep(step)
@@ -305,7 +328,7 @@ class YRange(QWidget):
 STYLE = """
 QFrame#header { background: #f6f8fa; border-bottom: 1px solid #d0d7de; }
 QLabel#caption { color: #57606a; font-size: 8pt; }
-QLabel#reading { font-size: 17pt; font-weight: 600; }
+QLabel#reading { font-size: 17pt; font-weight: 600; font-family: Consolas, "Cascadia Mono", monospace; }
 QLabel#mode { font-size: 15pt; font-weight: 700; color: white; border-radius: 6px; padding: 8px 14px; }
 QLabel#message { color: #57606a; }
 QPushButton#lockButton { font-size: 14pt; font-weight: 700; padding: 6px 18px; }
@@ -315,9 +338,12 @@ QPushButton#inputsLock { padding: 6px 12px; }
 QPushButton#inputsLock:checked { background: #fff8c5; color: #4d2d00; border: 1px solid #d4a72c; border-radius: 4px;
                                  font-weight: 600; }
 QFrame#section { background: white; border: 1px solid #d0d7de; border-radius: 6px; }
-QFrame#section QLabel, QFrame#section QCheckBox { background: transparent; }
+QFrame#section QLabel { background: transparent; }
 QToolButton#sectionHeader { border: none; font-weight: 600; font-size: 10pt; padding: 5px 4px; color: #24292f; }
 QAbstractSpinBox[readOnly="true"] { background: #eef1f4; color: #57606a; }
+QPushButton#pause:checked { background: #fff8c5; color: #4d2d00; border: 1px solid #d4a72c; border-radius: 4px;
+                            font-weight: 600; padding: 3px 10px; }
+QLabel#miniValue { font-size: 15pt; font-weight: 600; font-family: Consolas, "Cascadia Mono", monospace; }
 """
 
 
@@ -367,6 +393,61 @@ class Section(QFrame):
 
     def full(self, widget: QWidget) -> None:
         self.form.addRow(widget)
+
+
+class PlotMenu:
+    """Stands in for a ViewBox's raiseContextMenu: shows the window's own menu."""
+
+    def __init__(self, window: Any, vb: Any) -> None:
+        self.window, self.vb = window, vb
+
+    def __call__(self, ev: Any) -> None:
+        self.window._plot_menu(self.vb, ev)
+        ev.accept()
+
+
+class MiniWindow(QWidget):
+    """A small always-on-top window: the lock's state, error and output, and a button back to the full one."""
+
+    def __init__(self, main: Any) -> None:
+        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        self.main = main
+        self.setWindowTitle("Laser lock")
+        self.mode = QLabel("IDLE")
+        self.mode.setObjectName("mode")
+        self.mode.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mode.setMinimumWidth(150)
+        self.mode.setToolTip("What the lock is doing (as in the full window)")
+        self.error, self.output = QLabel("—"), QLabel("—")
+        self.error.setToolTip("Frequency − setpoint")
+        self.output.setToolTip("The DG1022 output now")
+        for lab in (self.error, self.output):
+            lab.setObjectName("miniValue")
+            lab.setMinimumWidth(150)
+            lab.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.expand = QPushButton("Full")
+        self.expand.setToolTip("Back to the full window")
+        self.expand.setMaximumWidth(60)
+        self.expand.clicked.connect(main.show_full)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(8, 6, 8, 6)
+        h.addWidget(self.mode)
+        h.addWidget(self.error)
+        h.addWidget(self.output)
+        h.addWidget(self.expand)
+        self.setStyleSheet(STYLE)
+
+    def show_state(self, mode: str, colour: str, error: str, output: str) -> None:
+        if self.mode.text() != mode:
+            self.mode.setText(mode)
+        self.mode.setStyleSheet(f"background: {colour}; font-size: 12pt; padding: 5px 10px")
+        self.error.setText(error)
+        self.output.setText(output)
+
+    def closeEvent(self, event: QCloseEvent | None) -> None:
+        self.main.show_full()  # closing the small window brings the full one back
+        if event is not None:
+            event.ignore()
 
 
 class History:
@@ -470,7 +551,14 @@ class MainWindow(QMainWindow):
         hl.addLayout(readings, 0, 1)
         hl.addWidget(self.lock_btn, 0, 2)
         hl.addWidget(self.inputs_lock, 0, 3)
-        hl.addWidget(self.message_label, 1, 0, 1, 4)
+        self.mini_btn = QPushButton("Mini window")
+        self.mini_btn.setMinimumHeight(52)
+        self.mini_btn.setToolTip("Swap to a small always-on-top window with just the state, error and output "
+                                 "(the lock keeps running; Full there brings this window back)")
+        self.mini_btn.clicked.connect(self.show_mini)
+        hl.addWidget(self.mini_btn, 0, 4)
+        hl.addWidget(self.message_label, 1, 0, 1, 5)
+        self.mini = MiniWindow(self)
         hl.setColumnStretch(1, 1)
         self.header = header
 
@@ -591,9 +679,9 @@ class MainWindow(QMainWindow):
         self._guarded += [self.manual, self.log_box]
 
         # ---- Wavemeter
-        self.status_label = QLabel("")
+        self.status_label = mono_label(QLabel(""))
         self.status_label.setToolTip("The wavemeter's state and how often a new reading comes (the lock's rate)")
-        self.hop_label = QLabel("Mode hops: none")
+        self.hop_label = mono_label(QLabel("Mode hops: none"))
         self.hop_label.setToolTip("Mode hops seen since start: the count, and the last one's jump, time and output")
         self.wm_exposure = IntSpin()
         self.wm_exposure.setRange(1, 9999)
@@ -619,6 +707,7 @@ class MainWindow(QMainWindow):
                          "settings: changing them here changes them in the WLM program too)", "wavemeter" in collapsed)
         sec_wm.full(self.status_label)
         sec_wm.full(self.hop_label)
+        self.wm_exposure.setFont(mono())
         sec_wm.row("Exposure", self._pair(self.wm_exposure, self.wm_auto), "The exposure (CCD 1); setting one turns "
                    "auto off")
         sec_wm.row("Measure every", self._pair(self.wm_interval, self.wm_interval_on), "With on, one measurement per "
@@ -665,6 +754,7 @@ class MainWindow(QMainWindow):
         self.scan_table.verticalHeader().setVisible(False)
         self.scan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.scan_table.setMinimumHeight(110)
+        self.scan_table.setFont(mono())
         self.scan_table.itemSelectionChanged.connect(self._scan_selected)
         self.stretch_btn = QPushButton("Lock at selected stretch")
         self.stretch_btn.setToolTip("Go to the chosen stretch's centre (from below), make the frequency there the "
@@ -719,7 +809,10 @@ class MainWindow(QMainWindow):
         self.span.addItems(list(SPANS))
         self.span.setCurrentText(str(ui["span"]) if ui["span"] in SPANS else "2 min")
         self.span.setToolTip("The time shown (it scrolls with the newest reading unless paused)")
-        self.pause = QCheckBox("Pause")
+        self.pause = QPushButton("⏸ Pause")
+        self.pause.setObjectName("pause")
+        self.pause.setCheckable(True)
+        self.pause.toggled.connect(self._pause_toggled)
         self.pause.setToolTip("Freeze the time plots to pan and zoom with the mouse (readings keep being "
                               "recorded); dragging the time axis pauses too")
         self.time_kind = Combo()
@@ -835,7 +928,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.time_kind)
         top.addWidget(clear)
         top.addStretch(1)
-        self.rms_label = QLabel("")
+        self.rms_label = mono_label(QLabel(""))
         self.rms_label.setToolTip("The lock's quality over the shown span: rms and mean of the error while locked, "
                                   "leaving out readings beyond the capture range")
         top.addWidget(self.rms_label)
@@ -863,6 +956,11 @@ class MainWindow(QMainWindow):
         self.sep_widget = plots
         self._layout_changed()
         self._pens()
+        for vb in (self.err_plot.getViewBox(), self.v_plot.getViewBox(), self.comb.getViewBox(), self.comb_vb,
+                   self.sw_plot.getViewBox()):
+            vb.raiseContextMenu = PlotMenu(self, vb)
+        for plot in (self.err_plot, self.v_plot, self.comb, self.sw_plot):
+            plot.hideButtons()  # the "A" button: auto is in the toolbar and the menu
         self.sweep_panel = QWidget()
         sv = QVBoxLayout(self.sweep_panel)
         sv.setContentsMargins(0, 0, 0, 0)
@@ -932,6 +1030,18 @@ class MainWindow(QMainWindow):
         for x in (w, cap, value):
             x.setToolTip(tip)
         return w
+
+    def show_mini(self) -> None:
+        self.mini.move(self.geometry().topRight().x() - self.mini.sizeHint().width(), self.geometry().top())
+        self.mini.show()
+        self.hide()
+        self._refresh()
+
+    def show_full(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.mini.hide()
 
     def _apply_input_lock(self) -> None:
         locked = self.inputs_lock.isChecked()
@@ -1046,6 +1156,60 @@ class MainWindow(QMainWindow):
         self.v_plot.setLabel("bottom", "time" if clock else "time since start (s)")
         if hasattr(self, "comb"):
             self.comb.setLabel("bottom", "time" if clock else "time since start (s)")
+
+    def _pause_toggled(self, paused: bool) -> None:
+        self.pause.setText("▶ Resume (paused)" if paused else "⏸ Pause")
+
+    def _resume(self) -> None:
+        """Follow the newest readings again, with the axes on auto."""
+        self.pause.setChecked(False)
+        self.err_range.auto.setChecked(True)
+        self.v_range.auto.setChecked(True)
+        self._draw_time()
+
+    def _plot_menu(self, vb: Any, ev: Any) -> None:
+        """A right-click menu that fits this window (pyqtgraph's own offers transforms, FFT and log axes, and its
+        View All quietly paused the plots)."""
+        menu = QMenu(self)
+        if vb is self.sw_plot.getViewBox():
+            a = menu.addAction("Auto-range")
+            a.triggered.connect(self._sweep_auto)
+            yr = self.sw_y
+        else:
+            a = menu.addAction("Resume: follow the newest, axes on auto")
+            a.triggered.connect(self._resume)
+            a = menu.addAction("Pause (pan and zoom with the mouse)")
+            a.setCheckable(True)
+            a.setChecked(self.pause.isChecked())
+            a.toggled.connect(self.pause.setChecked)
+            yr = self.v_range if vb in (self.v_plot.getViewBox(), self.comb_vb) else self.err_range
+        menu.addSeparator()
+        a = menu.addAction("y: auto")
+        a.setCheckable(True)
+        a.setChecked(yr.auto.isChecked())
+        a.toggled.connect(yr.auto.setChecked)
+        for b in yr.preset_buttons:
+            a = menu.addAction(f"y: {b.text()}")
+            a.triggered.connect(b.click)
+        if vb is not self.sw_plot.getViewBox() and self.layout_kind.currentIndex() == 1:
+            other = self.err_range if yr is self.v_range else self.v_range
+            menu.addSeparator()
+            a = menu.addAction(("Error" if other is self.err_range else "Output") + " y: auto")
+            a.setCheckable(True)
+            a.setChecked(other.auto.isChecked())
+            a.toggled.connect(other.auto.setChecked)
+            for b in other.preset_buttons:
+                a = menu.addAction(("Error" if other is self.err_range else "Output") + f" y: {b.text()}")
+                a.triggered.connect(b.click)
+        menu.addSeparator()
+        a = menu.addAction("Export (image or CSV)…")
+        a.triggered.connect(vb.scene().showExportDialog)
+        menu.popup(ev.screenPos().toPoint())
+        self._menu = menu  # kept alive while shown
+
+    def _sweep_auto(self) -> None:
+        self.sw_y.auto.setChecked(True)
+        self.sw_plot.enableAutoRange()
 
     def _time_dragged(self, mask: Any) -> None:
         if mask is None or len(mask) < 1 or mask[0]:
@@ -1194,6 +1358,8 @@ class MainWindow(QMainWindow):
             self.mode_label.setText(mode.upper())
             self.mode_label.setStyleSheet(f"background: {colour}")
             self._mode_colour = colour
+        if self.mini.isVisible():
+            self.mini.show_state(mode.upper(), colour, self.err_label.text(), self.volt_label.text())
         if snap.message:
             self.message_label.setText(snap.message)
         locked = snap.mode == "locked"
@@ -1440,6 +1606,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent | None) -> None:
         self.timer.stop()
+        self.mini.hide()
+        self.mini.deleteLater()
         self.on_save(self._current_settings(), {"step_v": self.cal_step.value(), "settle_s": self.cal_settle.value(),
                                                 "average_s": self.cal_avg.value()})
         super().closeEvent(event)

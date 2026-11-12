@@ -68,6 +68,12 @@ message. On the left, panels that click open and shut: Setpoint, Lock loop, Cali
 Output, Wavemeter, Sweep and find stable range. On the right, the plots and their controls. Hover over
 anything for what it does. Which panels are shut, and the input lock, are remembered between runs.
 
+**Mini window** swaps to a small always-on-top window with just the state, error and output (the lock keeps
+running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
+
+**Right-click on a plot** offers: Resume (follow the newest readings, axes on auto), Pause, the y ranges, and
+Export (image or CSV). When the plots are paused, the Pause button turns amber and reads **▶ Resume**.
+
 **Inputs locked** guards against stray clicks and keys: number boxes become read-only, and lists, ticks
 and action buttons (Lock included) are disabled; **Abort** stays available while a sweep or a calibration
 runs, and the plots' view controls still work.
