@@ -1077,3 +1077,26 @@ def test_hover_shows_time_and_value(tmp_path: Any) -> None:
         win.close()
     finally:
         eng.stop()
+
+
+def test_quality_labels_flicker_and_jumps() -> None:
+    import numpy as np
+
+    from laserlock.quality import classify
+
+    rng = np.random.default_rng(1)
+    t = np.arange(0, 30, 0.03)
+    f = 40 - 1.0 * t + rng.normal(0, 0.3, t.size)  # a smooth drift with 0.3 MHz noise: good
+    flick = (t > 3) & (t < 8)
+    f[flick] += np.where(np.arange(flick.sum()) % 3 == 0, -25.0, 0.0) * rng.uniform(0.5, 1.5, flick.sum())
+    f[t > 25] -= 200.0  # a sharp drop
+    q = classify(t, f)
+    assert q.flicker[(t > 4) & (t < 7)].all()
+    assert not q.flicker[(t > 10) & (t < 24)].any()
+    assert q.jumps == 1 and q.jump[np.searchsorted(t, 25.0, side="right")]
+    assert not q.jump[(t > 10) & (t < 24.9)].any()
+    assert 4 < q.flicker_s < 6
+    # the normal scatter of a noisier laser isn't flagged
+    g = 0.05 * t + rng.normal(0, 30, t.size)
+    q = classify(t, g)
+    assert q.flicker.mean() < 0.05 and q.jumps == 0

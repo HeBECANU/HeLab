@@ -71,6 +71,14 @@ anything for what it does. Which panels are shut, and the input lock, are rememb
 **Mini window** swaps to a small always-on-top window with just the state, error and output (the lock keeps
 running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
 
+**Flicker and jumps.** The time plots colour the traces where the frequency misbehaves: **orange** where it
+flickers (big steps reversing direction 3 or more times within 1 s: a ringing lock, a laser flicking between
+modes, a bad signal), **red** at a sharp jump (one big step that isn't flicker: a mode hop, a sudden step); the
+rest is normal (error blue, output black). "Big" is judged against the trace's own step noise (at least 6×
+for flicker, 10× for a jump, robust to the bad parts), so the normal scatter isn't flagged; **flicker ≥** and
+**jump ≥** set the smallest steps that count (default 5 and 50 MHz). The toolbar counts them over the shown
+span, and hovering says which a reading is (`laserlock/quality.py`).
+
 **Hover over a plot** for the nearest reading's time and value (on the sweep: output and frequency).
 **Right-click on a plot** offers: Resume (follow the newest readings, axes on auto), Pause, the y ranges, and
 Export (image or CSV). When the plots are paused, the Pause button turns amber and reads **▶ Resume**.

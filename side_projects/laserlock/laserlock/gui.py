@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QCo
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
+from .quality import Quality, classify
 from .engine import Engine, HopEvent, ScanRequest, ScanResult, Stretch, sweep_hops
 
 def preset_thz(entry: dict[str, Any]) -> float | None:
@@ -82,7 +83,8 @@ HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
 SPANS: dict[str, float | None] = {"30 s": 30.0, "2 min": 120.0, "10 min": 600.0, "1 h": 3600.0, "All": None}
-ERR_COLOUR, OUT_COLOUR = "#0969da", "#bf3989"
+ERR_COLOUR, OUT_COLOUR = "#0969da", "#24292f"
+FLICKER_COLOUR, JUMP_COLOUR = "#e8590c", "#cf222e"
 MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "sweeping": "#9a6700",
                 "fault": "#cf222e"}
 
@@ -885,6 +887,20 @@ class MainWindow(QMainWindow):
             curve.setDownsampling(auto=True, method="peak")
             curve.setClipToView(True)
             curve.setZValue(5)  # above the grid and the zero line
+        # flicker (orange) and jumps (red) drawn over each trace: the same data, NaN where the reading is good
+        self._marks: dict[Any, tuple[Any, Any]] = {}
+        for curve, owner in ((self.err_curve, self.err_plot), (self.v_curve, self.v_plot), (self.c_err, self.comb),
+                             (self.c_v, self.comb_vb)):
+            pair = []
+            for colour in (FLICKER_COLOUR, JUMP_COLOUR):
+                item = pg.PlotDataItem(pen=pg.mkPen(colour, width=1.5), connect="finite")
+                item.setClipToView(True)
+                item.setZValue(6)
+                owner.addItem(item)
+                pair.append(item)
+            self._marks[curve] = (pair[0], pair[1])
+        self._quality: Quality | None = None
+        self._quality_t = np.empty(0)
         sweep_plots = pg.GraphicsLayoutWidget()
         self.sw_plot = sweep_plots.addPlot()
         self.sw_plot.setLabel("left", "f − setpoint", units="Hz")
@@ -960,6 +976,27 @@ class MainWindow(QMainWindow):
         orow.addWidget(self._lab("Line", "The traces' line width"))
         orow.addWidget(self.line_width)
         orow.addWidget(self.hop_lines)
+        orow.addSpacing(14)
+        orow.addWidget(self._lab("Flag", "Colour the traces: orange where the frequency flickers up and down, red at "
+                                 "a sharp jump; the rest is normal. Judged against the trace's own step noise; these "
+                                 "are the smallest steps that count"))
+        self.flicker_min = spin(0.1, 1e5, 1, 1.0, float(ui.get("flicker_min_mhz", 5.0)), " MHz")
+        self.flicker_min.setToolTip("Flicker: steps at least this big (and 6× the normal step noise) that reverse "
+                                    "direction 3 times within 1 s. Shown orange")
+        self.jump_min = spin(1.0, 1e6, 0, 10.0, float(ui.get("jump_min_mhz", 50.0)), " MHz")
+        self.jump_min.setToolTip("Jump: one step at least this big (and 10× the normal step noise) that isn't part "
+                                 "of flicker, e.g. a mode hop. Shown red")
+        for w in (self.flicker_min, self.jump_min):
+            w.setMaximumWidth(120)
+            w.valueChanged.connect(self._draw_time_now)
+        orow.addWidget(self._lab("flicker ≥", self.flicker_min.toolTip()))
+        orow.addWidget(self.flicker_min)
+        orow.addWidget(self._lab("jump ≥", self.jump_min.toolTip()))
+        orow.addWidget(self.jump_min)
+        self.quality_label = mono_label(QLabel(""))
+        self.quality_label.setToolTip("Over the shown span: how many sharp jumps (red) and how long it flickered "
+                                      "(orange)")
+        orow.addWidget(self.quality_label)
         orow.addStretch(1)
         self.time_panel = QWidget()
         tv = QVBoxLayout(self.time_panel)
@@ -1159,6 +1196,7 @@ class MainWindow(QMainWindow):
                 "span": self.span.currentText(), "clock": self.time_kind.currentIndex() == 0,
                 "combined": self.layout_kind.currentIndex() == 1, "line_width": self.line_width.value(),
                 "hop_lines": self.hop_lines.isChecked(),
+                "flicker_min_mhz": self.flicker_min.value(), "jump_min_mhz": self.jump_min.value(),
                 "collapsed": [sec.key for sec in self.sections if sec.collapsed],
                 "inputs_locked": self.inputs_lock.isChecked(),
                 "err_y": self.err_range.state(), "v_y": self.v_range.state(), "sweep_y": self.sw_y.state()}
@@ -1180,6 +1218,21 @@ class MainWindow(QMainWindow):
         for curve, colour in ((self.err_curve, ERR_COLOUR), (self.c_err, ERR_COLOUR), (self.v_curve, OUT_COLOUR),
                               (self.c_v, OUT_COLOUR)):
             curve.setPen(pg.mkPen(colour, width=w))
+            flick_item, jump_item = self._marks[curve]
+            flick_item.setPen(pg.mkPen(FLICKER_COLOUR, width=w + 0.5))
+            jump_item.setPen(pg.mkPen(JUMP_COLOUR, width=w + 0.5))
+
+    def _draw_time_now(self) -> None:
+        self._draw_time()
+
+    def _quality_at(self, x: float) -> str:
+        q, t = self._quality, self._quality_t
+        if q is None or not t.size:
+            return ""
+        i = int(np.clip(np.searchsorted(t, x), 0, t.size - 1))
+        if i > 0 and abs(t[i - 1] - x) < abs(t[i] - x):
+            i -= 1
+        return "  · jump" if q.jump[i] else "  · flicker" if q.flicker[i] else ""
 
     def _hop_lines_toggled(self) -> None:
         self._hops_drawn = (-1, 0.0)
@@ -1297,7 +1350,7 @@ class MainWindow(QMainWindow):
                 v = self._nearest(self.c_v, x)
                 if e is None:
                     return
-                lines = [self._time_text(e[0]), f"error {e[1] / 1e6:+.3f} MHz"]
+                lines = [self._time_text(e[0]) + self._quality_at(e[0]), f"error {e[1] / 1e6:+.3f} MHz"]
                 if v is not None:
                     lines.append(f"output {v[1]:.4f} V")
                     self._hover_dot2.setData([v[0]], [v[1]])
@@ -1309,7 +1362,7 @@ class MainWindow(QMainWindow):
                 if n is None:
                     return
                 value = f"{n[1] / 1e6:+.3f} MHz" if plot is self.err_plot else f"{n[1]:.4f} V"
-                lines = [self._time_text(n[0]), value]
+                lines = [self._time_text(n[0]) + self._quality_at(n[0]), value]
                 where = n
             (x0, x1), (y0, y1) = vb.viewRange()
             text.setAnchor((1 if where[0] > (x0 + x1) / 2 else 0, 0 if where[1] > (y0 + y1) / 2 else 1))
@@ -1332,7 +1385,11 @@ class MainWindow(QMainWindow):
         self._hist.n = 0
         for curve in (self.err_curve, self.v_curve, self.c_err, self.c_v):
             curve.setData([], [])
+            for item in self._marks[curve]:
+                item.setData([], [])
         self.rms_label.setText("")
+        self.quality_label.setText("")
+        self._quality = None
 
     def _nudge(self, direction: int) -> None:
         self.set_thz.setValue(self.set_thz.value() + direction * self.nudge.value() * 1e-6)
@@ -1545,12 +1602,20 @@ class MainWindow(QMainWindow):
         setpoint = self.set_thz.value()
         ref = setpoint if setpoint > 0 else float(thz[0]) if thz.size else 0.0
         err = (thz - ref) * 1e12  # Hz
-        if combined:
-            self.c_err.setData(t, err)
-            self.c_v.setData(t, volts)
-        else:
-            self.err_curve.setData(t, err)
-            self.v_curve.setData(t, volts)
+        q = classify(t, err / 1e6, self.flicker_min.value(), self.jump_min.value())
+        self._quality, self._quality_t = q, t
+        pairs = ((self.c_err, err), (self.c_v, volts)) if combined else ((self.err_curve, err), (self.v_curve, volts))
+        for curve, y in pairs:
+            curve.setData(t, y)
+            flick_item, jump_item = self._marks[curve]
+            flick_item.setData(t, np.where(q.flicker, y, np.nan))
+            jump_item.setData(t, np.where(q.jump, y, np.nan))
+        bits = []
+        if q.jumps:
+            bits.append(f"<span style='color:{JUMP_COLOUR}'>■ {q.jumps} jump{'s' if q.jumps != 1 else ''}</span>")
+        if q.flicker_s > 0:
+            bits.append(f"<span style='color:{FLICKER_COLOUR}'>■ flicker {q.flicker_s:.1f} s</span>")
+        self.quality_label.setText("  ".join(bits) if bits else "no flicker or jumps")
         self.err_range.fit(err[t >= now - min(FOLLOW_S, span or FOLLOW_S)])
         self._draw_hops(self.engine.snapshot().hops if hops is None else hops, now - span if span else -math.inf)
         # the lock's quality: locked readings within the capture range (not the time spent in another mode)
