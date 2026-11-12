@@ -7,6 +7,10 @@ from typing import Any
 
 import pytest
 
+# Run from side_projects/laserlock with its own environment (`uv run pytest`). HeLab's own pytest
+# collects this file too and skips it, since laserlock isn't installed in HeLab's environment.
+pytest.importorskip("laserlock")
+
 from laserlock import config
 from laserlock.controller import LockSettings, PILock, nm_to_thz, suggest_gains, thz_to_nm
 from laserlock.devices import DG1022, HARD_V_MAX, DeviceFault
