@@ -116,6 +116,26 @@ ramps back.
 
 Both refuse (and write nothing) while the DG1022's output is off. Abort stops them and ramps back.
 
+## Find a stable range
+
+For after the laser's hardware has been touched: **Find stable range → lock** sweeps *From* → *To* and back
+(*Step*, *Settle / dwell* as for a sweep) and keeps the output ranges that were mode-hop free **both ways**.
+A voltage counts when each direction read one mode there (most readings in one group, no mode competition)
+and both read the same one (the hysteresis between up and down is fine, another mode isn't), and neither
+direction jumped next to it. Then:
+
+- if the setpoint lies in a stable stretch at least **Margin** (default 0.3 V) from its ends, it ramps there
+  from below (as the up sweep came), **holds** (default 5 s) and watches for mode hops; no hop: it sets the
+  gains from the stretch's slope, keeps the output inside the stretch, and locks;
+- otherwise (not in one, too near an edge, or a hop while holding) it returns to where it started and the
+  table lists every stable stretch, widest in frequency first: its output range, where the setpoint falls
+  in it or the **shift** the laser needs (+ raises its frequency) to put the setpoint at its centre, its
+  width, slope and frequencies. Tweak the hardware by about that shift and press it again.
+
+**Lock at selected** locks at a chosen stretch instead: it goes to the stretch's centre from below, makes the
+frequency there the setpoint (if it still reads the scan's mode), and keeps the output inside the stretch.
+The sweep plot shows the up and down sweeps and shades the stable stretches (the chosen one darker).
+
 ## Set up (once)
 
 Needs [uv](https://docs.astral.sh/uv/), NI-VISA (or Keysight VISA) and the HighFinesse software installed.

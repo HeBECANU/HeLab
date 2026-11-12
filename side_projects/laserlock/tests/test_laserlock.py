@@ -647,3 +647,115 @@ def test_hop_needs_to_hold_and_many_hops_reuse_few_lines(tmp_path: Any) -> None:
     assert win._hops_drawn[0] == 300
     win.close()
     app.processEvents()
+
+
+# ---------------------------------------------------------------- find a stable range
+
+from laserlock.engine import stable_stretches  # noqa: E402
+
+
+def _leg(vs: list[float], f: Any) -> list[SweepPoint]:
+    return [SweepPoint(v, f(v), 1.0, 5, 5) for v in vs]
+
+
+def test_stable_stretches_need_both_directions() -> None:
+    vs = [round(0.1 * i, 4) for i in range(71)]
+
+    def up(v: float) -> float:  # 100 MHz/V; hops of -800 MHz at 2.0 V and 5.0 V going up
+        return F0 + (100 * v - 800 * ((v >= 2.0) + (v >= 5.0))) * 1e-6
+
+    def down(v: float) -> float:  # coming down the hops come lower (hysteresis): 1.6 V and 4.6 V
+        return F0 + (100 * v - 800 * ((v >= 1.6) + (v >= 4.6))) * 1e-6
+
+    target = F0 + 150e-6  # in mode 0 near 1.5 V, mode 1 near 9.5 V (not reached), mode 2 not
+    st = stable_stretches(_leg(vs, up), _leg(vs[::-1], down), target)
+    spans = sorted((s.v_lo, s.v_hi) for s in st)
+    # 1.6-1.9 and 4.6-4.9 differ between the directions: not stable
+    assert spans == [(0.0, 1.5), (2.0, 4.5), (5.0, 7.0)]
+    first = next(s for s in st if s.v_lo == 0.0)
+    assert first.target_v == pytest.approx(1.5) and first.room_v == pytest.approx(0.0)
+    assert all(s.mhz_per_v == pytest.approx(100.0) for s in st)
+    mid = next(s for s in st if s.v_lo == 2.0)
+    assert mid.target_v is None and mid.shift_mhz == pytest.approx(150 - (100 * 3.25 - 800))
+    # a point with two modes in its readings breaks a stretch
+    noisy = _leg(vs, up)
+    noisy[30] = SweepPoint(3.0, up(3.0), 1.0, 3, 5)
+    spans = sorted((s.v_lo, s.v_hi) for s in stable_stretches(noisy, _leg(vs[::-1], down), target))
+    assert (2.0, 2.9) in spans and (3.1, 4.5) in spans
+
+
+def _run_scan(eng: Engine, target: float, margin: float = 0.3, hold: float = 0.5) -> str:
+    eng.find_stable(0.0, 7.0, 0.25, 0.0, 0.1, target, margin, hold)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and eng.snapshot().mode == "sweeping":
+        time.sleep(0.05)
+    return eng.snapshot().message
+
+
+def test_find_stable_locks_inside_a_stretch_or_proposes() -> None:
+    laser = SimLaser(f0_thz=F0, mhz_per_v=300.0, noise_mhz=0.2, walk_mhz_per_rt_s=0.0, sine_mhz=0.0, seed=8,
+                     hop_every_v=2.0, hop_mhz=1500.0)
+    out = SimDG1022(laser, min_interval=0.01, volts=1.0)
+    eng = Engine(SimWavemeter(laser, period=0.01), out, LockSettings())
+    eng.start()
+    try:
+        far = F0 + 5000e-6  # never reached (the laser spans f0 ... f0 + 600 MHz)
+        msg = _run_scan(eng, far)
+        assert msg.startswith("find stable range: the setpoint isn't in a stable stretch"), msg
+        assert eng.snapshot().mode == "idle" and out.get() == pytest.approx(1.0)
+        _, scan = eng.scan_data()
+        assert scan is not None and len(scan.stretches) == 4
+        assert all(abs(s.mhz_per_v - 300) < 20 for s in scan.stretches)
+        target = F0 + 300e-6  # crossed at 1, 3, 5 V (and not 7: 6–7 V reaches 600 MHz only... at 7)
+        msg = _run_scan(eng, target)
+        assert msg.startswith("find stable range: locked"), msg
+        snap = eng.snapshot()
+        assert snap.mode == "locked"
+        s = eng.settings()
+        assert s.setpoint_thz == pytest.approx(target) and s.v_max - s.v_min < 2.0
+        assert s.v_min <= out.get() <= s.v_max
+        eng.release()
+        # lock at a chosen stretch: its centre's frequency becomes the setpoint
+        _, scan = eng.scan_data()
+        assert scan is not None
+        st = max(scan.stretches, key=lambda x: x.v_lo)
+        eng.lock_stretch(st)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and eng.snapshot().mode == "sweeping":
+            time.sleep(0.05)
+        assert eng.snapshot().mode == "locked", eng.snapshot().message
+        assert eng.settings().setpoint_thz == pytest.approx(st.f_at((st.v_lo + st.v_hi) / 2), abs=20e-6)
+    finally:
+        eng.stop()
+
+
+def test_window_lists_stretches(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.engine import ScanRequest, ScanResult
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=10)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser), LockSettings(setpoint_thz=F0))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    vs = [round(0.1 * i, 4) for i in range(71)]
+
+    def f(v: float) -> float:
+        return F0 + (100 * v - 800 * (v >= 3.0)) * 1e-6
+
+    up, down = _leg(vs, f), _leg(vs[::-1], f)
+    stretches = stable_stretches(up, down, F0 + 2000e-6)
+    with eng._lock:
+        eng._scan = ScanResult(ScanRequest(0, 7, 0.1, 0, 0.1, F0, 0.3, 1), up, down, stretches, None, "")
+        eng._scan_seq += 1
+    win._refresh()
+    assert win.scan_table.rowCount() == 2
+    assert win.scan_table.item(0, 1).text().startswith("shift ")
+    assert len(win._stretch_regions) == 2
+    win.scan_table.selectRow(0)
+    assert win.stretch_btn.isEnabled()
+    win.close()
+    app.processEvents()

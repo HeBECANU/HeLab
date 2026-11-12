@@ -16,13 +16,14 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QFont
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox,
-                             QHBoxLayout, QLabel, QMainWindow, QPushButton, QScrollArea, QSpinBox, QSplitter,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+                             QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QPushButton,
+                             QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+                             QWidget)
 
 from .controller import LockSettings, nm_to_thz, thz_to_nm
 from .devices import HARD_V_MAX, HARD_V_MIN
-from .engine import Engine, HopEvent, sweep_hops
+from .engine import Engine, HopEvent, ScanResult, Stretch, sweep_hops
 
 def preset_thz(entry: dict[str, Any]) -> float | None:
     """A preset is {"thz": f} or {"nm": vacuum wavelength}, with an optional "name"."""
@@ -404,6 +405,39 @@ class MainWindow(QMainWindow):
         f.addRow("Step", self.sw_step)
         f.addRow("Settle / dwell", self._pair(self.sw_settle, self.sw_dwell))
         f.addRow(self._pair(self.sweep_btn, self.auto_btn))
+        self.scan_margin = spin(0.0, 3.5, 2, 0.05, float(sw.get("margin_v", 0.3)), " V")
+        self.scan_margin.setToolTip("The setpoint must be at least this far from the ends of its hop-free stretch")
+        self.scan_hold = spin(0.0, 600.0, 1, 1.0, float(sw.get("hold_s", 5.0)), " s")
+        self.scan_hold.setToolTip("Before locking, the output is held there this long: a mode hop meanwhile "
+                                  "means not stable, so no lock")
+        f.addRow("Margin / hold", self._pair(self.scan_margin, self.scan_hold))
+        self.scan_btn = QPushButton("Find stable range → lock")
+        self.scan_btn.setToolTip("Sweeps From→To→From and finds the output ranges that are mode-hop free both "
+                                 "ways. If the setpoint is in one with the margin to spare, goes there from below, "
+                                 "holds, and locks if no hop comes; otherwise returns and lists the stable ranges "
+                                 "with the laser shift each needs (tune the hardware, then press again).")
+        self.scan_btn.clicked.connect(self._find_stable)
+        f.addRow(self.scan_btn)
+        self.scan_table = QTableWidget(0, 5)
+        self.scan_table.setHorizontalHeaderLabels(["Output", "Setpoint", "Width", "Tuning", "Frequency (THz)"])
+        self.scan_table.setToolTip("The mode-hop-free stretches of the last scan, widest first. Setpoint: where "
+                                   "it falls, or how far to shift the laser (hardware: + raises its frequency) to centre the setpoint there.")
+        self.scan_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.scan_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.scan_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.scan_table.verticalHeader().setVisible(False)
+        self.scan_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.scan_table.setMinimumHeight(110)
+        self.scan_table.itemSelectionChanged.connect(self._scan_selected)
+        f.addRow(self.scan_table)
+        self.stretch_btn = QPushButton("Lock at selected")
+        self.stretch_btn.setToolTip("Goes to the centre of the chosen stretch (from below), makes the frequency "
+                                    "there the setpoint, and locks with the output kept inside the stretch")
+        self.stretch_btn.clicked.connect(self._lock_selected)
+        self.stretch_btn.setEnabled(False)
+        f.addRow(self.stretch_btn)
+        self._stretches: list[Stretch] = []
+        self._scan_shown = -1
 
         ui = {"show_plots": True, "show_sweep": True, "span": "2 min", "clock": True, **(ui or {})}
         self.show_plots = QCheckBox("Time plots")
@@ -493,6 +527,12 @@ class MainWindow(QMainWindow):
             item.setVisible(False)
             self.sw_plot.addItem(item)
         self._sweep_n = -1
+        self.sw_down = self.sw_plot.plot(pen=pg.mkPen("#bc4c00", width=1), symbol="t", symbolSize=5,
+                                         symbolBrush="#bc4c00", symbolPen=None)
+        self._stretch_regions: list[Any] = []
+        self.sw_plot.addLegend(offset=(10, 10))
+        self.sw_plot.legend.addItem(self.sw_curve, "sweep / up")
+        self.sw_plot.legend.addItem(self.sw_down, "down")
         right = self.right = QWidget()
         rv = QVBoxLayout(right)
         top = QHBoxLayout()
@@ -645,7 +685,36 @@ class MainWindow(QMainWindow):
 
     def sweep_settings(self) -> dict[str, float]:
         return {"v_start": self.sw_start.value(), "v_stop": self.sw_stop.value(), "step": self.sw_step.value(),
-                "settle_s": self.sw_settle.value(), "dwell_s": self.sw_dwell.value()}
+                "settle_s": self.sw_settle.value(), "dwell_s": self.sw_dwell.value(),
+                "margin_v": self.scan_margin.value(), "hold_s": self.scan_hold.value()}
+
+    def _find_stable(self) -> None:
+        if self.engine.snapshot().mode == "sweeping":
+            self.engine.abort()
+            return
+        self._push_settings()
+        target = self.set_thz.value()
+        if not target:
+            self.message_label.setText("set a setpoint first")
+            return
+        self.engine.find_stable(self.sw_start.value(), self.sw_stop.value(), self.sw_step.value(),
+                                self.sw_settle.value(), self.sw_dwell.value(), target,
+                                self.scan_margin.value(), self.scan_hold.value())
+
+    def _selected_stretch(self) -> Stretch | None:
+        rows = {i.row() for i in self.scan_table.selectedIndexes()}
+        return self._stretches[rows.pop()] if len(rows) == 1 and 0 <= min(rows) < len(self._stretches) else None
+
+    def _scan_selected(self) -> None:
+        self.stretch_btn.setEnabled(self._selected_stretch() is not None and self.engine.snapshot().mode == "idle")
+        self._sweep_n = -1
+        self._scan_shown = -1  # redraw: the chosen stretch is darker
+
+    def _lock_selected(self) -> None:
+        st = self._selected_stretch()
+        if st is not None:
+            self._push_settings()
+            self.engine.lock_stretch(st)
 
     def _current_settings(self) -> LockSettings:
         return replace(self.engine.settings(), setpoint_thz=self.set_thz.value(), kp=self.kp.value(),
@@ -725,6 +794,12 @@ class MainWindow(QMainWindow):
         self.auto_btn.setText("Abort" if sweeping else "Auto-lock to setpoint")
         self.sweep_btn.setEnabled(snap.mode in ("idle", "sweeping"))
         self.auto_btn.setEnabled(snap.mode in ("idle", "sweeping"))
+        self.scan_btn.setText("Abort" if sweeping else "Find stable range → lock")
+        self.scan_btn.setEnabled(snap.mode in ("idle", "sweeping"))
+        self.stretch_btn.setEnabled(snap.mode == "idle" and self._selected_stretch() is not None)
+        if (snap.message.startswith(("find stable range: locked", "locked at ")) and snap.message != self._shown_cal):
+            self._shown_cal = snap.message
+            self._show_settings()
         self._refresh_sweep()
         self.manual.setEnabled(snap.mode == "idle")
         self.cal_btn.setText("Abort calibration" if snap.mode == "calibrating" else "Calibrate tuning")
@@ -839,7 +914,66 @@ class MainWindow(QMainWindow):
             b.setVisible(k < len(lines))
         self.hop_dots.setData([e.t - self._t0 for e in shown], [e.volts for e in shown])
 
+    def _refresh_scan(self) -> bool:
+        """Draws the last find-stable-range scan (both directions, the stable stretches) and fills the table.
+        Returns whether there is one (then the plain sweep's drawing is left alone)."""
+        seq, scan = self.engine.scan_data()
+        if scan is None:
+            if self._scan_shown != -2:
+                self._scan_shown = -2
+                self._sweep_n = -1  # the plain sweep redraws its curve
+                self.sw_down.setData([], [])
+                self._set_stretches([], None)
+            return False
+        if seq == self._scan_shown:
+            return True
+        self._scan_shown = seq
+        ref = self.set_thz.value() or scan.request.target_thz
+        for curve, pts in ((self.sw_curve, scan.up), (self.sw_down, scan.down)):
+            good = [p for p in pts if p.thz is not None]
+            curve.setData([p.volts for p in good], [((p.thz or 0.0) - ref) * 1e12 for p in good])
+        for line in self._sw_hop_lines:
+            self.sw_plot.removeItem(line)
+        self._sw_hop_lines = []
+        self.sw_choice.setVisible(scan.choice is not None and scan.choice.target_v is not None)
+        if scan.choice is not None and scan.choice.target_v is not None:
+            self.sw_choice.setValue(scan.choice.target_v)
+        self.sw_range.setVisible(False)
+        self._set_stretches(scan.stretches, scan.choice)
+        return True
+
+    def _set_stretches(self, stretches: list[Stretch], choice: Stretch | None) -> None:
+        picked = self._selected_stretch()
+        for item in self._stretch_regions:
+            self.sw_plot.removeItem(item)
+        self._stretch_regions = []
+        for st in stretches:
+            dark = st == choice or st == picked
+            region = pg.LinearRegionItem((st.v_lo, st.v_hi), movable=False,
+                                         brush=(26, 127, 55, 70 if dark else 25), pen=pg.mkPen(None))
+            region.setZValue(-20)
+            self.sw_plot.addItem(region, ignoreBounds=True)
+            self._stretch_regions.append(region)
+        if stretches == self._stretches:
+            return
+        self._stretches = list(stretches)
+        self.scan_table.blockSignals(True)
+        self.scan_table.setRowCount(len(stretches))
+        for row, st in enumerate(stretches):
+            if st.target_v is not None:
+                where = f"in: {st.target_v:.3f} V, {st.room_v:.2f} V room"
+            else:
+                where = f"shift {st.shift_mhz / 1e3:+.2f} GHz"
+            cells = (f"{st.v_lo:.2f}–{st.v_hi:.2f} V", where, f"{st.width_mhz / 1e3:.2f} GHz",
+                     f"{st.mhz_per_v:+.0f} MHz/V", f"{st.f_lo:.6f}–{st.f_hi:.6f}")
+            for col, text in enumerate(cells):
+                self.scan_table.setItem(row, col, QTableWidgetItem(text))
+        self.scan_table.clearSelection()
+        self.scan_table.blockSignals(False)
+
     def _refresh_sweep(self) -> None:
+        if self._refresh_scan():
+            return
         points, choice = self.engine.sweep_data()
         key = len(points) * 2 + (choice is not None)
         if key == self._sweep_n:

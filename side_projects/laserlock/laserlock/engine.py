@@ -88,6 +88,10 @@ class Engine:
         self._sweep_request: SweepRequest | None = None
         self._sweep_points: list[SweepPoint] = []
         self._sweep_choice: LockPoint | None = None
+        self._scan_request: ScanRequest | None = None
+        self._goto_request: Stretch | None = None
+        self._scan: ScanResult | None = None
+        self._scan_seq = 0  # +1 whenever the scan's data change (the window redraws then)
         self.log_dir = log_dir
         self._csv: csv.writer | None = None  # type: ignore[valid-type]
         self._csv_file = None
@@ -166,6 +170,33 @@ class Engine:
                 self._abort.clear()
                 self._mode, self._message = "sweeping", "sweep: starting"  # at once, so no one sees "idle" in between
 
+    def find_stable(self, v_lo: float, v_hi: float, step: float, settle_s: float, dwell_s: float,
+                    target_thz: float, margin_v: float = 0.3, hold_s: float = 5.0) -> None:
+        """Sweeps v_lo → v_hi → v_lo and finds the stretches that are mode-hop free both ways. If `target_thz`
+        lies in one with at least `margin_v` to either side, goes there from below, watches for `hold_s` that
+        no hop comes, and locks. Otherwise (or if a hop comes) it stays unlocked, back where it started, and
+        `scan_data()` lists the stretches with the shift the laser needs to bring the target to each one's
+        centre."""
+        with self._lock:
+            if self._mode == "idle" and step > 0:
+                lo, hi = sorted((v_lo, v_hi))
+                self._scan_request = ScanRequest(lo, hi, step, settle_s, dwell_s, target_thz, margin_v, hold_s)
+                self._abort.clear()
+                self._mode, self._message = "sweeping", "find stable range: starting"
+
+    def lock_stretch(self, stretch: Stretch) -> None:
+        """Goes to the centre of a stable stretch (from below, as the scan's up sweep), takes the frequency
+        there as the setpoint, and locks with the output kept inside the stretch."""
+        with self._lock:
+            if self._mode == "idle":
+                self._goto_request = stretch
+                self._abort.clear()
+                self._mode, self._message = "sweeping", "going to the stretch"
+
+    def scan_data(self) -> tuple[int, ScanResult | None]:
+        with self._lock:
+            return self._scan_seq, self._scan
+
     def sweep_data(self) -> tuple[list[SweepPoint], LockPoint | None]:
         with self._lock:
             return list(self._sweep_points), self._sweep_choice
@@ -220,6 +251,12 @@ class Engine:
                     continue
                 if self._sweep_request is not None:
                     self._sweep(self._sweep_request)
+                    continue
+                if self._scan_request is not None:
+                    self._find_stable(self._scan_request)
+                    continue
+                if self._goto_request is not None:
+                    self._lock_stretch(self._goto_request)
                     continue
                 self._wavemeter_timing()
                 self._tick()
@@ -389,6 +426,8 @@ class Engine:
             self._mode, self._state = "sweeping", "sweeping"
             self._sweep_points = []
             self._sweep_choice = None
+            self._scan = None
+            self._scan_seq += 1
         v_back = self._volts
         result = "sweep aborted"
         locked = False
@@ -456,6 +495,152 @@ class Engine:
             log.info("%s", result)
 
 
+    # ---------------------------------------------------------------- find a stable range
+
+    def _scan_leg(self, vs: list[float], req: ScanRequest, name: str, into: list[SweepPoint]) -> bool:
+        for i, v in enumerate(vs):
+            if self._abort.is_set():
+                return False
+            self._volts = self.out.set(v)
+            self._collect(req.settle_s)
+            point = sweep_point(self._volts, self._collect(req.dwell_s))
+            with self._lock:
+                into.append(point)
+                self._scan_seq += 1
+                self._message = f"find stable range: {name} {i + 1}/{len(vs)}: {v:.3f} V"
+        return True
+
+    def _hold_test(self, seconds: float, expect_thz: float, limit_mhz: float) -> str | None:
+        """Watches the frequency for `seconds`; returns why it isn't stable, or None."""
+        hops0 = self._hop_count
+        far = 0
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not self._abort.is_set():
+            for f in self._collect(min(0.5, max(end - time.monotonic(), 0.0))):
+                if abs(f - expect_thz) * 1e6 > limit_mhz:
+                    far += 1
+            if self._hop_count != hops0:
+                return "a mode hop came while holding"
+            if far >= 3:
+                return f"the frequency left ±{limit_mhz:.0f} MHz of the expected while holding"
+            self._set_progress(f"find stable range: holding, {max(end - time.monotonic(), 0):.0f} s left")
+        return "aborted" if self._abort.is_set() else None
+
+    def _engage_in(self, stretch: Stretch, setpoint_thz: float, extra_capture_mhz: float) -> None:
+        update = statistics.median(self._periods) if self._periods else 0.1
+        sign, kp, ki = suggest_gains(stretch.mhz_per_v, update)
+        with self._lock:
+            self._settings = replace(self._settings, setpoint_thz=setpoint_thz, sign=sign, kp=kp, ki=ki,
+                                     v_min=stretch.v_lo, v_max=stretch.v_hi,
+                                     capture_mhz=max(self._settings.capture_mhz, extra_capture_mhz))
+            self.pi.s = replace(self._settings)
+            self.pi.engage(self._volts)
+            self._mode, self._state = "locked", "locked"
+
+    def _find_stable(self, req: ScanRequest) -> None:
+        with self._lock:
+            self._scan_request = None
+            self._mode, self._state = "sweeping", "sweeping"
+            self._scan = ScanResult(req, [], [], [], None, "")
+            self._scan_seq += 1
+            scan = self._scan
+            self._sweep_points, self._sweep_choice = [], None
+        v_back = self._volts
+        result = "find stable range: aborted"
+        locked = False
+        try:
+            if not self.out.output_on():
+                result = "the DG1022's output is off: switch it on at the front panel first"
+                return
+            lo, hi = max(req.v_lo, HARD_V_MIN), min(req.v_hi, HARD_V_MAX)
+            n = max(int(round((hi - lo) / req.step)), 2)
+            vs = [round(lo + (hi - lo) * i / n, 4) for i in range(n + 1)]
+            self._set_progress(f"find stable range: ramping to {vs[0]:.3f} V")
+            self._ramp_to(vs[0])
+            if not self._scan_leg(vs, req, "up", scan.up) or not self._scan_leg(vs[::-1], req, "down", scan.down):
+                return
+            stretches = stable_stretches(scan.up, scan.down, req.target_thz)
+            choice = next((st for st in stretches if st.target_v is not None and st.room_v >= req.margin_v), None)
+            with self._lock:
+                self._scan = scan = ScanResult(req, scan.up, scan.down, stretches, choice, "")
+                self._scan_seq += 1
+            if not stretches:
+                result = "find stable range: no mode-hop-free stretch of 3 points or more in the range"
+                return
+            if choice is None:
+                near = [st for st in stretches if st.target_v is not None]
+                why = (f"the setpoint is in {near[0].v_lo:.2f}–{near[0].v_hi:.2f} V but only {near[0].room_v:.2f} V "
+                       f"from its edge (margin {req.margin_v:.2f} V)") if near else "the setpoint isn't in a stable stretch"
+                best = stretches[0]
+                result = (f"find stable range: {why}. Widest: {best.v_lo:.2f}–{best.v_hi:.2f} V, "
+                          f"{best.width_mhz / 1e3:.1f} GHz; shift the laser {best.shift_mhz / 1e3:+.2f} GHz to centre "
+                          f"the setpoint in it (all {len(stretches)} in the table)")
+                return
+            assert choice.target_v is not None
+            self._set_progress(f"find stable range: approaching {choice.target_v:.4f} V from below")
+            self._ramp_to(choice.v_lo)
+            self._ramp_to(choice.target_v)
+            self._collect(req.settle_s + 0.3)
+            limit = max(5 * abs(choice.mhz_per_v) * req.step, HOP_MIN_MHZ)
+            failed = self._hold_test(req.hold_s, req.target_thz, limit)
+            if failed is not None:
+                result = f"find stable range: not locked, {failed} at {choice.target_v:.4f} V"
+                return
+            self._engage_in(choice, req.target_thz, 2 * abs(choice.mhz_per_v) * req.step)
+            locked = True
+            result = (f"find stable range: locked at {choice.target_v:.4f} V in {choice.v_lo:.2f}–{choice.v_hi:.2f} V "
+                      f"({choice.width_mhz / 1e3:.1f} GHz hop-free, {choice.room_v:.2f} V room; tuning "
+                      f"{choice.mhz_per_v:+.0f} MHz/V)")
+        finally:
+            self._finish_scan(locked, v_back, result)
+
+    def _finish_scan(self, locked: bool, v_back: float, result: str) -> None:
+        if not locked:
+            if abs(self._volts - v_back) > 5e-5 and "output is off" not in result:
+                self._set_progress("returning")
+                self._abort.clear()
+                self._ramp_to(v_back)
+            with self._lock:
+                self._mode, self._state = "idle", "idle"
+        with self._lock:
+            self._message = result
+            if self._scan is not None:
+                self._scan = replace(self._scan, message=result)
+                self._scan_seq += 1
+        log.info("%s", result)
+
+    def _lock_stretch(self, stretch: Stretch) -> None:
+        with self._lock:
+            self._goto_request = None
+            self._mode, self._state = "sweeping", "sweeping"
+        v_back = self._volts
+        result = "aborted"
+        locked = False
+        try:
+            centre = (stretch.v_lo + stretch.v_hi) / 2
+            self._set_progress(f"going to {centre:.3f} V from below")
+            self._ramp_to(stretch.v_lo)
+            self._ramp_to(centre)
+            self._collect(0.5)
+            vals = self._collect(1.0)
+            if self._abort.is_set():
+                return
+            if len(vals) < 3:
+                result = "lock at stretch: too few readings"
+                return
+            f = statistics.median(vals)
+            expect = stretch.f_at(centre)
+            if abs(f - expect) * 1e6 > max(abs(stretch.mhz_per_v) * 0.5, HOP_MIN_MHZ):
+                result = (f"lock at stretch: the laser reads {(f - expect) * 1e6:+.0f} MHz from the scan there "
+                          f"(another mode, or the hardware moved): scan again")
+                return
+            self._engage_in(stretch, round(f, 7), 2 * HOP_MIN_MHZ)
+            locked = True
+            result = f"locked at {centre:.4f} V, setpoint {f:.7f} THz (stretch {stretch.v_lo:.2f}–{stretch.v_hi:.2f} V)"
+        finally:
+            self._finish_scan(locked, v_back, result)
+
+
 POLL_S = 0.01  # the wavemeter is polled every 10 ms (it measures every ~40 ms here)
 RAMP_STEP_V = 0.05  # V per write when ramping (one write per 100 ms: 0.5 V/s)
 HOP_MIN_MHZ = 300.0  # a jump between sweep points at least this big (and well off the trend) is a mode hop
@@ -476,7 +661,8 @@ class SweepPoint:
     volts: float
     thz: float | None  # median of the largest group of readings within 1 GHz (drops the far outliers)
     spread_mhz: float | None
-    n: int
+    n: int  # readings in the largest group
+    total: int = 0  # readings taken (0: unknown)
 
 
 @dataclass(frozen=True)
@@ -489,13 +675,13 @@ class LockPoint:
 
 def sweep_point(volts: float, vals: list[float]) -> SweepPoint:
     if not vals:
-        return SweepPoint(volts, None, None, 0)
+        return SweepPoint(volts, None, None, 0, 0)
     # the largest group of readings within 1 GHz of each other (the median of two far groups is in neither)
     groups = [[w for w in vals if abs(w - v) < 1e-3] for v in vals]
     near = max(groups, key=len)
     med = statistics.median(near)
     spread = statistics.pstdev(near) * 1e6 if len(near) > 1 else 0.0
-    return SweepPoint(volts, med, spread, len(near))
+    return SweepPoint(volts, med, spread, len(near), len(vals))
 
 
 def split_sweep(points: list[SweepPoint]) -> tuple[list[SweepPoint], list[tuple[int, int]], list[float], float]:
@@ -555,3 +741,124 @@ def choose_lock_point(points: list[SweepPoint], target_thz: float) -> LockPoint 
             if best is None or room > best[0]:
                 best = (room, cand)
     return None if best is None else best[1]
+
+
+
+@dataclass(frozen=True)
+class ScanRequest:
+    v_lo: float
+    v_hi: float
+    step: float
+    settle_s: float
+    dwell_s: float
+    target_thz: float
+    margin_v: float
+    hold_s: float
+
+
+@dataclass(frozen=True)
+class Stretch:
+    """A range of output that was mode-hop free sweeping both up and down."""
+
+    v_lo: float
+    v_hi: float
+    f_lo: float  # THz, over both directions
+    f_hi: float
+    mhz_per_v: float  # fitted tuning slope
+    f_mid: float  # THz, the fit at the stretch's centre
+    target_v: float | None  # where the target is crossed (up sweep), if it is
+    room_v: float  # from target_v to the nearer end (0 if not crossed)
+    shift_mhz: float  # the laser shift that would put the target at the stretch's centre
+
+    @property
+    def width_mhz(self) -> float:
+        return (self.f_hi - self.f_lo) * 1e6
+
+    def f_at(self, v: float) -> float:
+        return self.f_mid + self.mhz_per_v * (v - (self.v_lo + self.v_hi) / 2) * 1e-6
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    request: ScanRequest
+    up: list[SweepPoint]
+    down: list[SweepPoint]  # in the order measured (high to low)
+    stretches: list[Stretch]  # widest first
+    choice: Stretch | None
+    message: str
+
+
+def _cross(pts: list[SweepPoint], target: float) -> float | None:
+    for a, b in zip(pts, pts[1:]):
+        if a.thz is None or b.thz is None or a.thz == b.thz:
+            continue
+        if min(a.thz, b.thz) <= target <= max(a.thz, b.thz):
+            return a.volts + (target - a.thz) / (b.thz - a.thz) * (b.volts - a.volts)
+    return None
+
+
+def stable_stretches(up: list[SweepPoint], down: list[SweepPoint], target_thz: float,
+                     min_points: int = 3) -> list[Stretch]:
+    """The ranges that are mode-hop free in both directions, widest (in frequency) first.
+
+    A voltage is stable when both sweeps read one mode there (most readings in one group) and the same one
+    (up and down within a hop of each other: hysteresis is fine, another mode isn't); two neighbours are
+    joined when neither sweep jumped between them (more than 5x the typical step and at least HOP_MIN_MHZ
+    off the trend)."""
+    by_v = {round(p.volts, 4): p for p in down}
+    pairs = [(u, by_v.get(round(u.volts, 4))) for u in sorted(up, key=lambda p: p.volts)]
+    steps = [(b.thz - a.thz) * 1e6 for leg in (up, down) for a, b in zip(sorted(leg, key=lambda p: p.volts),
+                                                                         sorted(leg, key=lambda p: p.volts)[1:])
+             if a.thz is not None and b.thz is not None]
+    if not steps:
+        return []
+    typical = statistics.median(steps)
+    limit = max(5 * abs(typical), HOP_MIN_MHZ)
+
+    def one_mode(p: SweepPoint | None) -> bool:
+        return p is not None and p.thz is not None and (p.total == 0 or p.n >= 0.8 * p.total)
+
+    def good(i: int) -> bool:
+        u, d = pairs[i]
+        return one_mode(u) and one_mode(d) and abs((u.thz or 0) - (d.thz or 0)) * 1e6 < limit  # type: ignore[union-attr]
+
+    def joined(i: int) -> bool:
+        for k in (0, 1):
+            a, b = pairs[i][k], pairs[i + 1][k]
+            assert a is not None and b is not None and a.thz is not None and b.thz is not None
+            if abs((b.thz - a.thz) * 1e6 - typical) >= limit:
+                return False
+        return True
+
+    runs: list[tuple[int, int]] = []
+    i = 0
+    while i < len(pairs):
+        if not good(i):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(pairs) and good(j + 1) and joined(j):
+            j += 1
+        if j - i + 1 >= min_points:
+            runs.append((i, j))
+        i = j + 1
+    out: list[Stretch] = []
+    for a, b in runs:
+        ups = [pairs[k][0] for k in range(a, b + 1)]
+        downs = [pairs[k][1] for k in range(a, b + 1)]
+        vs = [p.volts for p in ups]
+        mids = [((u.thz or 0) + (d.thz or 0)) / 2 for u, d in zip(ups, downs)]  # type: ignore[union-attr]
+        fit = statistics.linear_regression(vs, [(m - mids[0]) * 1e6 for m in mids])
+        v_lo, v_hi = vs[0], vs[-1]
+        vc = (v_lo + v_hi) / 2
+        f_mid = mids[0] + (fit.intercept + fit.slope * vc) * 1e-6
+        every = [p.thz for p in ups + downs if p is not None and p.thz is not None]
+        tv = _cross(ups, target_thz)
+        down_crosses = _cross(sorted((d for d in downs if d is not None), key=lambda p: p.volts), target_thz)
+        if tv is not None and down_crosses is None:
+            tv = None  # only one direction reaches it: too close to the edge
+        room = min(tv - v_lo, v_hi - tv) if tv is not None else 0.0
+        out.append(Stretch(v_lo, v_hi, min(every), max(every), fit.slope, f_mid, tv, room,
+                           (target_thz - f_mid) * 1e6))
+    out.sort(key=lambda st: -st.width_mhz)
+    return out
