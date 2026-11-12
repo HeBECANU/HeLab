@@ -1041,3 +1041,39 @@ def test_mini_window_menu_and_pause(tmp_path: Any) -> None:
         win.close()
     finally:
         eng.stop()
+
+
+def test_hover_shows_time_and_value(tmp_path: Any) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtCore import QPointF
+    from PyQt6.QtWidgets import QApplication
+
+    from laserlock.gui import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    laser = SimLaser(f0_thz=F0, seed=17)
+    eng = Engine(SimWavemeter(laser), SimDG1022(laser, volts=2.5), LockSettings(setpoint_thz=F0 + 50e-6))
+    win = MainWindow(eng, {"step_v": 0.05, "settle_s": 0.5, "average_s": 0.5}, lambda s, c: None)
+    eng.start()
+    try:
+        win.show()
+        end = time.monotonic() + 1.2
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.02)
+        win._refresh()
+        win._draw_time()
+        xs, ys = win.v_curve.getData()
+        x = float(xs[len(xs) // 2])
+        vb = win.v_plot.getViewBox()
+        win._hovered(vb.mapViewToScene(QPointF(x, float(ys[0]))), [win.err_plot, win.v_plot])
+        text, dot = win._hover[win.v_plot]
+        assert text.isVisible() and dot.isVisible()
+        shown = text.toPlainText().split("\n")
+        assert shown[0] == win._time_text(x) and shown[1] == "2.5000 V"
+        assert not win._hover[win.err_plot][0].isVisible()
+        win._hide_hover()
+        assert not text.isVisible()
+        win.close()
+    finally:
+        eng.stop()

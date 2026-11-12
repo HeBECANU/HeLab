@@ -71,6 +71,7 @@ anything for what it does. Which panels are shut, and the input lock, are rememb
 **Mini window** swaps to a small always-on-top window with just the state, error and output (the lock keeps
 running); its **Full** button, or closing it, brings the full window back. Numbers are in a monospaced font.
 
+**Hover over a plot** for the nearest reading's time and value (on the sweep: output and frequency).
 **Right-click on a plot** offers: Resume (follow the newest readings, axes on auto), Pause, the y ranges, and
 Export (image or CSV). When the plots are paused, the Pause button turns amber and reads **▶ Resume**.
 

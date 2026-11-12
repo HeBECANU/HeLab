@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (QAbstractItemView, QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox,
                              QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
@@ -62,15 +62,17 @@ def mono_label(label: QLabel, size: float | None = None, bold: bool = False) -> 
 
 
 def light_grid(plot: Any) -> None:
-    """A light-grey grid on the major ticks only: showGrid also draws the minor ticks' lines, which cost about
-    40 % of a core at 5 redraws a second (2026-11-11)."""
+    """A light-grey grid: labelled major lines about every 60 px and fainter minor ones between them.
+    (pyqtgraph's showGrid at its default density cost about 40 % of a core at 5 redraws a second, 2026-11-11;
+    this draws far fewer lines.)"""
     for side in ("left", "bottom"):
         axis = plot.getAxis(side)
-        axis.setTickPen(pg.mkPen("#d8d8d8"))
+        axis.setTickPen(pg.mkPen("#dfe2e5"))
         axis.setTextPen(pg.mkPen("k"))
         axis.setPen(pg.mkPen("#888"))
         axis.setGrid(255)
-        axis.setStyle(maxTickLevel=0, tickFont=mono())  # major lines only
+        axis.setTickDensity(1.6)
+        axis.setStyle(maxTickLevel=0, tickFont=mono(), tickLength=-6)
 
 
 HOP_COLOUR = "#cf222e"
@@ -190,9 +192,12 @@ class TimeAxis(pg.AxisItem):
         span = maxVal - minVal
         if span <= 0 or size <= 0:
             return [(1.0, 0.0)]
-        want = span / max(size / 90.0, 1.0)  # about one label per 90 px
-        major = next((s for s in self.STEPS if s >= want), self.STEPS[-1])
-        return [(float(major), 0.0)]
+        want = span / max(size / 70.0, 1.0)  # about one label per 70 px
+        k = next((i for i, s in enumerate(self.STEPS) if s >= want), len(self.STEPS) - 1)
+        major = self.STEPS[k]
+        minor = next((m for m in reversed(self.STEPS[:k]) if major / m in (2, 3, 4, 5, 6) and major / m * 12 <= size / 4),
+                     None)  # a step that divides the major one, at least ~12 px apart
+        return [(float(major), 0.0)] + ([(float(minor), 0.0)] if minor else [])
 
     def tickStrings(self, values: list[float], scale: float, spacing: float) -> list[str]:
         if not self.clock:
@@ -393,6 +398,16 @@ class Section(QFrame):
 
     def full(self, widget: QWidget) -> None:
         self.form.addRow(widget)
+
+
+class HoverSlot:
+    """A plot widget's mouse-move slot: hands the position to the window with that widget's plots."""
+
+    def __init__(self, window: Any, plots: list[Any]) -> None:
+        self.window, self.plots = window, plots
+
+    def __call__(self, args: Any) -> None:
+        self.window._hovered(args[0], self.plots)
 
 
 class PlotMenu:
@@ -961,6 +976,28 @@ class MainWindow(QMainWindow):
             vb.raiseContextMenu = PlotMenu(self, vb)
         for plot in (self.err_plot, self.v_plot, self.comb, self.sw_plot):
             plot.hideButtons()  # the "A" button: auto is in the toolbar and the menu
+        # hover: the nearest reading's time and value, at the cursor
+        self._hover: dict[Any, tuple[Any, Any]] = {}
+        for plot in (self.err_plot, self.v_plot, self.comb, self.sw_plot):
+            text = pg.TextItem(color="#24292f", fill=pg.mkBrush(255, 255, 255, 225), border=pg.mkPen("#d0d7de"),
+                               anchor=(0, 1))
+            text.setFont(mono())
+            dot = pg.ScatterPlotItem(size=9, pen=pg.mkPen("#24292f", width=1.5), brush=None)
+            for item in (text, dot):
+                item.setZValue(50)
+                item.setVisible(False)
+                plot.addItem(item, ignoreBounds=True)
+            self._hover[plot] = (text, dot)
+        self._hover_dot2 = pg.ScatterPlotItem(size=9, pen=pg.mkPen("#24292f", width=1.5), brush=None)
+        self._hover_dot2.setZValue(50)
+        self._hover_dot2.setVisible(False)
+        self.comb_vb.addItem(self._hover_dot2, ignoreBounds=True)
+        self._hover_proxies = []
+        for widget, plots_in in ((self.sep_widget, [self.err_plot, self.v_plot]), (self.comb_widget, [self.comb]),
+                                 (sweep_plots, [self.sw_plot])):
+            self._hover_proxies.append(pg.SignalProxy(widget.scene().sigMouseMoved, rateLimit=30,
+                                                      slot=HoverSlot(self, plots_in)))
+            widget.installEventFilter(self)
         self.sweep_panel = QWidget()
         sv = QVBoxLayout(self.sweep_panel)
         sv.setContentsMargins(0, 0, 0, 0)
@@ -1206,6 +1243,82 @@ class MainWindow(QMainWindow):
         a.triggered.connect(vb.scene().showExportDialog)
         menu.popup(ev.screenPos().toPoint())
         self._menu = menu  # kept alive while shown
+
+    def eventFilter(self, obj: Any, event: Any) -> bool:
+        if event.type() == QEvent.Type.Leave:
+            self._hide_hover()
+        return super().eventFilter(obj, event)
+
+    def _hide_hover(self) -> None:
+        for text, dot in self._hover.values():
+            text.setVisible(False)
+            dot.setVisible(False)
+        self._hover_dot2.setVisible(False)
+
+    def _time_text(self, x: float) -> str:
+        if self.time_kind.currentIndex() == 0:
+            t = self._t0 + x
+            return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 10)}"
+        return f"{x - (self._start - self._t0):.1f} s"
+
+    @staticmethod
+    def _nearest(curve: Any, x: float) -> tuple[float, float] | None:
+        xs, ys = curve.getData()
+        if xs is None or len(xs) == 0:
+            return None
+        i = int(np.clip(np.searchsorted(xs, x), 1, len(xs) - 1)) if len(xs) > 1 else 0
+        if len(xs) > 1 and abs(xs[i - 1] - x) < abs(xs[i] - x):
+            i -= 1
+        return float(xs[i]), float(ys[i])
+
+    def _hovered(self, pos: Any, plots: list[Any]) -> None:
+        """Shows the reading nearest the cursor (in time; on the sweep, in output) with its value. `plots`: the
+        ones in the widget the mouse moved over (each widget has its own scene)."""
+        self._hide_hover()
+        for plot in plots:
+            vb = plot.getViewBox()
+            if not vb.sceneBoundingRect().contains(pos):
+                continue
+            x = vb.mapSceneToView(pos).x()
+            text, dot = self._hover[plot]
+            lines: list[str] = []
+            if plot is self.sw_plot:
+                xs, ys = self.sw_curve.getData()
+                xd, yd = self.sw_down.getData()
+                pts = [(a, b) for a, b in zip(list(xs if xs is not None else []) + list(xd if xd is not None else []),
+                                             list(ys if ys is not None else []) + list(yd if yd is not None else []))]
+                if not pts:
+                    return
+                vx, vy = min(pts, key=lambda q: abs(q[0] - x))
+                lines = [f"{vx:.4f} V", f"{vy / 1e6:+.3f} MHz"]
+                where = (vx, vy)
+            elif plot is self.comb:
+                e = self._nearest(self.c_err, x)
+                v = self._nearest(self.c_v, x)
+                if e is None:
+                    return
+                lines = [self._time_text(e[0]), f"error {e[1] / 1e6:+.3f} MHz"]
+                if v is not None:
+                    lines.append(f"output {v[1]:.4f} V")
+                    self._hover_dot2.setData([v[0]], [v[1]])
+                    self._hover_dot2.setVisible(True)
+                where = e
+            else:
+                curve = self.err_curve if plot is self.err_plot else self.v_curve
+                n = self._nearest(curve, x)
+                if n is None:
+                    return
+                value = f"{n[1] / 1e6:+.3f} MHz" if plot is self.err_plot else f"{n[1]:.4f} V"
+                lines = [self._time_text(n[0]), value]
+                where = n
+            (x0, x1), (y0, y1) = vb.viewRange()
+            text.setAnchor((1 if where[0] > (x0 + x1) / 2 else 0, 0 if where[1] > (y0 + y1) / 2 else 1))
+            text.setText("\n".join(lines))
+            text.setPos(*where)
+            dot.setData([where[0]], [where[1]])
+            text.setVisible(True)
+            dot.setVisible(True)
+            return
 
     def _sweep_auto(self) -> None:
         self.sw_y.auto.setChecked(True)
