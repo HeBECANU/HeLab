@@ -68,6 +68,10 @@ Q25.4).
   unchanged for 20 s that still fails the format checks is marked damaged (a notification, a status
   in Live and Folder details, no TXY) and never holds up later shots. A file with no rows is never
   skipped silently (Q10.2, "OK"); as built it follows the same 20 s rule (Q23.3 to confirm).
+- **Unreadable** (block 74, Tony in Chat 2026-11-12: "we shouldn't hang on to waiting for file to settle
+  after say 15s timeout?", then "ok 20s"): a settled raw file that stays unreadable and unchanged for 20 s
+  is unconvertible (`read_failed`, "Couldn't be read for N s") and holds up no later shot; it is tried
+  again on a change, a new Live session or Convert this folder….
 
 ## Backends
 
