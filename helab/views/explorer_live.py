@@ -46,9 +46,10 @@ ARM_AUTO_CONVERT = "Arm auto-convert"
 
 
 # Why a raw file isn't converted yet that is no news while Live watches: it was just written, or
-# changed between two checks (``io_ops.convert``'s ``shot_waiting`` reasons). Others wait for good,
-# re-checked only when the file changes (no final newline, off the trigger channel: Q12.5), or
-# until the clock or the share lets it be read (``future``, ``read_failed``).
+# changed between two checks (``io_ops.convert``'s ``shot_waiting`` reasons). Others wait longer: no final
+# newline or off the trigger channel (Q12.5) until the file changes or, unchanged for 20 s, it is damaged; one
+# that couldn't be read until it can or, unchanged for 20 s, it is unconvertible (``read_failed``); one dated
+# ahead until the clock catches up (``future``).
 CONVERT_SETTLING = ("settling", "changed")
 # A raw file unmodified for 20 s that still fails the format checks (``io_ops.convert.DAMAGED``, Q18.5):
 # its ``shot_unconvertible`` reason, and how its message starts (as FolderCache keeps it after auto-convert
@@ -80,6 +81,7 @@ class AutoConvert:
     then reach the data through Live's next check."""
     started_at: float  # Wall time.
     request: bool = False  # A conversion in flight.
+    requested_at: float = -math.inf  # Monotonic: when it was asked for (Live's backstop).
     passes: int = 0
     ended_at: float = -math.inf  # Monotonic: when the last conversion ended.
     todo: int = 0  # The running conversion's shots to convert, and those done.
@@ -106,6 +108,8 @@ class AutoConvert:
     # unconvertible (message), kept while they stay unconvertible, the damaged ones among them (Q18.5)
     # named in ``damaged``; kept beside (shot: reason).
     waiting: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # Wall time: when the last conversion's summary came (what ``waiting`` is as of; None: none yet).
+    summary_at: float | None = None
     unconvertible: dict[str, str] = field(default_factory=dict)
     damaged: set[str] = field(default_factory=set)
     kept: dict[int, str] = field(default_factory=dict)
@@ -120,12 +124,37 @@ class AutoConvert:
         return {name: why for name, why in self.waiting.items() if why[0] not in CONVERT_SETTLING}
 
 
+# ``low_hits_threshold``'s value and the settings store it was read from (the test seam's file, else ""): the Live
+# line, Folder details and each converted shot ask for it, so it is read once, not with each render (a settings
+# read on the GUI thread: 28 of the lab's 70 stall stacks on 2026-11-11), until it is set here or Settings close
+# (``forget_low_hits``: after Save or Reset all). Each test's own settings file reads it afresh.
+_low_hits: tuple[str, int] | None = None
+
+
 def low_hits_threshold() -> int:
-    """Settings: a converted shot with fewer hits notifies (0: never)."""
+    """Settings: a converted shot with fewer hits notifies (0: never). From memory once read."""
+    global _low_hits
+    store = os.environ.get("HELAB_TEST_SETTINGS_FILE", "")
+    if _low_hits is not None and _low_hits[0] == store:
+        return _low_hits[1]
     try:
-        return max(0, int(read_setting(app_settings(), CONVERT_LOW_HITS_SETTING)))
+        value = max(0, int(read_setting(app_settings(), CONVERT_LOW_HITS_SETTING)))
     except (TypeError, ValueError, OverflowError):
-        return int(setting_default(CONVERT_LOW_HITS_SETTING))
+        value = int(setting_default(CONVERT_LOW_HITS_SETTING))
+    _low_hits = (store, value)
+    return value
+
+
+def set_low_hits_threshold(value: int) -> None:
+    """Save the low-count threshold (the Auto-convert menu's Notify…); ``low_hits_threshold`` reads it next."""
+    app_settings().setValue(CONVERT_LOW_HITS_SETTING, value)
+    forget_low_hits()
+
+
+def forget_low_hits() -> None:
+    """The next ``low_hits_threshold`` reads Settings again (the main window, as Settings close)."""
+    global _low_hits
+    _low_hits = None
 
 
 @dataclass(eq=False)
@@ -184,6 +213,8 @@ class LiveSession:
     convert: AutoConvert | None = None
     # A conversion wrote a shot while a check ran: the next check starts at once.
     check_soon: bool = False
+    # Monotonic: when the last check, or save, was asked for (Live's backstop, ``LiveController._live_watch``).
+    check_started_at: float = field(default_factory=time.monotonic)
     # ``latest_shot``'s answer and the data it is of, so the status bar's refresh doesn't search the
     # metadata each time.
     latest: tuple[Dataset, tuple[int, float | None, bool] | None] | None = None
@@ -255,6 +286,11 @@ class LiveController:
     LIVE_REREAD_SECONDS = 300.0
     # How long the tab's Live line and Folder details say that shots were read again.
     LIVE_REREAD_NOTE_SECONDS = 60.0
+    # Live's backstop (``_live_watch``): how often it looks, and how long Live may go without asking for a check
+    # (at least this, and at least ``LIVE_STALL_INTERVALS`` check intervals) before it says so and asks for one.
+    LIVE_WATCH_SECONDS = 10.0
+    LIVE_STALL_SECONDS = 60.0
+    LIVE_STALL_INTERVALS = 4
 
     def __init__(self, explorer: FolderExplorer) -> None:
         # The tab, which owns this controller. Held weakly: a reference cycle would keep the tab's
@@ -272,6 +308,9 @@ class LiveController:
         self._live_timer = QTimer(explorer)
         self._live_timer.setSingleShot(True)
         self._live_timer.timeout.connect(self._live_tick)
+        self._watch_timer = QTimer(explorer)
+        self._watch_timer.setInterval(round(self.LIVE_WATCH_SECONDS * 1000))
+        self._watch_timer.timeout.connect(self._live_watch)
 
     @property
     def explorer(self) -> FolderExplorer:
@@ -361,7 +400,9 @@ class LiveController:
                 "loaded_at", 0):
             session.dataset, session.shots = dataset, set(dataset.data)
         session.on, session.error = True, ""
+        session.check_started_at = time.monotonic()
         self.live = session
+        self._watch_timer.start()
         if path in explorer.model.cache.auto_convert and session.convert is None:
             self._convert_on(session)
         # Live's first check is the folder's check now: an earlier failure's Retry is replaced by Live's.
@@ -383,6 +424,7 @@ class LiveController:
         self.live = None
         session.on = False
         self._live_timer.stop()
+        self._watch_timer.stop()
         if session.request == "check":
             session.request = ""  # Its cancellation below isn't an error.
             explorer.model.cache.cancel(explorer.live_owner, "load", session.path)
@@ -474,7 +516,66 @@ class LiveController:
             self._live_halt(session, "Live check couldn't be queued — Retry")
             return
         session.request, session.reading = "check", False
+        session.check_started_at = time.monotonic()
         explorer._update_activity()
+
+    def stall_seconds(self) -> float:
+        """How long Live may go without asking for a check before its backstop steps in."""
+        return max(self.LIVE_STALL_SECONDS, self.LIVE_STALL_INTERVALS * self.explorer.model.cache.live_interval)
+
+    def _live_watch(self) -> None:
+        """Live's backstop, every ``LIVE_WATCH_SECONDS`` while Live is on: a check, save or conversion Live
+        thinks is in flight with none behind it in ``FolderCache`` (none queued, running or waiting its turn),
+        or no check timed at all, for ``stall_seconds``, is lost; it is logged with Live's state and Live
+        goes on (a check now; the conversion at the next tick). A request still there is its helper's to
+        time out (no progress: IOService), never replaced beside itself. Live stopped on an error waits for
+        Retry, and a converter question for its answer."""
+        explorer = self.explorer
+        session = self.live
+        if explorer.closed or session is None or session.error:
+            return
+        cache, path, now = explorer.model.cache, session.path, time.monotonic()
+        stall = self.stall_seconds()
+        convert = session.convert
+        if (convert is not None and convert.request and now - convert.requested_at > stall
+                and not cache.has_request(explorer.live_owner, "convert", path)):
+            logging.warning("Live auto-convert: no conversion of %s running for %.0f s, though one was asked for; "
+                            "converting again at the next check (%s)", path, now - convert.requested_at,
+                            self._live_state(session))
+            convert.request, convert.todo, convert.done = False, 0, 0
+            convert.ended_at = now
+        if now - session.check_started_at <= stall:
+            return
+        if session.request == "check":
+            lost = not cache.has_request(explorer.live_owner, "load", path)
+        elif session.request == "save":
+            lost = not (cache.has_request(explorer.live_save_owner, "load", path)
+                        or cache.save_deferred(explorer.live_save_owner, path))
+        else:
+            lost = not self._live_timer.isActive()
+        if not lost:
+            return
+        logging.warning("Live: no check started for %.0f s in %s; starting one (%s)", now - session.check_started_at,
+                        path, self._live_state(session))
+        if session.request == "save":
+            # Its shots wait for the next save (none of it runs: nothing to replace).
+            session.unsaved |= session.saving
+            session.saving = set()
+        session.request, session.reading, session.check_soon = "", False, False
+        self._live_next(0.0)
+        self._live_changed()
+
+    def _live_state(self, session: LiveSession) -> str:
+        """Live's state for the log (the backstop's warnings)."""
+        cache = self.explorer.model.cache
+        convert = session.convert
+        state = (f"request={session.request!r}, reading={session.reading}, check_soon={session.check_soon}, "
+                 f"timer={self._live_timer.isActive()}, checks={session.checks}, unsaved={len(session.unsaved)}, "
+                 f"saving={len(session.saving)}, interval={cache.live_interval:g} s")
+        if convert is None:
+            return state + ", auto-convert off"
+        return state + (f", convert request={convert.request}, error={convert.error!r}, question={self.box is not None}, "
+                        f"ended {time.monotonic() - convert.ended_at:.0f} s ago")
 
     def _live_save_blocked(self, session: LiveSession) -> str:
         """Why the folder's new shots can't be saved to the disk cache, in a few words for the
@@ -511,6 +612,7 @@ class LiveController:
         session.saving |= session.unsaved
         session.unsaved = set()
         session.request, session.reading = "save", False
+        session.check_started_at = time.monotonic()
         return True
 
     def _live_recent(self, session: LiveSession) -> list[int]:
@@ -899,7 +1001,7 @@ class LiveController:
             self.explorer, "Low-count notifications",
             "Notify when a converted shot has fewer hits than (0: never):", low_hits_threshold(), 0, 10**9, 100)
         if accepted:
-            app_settings().setValue(CONVERT_LOW_HITS_SETTING, value)
+            set_low_hits_threshold(value)
             self._live_changed()
 
     def _convert_on(self, session: LiveSession) -> None:
@@ -934,13 +1036,16 @@ class LiveController:
         profile = cache.auto_convert_profile(session.path)
         if cache.converting_with(session.path, profile):
             return  # (Convert this folder… of another profile runs: Live's next tick converts, TP-5.)
+        # (Files found unreadable before this auto-convert began are tried again: a new Live session's first look.)
         if not cache.convert(self.explorer.live_owner, session.path, destination=destination,
-                             beside=None if destination is None else False, profile_used=profile):
+                             beside=None if destination is None else False, profile_used=profile,
+                             retry_unreadable_since=convert.started_at):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
             self._convert_stopped(session)
             return
         convert.request, convert.todo, convert.done = True, 0, 0
+        convert.requested_at = time.monotonic()
 
     def _convert_stopped(self, session: LiveSession) -> None:
         """Auto-convert stopped without a helper's failure (one couldn't be queued, or Work Offline refused it):
@@ -1029,6 +1134,7 @@ class LiveController:
         elif kind == "partial_removed":
             logging.info("Live auto-convert removed a leftover temporary TXY: %s", event["file"])
         elif kind == "convert_summary":
+            convert.summary_at = time.time()
             convert.waiting = {str(entry[0]): (str(entry[3]), str(entry[4])) if len(entry) >= 5 else ("", "")
                                for entry in event["waiting"]}
             # (A file skipped as unconvertible isn't sent again: its reason is the folder's, kept by FolderCache.)
@@ -1186,6 +1292,10 @@ class LiveController:
             if entries:
                 lines.append(f"{title} ({len(entries):,}): " + "; ".join(entries[:8])
                              + (" …" if len(entries) > 8 else ""))
+        unreadable = self.explorer.model.cache.convert_unreadable.get(session.path, {})
+        if names := sorted(name for name in convert.unconvertible if name in unreadable):
+            lines.append(f"{', '.join(names[:8])}{' …' if len(names) > 8 else ''}: couldn't be read; Live off and on, "
+                         "or Convert this folder…, tries it again.")
         if convert.stuck():
             lines.append("A waiting file is checked again only when it changes.")
         if (instead := explorer_convert.instead_of_beside(session.path)) is not None:

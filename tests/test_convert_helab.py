@@ -734,6 +734,93 @@ def test_a_raw_file_failing_the_checks_for_20_s_is_damaged_and_holds_nothing_up(
     assert set(reads) <= {5}
 
 
+def test_a_raw_file_unreadable_for_20_s_is_unconvertible_and_holds_nothing_up(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A settled raw file this computer can't read (a writer's or an antivirus's lock, its permissions) never waits
+    for good: read again by each conversion while younger than ``DAMAGED_SECONDS`` since first seen unchanged,
+    then unconvertible (``read_failed``), skipped while unchanged, and tried again once it changes."""
+    whole = raw_bytes(10_000, 20_000)
+    write_raw(source, 1, whole)
+    write_raw(source, 2, whole)
+    reads: list[int] = []
+    original = convert._read_raw
+
+    def locked(shot: Any, beat: Any) -> bytes | str:
+        reads.append(shot.shot)
+        if shot.shot == 1:
+            raise PermissionError(errno.EACCES, "Permission denied", shot.path)
+        return original(shot, beat)
+    monkeypatch.setattr(convert, "_read_raw", locked)
+    request = request_for(source, tmp_path, seen=[])
+    first = run(source, request)  # (Seen for the first time: both wait for a second look.)
+    request["seen"] = summary(first)["waiting"]
+    second = run(source, request)
+    assert [event["shot"] for event in of(second, "shot_converted")] == [2]
+    [waiting] = of(second, "shot_waiting")
+    assert (waiting["shot"], waiting["reason"]) == (1, convert.READ_FAILED)
+    assert waiting["message"].startswith("Couldn't be read: ") and of(second, "shot_unconvertible") == []
+    # Still unreadable, unchanged, 25 s after it was first seen so: unconvertible, with its reason and how long.
+    request["seen"], request["done"] = aged(summary(second)["waiting"], 25), summary(second)["current"]
+    third = run(source, request)
+    [refused] = of(third, "shot_unconvertible")
+    assert (refused["shot"], refused["reason"]) == (1, convert.READ_FAILED)
+    assert refused["message"].startswith("Couldn't be read for 25 s: ") and "Permission denied" in refused["message"]
+    assert [entry[0] for entry in summary(third)["unconvertible"]] == ["d1.txt"] and summary(third)["waiting"] == []
+    # Skipped while unchanged (sent back as skip): not read again, and a later shot converts.
+    write_raw(source, 3, whole)
+    request["seen"], request["skip"] = summary(third)["waiting"], summary(third)["unconvertible"]
+    request["done"] = summary(third)["current"]
+    reads.clear()
+    request["seen"] = summary(run(source, request))["waiting"]
+    fifth = run(source, request)
+    assert [event["shot"] for event in of(fifth, "shot_converted")] == [3] and 1 not in reads
+    # Changed (its writer went on): looked at again.
+    write_raw(source, 1, whole, mtime=OLD + 1)
+    sixth = run(source, request)
+    assert [(event["shot"], event["reason"]) for event in of(sixth, "shot_waiting")] == [(1, raw.CHANGED)]
+
+
+def test_a_raw_file_gone_when_read_waits_and_is_never_given_up_on(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Removed or renamed between the listing and the read (a writer's temporary name): it waits, however long
+    since it was first seen, never unconvertible as a file that can't be read is."""
+    write_raw(source, 1, raw_bytes(10_000, 20_000))
+
+    def gone(shot: Any, beat: Any) -> bytes | str:
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory", shot.path)
+    request = request_for(source, tmp_path, seen=[])
+    request["seen"] = aged(summary(run(source, request))["waiting"], 25)
+    monkeypatch.setattr(convert, "_read_raw", gone)
+    events = run(source, request)
+    assert of(events, "shot_unconvertible") == []
+    [waiting] = of(events, "shot_waiting")
+    assert (waiting["shot"], waiting["reason"]) == (1, raw.CHANGED) and waiting["message"].startswith("Gone when")
+
+
+def test_a_raw_file_past_windows_path_limit_is_unconvertible_not_gone(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows a raw file's path of 260 characters or more fails to open as "not found" (WinError 3): while its
+    folder is there that is the length, never a file gone, so it is unconvertible with the advice (as a TXY's path
+    is), not waited for silently."""
+    write_raw(source, 1, raw_bytes(10_000, 20_000))
+    long_name = str(source / ("x" * 300) / "d1.txt")
+
+    def too_long(shot: Any, beat: Any) -> bytes | str:
+        raise FileNotFoundError(errno.ENOENT, "The system cannot find the path specified", long_name)
+    request = request_for(source, tmp_path, seen=[])
+    request["seen"] = summary(run(source, request))["waiting"]
+    monkeypatch.setattr(convert, "_read_raw", too_long)
+    monkeypatch.setattr(convert, "PLATFORM", "win32")
+    events = run(source, request)
+    [refused] = of(events, "shot_unconvertible")
+    assert (refused["shot"], refused["reason"]) == (1, "failed") and of(events, "shot_waiting") == []
+    assert refused["message"].startswith("Path too long for Windows (")
+    # Its folder gone too (a drive dropped): not a length; it waits, as a file gone does.
+    monkeypatch.setattr(convert, "_isdir", lambda folder, what: False)
+    events = run(source, request)
+    assert of(events, "shot_unconvertible") == [] and [e["reason"] for e in of(events, "shot_waiting")] == [raw.CHANGED]
+
+
 @pytest.mark.parametrize("age, damaged", [(30, False), (61, True)], ids=["30s-waits", "61s-damaged"])
 def test_once_calls_a_file_damaged_only_after_the_once_settle_age(
         source: Path, tmp_path: Path, age: float, damaged: bool) -> None:

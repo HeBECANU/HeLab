@@ -48,6 +48,7 @@ from helab.views.CacheTab import read_result_reuse
 from helab.views.ClockSkewWarning import ClockSkewWarning
 from helab.views.OldLogs import OldLogs
 from helab.views.ElidedLabel import ElidedLabel
+from helab.views import explorer_live
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderInfoWindow import FolderInfoSources, FolderInfoWindow
 from helab.views.HoverMenuToolButton import HoverMenuToolButton
@@ -1331,6 +1332,7 @@ class HelabMainWindow(QMainWindow):
         cache.live_interval = read_live_interval(settings)
         cache.live_autosave_shots = read_live_autosave(settings)
         get_io_service().settle_seconds = read_settle_seconds(settings)
+        explorer_live.forget_low_hits()  # (Read from memory between: Save or Reset all may have changed it.)
 
     def show_status_notice(self, text: str, seconds: float = 10.0) -> None:
         self._status_notice = (text, time.monotonic() + seconds)

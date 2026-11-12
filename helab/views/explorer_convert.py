@@ -559,8 +559,10 @@ class ExplorerConverter:
     def _pass(self, conversion: FolderConversion) -> bool:
         beside = conversion.destination == "beside"
         cache = self.explorer.model.cache
+        # (Files found unreadable before this conversion began are tried again: a lock never loses a shot for good.)
         if not cache.convert(self.owner, conversion.path, destination=None if beside else conversion.destination,
-                             beside=beside, profile_used=conversion.profile):
+                             beside=beside, profile_used=conversion.profile,
+                             retry_unreadable_since=conversion.started_at):
             other = cache.converting_with(conversion.path)
             conversion.error = (f"a conversion of this folder with {other} is running; try again when it ends"
                                 if other else "the conversion couldn't be queued")

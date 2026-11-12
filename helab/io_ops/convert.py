@@ -27,7 +27,11 @@ mtime (each ``waiting`` entry carries that time, sent back in ``seen``; so a sou
 can't make a file paused mid-write look old; ``--once``, one look with no history, goes by the mtime
 alone and wants ``ONCE_SETTLE_SECONDS``, as its settle rule does, Q23.7), is **damaged** (Q18.5): unconvertible (``shot_unconvertible``, reason ``damaged``, the check in
 ``problem``), no TXY, skipped from then on while unchanged, so it never holds up later shots. One the
-converter fails on is unconvertible too.
+converter fails on is unconvertible too. A settled file this computer can't read (a writer's or an antivirus's
+lock, its permissions, a share's error) waits as ``read_failed``, read again by each conversion, until it has
+been unchanged and unreadable that long by the same two clocks: then it is unconvertible too (reason
+``read_failed``, "Couldn't be read for N s: …"), skipped while unchanged; the app tries it again in a new Live
+session and in Convert this folder… (``FolderCache.convert``'s ``retry_unreadable_since``).
 
 **Output** (Q9.3, Q9.7). ``beside`` writes the TXY next to the raw files, only when the folder's
 ``write_beside`` flag is on in the store (or the command line asked, ``beside_confirmed``), and
@@ -118,6 +122,9 @@ COMPUTE_RATE = 10**6
 # timeout 20s"; raw files arrive about one per 30 s).
 DAMAGED_SECONDS = 20.0
 DAMAGED = "damaged"
+# A settled raw file that couldn't be read: its ``shot_waiting`` reason, then (unchanged and still unreadable for
+# DAMAGED_SECONDS) its ``shot_unconvertible`` one.
+READ_FAILED = "read_failed"
 # A shot's ``shot_waiting`` reason when HeLab's TXY were cleared while this conversion ran (A19.2).
 CLEARED = "cleared"
 CLEARED_TEXT = "HeLab's converted TXY were cleared while this conversion ran: converted again at the next check"
@@ -573,19 +580,33 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
             event["problem"] = problem
         send(event)
 
-    def unfinished_or_damaged(shot: _Shot, code: str, message: str) -> None:
-        """A file failing the format checks: damaged once unmodified for DAMAGED_SECONDS by its mtime and
-        since this computer first saw it so, else waiting. ``--once`` (one look, no history) goes by the
-        mtime alone, so it wants ONCE_SETTLE_SECONDS, as its settle rule does (Q23.7), and never less than
-        two looks."""
+    def unchanged_for(shot: _Shot) -> tuple[float, float]:
+        """How long the file has been unmodified, by its mtime and since this computer first saw it so, and
+        how long it may fail a check before it is given up on (DAMAGED_SECONDS). ``--once`` (one look, no
+        history) goes by the mtime alone, so it wants ONCE_SETTLE_SECONDS, as its settle rule does (Q23.7), and
+        never less than two looks."""
         age = now - shot.mtime_ns / 1e9
-        limit = max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS)
-        if seen is not None:
-            age, limit = min(age, now - seen_since(shot)), DAMAGED_SECONDS
+        if seen is None:
+            return age, max(ONCE_SETTLE_SECONDS, DAMAGED_SECONDS)
+        return min(age, now - seen_since(shot)), DAMAGED_SECONDS
+
+    def unfinished_or_damaged(shot: _Shot, code: str, message: str) -> None:
+        """A file failing the format checks: damaged once unchanged for DAMAGED_SECONDS (``unchanged_for``),
+        else waiting."""
+        age, limit = unchanged_for(shot)
         if age >= limit:
             refuse(shot, DAMAGED, f"Damaged: {message} (unchanged for {age:,.0f} s)", code)
         else:
             wait(shot, code, message)
+
+    def unreadable(shot: _Shot, exc: OSError) -> None:
+        """A settled file that couldn't be read: unconvertible once unchanged and unreadable for DAMAGED_SECONDS
+        (``unchanged_for``), so it never waits for good; else waiting, read again by the next conversion."""
+        age, limit = unchanged_for(shot)
+        if age >= limit:
+            refuse(shot, READ_FAILED, f"Couldn't be read for {age:,.0f} s: {exc}")
+        else:
+            wait(shot, READ_FAILED, f"Couldn't be read: {exc}")
 
     for shot in raws:
         stat = (shot.size, shot.mtime_ns)
@@ -790,9 +811,19 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
         read_at[shot.shot] = time.time()
         try:
             data = _read_raw(shot, reader)
+        except FileNotFoundError as exc:
+            handled += 1
+            if (too_long := path_too_long(exc, shot.path)) is not None:
+                # Windows' path limit says "not found" (WinError 3) while the folder is there: never readable as it
+                # is, so said, not waited for (Q23.6, as for the TXY's path).
+                refuse(shot, "failed", too_long)
+                return None
+            # Removed or renamed since it was listed (a writer's temporary name): no lock, nothing to give up on.
+            wait(shot, raw.CHANGED, "Gone when it was read (removed or renamed): looked at again at the next check")
+            return None
         except OSError as exc:
             handled += 1
-            wait(shot, "read_failed", f"Couldn't be read: {exc}")
+            unreadable(shot, exc)
             return None
         if isinstance(data, str):
             handled += 1

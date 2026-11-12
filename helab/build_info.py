@@ -47,9 +47,12 @@ class BuildInfo:
 
 
 def _git(root: Path, *arguments: str) -> str:
+    """``git -C root …``'s output. Read only: ``GIT_OPTIONAL_LOCKS=0`` keeps ``status`` from refreshing the index
+    under its lock, which a timeout's kill would leave behind (every process importing ``helab.utils.constants``
+    asks, and a stale ``index.lock`` stops the user's next commit)."""
     return subprocess.check_output(
         ["git", "-C", str(root), *arguments], stderr=subprocess.DEVNULL,
-        timeout=2, text=True,
+        timeout=2, text=True, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     ).strip()
 
 

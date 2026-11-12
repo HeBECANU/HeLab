@@ -302,8 +302,11 @@ class PlotWorkspace:
         path = dock.property("dataSourcePath")
         if not isinstance(path, str):
             return
-        label = dock.findChild(QLabel, "plot_data_source")
-        if label is None:
+        # (Its wrapper's own children: a plot's own widget tree, often deep, is never searched.)
+        wrapper = dock.widget()
+        label = None if wrapper is None else wrapper.findChild(
+            QLabel, "plot_data_source", Qt.FindChildOption.FindDirectChildrenOnly)
+        if wrapper is None or label is None:
             return
         # The plot's data is the tab's when it holds the same shots, by fingerprint and origin (not by
         # signature: every load of a folder without MATLAB TXY has the same one; plots-1). A plot
@@ -321,14 +324,22 @@ class PlotWorkspace:
         record, warned = dock.property("plotSourceRecord"), dock.property("plotSourceWarnings")
         name = os.path.basename(path.rstrip(os.sep)) or path
         text = " · ".join([f"{prefix}: {name}", *(part for part in parts if isinstance(part, str) and part)])
-        label.setText(text)
-        dock.setProperty("plotSourceText", text)
         tip = record if isinstance(record, str) and record else path
-        label.setToolTip(f"{warned}\n{tip}" if isinstance(warned, str) and warned else tip)  # (Plain: the app wraps it.)
-        error_label = dock.findChild(QLabel, "plot_error")
+        tip = f"{warned}\n{tip}" if isinstance(warned, str) and warned else tip  # (Plain: the app wraps it.)
         error = dock.property("plotError")
+        error_text = f"⚠ {error}" if isinstance(error, str) and error else ""
+        dock.setProperty("plotSourceText", text)
+        # The main window asks with every change of Folder details (many a second while Live converts and
+        # checks): its labels are set only when what they show changes (A73.4 (d): 29 of the lab's stall stacks
+        # were here), kept on their wrapper, which a replaced plot's content replaces (``_wrap_plot``).
+        shown_key = "\x1f".join((text, tip, error_text))
+        if wrapper.property("plotSourceShown") == shown_key:
+            return
+        wrapper.setProperty("plotSourceShown", shown_key)
+        label.setText(text)
+        label.setToolTip(tip)
+        error_label = wrapper.findChild(QLabel, "plot_error", Qt.FindChildOption.FindDirectChildrenOnly)
         if error_label is not None:
-            text = f"⚠ {error}" if isinstance(error, str) and error else ""
-            error_label.setText(text)
-            error_label.setToolTip(text)
-            error_label.setVisible(bool(text))
+            error_label.setText(error_text)
+            error_label.setToolTip(error_text)
+            error_label.setVisible(bool(error_text))

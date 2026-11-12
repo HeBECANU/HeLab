@@ -93,6 +93,46 @@ def test_a_commands_help_is_still_its_own(tmp_path: Path, command: str) -> None:
     assert result.stdout.startswith(f"usage: helab {command} [-h]") and "exit 0" in result.stdout, result.stdout
 
 
+def test_build_infos_git_never_takes_optional_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every process importing ``helab.utils.constants`` asks git for its build info, ``status`` among it: run with
+    ``GIT_OPTIONAL_LOCKS=0`` it never refreshes the index under ``index.lock``, so the 2 s timeout's kill can't
+    leave a stale lock in the checkout (seen in a parallel suite run, and on Ground)."""
+    seen: list[dict[str, str]] = []
+
+    def output(command: list[str], **kwargs: object) -> str:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        seen.append(env)
+        return str(tmp_path) if "--show-toplevel" in command else ""
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(subprocess, "check_output", output)
+    checkout_build_info(tmp_path)
+    assert len(seen) == 4 and all(env.get("GIT_OPTIONAL_LOCKS") == "0" for env in seen)
+
+
+@pytest.mark.skipif(not __import__("shutil").which("git"), reason="needs git")
+def test_build_infos_status_leaves_the_index_alone(tmp_path: Path) -> None:
+    """With a file's stat changed since the index was written, plain ``git status`` rewrites the index (under its
+    lock); ``_git``'s doesn't."""
+    tmp_path = tmp_path / "repo"  # (Its own folder: the test's has conftest's .helab-root.)
+    tmp_path.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    for command in (["init", "-q"], ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", "-C", str(tmp_path), *command], check=True, env=env)
+    (tmp_path / "a.txt").write_text("a")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True, env=env)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "a"], check=True, env=env)
+    index = tmp_path / ".git" / "index"
+    before = index.stat().st_mtime_ns
+    os.utime(tmp_path / "a.txt", ns=(before + 5_000_000_000, before + 5_000_000_000))  # (Stat changed, content not.)
+    os.utime(index, ns=(before, before))
+    assert build_info._git(tmp_path, "status", "--porcelain", "--untracked-files=normal") == ""
+    assert index.stat().st_mtime_ns == before
+    subprocess.run(["git", "-C", str(tmp_path), "status", "--porcelain"], check=True, env=env, capture_output=True)
+    assert index.stat().st_mtime_ns != before  # (The control: plain status does write it.)
+
+
 def test_checkout_git_failure_is_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     def fail(*args: object, **kwargs: object) -> str:

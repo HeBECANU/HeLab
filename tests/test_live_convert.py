@@ -34,7 +34,7 @@ from helab.utils.settings_store import app_settings
 from helab.views import live_launch
 from helab.views.FolderDetailsPanel import FolderDetailsPanel
 from helab.views.FolderExplorer import FolderExplorer
-from helab.views.explorer_live import ARM_AUTO_CONVERT, no_hits_text as live_no_hits
+from helab.views.explorer_live import ARM_AUTO_CONVERT, no_hits_text as live_no_hits, set_low_hits_threshold
 from test_convert_helab import raw_bytes
 from test_live import age_folder, deliver, job_of, next_request, producer, replay, service, write_shot  # noqa: F401
 
@@ -663,7 +663,7 @@ def test_a_conversion_error_stops_auto_convert_until_retry(qtbot: QtBot, service
 
 def test_a_low_count_shot_notifies_once(qtbot: QtBot, service: IOService, tmp_path: Path,
                                         notifier: FakeNotifier) -> None:
-    app_settings().setValue(CONVERT_LOW_HITS_SETTING, 2)
+    app_settings().setValue(CONVERT_LOW_HITS_SETTING, 2)  # (Before its first read: this test's settings file.)
     explorer, path = watching_raw_folder(qtbot, tmp_path)
     cycle(qtbot, explorer, path, tmp_path)
     write_raw(Path(path), 1, raw_bytes(10_000))  # 1 hit: low.
@@ -681,8 +681,8 @@ def test_a_low_count_shot_notifies_once(qtbot: QtBot, service: IOService, tmp_pa
     session.convert.request = True
     explorer.live_control._convert_event(session, converted[0])
     assert len(notifier.sent) == 1 and session.convert.low == 1
-    # 0: never.
-    app_settings().setValue(CONVERT_LOW_HITS_SETTING, 0)
+    # 0: never (set as the Auto-convert menu sets it: read from memory, not with each render).
+    set_low_hits_threshold(0)
     explorer.live_control._convert_event(session, {**converted[0], "shot": 9, "raw_sha256": "x"})
     assert len(notifier.sent) == 1
     text, tooltip = line(explorer)

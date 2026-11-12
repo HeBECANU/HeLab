@@ -38,6 +38,9 @@ if TYPE_CHECKING:
 # Folder checks that list a folder: browse step 1 (names only), browse step 2
 # (``details``, the full scan in the background) and a basic scan.
 SCANS = ("list", "details", "scan")
+# A load's or cached read's answers that end it for its subscribers, its helper stopping there (``io_ops.loading``,
+# ``live``, ``save_held``): its job leaves the job list with them (``FolderCache._answered``), as with a ``loaded``.
+ANSWERS = ("shots_missing", "too_large")
 # The saved fields a listing entry carries for each kind of disk cache record.
 ENTRY_KEYS = {"datasets": ("disk_cached", "cache_info"), "summaries": ("scan_status",),
               "histories": ("scan_history",), "subtrees": ("subtree",), "results": ("results",)}
@@ -346,6 +349,10 @@ class FolderCache(QObject):
         # Why each of a folder's unconvertible raw files can't be converted (``shot_unconvertible``,
         # sent once: later conversions skip the file), kept while it stays unconvertible.
         self.convert_reasons: OrderedDict[str, dict[str, str]] = OrderedDict()
+        # Those among them that couldn't be read (``read_failed``), and when (wall time): skipped while unchanged
+        # by the conversions that began after, tried again by those that began before (``convert``'s
+        # ``retry_unreadable_since``: a new Live session, Convert this folder…).
+        self.convert_unreadable: OrderedDict[str, dict[str, float]] = OrderedDict()
         # Flag saves in flight: job owner → (path, the choice's set_at, who set it).
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
         # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
@@ -1597,7 +1604,7 @@ class FolderCache(QObject):
         return str(running.get("name") or "?")
 
     def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
-                profile_used: DetectorProfile | None = None) -> bool:
+                profile_used: DetectorProfile | None = None, retry_unreadable_since: float | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
         background lane, pausable, refused while working offline: answered ``offline``). Sends
         the folder's last conversion's lists back (``seen``, ``done``, ``kept``, ``skip``; ``seen``
@@ -1607,7 +1614,10 @@ class FolderCache(QObject):
         ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` the folder's flag as this
         memory knows it, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a
         refused beside write); None: as set. The helper still writes beside only while the store's flag is on.
-        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam)."""
+        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam).
+        ``retry_unreadable_since`` (wall time; the asker's start): files found unreadable before it are tried again,
+        not skipped, so a lock (a writer's, an antivirus's) never loses a shot for good; None: skipped while
+        unchanged."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
@@ -1634,7 +1644,9 @@ class FolderCache(QObject):
                 # failed under a backend, is tried again once the user changes where TXY go or the backend
                 # (convert-2: the refusal's advice can be acted on this session).
                 if lists.get("where") == self._convert_where(payload):
-                    payload["skip"] = lists["unconvertible"]
+                    unreadable = self.convert_unreadable.get(path, {})
+                    payload["skip"] = [entry for entry in lists["unconvertible"] if retry_unreadable_since is None
+                                       or unreadable.get(str(entry[0]), math.inf) >= retry_unreadable_since]
             else:
                 # Another profile's current and unconvertible shots, and why a file looked unfinished (its
                 # trigger channel), aren't this one's: checked again. When each waiting file was seen, with its
@@ -1666,6 +1678,11 @@ class FolderCache(QObject):
             self.convert_reasons[job.path] = reasons
             while len(self.convert_reasons) > self.MAX_SNAPSHOTS:
                 self.convert_reasons.popitem(last=False)
+        unreadable = {name: at for name, at in self.convert_unreadable.pop(job.path, {}).items() if name in names}
+        if unreadable:
+            self.convert_unreadable[job.path] = unreadable
+            while len(self.convert_unreadable) > self.MAX_SNAPSHOTS:
+                self.convert_unreadable.popitem(last=False)
 
     def set_folder_prefs(self, path: str, *, no_cache: bool, no_auto_load: bool, remove_cached: bool = False,
                          owner: str = "") -> bool:
@@ -2892,6 +2909,19 @@ class FolderCache(QObject):
                             priority=priority, force=True)
         QTimer.singleShot(0, batch)
 
+    def _answered(self, job: SharedJob, event: dict[str, Any]) -> None:
+        """An answer that ends a request for its subscribers (``ANSWERS``, ``live_unchanged``) ends the job for them,
+        as a ``loaded`` does: off the job list now, its later events (the helper's ``done``, found through
+        ``_producers``) to no one. Its ``done`` can come a drain later (each ``IOService._tick`` drains 8 ms of
+        events); a request asked for meanwhile (a converted shot's next Live check, a Retry, Load anyway) would
+        otherwise join this one (``has_request``) and wait for an answer already given: Live never checked again
+        (the lab, 2026-11-11)."""
+        if self.jobs.get(job.key) is job:
+            del self.jobs[job.key]
+        subscribers, job.subscribers = tuple(job.subscribers.values()), {}
+        for request in subscribers:
+            self.resultReady.emit(request, event)
+
     def _forget_job(self, job: SharedJob) -> None:
         if self.jobs.get(job.key) is job:
             del self.jobs[job.key]
@@ -3134,6 +3164,12 @@ class FolderCache(QObject):
         submitted = self.submit(owner, 0, path, "load", payload, priority=True)
         self.quitSavesChanged.emit()
         return submitted
+
+    def save_deferred(self, owner: str, path: str) -> bool:
+        """Whether ``owner``'s save of ``path`` waits for its turn (``save``: another load or save of the folder
+        runs first). Memory only (Live's backstop)."""
+        waiting = self._deferred_saves.get(self.key(path))
+        return waiting is not None and waiting[0] == owner
 
     def _save_waits(self, path: str) -> bool:
         """A save of ``path`` waits: the folder's data is being written, or another load of it
@@ -4666,6 +4702,9 @@ class FolderCache(QObject):
                 # A Live check from before a mismatch (the folder's epoch moved): fenced like a ``loaded``.
                 self._cancel_job(job)
                 return
+            if kind == "live_unchanged":
+                self._answered(job, event)
+                return
             if kind == "loaded":
                 job.clock.stop()
                 event = {"loaded_at": time.time(), **event}
@@ -4764,6 +4803,17 @@ class FolderCache(QObject):
             self.convert_reasons.setdefault(job.path, {})[str(event["raw_name"])] = str(
                 event.get("message") or event["reason"])
             self.convert_reasons.move_to_end(job.path)
+            if event["reason"] == "read_failed":
+                self.convert_unreadable.setdefault(job.path, {})[str(event["raw_name"])] = time.time()
+                self.convert_unreadable.move_to_end(job.path)
+                while len(self.convert_unreadable) > self.MAX_SNAPSHOTS:
+                    self.convert_unreadable.popitem(last=False)
+            elif (unreadable := self.convert_unreadable.get(job.path)) is not None:
+                # Unconvertible now for another reason. (No empty entry is left: a cancelled conversion sends no
+                # summary to prune it.)
+                unreadable.pop(str(event["raw_name"]), None)
+                if not unreadable:
+                    del self.convert_unreadable[job.path]
         elif job.operation == "invalidate" and kind in ("removed", "admin_result"):
             # Its state was reset when it was submitted; only the cleanup deadline and usage are new.
             self._schedule_sweep(event.get("next_deadline"))
@@ -4778,6 +4828,9 @@ class FolderCache(QObject):
             self._mismatch(job.path, event, "load")
         if kind in ("done", "error", "cancelled"):
             self._forget_job(job)
+        elif job.operation in ("load", "cached") and kind in ANSWERS:
+            self._answered(job, event)  # (A load's, a Live check's or save's, a cached read's: it stopped there.)
+            return
         for request in tuple(job.subscribers.values()):
             self.resultReady.emit(request, event)
         if job.operation == "invalidate" and kind == "done":

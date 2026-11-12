@@ -304,6 +304,10 @@ class ActivitySources:
                 state, text = "running", "saving new shots"
             elif session.unsettled:
                 state, text = "settling", f"waiting for {session.unsettled:,} file{'' if session.unsettled == 1 else 's'} to settle"
+                if (session.checked_at is not None
+                        and wall - session.checked_at > control.stall_seconds()):
+                    # The last check's count, with no check since for longer than Live's backstop allows: when it was.
+                    text += f" (as of {time.strftime('%H:%M:%S', time.localtime(session.checked_at))})"
             else:
                 state, text = "waiting", watching_text(session)
         else:
@@ -332,6 +336,10 @@ class ActivitySources:
             state, status = "running", f"converting {convert.done:,} of {convert.todo:,}"
         elif convert.waiting:
             state, status = "settling", f"waiting for {len(convert.waiting):,} raw file{'' if len(convert.waiting) == 1 else 's'} to settle"
+            if (convert.summary_at is not None
+                    and time.time() - convert.summary_at > explorer.live_control.stall_seconds()):
+                # No conversion since for longer than Live's backstop allows: it says when this was so.
+                status += f" (as of {time.strftime('%H:%M:%S', time.localtime(convert.summary_at))})"
         else:
             state, status = "waiting", f"converted {convert.converted:,} · converts with each check"
         progress = Progress(convert.done, convert.todo, noun="shot") if convert.request and convert.todo else None
