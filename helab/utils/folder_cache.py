@@ -346,6 +346,10 @@ class FolderCache(QObject):
         # Why each of a folder's unconvertible raw files can't be converted (``shot_unconvertible``,
         # sent once: later conversions skip the file), kept while it stays unconvertible.
         self.convert_reasons: OrderedDict[str, dict[str, str]] = OrderedDict()
+        # Those among them that couldn't be read (``read_failed``), and when (wall time): skipped while unchanged
+        # by the conversions that began after, tried again by those that began before (``convert``'s
+        # ``retry_unreadable_since``: a new Live session, Convert this folder…).
+        self.convert_unreadable: OrderedDict[str, dict[str, float]] = OrderedDict()
         # Flag saves in flight: job owner → (path, the choice's set_at, who set it).
         self._pref_writes: dict[str, tuple[str, float, str]] = {}
         # Folder choices being saved (``set_folder_choice``): job owner → folder (a root's change keeps those).
@@ -1597,7 +1601,7 @@ class FolderCache(QObject):
         return str(running.get("name") or "?")
 
     def convert(self, owner: str, path: str, *, destination: str | None = None, beside: bool | None = None,
-                profile_used: DetectorProfile | None = None) -> bool:
+                profile_used: DetectorProfile | None = None, retry_unreadable_since: float | None = None) -> bool:
         """Convert ``path``'s settled raw files to HeLab's TXY (``io_ops.convert``; the helper's
         background lane, pausable, refused while working offline: answered ``offline``). Sends
         the folder's last conversion's lists back (``seen``, ``done``, ``kept``, ``skip``; ``seen``
@@ -1607,7 +1611,10 @@ class FolderCache(QObject):
         ``destination`` (``cache`` or ``temp``) overrides the setting and ``beside`` the folder's flag as this
         memory knows it, for this conversion (A39.5: Folder details' offer; Q38.1: the user's choice after a
         refused beside write); None: as set. The helper still writes beside only while the store's flag is on.
-        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam)."""
+        ``profile_used``: the profile to convert with (None: Settings'; ``auto_convert_profile``'s seam).
+        ``retry_unreadable_since`` (wall time; the asker's start): files found unreadable before it are tried again,
+        not skipped, so a lock (a writer's, an antivirus's) never loses a shot for good; None: skipped while
+        unchanged."""
         from helab.utils import constants
         from helab.utils.settings_store import app_settings
         path = self.key(path)
@@ -1634,7 +1641,9 @@ class FolderCache(QObject):
                 # failed under a backend, is tried again once the user changes where TXY go or the backend
                 # (convert-2: the refusal's advice can be acted on this session).
                 if lists.get("where") == self._convert_where(payload):
-                    payload["skip"] = lists["unconvertible"]
+                    unreadable = self.convert_unreadable.get(path, {})
+                    payload["skip"] = [entry for entry in lists["unconvertible"] if retry_unreadable_since is None
+                                       or unreadable.get(str(entry[0]), math.inf) >= retry_unreadable_since]
             else:
                 # Another profile's current and unconvertible shots, and why a file looked unfinished (its
                 # trigger channel), aren't this one's: checked again. When each waiting file was seen, with its
@@ -1666,6 +1675,11 @@ class FolderCache(QObject):
             self.convert_reasons[job.path] = reasons
             while len(self.convert_reasons) > self.MAX_SNAPSHOTS:
                 self.convert_reasons.popitem(last=False)
+        unreadable = {name: at for name, at in self.convert_unreadable.pop(job.path, {}).items() if name in names}
+        if unreadable:
+            self.convert_unreadable[job.path] = unreadable
+            while len(self.convert_unreadable) > self.MAX_SNAPSHOTS:
+                self.convert_unreadable.popitem(last=False)
 
     def set_folder_prefs(self, path: str, *, no_cache: bool, no_auto_load: bool, remove_cached: bool = False,
                          owner: str = "") -> bool:
@@ -4782,6 +4796,12 @@ class FolderCache(QObject):
             self.convert_reasons.setdefault(job.path, {})[str(event["raw_name"])] = str(
                 event.get("message") or event["reason"])
             self.convert_reasons.move_to_end(job.path)
+            unreadable = self.convert_unreadable.setdefault(job.path, {})
+            if event["reason"] == "read_failed":
+                unreadable[str(event["raw_name"])] = time.time()
+            else:
+                unreadable.pop(str(event["raw_name"]), None)
+            self.convert_unreadable.move_to_end(job.path)
         elif job.operation == "invalidate" and kind in ("removed", "admin_result"):
             # Its state was reset when it was submitted; only the cleanup deadline and usage are new.
             self._schedule_sweep(event.get("next_deadline"))

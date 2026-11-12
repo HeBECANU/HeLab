@@ -205,3 +205,22 @@ def test_lives_tick_waits_for_an_edited_profile_of_the_same_name(qtbot: QtBot, s
     assert not session.convert.error and not session.convert.request  # (Waits: the next tick converts.)
     assert cache.converting_with(path, edited) == "matlab-2019" and cache.converting_with(path, MATLAB_2019) == ""
     explorer.close_cleanup()
+
+
+def test_convert_this_folder_tries_again_the_files_found_unreadable_before_it(
+        qtbot: QtBot, service: IOService, tmp_path: Path, local: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raw file found unreadable (a lock) is skipped while unchanged only by the conversions that began after:
+    Convert this folder… asks with its own start, so it reads such a file again (``FolderCache.convert``'s
+    ``retry_unreadable_since``; Live's new session does the same, ``test_live_stall``)."""
+    explorer, path, _ = raw_folder(qtbot, tmp_path)
+    cache, converter = explorer.model.cache, explorer.converter
+    asked: list[dict[str, Any]] = []
+
+    def convert(*args: Any, **kwargs: Any) -> bool:
+        asked.append(kwargs)
+        return True
+    monkeypatch.setattr(cache, "convert", convert)
+    answer(converter.ask_convert(path), file_tag(cache.convert_profile()), "cache")
+    qtbot.waitUntil(lambda: bool(asked))
+    assert asked[0]["retry_unreadable_since"] == converter.conversions[path].started_at
+    explorer.close_cleanup()

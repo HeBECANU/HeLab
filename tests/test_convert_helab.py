@@ -734,6 +734,52 @@ def test_a_raw_file_failing_the_checks_for_20_s_is_damaged_and_holds_nothing_up(
     assert set(reads) <= {5}
 
 
+def test_a_raw_file_unreadable_for_20_s_is_unconvertible_and_holds_nothing_up(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A settled raw file this computer can't read (a writer's or an antivirus's lock, its permissions) never waits
+    for good: read again by each conversion while younger than ``DAMAGED_SECONDS`` since first seen unchanged,
+    then unconvertible (``read_failed``), skipped while unchanged, and tried again once it changes."""
+    whole = raw_bytes(10_000, 20_000)
+    write_raw(source, 1, whole)
+    write_raw(source, 2, whole)
+    reads: list[int] = []
+    original = convert._read_raw
+
+    def locked(shot: Any, beat: Any) -> bytes | str:
+        reads.append(shot.shot)
+        if shot.shot == 1:
+            raise PermissionError(errno.EACCES, "Permission denied", shot.path)
+        return original(shot, beat)
+    monkeypatch.setattr(convert, "_read_raw", locked)
+    request = request_for(source, tmp_path, seen=[])
+    first = run(source, request)  # (Seen for the first time: both wait for a second look.)
+    request["seen"] = summary(first)["waiting"]
+    second = run(source, request)
+    assert [event["shot"] for event in of(second, "shot_converted")] == [2]
+    [waiting] = of(second, "shot_waiting")
+    assert (waiting["shot"], waiting["reason"]) == (1, convert.READ_FAILED)
+    assert waiting["message"].startswith("Couldn't be read: ") and of(second, "shot_unconvertible") == []
+    # Still unreadable, unchanged, 25 s after it was first seen so: unconvertible, with its reason and how long.
+    request["seen"], request["done"] = aged(summary(second)["waiting"], 25), summary(second)["current"]
+    third = run(source, request)
+    [refused] = of(third, "shot_unconvertible")
+    assert (refused["shot"], refused["reason"]) == (1, convert.READ_FAILED)
+    assert refused["message"].startswith("Couldn't be read for 25 s: ") and "Permission denied" in refused["message"]
+    assert [entry[0] for entry in summary(third)["unconvertible"]] == ["d1.txt"] and summary(third)["waiting"] == []
+    # Skipped while unchanged (sent back as skip): not read again, and a later shot converts.
+    write_raw(source, 3, whole)
+    request["seen"], request["skip"] = summary(third)["waiting"], summary(third)["unconvertible"]
+    request["done"] = summary(third)["current"]
+    reads.clear()
+    request["seen"] = summary(run(source, request))["waiting"]
+    fifth = run(source, request)
+    assert [event["shot"] for event in of(fifth, "shot_converted")] == [3] and 1 not in reads
+    # Changed (its writer went on): looked at again.
+    write_raw(source, 1, whole, mtime=OLD + 1)
+    sixth = run(source, request)
+    assert [(event["shot"], event["reason"]) for event in of(sixth, "shot_waiting")] == [(1, raw.CHANGED)]
+
+
 @pytest.mark.parametrize("age, damaged", [(30, False), (61, True)], ids=["30s-waits", "61s-damaged"])
 def test_once_calls_a_file_damaged_only_after_the_once_settle_age(
         source: Path, tmp_path: Path, age: float, damaged: bool) -> None:

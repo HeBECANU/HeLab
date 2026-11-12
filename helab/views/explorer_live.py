@@ -46,9 +46,10 @@ ARM_AUTO_CONVERT = "Arm auto-convert"
 
 
 # Why a raw file isn't converted yet that is no news while Live watches: it was just written, or
-# changed between two checks (``io_ops.convert``'s ``shot_waiting`` reasons). Others wait for good,
-# re-checked only when the file changes (no final newline, off the trigger channel: Q12.5), or
-# until the clock or the share lets it be read (``future``, ``read_failed``).
+# changed between two checks (``io_ops.convert``'s ``shot_waiting`` reasons). Others wait longer: no final
+# newline or off the trigger channel (Q12.5) until the file changes or, unchanged for 20 s, it is damaged; one
+# that couldn't be read until it can or, unchanged for 20 s, it is unconvertible (``read_failed``); one dated
+# ahead until the clock catches up (``future``).
 CONVERT_SETTLING = ("settling", "changed")
 # A raw file unmodified for 20 s that still fails the format checks (``io_ops.convert.DAMAGED``, Q18.5):
 # its ``shot_unconvertible`` reason, and how its message starts (as FolderCache keeps it after auto-convert
@@ -1008,8 +1009,10 @@ class LiveController:
         profile = cache.auto_convert_profile(session.path)
         if cache.converting_with(session.path, profile):
             return  # (Convert this folder… of another profile runs: Live's next tick converts, TP-5.)
+        # (Files found unreadable before this auto-convert began are tried again: a new Live session's first look.)
         if not cache.convert(self.explorer.live_owner, session.path, destination=destination,
-                             beside=None if destination is None else False, profile_used=profile):
+                             beside=None if destination is None else False, profile_used=profile,
+                             retry_unreadable_since=convert.started_at):
             convert.error = "the conversion couldn't be queued"
             logging.warning("Live auto-convert stopped for %s: %s", session.path, convert.error)
             self._convert_stopped(session)

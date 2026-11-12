@@ -176,3 +176,46 @@ def test_the_backstop_starts_a_check_live_lost(qtbot: QtBot, service: IOService,
     explorer.stop_live(save=False)
     assert not control._watch_timer.isActive()
     explorer.close_cleanup()
+
+
+def test_a_raw_file_live_cant_read_ends_unconvertible_and_a_new_session_tries_it_again(
+        qtbot: QtBot, service: IOService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raw file locked for good (a writer's or an antivirus's lock) stops being waited on: unconvertible
+    (``read_failed``) once unchanged and unreadable for ``DAMAGED_SECONDS``, said on the Live line and in its
+    tooltip, skipped by this auto-convert while unchanged, and tried again by the next (a new Live session, or
+    auto-convert off and on), so a lock never loses a shot for good."""
+    monkeypatch.setattr(convert, "DAMAGED_SECONDS", 0.0)  # (At its first failed read.)
+    original = convert._read_raw
+
+    def locked(shot: Any, beat: Any) -> bytes | str:
+        if shot.shot == 1:
+            raise PermissionError(13, "Permission denied", shot.path)
+        return original(shot, beat)
+    monkeypatch.setattr(convert, "_read_raw", locked)
+    explorer, path = watching_raw_folder(qtbot, tmp_path)
+    cache = explorer.model.cache
+    session = explorer.live
+    assert session is not None and session.convert is not None
+    cycle(qtbot, explorer, path, tmp_path)  # (Records.)
+    write_raw(Path(path), 1, raw_bytes(10_000))
+    cycle(qtbot, explorer, path, tmp_path)  # (Seen once.)
+    _, sent = cycle(qtbot, explorer, path, tmp_path)
+    [refused] = of(sent, "shot_unconvertible")
+    assert refused["reason"] == convert.READ_FAILED and refused["message"].startswith("Couldn't be read for ")
+    assert session.convert.unconvertible == {"d1.txt": refused["message"]} and not session.convert.waiting
+    text = explorer.live_control.convert_line(session)[0]
+    assert "1 unconvertible" in text and "waiting" not in text, text
+    assert "Can't be converted (1): d1.txt: Couldn't be read for" in "\n".join(
+        explorer.live_control.convert_line(session)[1])
+    # This auto-convert skips it while unchanged.
+    request, _ = cycle(qtbot, explorer, path, tmp_path)
+    assert [entry[0] for entry in request.payload["skip"]] == ["d1.txt"]
+    # Off and on (or a new Live session): its first conversion tries it again.
+    explorer.live_control.set_auto_convert(False)
+    time.sleep(0.01)  # (A later start than the refusal's, on any clock's resolution.)
+    explorer.live_control.set_auto_convert(True)
+    request, sent = cycle(qtbot, explorer, path, tmp_path)
+    assert request.payload["skip"] == []
+    assert [event["raw_name"] for event in of(sent, "shot_waiting")] == ["d1.txt"]  # (Not in seen: a second look.)
+    explorer.stop_live(save=False)
+    explorer.close_cleanup()
