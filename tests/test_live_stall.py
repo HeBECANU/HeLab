@@ -291,3 +291,30 @@ def test_a_plots_source_line_is_set_only_when_it_changes(qtbot: QtBot, monkeypat
     sets.clear()
     PlotWorkspace._update_plot_source_label(dock, None)
     assert sets == ["Showing previously loaded data: run_1 · revision 2"]
+
+
+@pytest.mark.parametrize("answer", ["shots_missing", "too_large"])
+def test_a_retry_clicked_between_a_stopping_answer_and_its_done_is_its_own(
+        qtbot: QtBot, service: IOService, tmp_path: Path, answer: str) -> None:
+    """The cause's kin: a check that stops Live (shots missing, or too large) answers before its helper's ``done``;
+    Retry clicked in between must start a check of its own, never join the one that has already answered."""
+    explorer, path = watching_raw_folder(qtbot, tmp_path, auto_convert=False)
+    cache = explorer.model.cache
+    session = explorer.live
+    assert session is not None
+    cache.live_interval = 30.0
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None)
+    request = producer(cache, path, "load")
+    stop: dict[str, Any] = ({"kind": "shots_missing", "reason": "missing", "missing": [1], "missing_count": 1,
+                             "known_count": 1, "listed_count": 0} if answer == "shots_missing"
+                            else {"kind": "too_large", "estimate": 10**12, "refused": True})
+    cache.service.pending.remove(request)
+    deliver(cache, request, [stop])
+    assert session.error and session.request == "" and job_of(cache, path) is None
+    explorer.live_control.resume_live()  # (Retry, in the drain gap.)
+    qtbot.waitUntil(lambda: job_of(cache, path) is not None, timeout=2_000)
+    retry = job_of(cache, path)
+    deliver(cache, request, [{"kind": "done"}])  # (The answered check's, late: to no one.)
+    assert job_of(cache, path) is retry and session.request == "check" and not session.error
+    explorer.stop_live(save=False)
+    explorer.close_cleanup()

@@ -38,6 +38,9 @@ if TYPE_CHECKING:
 # Folder checks that list a folder: browse step 1 (names only), browse step 2
 # (``details``, the full scan in the background) and a basic scan.
 SCANS = ("list", "details", "scan")
+# A load's or cached read's answers that end it for its subscribers, its helper stopping there (``io_ops.loading``,
+# ``live``, ``save_held``): its job leaves the job list with them (``FolderCache._answered``), as with a ``loaded``.
+ANSWERS = ("shots_missing", "too_large")
 # The saved fields a listing entry carries for each kind of disk cache record.
 ENTRY_KEYS = {"datasets": ("disk_cached", "cache_info"), "summaries": ("scan_status",),
               "histories": ("scan_history",), "subtrees": ("subtree",), "results": ("results",)}
@@ -2906,6 +2909,19 @@ class FolderCache(QObject):
                             priority=priority, force=True)
         QTimer.singleShot(0, batch)
 
+    def _answered(self, job: SharedJob, event: dict[str, Any]) -> None:
+        """An answer that ends a request for its subscribers (``ANSWERS``, ``live_unchanged``) ends the job for them,
+        as a ``loaded`` does: off the job list now, its later events (the helper's ``done``, found through
+        ``_producers``) to no one. Its ``done`` can come a drain later (each ``IOService._tick`` drains 8 ms of
+        events); a request asked for meanwhile (a converted shot's next Live check, a Retry, Load anyway) would
+        otherwise join this one (``has_request``) and wait for an answer already given: Live never checked again
+        (the lab, 2026-11-11)."""
+        if self.jobs.get(job.key) is job:
+            del self.jobs[job.key]
+        subscribers, job.subscribers = tuple(job.subscribers.values()), {}
+        for request in subscribers:
+            self.resultReady.emit(request, event)
+
     def _forget_job(self, job: SharedJob) -> None:
         if self.jobs.get(job.key) is job:
             del self.jobs[job.key]
@@ -4687,16 +4703,7 @@ class FolderCache(QObject):
                 self._cancel_job(job)
                 return
             if kind == "live_unchanged":
-                # A Live check's answer ends it for its subscribers, as a ``loaded`` does: off the job list now,
-                # its later events (the helper's ``done``) to no one. Its ``done`` can come a drain later (each
-                # ``IOService._tick`` drains 8 ms of events); a check asked for meanwhile (a converted shot's
-                # ``check_soon``) would otherwise join this one and wait for an answer already given, and Live
-                # would never check again (the lab, 2026-11-11).
-                if self.jobs.get(job.key) is job:
-                    del self.jobs[job.key]
-                subscribers, job.subscribers = tuple(job.subscribers.values()), {}
-                for request in subscribers:
-                    self.resultReady.emit(request, event)
+                self._answered(job, event)
                 return
             if kind == "loaded":
                 job.clock.stop()
@@ -4816,6 +4823,9 @@ class FolderCache(QObject):
             self._mismatch(job.path, event, "load")
         if kind in ("done", "error", "cancelled"):
             self._forget_job(job)
+        elif job.operation in ("load", "cached") and kind in ANSWERS:
+            self._answered(job, event)  # (A load's, a Live check's or save's, a cached read's: it stopped there.)
+            return
         for request in tuple(job.subscribers.values()):
             self.resultReady.emit(request, event)
         if job.operation == "invalidate" and kind == "done":
