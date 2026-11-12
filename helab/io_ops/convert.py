@@ -811,9 +811,14 @@ def convert_folder(path: str, request: ConvertRequest, send: Emit = emit) -> Non
         read_at[shot.shot] = time.time()
         try:
             data = _read_raw(shot, reader)
-        except FileNotFoundError:
-            # Removed or renamed since it was listed (a writer's temporary name): no lock, nothing to give up on.
+        except FileNotFoundError as exc:
             handled += 1
+            if (too_long := path_too_long(exc, shot.path)) is not None:
+                # Windows' path limit says "not found" (WinError 3) while the folder is there: never readable as it
+                # is, so said, not waited for (Q23.6, as for the TXY's path).
+                refuse(shot, "failed", too_long)
+                return None
+            # Removed or renamed since it was listed (a writer's temporary name): no lock, nothing to give up on.
             wait(shot, raw.CHANGED, "Gone when it was read (removed or renamed): looked at again at the next check")
             return None
         except OSError as exc:

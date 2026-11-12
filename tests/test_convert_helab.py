@@ -797,6 +797,30 @@ def test_a_raw_file_gone_when_read_waits_and_is_never_given_up_on(
     assert (waiting["shot"], waiting["reason"]) == (1, raw.CHANGED) and waiting["message"].startswith("Gone when")
 
 
+def test_a_raw_file_past_windows_path_limit_is_unconvertible_not_gone(
+        source: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows a raw file's path of 260 characters or more fails to open as "not found" (WinError 3): while its
+    folder is there that is the length, never a file gone, so it is unconvertible with the advice (as a TXY's path
+    is), not waited for silently."""
+    write_raw(source, 1, raw_bytes(10_000, 20_000))
+    long_name = str(source / ("x" * 300) / "d1.txt")
+
+    def too_long(shot: Any, beat: Any) -> bytes | str:
+        raise FileNotFoundError(errno.ENOENT, "The system cannot find the path specified", long_name)
+    request = request_for(source, tmp_path, seen=[])
+    request["seen"] = summary(run(source, request))["waiting"]
+    monkeypatch.setattr(convert, "_read_raw", too_long)
+    monkeypatch.setattr(convert, "PLATFORM", "win32")
+    events = run(source, request)
+    [refused] = of(events, "shot_unconvertible")
+    assert (refused["shot"], refused["reason"]) == (1, "failed") and of(events, "shot_waiting") == []
+    assert refused["message"].startswith("Path too long for Windows (")
+    # Its folder gone too (a drive dropped): not a length; it waits, as a file gone does.
+    monkeypatch.setattr(convert, "_isdir", lambda folder, what: False)
+    events = run(source, request)
+    assert of(events, "shot_unconvertible") == [] and [e["reason"] for e in of(events, "shot_waiting")] == [raw.CHANGED]
+
+
 @pytest.mark.parametrize("age, damaged", [(30, False), (61, True)], ids=["30s-waits", "61s-damaged"])
 def test_once_calls_a_file_damaged_only_after_the_once_settle_age(
         source: Path, tmp_path: Path, age: float, damaged: bool) -> None:
