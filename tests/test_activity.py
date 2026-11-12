@@ -63,7 +63,7 @@ def fake_explorer(owner: str = "tab", sessions: Sequence[LiveSession] = (), conv
     live_control = SimpleNamespace(
         sessions=lambda: list(sessions), box=live_box, session=by_path.get,
         live_line=lambda session: ("Live · watching", "Checks every 3 s", False),
-        convert_line=lambda session: ("converted 2", ["Converts with each check"], False))
+        convert_line=lambda session: ("converted 2", ["Converts with each check"], False), stall_seconds=lambda: 60.0)
     converter = SimpleNamespace(owner=f"{owner}:convert", conversions=conversions or {}, box=convert_box,
                                 row=lambda path: ("Converting…", "Converting the raw files"))
     return SimpleNamespace(model=SimpleNamespace(owner=owner), bg_owner=f"{owner}:bg", live_owner=f"{owner}:live",
@@ -491,6 +491,24 @@ def test_an_auto_convert_pass_with_nothing_to_convert_leaves_its_row_as_it_was(
     assert (convert.state, convert.state_text) == ("running", "converting 0 of 2")
     service.shutdown()
 
+
+def test_an_auto_convert_rows_waiting_note_says_when_it_was_once_no_conversion_followed(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lab's "waiting for a very old d raw to settle": the row's waiting note is the last conversion's. Once
+    no conversion has followed it for longer than Live's backstop allows, it says when it was so."""
+    service = quiet_service(monkeypatch)
+    cache = get_folder_cache(service)
+    data = Dataset("/live", "sig", {}, {"fingerprint": []}, 0)
+    session = LiveSession("/live", time.time(), set(), data)
+    session.convert = AutoConvert(time.time(), waiting={"d2392.txt": ("settling", "")}, summary_at=time.time() - 5)
+    explorer = fake_explorer("tab", [session])
+    convert = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "autoconvert:")
+    assert (convert.state, convert.state_text) == ("settling", "waiting for 1 raw file to settle")
+    session.convert.summary_at = at = time.mktime((2026, 11, 11, 16, 38, 50, 0, 0, -1))
+    convert = task(sources(service, cache, [("live tab", explorer)]).snapshot(), "autoconvert:")
+    assert (convert.state, convert.state_text) == ("settling", "waiting for 1 raw file to settle (as of 16:38:50)")
+    assert time.time() - at > 60
+    service.shutdown()
 
 
 def test_the_status_bars_live_phrase_changes_only_when_shots_come_in() -> None:

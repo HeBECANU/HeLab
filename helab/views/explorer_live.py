@@ -108,6 +108,8 @@ class AutoConvert:
     # unconvertible (message), kept while they stay unconvertible, the damaged ones among them (Q18.5)
     # named in ``damaged``; kept beside (shot: reason).
     waiting: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # Wall time: when the last conversion's summary came (what ``waiting`` is as of; None: none yet).
+    summary_at: float | None = None
     unconvertible: dict[str, str] = field(default_factory=dict)
     damaged: set[str] = field(default_factory=set)
     kept: dict[int, str] = field(default_factory=dict)
@@ -1132,6 +1134,7 @@ class LiveController:
         elif kind == "partial_removed":
             logging.info("Live auto-convert removed a leftover temporary TXY: %s", event["file"])
         elif kind == "convert_summary":
+            convert.summary_at = time.time()
             convert.waiting = {str(entry[0]): (str(entry[3]), str(entry[4])) if len(entry) >= 5 else ("", "")
                                for entry in event["waiting"]}
             # (A file skipped as unconvertible isn't sent again: its reason is the folder's, kept by FolderCache.)
