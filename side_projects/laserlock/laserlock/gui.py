@@ -53,7 +53,8 @@ def light_grid(plot: Any) -> None:
 
 
 HOP_COLOUR = "#cf222e"
-HOP_LINES_MAX = 30  # hop lines per time plot: the newest in the shown span (dots show all of them)
+HOP_LINES_MAX = 30
+FOLLOW_S = 20.0  # the error axis's auto range fits the newest this many seconds  # hop lines per time plot: the newest in the shown span (dots show all of them)
 HOP_PEN = pg.mkPen(HOP_COLOUR, width=1, style=Qt.PenStyle.DashLine)
 
 
@@ -63,8 +64,79 @@ MODE_COLOURS = {"idle": "#666", "locked": "#1a7f37", "calibrating": "#9a6700", "
                 "fault": "#cf222e"}
 
 
+def digit_step(box: Any, steps: int) -> bool:
+    """Steps the digit just left of the text cursor (the units digit when it is at the decimal point), and
+    keeps the cursor on that digit. False: no digit to step (the caller steps normally)."""
+    le = box.lineEdit()
+    text, pos = le.text(), le.cursorPosition()
+    pre, suf = len(box.prefix()), len(box.suffix())
+    num = text[pre:len(text) - suf]
+    point = box.locale().decimalPoint() if isinstance(box, QDoubleSpinBox) else "."
+    d = num.find(point)
+    d = len(num) if d < 0 else d
+    i = min(max(pos - pre, 0), len(num)) - 1
+    while i >= 0 and not num[i].isdigit():  # at the point, a sign or a space: the digit further left
+        i -= 1
+    if i < 0:
+        i = next((k for k, c in enumerate(num) if c.isdigit()), -1)
+        if i < 0:
+            return False
+    power = (d - i - 1) if i < d else -(i - d)
+    from_point = (i + 1) - d  # the cursor's place relative to the point, kept after the change
+    if isinstance(box, QDoubleSpinBox):
+        box.setValue(box.value() + steps * 10.0 ** power)
+    else:
+        box.setValue(int(box.value() + steps * 10 ** max(power, 0)))
+    text = le.text()
+    num = text[pre:len(text) - suf]
+    d = num.find(point)
+    d = len(num) if d < 0 else d
+    le.setCursorPosition(min(max(pre + d + from_point, pre), len(text) - suf))
+    return True
+
+
+class Spin(QDoubleSpinBox):
+    """A number box the mouse wheel never changes (the wheel scrolls the panel), whose arrow keys step the digit
+    left of the cursor while it is being edited."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, e: Any) -> None:
+        e.ignore()
+
+    def stepBy(self, steps: int) -> None:
+        if not (self.lineEdit().hasFocus() and digit_step(self, steps)):
+            super().stepBy(steps)
+
+
+class IntSpin(QSpinBox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, e: Any) -> None:
+        e.ignore()
+
+    def stepBy(self, steps: int) -> None:
+        if not (self.lineEdit().hasFocus() and digit_step(self, steps)):
+            super().stepBy(steps)
+
+
+class Combo(QComboBox):
+    """A drop-down the mouse wheel never changes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, e: Any) -> None:
+        e.ignore()
+
+
 def spin(lo: float, hi: float, decimals: int, step: float, value: float, suffix: str = "") -> QDoubleSpinBox:
-    s = QDoubleSpinBox()
+    s = Spin()
     s.setRange(lo, hi)
     s.setDecimals(decimals)
     s.setSingleStep(step)
@@ -119,10 +191,12 @@ class YRange(QWidget):
     followed too."""
 
     def __init__(self, views: list[Any], scale: float, unit: str, lo: float, hi: float, decimals: int = 3,
-                 state: dict[str, Any] | None = None) -> None:
+                 state: dict[str, Any] | None = None, follow: bool = False,
+                 presets: list[tuple[str, float, float]] | None = None) -> None:
         super().__init__()
         self.views = [v if isinstance(v, pg.ViewBox) else v.getViewBox() for v in views]
         self.scale, self.current = scale, 0
+        self.follow = follow  # auto is set by the window (fit()) instead of pyqtgraph
         state = state or {}
         self.auto = QCheckBox("auto")
         self.auto.setChecked(bool(state.get("auto", True)))
@@ -141,9 +215,34 @@ class YRange(QWidget):
         h.addWidget(self.lo)
         h.addWidget(QLabel("to"))
         h.addWidget(self.hi)
+        self.preset_buttons: list[QPushButton] = []
+        for label, p_lo, p_hi in presets or []:
+            b = QPushButton(label)
+            b.setToolTip(f"y from {p_lo:g} to {p_hi:g} {unit}")
+            b.setMaximumWidth(max(44, 9 * len(label) + 16))
+            b.clicked.connect(self._preset_clicked)
+            b.setProperty("range", (p_lo, p_hi))
+            h.addWidget(b)
+            self.preset_buttons.append(b)
         for vb in self.views:
             vb.sigRangeChangedManually.connect(self._mouse)
         self._apply()
+
+    def _preset_clicked(self) -> None:
+        b = self.sender()
+        if isinstance(b, QPushButton):
+            lo, hi = b.property("range")
+            self.set_fixed(lo, hi)
+
+    def set_fixed(self, lo: float, hi: float) -> None:
+        for w, v in ((self.lo, lo), (self.hi, hi)):
+            w.blockSignals(True)
+            w.setValue(v)
+            w.blockSignals(False)
+        if self.auto.isChecked():
+            self.auto.setChecked(False)  # applies
+        else:
+            self._apply()
 
     def _typed(self) -> None:
         if self.auto.isChecked():
@@ -154,7 +253,10 @@ class YRange(QWidget):
     def _apply(self) -> None:
         for vb in self.views:
             if self.auto.isChecked():
-                vb.enableAutoRange(y=True)
+                if self.follow:
+                    vb.disableAutoRange(axis=pg.ViewBox.YAxis)
+                else:
+                    vb.enableAutoRange(y=True)
             else:
                 lo, hi = sorted((self.lo.value(), self.hi.value()))
                 if hi == lo:
@@ -177,8 +279,22 @@ class YRange(QWidget):
     def sync(self) -> None:
         """Follows the shown plot's own auto-range button."""
         auto = bool(self.views[self.current].state["autoRange"][1])
+        if self.follow:
+            if auto:  # its "A" button: auto, done here
+                self.views[self.current].disableAutoRange(axis=pg.ViewBox.YAxis)
+                if not self.auto.isChecked():
+                    self.auto.setChecked(True)
+            return
         if auto != self.auto.isChecked():
             self.auto.setChecked(auto)  # applies to the others too
+
+    def fit(self, values: Any) -> None:
+        """Auto with `follow`: the shown view's range from these values (the newest readings)."""
+        if not (self.follow and self.auto.isChecked()) or len(values) == 0:
+            return
+        lo, hi = float(np.min(values)), float(np.max(values))
+        pad = max((hi - lo) * 0.08, 1e-9 * self.scale, abs(hi) * 1e-12)
+        self.views[self.current].setYRange(lo - pad, hi + pad, padding=0)
 
     def state(self) -> dict[str, Any]:
         return {"auto": self.auto.isChecked(), "lo": self.lo.value(), "hi": self.hi.value()}
@@ -256,14 +372,14 @@ class MainWindow(QMainWindow):
                                   "the threshold in Loop that holds for a few readings; a lone far reading isn't one.")
         g.addWidget(self.hop_label, 4, 0, 1, 2)
         # its timing (the server's own settings, read back about once a second)
-        self.wm_exposure = QSpinBox()
+        self.wm_exposure = IntSpin()
         self.wm_exposure.setRange(1, 9999)
         self.wm_exposure.setSuffix(" ms")
         self.wm_exposure.setKeyboardTracking(False)
         self.wm_exposure.setToolTip("The exposure (CCD 1). Setting it turns auto exposure off.")
         self.wm_auto = QCheckBox("auto")
         self.wm_auto.setToolTip("The wavemeter sets its exposure itself from the signal")
-        self.wm_interval = QSpinBox()
+        self.wm_interval = IntSpin()
         self.wm_interval.setRange(1, 100_000)
         self.wm_interval.setSuffix(" ms")
         self.wm_interval.setKeyboardTracking(False)
@@ -291,7 +407,7 @@ class MainWindow(QMainWindow):
         self.set_thz.valueChanged.connect(self._thz_changed)
         self.set_nm.valueChanged.connect(self._nm_changed)
         self._presets: list[dict[str, Any]] = [dict(e) for e in (presets or []) if preset_thz(e)]
-        self.preset_box = QComboBox()
+        self.preset_box = Combo()
         self.preset_box.setToolTip("Saved setpoints; choosing one sets the setpoint")
         self.preset_box.activated.connect(self._preset_chosen)
         add_preset, del_preset = QPushButton("Save setpoint"), QPushButton("Remove")
@@ -332,7 +448,7 @@ class MainWindow(QMainWindow):
                            "0 is a PI lock. Calibrate sets P and I and leaves D alone.")
         self.d_filter = spin(0.0, 60.0, 2, 0.1, s.d_filter_s, " s")
         self.d_filter.setToolTip("The D term's low-pass time constant (the wavemeter's noise differentiates badly)")
-        self.sign = QComboBox()
+        self.sign = Combo()
         self.sign.addItems(["+ (more V → higher f)", "− (more V → lower f)"])
         self.sign.setCurrentIndex(0 if s.sign >= 0 else 1)
         self.v_min = spin(HARD_V_MIN, HARD_V_MAX, 4, 0.1, s.v_min, " V")
@@ -487,14 +603,14 @@ class MainWindow(QMainWindow):
 
         # plots
         pg.setConfigOptions(antialias=False, background="w", foreground="k")  # antialiasing costs a lot of CPU
-        self.span = QComboBox()
+        self.span = Combo()
         self.span.addItems(list(SPANS))
         self.span.setCurrentText(str(ui["span"]) if ui["span"] in SPANS else "2 min")
         self.span.setToolTip("The time shown (it scrolls with the newest reading unless paused)")
         self.pause = QCheckBox("Pause")
         self.pause.setToolTip("Freeze the time plots to pan and zoom with the mouse (readings keep being "
                               "recorded); dragging the time axis pauses too")
-        self.time_kind = QComboBox()
+        self.time_kind = Combo()
         self.time_kind.addItems(["clock", "since start"])
         self.time_kind.setCurrentIndex(0 if ui["clock"] else 1)
         self.time_kind.setToolTip("The time axis: the clock time, or seconds since the window opened")
@@ -555,11 +671,16 @@ class MainWindow(QMainWindow):
         self.sw_plot.setLabel("bottom", "output", units="V")
         self.sw_plot.setTitle("Sweep")
         light_grid(self.sw_plot)
-        self.err_range = YRange([self.err_plot, self.comb], 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"))
-        self.v_range = YRange([self.v_plot, self.comb_vb], 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"))
+        self.err_range = YRange([self.err_plot, self.comb], 1e6, "MHz", -50.0, 50.0, 3, ui.get("err_y"), follow=True,
+                                presets=[(f"±{w:g}", -w, w) for w in (1, 10, 100, 1000)])
+        self.err_range.auto.setToolTip(f"Fit the error axis to the newest {FOLLOW_S:.0f} s of readings, so it follows "
+                                       "the laser (an older jump, e.g. a mode hop, scrolls off); untick to keep "
+                                       "the range in the boxes")
+        self.v_range = YRange([self.v_plot, self.comb_vb], 1.0, "V", HARD_V_MIN, HARD_V_MAX, 4, ui.get("v_y"),
+                              presets=[("0–7 V", HARD_V_MIN, HARD_V_MAX)])
         self.sw_y = YRange([self.sw_plot], 1e6, "MHz", -5000.0, 5000.0, 1, ui.get("sweep_y"))
         # plot options
-        self.layout_kind = QComboBox()
+        self.layout_kind = Combo()
         self.layout_kind.addItems(["two plots", "one plot, two y axes"])
         self.layout_kind.setCurrentIndex(1 if ui["combined"] else 0)
         self.layout_kind.setToolTip("Error and output on separate plots, or on one (error left, output right)")
@@ -961,6 +1082,7 @@ class MainWindow(QMainWindow):
         else:
             self.err_curve.setData(t, err)
             self.v_curve.setData(t, volts)
+        self.err_range.fit(err[t >= now - min(FOLLOW_S, span or FOLLOW_S)])
         self._draw_hops(self.engine.snapshot().hops if hops is None else hops, now - span if span else -math.inf)
         # the lock's quality: locked readings within the capture range (not the time spent in another mode)
         in_capture = np.abs(err) <= self.capture.value() * 1e6

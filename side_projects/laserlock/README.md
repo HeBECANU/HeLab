@@ -74,11 +74,18 @@ rest. The setpoint holds 9 decimals in THz (1 kHz) and 8 in nm.
 being recorded. **Time** labels the axis with the clock time or the seconds since the window opened.
 **Clear** forgets the plotted readings (not the CSV log). **Plot** puts the error and the output on two plots
 or on one with two y axes (error left, output right); **Line** sets the traces' width. Each plot's **y** range is **auto** or fixed
-between the two boxes (MHz or V); zooming a y axis with the mouse switches it to fixed and fills the boxes,
+between the two boxes (MHz or V). The error axis's auto fits the **newest 20 s** of readings, so it follows the
+laser: after a mode hop it would otherwise stay stretched over the jump for the whole span, flattening the
+lock's trace (2026-11-12). The output's auto fits the whole span. Buttons set common ranges: error **±1 / ±10 / ±100 / ±1000 MHz**, output **0–7 V**; zooming a y axis with the mouse switches it to fixed and fills the boxes,
 and the plot's own "A" button returns to auto. Span, time labels, ranges, layout, line width and hop lines are remembered between runs.
 
 **Show: Time plots / Sweep plot** hides either plot panel (both: the window is just the controls); remembered
 between runs.
+
+**Number boxes.** The mouse wheel never changes a value or a drop-down (it scrolls the panel). While a box
+is being edited, **↑ / ↓** step the digit just left of the text cursor (at the decimal point, the units),
+and the cursor stays on that digit; the box's arrow buttons, without the cursor in it, step by the usual
+amount.
 
 ## Mode hops
 
